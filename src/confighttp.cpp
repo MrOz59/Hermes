@@ -1203,7 +1203,11 @@ namespace confighttp {
     const nlohmann::json capabilities {
       {"ok", true},
       {"server_name", "Hermes"},
-      {"base", "Hermes"},
+      // "base" is a protocol-compatibility identifier the Hestia client checks
+      // against a fixed value ("Apollo"); it is NOT visible branding. Renaming
+      // it breaks the Hestia handshake (client reports "base is incompatible"
+      // and falls back to legacy mode), so it must stay "Apollo".
+      {"base", "Apollo"},
       {"hestia_protocol", 1},
       {"min_client_protocol", 1},
       {"max_client_protocol", 1},

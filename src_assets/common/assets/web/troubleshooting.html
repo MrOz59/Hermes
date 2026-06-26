@@ -40,6 +40,72 @@
   <Navbar></Navbar>
   <div class="container">
     <h1 class="my-4">{{ $t('troubleshooting.troubleshooting') }}</h1>
+
+    <!-- Live server status / metrics -->
+    <div class="card p-2 my-4">
+      <div class="card-body">
+        <h2 id="status">Server status</h2>
+        <br>
+        <div class="row" v-if="metrics">
+          <!-- Encoder -->
+          <div class="col-md-6 mb-3">
+            <div class="fw-bold">Encoder</div>
+            <div v-if="metrics.encoder && metrics.encoder.name">
+              {{ metrics.encoder.name }}
+              <span class="badge"
+                    :class="metrics.encoder.hardware ? 'bg-success' : 'bg-warning text-dark'">
+                {{ metrics.encoder.hardware ? 'hardware' : 'software' }}
+              </span>
+              <span v-if="metrics.encoder.codecs && metrics.encoder.codecs.length"
+                    class="text-muted ms-2">
+                {{ metrics.encoder.codecs.join(', ') }}
+              </span>
+            </div>
+            <div v-else class="text-muted">Not probed yet</div>
+          </div>
+          <!-- Clients -->
+          <div class="col-md-6 mb-3">
+            <div class="fw-bold">Clients</div>
+            <div>
+              {{ metrics.sessions ? metrics.sessions.active : 0 }} connected
+              <span v-if="metrics.sessions && metrics.sessions.streaming"
+                    class="badge bg-primary">streaming</span>
+            </div>
+          </div>
+          <!-- Pipeline metrics (only while streaming) -->
+          <template v-if="metrics.pipeline">
+            <div class="col-6 col-md-3 mb-2">
+              <div class="text-muted small">Stream FPS</div>
+              <div class="fs-5">{{ metrics.pipeline.fps.toFixed(1) }}</div>
+            </div>
+            <div class="col-6 col-md-3 mb-2">
+              <div class="text-muted small">Bitrate</div>
+              <div class="fs-5">{{ (metrics.pipeline.bitrate_kbps / 1000).toFixed(1) }} Mbps</div>
+            </div>
+            <div class="col-6 col-md-3 mb-2">
+              <div class="text-muted small">Encode time</div>
+              <div class="fs-5">{{ metrics.pipeline.encode_ms.toFixed(2) }} ms</div>
+            </div>
+            <div class="col-6 col-md-3 mb-2">
+              <div class="text-muted small">Capture→encode</div>
+              <div class="fs-5">{{ metrics.pipeline.capture_to_encode_ms.toFixed(2) }} ms</div>
+            </div>
+            <div class="col-6 col-md-3 mb-2">
+              <div class="text-muted small">Frames dropped</div>
+              <div class="fs-5"
+                   :class="metrics.pipeline.frames_dropped > 0 ? 'text-danger' : ''">
+                {{ metrics.pipeline.frames_dropped }}
+              </div>
+            </div>
+          </template>
+          <div v-else class="col-12 text-muted">
+            No active stream — pipeline metrics appear while streaming.
+          </div>
+        </div>
+        <div v-else class="text-muted">Loading status…</div>
+      </div>
+    </div>
+
     <!-- Force Close App -->
     <div class="card p-2 my-4">
       <div class="card-body">
@@ -155,6 +221,8 @@
           serverQuitting: false,
           serverQuit: false,
           platform: "",
+          metrics: null,
+          metricsInterval: null,
         };
       },
       computed: {
@@ -176,11 +244,23 @@
           this.refreshLogs();
         }, 5000);
         this.refreshLogs();
+
+        this.metricsInterval = setInterval(() => {
+          this.refreshMetrics();
+        }, 1000);
+        this.refreshMetrics();
       },
       beforeDestroy() {
         clearInterval(this.logInterval);
+        clearInterval(this.metricsInterval);
       },
       methods: {
+        refreshMetrics() {
+          fetch("./api/metrics", { credentials: 'include' })
+            .then(r => r.ok ? r.json() : null)
+            .then(r => { this.metrics = r; })
+            .catch(() => { /* keep last known metrics on transient errors */ });
+        },
         refreshLogs() {
           fetch("./api/logs", {
             credentials: 'include'

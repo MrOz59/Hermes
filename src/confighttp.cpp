@@ -39,8 +39,10 @@
 #include "nvhttp.h"
 #include "platform/common.h"
 #include "process.h"
+#include "rtsp.h"
 #include "utility.h"
 #include "uuid.h"
+#include "video.h"
 
 #ifdef _WIN32
   #include "platform/windows/utils.h"
@@ -50,6 +52,9 @@ using namespace std::literals;
 
 namespace confighttp {
   namespace fs = std::filesystem;
+
+  // Defined later; declared here so the web-UI metrics handler can reuse it.
+  nlohmann::json hestia_runtime_status_json();
 
   class HestiaHTTPSServer: public SimpleWeb::ServerBase<SimpleWeb::HTTPS> {
   public:
@@ -724,6 +729,17 @@ namespace confighttp {
    *
    * @api_examples{/api/apps| GET| null}
    */
+  // Web UI metrics endpoint: same runtime view as the Hestia diagnostics, but
+  // behind the normal web-UI session auth so the dashboard can poll it.
+  void getMetrics(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+    send_response(response, hestia_runtime_status_json());
+  }
+
   void getApps(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
       return;
@@ -1592,15 +1608,66 @@ namespace confighttp {
     send_response(response, {{"ok", true}, {"text", platf::get_clipboard()}});
   }
 
+  // Build the live encoder/session view shared by the diagnostics endpoint, so
+  // users can see the real encoder (hardware vs software) and who is connected
+  // instead of guessing from logs.
+  nlohmann::json hestia_runtime_status_json() {
+    nlohmann::json runtime;
+
+    const auto enc = video::get_encoder_status();
+    if (enc.probed) {
+      nlohmann::json codecs = nlohmann::json::array();
+      if (enc.h264) {
+        codecs.push_back("h264");
+      }
+      if (enc.hevc) {
+        codecs.push_back("hevc");
+      }
+      if (enc.av1) {
+        codecs.push_back("av1");
+      }
+      runtime["encoder"] = {
+        {"name", enc.encoder},
+        {"hardware", enc.hardware},
+        {"codecs", std::move(codecs)},
+      };
+    } else {
+      runtime["encoder"] = {{"name", nullptr}, {"hardware", false}, {"probed", false}};
+    }
+
+    const int sessions = rtsp_stream::session_count();
+    runtime["sessions"] = {
+      {"active", sessions},
+      {"streaming", sessions > 0},
+    };
+
+    // Live per-frame pipeline metrics (only meaningful while streaming).
+    const auto pm = video::get_pipeline_metrics();
+    if (pm.valid) {
+      runtime["pipeline"] = {
+        {"fps", pm.fps},
+        {"bitrate_kbps", pm.bitrate_kbps},
+        {"encode_ms", pm.encode_ms},
+        {"capture_to_encode_ms", pm.capture_to_encode_ms},
+        {"frames_encoded", pm.frames_encoded},
+        {"frames_dropped", pm.frames_dropped},
+      };
+    } else {
+      runtime["pipeline"] = nullptr;
+    }
+
+    return runtime;
+  }
+
   void get_hestia_diagnostics(resp_https_t response, req_https_t request) {
     if (!authenticate_hestia_client(response, request, crypto::PERM::view, "diagnostics")) {
       return;
     }
 
 #ifdef __linux__
-    send_response(response, {{"ok", true}, {"dependencies", {{"clipboard", clipboard_status_json()}}}});
+    send_response(response, {{"ok", true}, {"runtime", hestia_runtime_status_json()}, {"dependencies", {{"clipboard", clipboard_status_json()}}}});
 #else
-    send_response(response, {{"ok", true}, {"dependencies", {{"clipboard", {{"available", platf::clipboard_available()}, {"diagnostic", platf::clipboard_available() ? "ready" : "clipboard_unavailable"}, {"manualInstall", "Use the native clipboard service for this platform."}}}}}});
+    send_response(response, {{"ok", true}, {"runtime", hestia_runtime_status_json()}, {"dependencies", {{"clipboard", {{"available", platf::clipboard_available()}, {"diagnostic", platf::clipboard_available() ? "ready" : "clipboard_unavailable"}, {"manualInstall", "Use the native clipboard service for this platform."}}}}}});
 #endif
   }
 
@@ -2427,6 +2494,7 @@ fi')CLIP";
     server.resource["^/api/apps/launch$"]["POST"] = launchApp;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;
     server.resource["^/api/logs$"]["GET"] = getLogs;
+    server.resource["^/api/metrics$"]["GET"] = getMetrics;
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
     server.resource["^/api/evdi/install$"]["POST"] = installEvdi;

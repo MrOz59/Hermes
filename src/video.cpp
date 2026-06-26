@@ -1061,6 +1061,75 @@ namespace video {
   static encoder_t *chosen_encoder;
   int active_hevc_mode;
   int active_av1_mode;
+
+  // Last encoder probe result, for the diagnostics endpoint. Written at the end
+  // of probe_encoders(); read via get_encoder_status() under its own mutex.
+  static std::mutex encoder_status_mutex;
+  static encoder_status_t encoder_status_state;
+
+  encoder_status_t get_encoder_status() {
+    std::lock_guard lg {encoder_status_mutex};
+    return encoder_status_state;
+  }
+
+  // Live per-frame pipeline metrics. Accumulated over a window and averaged so
+  // the diagnostics endpoint can show where per-frame time goes.
+  static std::mutex pipeline_metrics_mutex;
+  struct pipeline_metrics_accum_t {
+    double encode_ms_sum = 0.0;
+    double capture_to_encode_ms_sum = 0.0;
+    uint64_t window_frames = 0;  ///< Frames in the current averaging window.
+    uint64_t window_bytes = 0;  ///< Encoded bytes in the current window.
+    uint64_t frames_encoded = 0;  ///< Total this session.
+    uint64_t frames_dropped = 0;
+    std::chrono::steady_clock::time_point window_start = std::chrono::steady_clock::now();
+    pipeline_metrics_t published;  ///< Last computed averages.
+  };
+  static pipeline_metrics_accum_t pipeline_metrics_state;
+
+  void metrics_record_frame(double encode_ms, double capture_to_encode_ms, size_t packet_bytes) {
+    std::lock_guard lg {pipeline_metrics_mutex};
+    auto &s = pipeline_metrics_state;
+    s.encode_ms_sum += encode_ms;
+    s.capture_to_encode_ms_sum += capture_to_encode_ms;
+    s.window_bytes += packet_bytes;
+    s.window_frames++;
+    s.frames_encoded++;
+
+    // Recompute the published averages roughly once per second.
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsed = std::chrono::duration<double>(now - s.window_start).count();
+    if (elapsed >= 1.0 && s.window_frames > 0) {
+      s.published.valid = true;
+      s.published.encode_ms = s.encode_ms_sum / s.window_frames;
+      s.published.capture_to_encode_ms = s.capture_to_encode_ms_sum / s.window_frames;
+      s.published.fps = s.window_frames / elapsed;
+      s.published.bitrate_kbps = (s.window_bytes * 8.0 / 1000.0) / elapsed;
+      s.published.frames_encoded = s.frames_encoded;
+      s.published.frames_dropped = s.frames_dropped;
+      s.encode_ms_sum = 0.0;
+      s.capture_to_encode_ms_sum = 0.0;
+      s.window_bytes = 0;
+      s.window_frames = 0;
+      s.window_start = now;
+    }
+  }
+
+  void metrics_record_drop() {
+    std::lock_guard lg {pipeline_metrics_mutex};
+    pipeline_metrics_state.frames_dropped++;
+    pipeline_metrics_state.published.frames_dropped = pipeline_metrics_state.frames_dropped;
+  }
+
+  void metrics_reset() {
+    std::lock_guard lg {pipeline_metrics_mutex};
+    pipeline_metrics_state = pipeline_metrics_accum_t {};
+  }
+
+  pipeline_metrics_t get_pipeline_metrics() {
+    std::lock_guard lg {pipeline_metrics_mutex};
+    return pipeline_metrics_state.published;
+  }
   bool last_encoder_probe_supported_ref_frames_invalidation = false;
   std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {
     true,
@@ -1420,14 +1489,31 @@ namespace video {
     auto &sps = session.sps;
     auto &vps = session.vps;
 
+    // Measure encode time and capture->encode latency for the metrics endpoint.
+    const auto encode_start = std::chrono::steady_clock::now();
+    double capture_to_encode_ms = 0.0;
+    if (frame_timestamp) {
+      const auto cap_to_enc = std::chrono::duration<double, std::milli>(encode_start - *frame_timestamp).count();
+      capture_to_encode_ms = cap_to_enc >= 0.0 ? cap_to_enc : 0.0;
+    }
+
     // send the frame to the encoder
     auto ret = avcodec_send_frame(ctx.get(), frame);
     if (ret < 0) {
       char err_str[AV_ERROR_MAX_STRING_SIZE] {0};
       BOOST_LOG(error) << "Could not send a frame for encoding: "sv << av_make_error_string(err_str, AV_ERROR_MAX_STRING_SIZE, ret);
 
+      metrics_record_drop();
       return -1;
     }
+
+    size_t packet_bytes = 0;
+    auto record_frame_metrics = [&]() {
+      const auto encode_ms = std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - encode_start)
+                               .count();
+      metrics_record_frame(encode_ms, capture_to_encode_ms, packet_bytes);
+    };
 
     while (ret >= 0) {
       auto packet = std::make_unique<packet_raw_avcodec>();
@@ -1435,9 +1521,14 @@ namespace video {
 
       ret = avcodec_receive_packet(ctx.get(), av_packet);
       if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+        record_frame_metrics();
         return 0;
       } else if (ret < 0) {
         return ret;
+      }
+
+      if (av_packet) {
+        packet_bytes += static_cast<size_t>(av_packet->size > 0 ? av_packet->size : 0);
       }
 
       if (av_packet->flags & AV_PKT_FLAG_KEY) {
@@ -1482,13 +1573,22 @@ namespace video {
       packets->raise(std::move(packet));
     }
 
+    record_frame_metrics();
     return 0;
   }
 
   int encode_nvenc(int64_t frame_nr, nvenc_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
+    const auto encode_start = std::chrono::steady_clock::now();
+    double capture_to_encode_ms = 0.0;
+    if (frame_timestamp) {
+      const auto cap_to_enc = std::chrono::duration<double, std::milli>(encode_start - *frame_timestamp).count();
+      capture_to_encode_ms = cap_to_enc >= 0.0 ? cap_to_enc : 0.0;
+    }
+
     auto encoded_frame = session.encode_frame(frame_nr);
     if (encoded_frame.data.empty()) {
       BOOST_LOG(error) << "NvENC returned empty packet";
+      metrics_record_drop();
       return -1;
     }
 
@@ -1496,11 +1596,19 @@ namespace video {
       BOOST_LOG(error) << "NvENC frame index mismatch " << frame_nr << " " << encoded_frame.frame_index;
     }
 
+    // Capture the encoded size before the buffer is moved into the packet.
+    const size_t packet_bytes = encoded_frame.data.size();
+
     auto packet = std::make_unique<packet_raw_generic>(std::move(encoded_frame.data), encoded_frame.frame_index, encoded_frame.idr);
     packet->channel_data = channel_data;
     packet->after_ref_frame_invalidation = encoded_frame.after_ref_frame_invalidation;
     packet->frame_timestamp = frame_timestamp;
     packets->raise(std::move(packet));
+
+    const auto encode_ms = std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - encode_start)
+                             .count();
+    metrics_record_frame(encode_ms, capture_to_encode_ms, packet_bytes);
 
     return 0;
   }
@@ -2865,6 +2973,25 @@ namespace video {
                                                        encoder.hevc[encoder_t::YUV444];
     last_encoder_probe_supported_yuv444_for_codec[2] = encoder.av1[encoder_t::PASSED] &&
                                                        encoder.av1[encoder_t::YUV444];
+
+    // Record the selected encoder for the diagnostics endpoint so users can see
+    // whether hardware or software encoding is actually in use, and which codecs
+    // the chosen encoder supports.
+    {
+      encoder_status_t status;
+      status.probed = true;
+      status.encoder = std::string {encoder.name};
+      status.hardware = encoder.name != "software";
+      status.h264 = encoder.h264[encoder_t::PASSED];
+      status.hevc = encoder.hevc[encoder_t::PASSED];
+      status.av1 = encoder.av1[encoder_t::PASSED];
+      if (!status.hardware) {
+        BOOST_LOG(warning) << "Using SOFTWARE video encoding (no hardware encoder passed probing). "sv
+                           << "Expect higher CPU use and latency; check GPU driver/VAAPI/NVENC availability."sv;
+      }
+      std::lock_guard lg {encoder_status_mutex};
+      encoder_status_state = std::move(status);
+    }
 
     BOOST_LOG(debug) << "------  h264 ------"sv;
     for (int x = 0; x < encoder_t::MAX_FLAGS; ++x) {

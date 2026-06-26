@@ -577,7 +577,12 @@ namespace rtsp_stream {
      */
     void insert(const std::shared_ptr<stream::session_t> &session) {
       auto lg = _session_slots.lock();
+      const bool first = _session_slots->empty();
       _session_slots->emplace(session);
+      if (first) {
+        // Start pipeline metrics fresh for a new streaming session.
+        video::metrics_reset();
+      }
       BOOST_LOG(info) << "New streaming session started [active sessions: "sv << _session_slots->size() << ']';
     }
 

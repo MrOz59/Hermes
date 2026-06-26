@@ -4,6 +4,10 @@
  */
 #pragma once
 
+// standard includes
+#include <string>
+#include <vector>
+
 // local includes
 #include "input.h"
 #include "platform/common.h"
@@ -364,4 +368,57 @@ namespace video {
    * @warning This is only safe to call when there is no client actively streaming.
    */
   int probe_encoders();
+
+  /**
+   * @brief Result of the last encoder probe, for diagnostics/metrics.
+   *
+   * Exposes what the server actually selected so users can tell hardware from
+   * software encoding instead of guessing. Populated at the end of
+   * probe_encoders(); read by the diagnostics endpoint.
+   */
+  struct encoder_status_t {
+    bool probed = false;  ///< A probe has completed at least once.
+    std::string encoder;  ///< Selected encoder backend (e.g. "nvenc", "vaapi", "software").
+    bool hardware = false;  ///< True if the selected encoder is hardware-accelerated.
+    bool h264 = false;  ///< H.264 supported by the selected encoder.
+    bool hevc = false;  ///< HEVC supported.
+    bool av1 = false;  ///< AV1 supported.
+  };
+
+  /** @brief Snapshot of the last encoder probe result (thread-safe copy). */
+  encoder_status_t get_encoder_status();
+
+  /**
+   * @brief Live per-frame pipeline metrics, for diagnostics/metrics.
+   *
+   * Rolling averages over a short window so users (and the web UI) can see where
+   * time goes instead of only an overall FPS number. Updated from the encode
+   * loop; read by the diagnostics endpoint. Zero/`valid=false` until frames flow.
+   */
+  struct pipeline_metrics_t {
+    bool valid = false;  ///< At least one frame has been measured.
+    double encode_ms = 0.0;  ///< Avg time spent in the encoder per frame.
+    double capture_to_encode_ms = 0.0;  ///< Avg latency from capture to encode start.
+    double fps = 0.0;  ///< Measured frames encoded per second.
+    double bitrate_kbps = 0.0;  ///< Measured output bitrate (kilobits/s).
+    uint64_t frames_encoded = 0;  ///< Total frames encoded this session.
+    uint64_t frames_dropped = 0;  ///< Total frames dropped (encoder errors/timeouts).
+  };
+
+  /**
+   * @brief Record one encoded frame's timings and output size.
+   * @param encode_ms Time spent in the encoder for this frame.
+   * @param capture_to_encode_ms Latency from capture to encode start.
+   * @param packet_bytes Encoded packet size, for the measured bitrate.
+   */
+  void metrics_record_frame(double encode_ms, double capture_to_encode_ms, size_t packet_bytes);
+
+  /** @brief Record one dropped frame (encoder error/timeout). */
+  void metrics_record_drop();
+
+  /** @brief Reset pipeline metrics at the start of a streaming session. */
+  void metrics_reset();
+
+  /** @brief Snapshot of the live pipeline metrics (thread-safe copy). */
+  pipeline_metrics_t get_pipeline_metrics();
 }  // namespace video

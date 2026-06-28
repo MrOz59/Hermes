@@ -325,7 +325,7 @@
     "qsv_slow_hevc": "Zezwalaj na wolne kodowanie HEVC",
     "qsv_slow_hevc_desc": "Może to umożliwić kodowanie HEVC na starszych procesorach graficznych Intel, kosztem wyższego wykorzystania GPU i gorszej wydajności.",
     "restart_note": "Apollo uruchamia się ponownie, aby zastosować zmiany.",
-    "sunshine_name": "Nazwa Apollo",
+    "sunshine_name": "Nazwa Hermes",
     "sunshine_name_desc": "Nazwa wyświetlana przez Moonlight. Jeśli nie zostanie określona, używana jest nazwa hosta komputera",
     "sw_preset": "Ustawienia wstępne SW",
     "sw_preset_desc": "Optymalizacja kompromisu między szybkością kodowania (zakodowane klatki na sekundę) a wydajnością kompresji (jakość na bit w strumieniu bitów). Domyślnie superszybki.",
@@ -366,16 +366,16 @@
     "wan_encryption_mode_desc": "Określa, kiedy szyfrowanie będzie używane podczas przesyłania strumieniowego przez Internet. Szyfrowanie może zmniejszyć wydajność przesyłania strumieniowego, szczególnie na mniej wydajnych hostach i klientach."
   },
   "index": {
-    "description": "Apollo jest samodzielnym hostem strumienia gry dla Moonlight.",
+    "description": "Hermes jest samodzielnym hostem strumienia gry dla Moonlight.",
     "download": "Pobierz",
-    "installed_version_not_stable": "Korzystasz z przedpremierowej wersji Apollo. Mogą wystąpić błędy lub inne problemy. Prosimy o zgłaszanie wszelkich napotkanych problemów. Dziękujemy za pomoc w ulepszaniu oprogramowania Apollo!",
+    "installed_version_not_stable": "Korzystasz z przedpremierowej wersji Hermes. Mogą wystąpić błędy lub inne problemy. Prosimy o zgłaszanie wszelkich napotkanych problemów. Dziękujemy za pomoc w ulepszaniu oprogramowania Hermes!",
     "loading_latest": "Ładowanie najnowszej wersji...",
     "new_pre_release": "Dostępna jest nowa wersja przedpremierowa!",
     "new_stable": "Nowa stabilna wersja jest już dostępna!",
-    "startup_errors": "<b>Uwaga!</b> Apollo wykrył te błędy podczas uruchamiania. <b>ZDECYDOWANIE ZALECAMY</b> ich naprawienie przed rozpoczęciem streamowania.",
-    "version_dirty": "Dziękujemy za pomoc w ulepszaniu oprogramowania Apollo!",
-    "version_latest": "Korzystasz z najnowszej wersji Apollo",
-    "welcome": "Witaj, Apollo!"
+    "startup_errors": "<b>Uwaga!</b> Hermes wykrył te błędy podczas uruchamiania. <b>ZDECYDOWANIE ZALECAMY</b> ich naprawienie przed rozpoczęciem streamowania.",
+    "version_dirty": "Dziękujemy za pomoc w ulepszaniu oprogramowania Hermes!",
+    "version_latest": "Korzystasz z najnowszej wersji Hermes",
+    "welcome": "Witaj, Hermes!"
   },
   "navbar": {
     "applications": "Aplikacje",
@@ -412,7 +412,7 @@
     "license": "Licencja",
     "lizardbyte_website": "Strona internetowa LizardByte",
     "resources": "Zasoby",
-    "resources_desc": "Zasoby dla Apollo!",
+    "resources_desc": "Zasoby dla Hermes!",
     "third_party_notice": "Powiadomienia strony trzeciej"
   },
   "troubleshooting": {
@@ -444,7 +444,7 @@
     "confirm_password": "Potwierdź hasło",
     "create_creds": "Przed rozpoczęciem pracy należy utworzyć nową nazwę użytkownika i hasło dostępu do interfejsu użytkownika.",
     "create_creds_alert": "Poniższe dane uwierzytelniające są potrzebne do uzyskania dostępu do interfejsu użytkownika Apollo. Zachowaj je w bezpiecznym miejscu, ponieważ nigdy więcej ich nie zobaczysz!",
-    "greeting": "Witamy w Apollo!",
+    "greeting": "Witamy w Hermes!",
     "login": "Login",
     "welcome_success": "Strona zostanie wkrótce przeładowana, a przeglądarka poprosi o podanie nowych danych uwierzytelniających"
   }

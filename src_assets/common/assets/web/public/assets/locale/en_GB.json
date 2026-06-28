@@ -330,7 +330,7 @@
     "res_fps_desc": "The display modes advertised by Apollo. Some versions of Moonlight, such as Moonlight-nx (Switch), rely on these lists to ensure that the requested resolutions and fps are supported. This setting does not change how the screen stream is sent to Moonlight.",
     "resolutions": "Advertised Resolutions",
     "restart_note": "Apollo is restarting to apply changes.",
-    "sunshine_name": "Apollo Name",
+    "sunshine_name": "Hermes Name",
     "sunshine_name_desc": "The name displayed by Moonlight. If not specified, the PC's hostname is used",
     "sw_preset": "SW Presets",
     "sw_preset_desc": "Optimize the trade-off between encoding speed (encoded frames per second) and compression efficiency (quality per bit in the bitstream). Defaults to superfast.",
@@ -371,16 +371,16 @@
     "wan_encryption_mode_desc": "This determines when encryption will be used when streaming over the Internet. Encryption can reduce streaming performance, particularly on less powerful hosts and clients."
   },
   "index": {
-    "description": "Apollo is a self-hosted game stream host for Moonlight.",
+    "description": "Hermes is a self-hosted game stream host for Moonlight.",
     "download": "Download",
-    "installed_version_not_stable": "You are running a pre-release version of Apollo. You may experience bugs or other issues. Please report any issues you encounter. Thank you for helping to make Apollo a better software!",
+    "installed_version_not_stable": "You are running a pre-release version of Hermes. You may experience bugs or other issues. Please report any issues you encounter. Thank you for helping to make Hermes a better software!",
     "loading_latest": "Loading latest release...",
     "new_pre_release": "A new Pre-Release Version is Available!",
     "new_stable": "A new Stable Version is Available!",
-    "startup_errors": "<b>Attention!</b> Apollo detected these errors during startup. We <b>STRONGLY RECOMMEND</b> fixing them before streaming.",
-    "version_dirty": "Thank you for helping to make Apollo a better software!",
-    "version_latest": "You are running the latest version of Apollo",
-    "welcome": "Hello, Apollo!"
+    "startup_errors": "<b>Attention!</b> Hermes detected these errors during startup. We <b>STRONGLY RECOMMEND</b> fixing them before streaming.",
+    "version_dirty": "Thank you for helping to make Hermes a better software!",
+    "version_latest": "You are running the latest version of Hermes",
+    "welcome": "Hello, Hermes!"
   },
   "navbar": {
     "applications": "Applications",
@@ -417,7 +417,7 @@
     "license": "License",
     "lizardbyte_website": "LizardByte Website",
     "resources": "Resources",
-    "resources_desc": "Resources for Apollo!",
+    "resources_desc": "Resources for Hermes!",
     "third_party_notice": "Third Party Notice"
   },
   "troubleshooting": {
@@ -449,7 +449,7 @@
     "confirm_password": "Confirm password",
     "create_creds": "Before Getting Started, we need you to make a new username and password for accessing the Web UI.",
     "create_creds_alert": "The credentials below are needed to access Apollo's Web UI. Keep them safe, since you will never see them again!",
-    "greeting": "Welcome to Apollo!",
+    "greeting": "Welcome to Hermes!",
     "login": "Login",
     "welcome_success": "This page will reload soon, your browser will ask you for the new credentials"
   }

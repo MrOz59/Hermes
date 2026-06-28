@@ -325,7 +325,7 @@
     "qsv_slow_hevc": "Permetti la codifica lenta in HEVC",
     "qsv_slow_hevc_desc": "Questo può abilitare la codifica HEVC su vecchie GPU Intel, al costo di un maggiore utilizzo della GPU e prestazioni peggiori.",
     "restart_note": "Apollo sta riavviando per applicare le modifiche.",
-    "sunshine_name": "Nome Apollo",
+    "sunshine_name": "Nome Hermes",
     "sunshine_name_desc": "Il nome visualizzato da Moonlight. Se non specificato, viene utilizzato il nome host del PC",
     "sw_preset": "Preset SW",
     "sw_preset_desc": "Ottimizza il trade-off tra velocità di codifica (fotogrammi codificati al secondo) e efficienza di compressione (qualità per bit nel bitstream). Predefiniti a superfast.",
@@ -366,16 +366,16 @@
     "wan_encryption_mode_desc": "Questo determina quando la crittografia sarà utilizzata durante lo streaming su Internet. La crittografia può ridurre le prestazioni di streaming, in particolare su host e client meno potenti."
   },
   "index": {
-    "description": "Apollo è una piattaforma autonoma di game stream per Moonlight.",
+    "description": "Hermes è una piattaforma autonoma di game stream per Moonlight.",
     "download": "Download",
-    "installed_version_not_stable": "Stai eseguendo una versione in anteprima di Apollo. Potresti riscontrare bug o altri problemi. Si prega di segnalare eventuali problemi incontrati. Grazie per aver contribuito a rendere Apollo un software migliore!",
+    "installed_version_not_stable": "Stai eseguendo una versione in anteprima di Hermes. Potresti riscontrare bug o altri problemi. Si prega di segnalare eventuali problemi incontrati. Grazie per aver contribuito a rendere Hermes un software migliore!",
     "loading_latest": "Caricamento dell'ultima versione...",
     "new_pre_release": "Una nuova versione pre-rilascio è disponibile!",
     "new_stable": "Una nuova versione Stabile è disponibile!",
-    "startup_errors": "<b>Attenzione!</b> Apollo ha rilevato questi errori durante l'avvio. Ti <b>raccomandamo vivamente </b> di risolverli prima dello streaming.",
-    "version_dirty": "Grazie per aver contribuito a rendere Apollo un software migliore!",
-    "version_latest": "Stai eseguendo l'ultima versione di Apollo",
-    "welcome": "Ciao, Apollo!"
+    "startup_errors": "<b>Attenzione!</b> Hermes ha rilevato questi errori durante l'avvio. Ti <b>raccomandamo vivamente </b> di risolverli prima dello streaming.",
+    "version_dirty": "Grazie per aver contribuito a rendere Hermes un software migliore!",
+    "version_latest": "Stai eseguendo l'ultima versione di Hermes",
+    "welcome": "Ciao, Hermes!"
   },
   "navbar": {
     "applications": "Applicazioni",
@@ -412,7 +412,7 @@
     "license": "Licenza",
     "lizardbyte_website": "Sito web di LizardByte",
     "resources": "Risorse",
-    "resources_desc": "Risorse per Apollo!",
+    "resources_desc": "Risorse per Hermes!",
     "third_party_notice": "Avvisi di terze parti"
   },
   "troubleshooting": {
@@ -444,7 +444,7 @@
     "confirm_password": "Conferma password",
     "create_creds": "Prima di iniziare, è necessario creare un nuovo nome utente e una nuova password per accedere all'interfaccia web.",
     "create_creds_alert": "Le credenziali in basso sono necessarie per accedere all'interfaccia web di Apollo. Tienile al sicuro, poichè non potrai più visualizzarle!",
-    "greeting": "Benvenuto in Apollo!",
+    "greeting": "Benvenuto in Hermes!",
     "login": "Login",
     "welcome_success": "Questa pagina verrà ricaricata, il tuo browser ti richiederà le nuove credenziali"
   }

@@ -375,9 +375,9 @@
     "loading_latest": "Carregando a última versão...",
     "new_pre_release": "Uma nova versão de pré-lançamento está disponível!",
     "new_stable": "Uma nova versão Stable está disponível!",
-    "startup_errors": "<b>Atenção!</b> A Apollo detectou estes erros durante o arranque. Recomendamos <b>vivamente que</b> os corrija antes de transmitir.",
+    "startup_errors": "<b>Atenção!</b> A Hermes detectou estes erros durante o arranque. Recomendamos <b>vivamente que</b> os corrija antes de transmitir.",
     "version_dirty": "Obrigado por ajudar a fazer do sol um software melhor!",
-    "version_latest": "Você está executando a última versão do Apollo",
+    "version_latest": "Você está executando a última versão do Hermes",
     "welcome": "Olá, Hermes!"
   },
   "navbar": {

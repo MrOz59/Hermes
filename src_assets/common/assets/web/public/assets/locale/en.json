@@ -140,8 +140,8 @@
   },
   "client_card": {
     "clients": "Clients",
-    "clients_desc": "Clients that are specifically tuned to work the best with Apollo",
-    "generic_moonlight_clients_desc": "Generic Moonlight clients are still usable with Apollo."
+    "clients_desc": "Clients that are specifically tuned to work the best with Hermes",
+    "generic_moonlight_clients_desc": "Generic Moonlight clients are still usable with Hermes."
   },
   "config": {
     "adapter_name": "Adapter Name",
@@ -532,15 +532,15 @@
     "save_password": "Remember Password"
   },
   "index": {
-    "description": "Apollo is a self-hosted game stream host for Moonlight.",
+    "description": "Hermes is a self-hosted game stream host for Moonlight.",
     "download": "Download",
-    "installed_version_not_stable": "You are running a pre-release version of Apollo. You may experience bugs or other issues. Please report any issues you encounter. Thank you for helping to make Apollo a better software!",
+    "installed_version_not_stable": "You are running a pre-release version of Hermes. You may experience bugs or other issues. Please report any issues you encounter. Thank you for helping to make Hermes a better software!",
     "loading_latest": "Loading latest release...",
     "new_pre_release": "A new Pre-Release Version is Available!",
     "new_stable": "A new Stable Version is Available!",
-    "startup_errors": "<b>Attention!</b> Apollo detected these errors during startup. We <b>STRONGLY RECOMMEND</b> fixing them before streaming.",
-    "version_dirty": "Thank you for helping to make Apollo a better software!",
-    "version_latest": "You are running the latest version of Apollo",
+    "startup_errors": "<b>Attention!</b> Hermes detected these errors during startup. We <b>STRONGLY RECOMMEND</b> fixing them before streaming.",
+    "version_dirty": "Thank you for helping to make Hermes a better software!",
+    "version_latest": "You are running the latest version of Hermes",
     "welcome": "Hello, Hermes!"
   },
   "navbar": {
@@ -626,7 +626,7 @@
     "legal_desc": "By continuing to use this software you agree to the terms and conditions in the following documents.",
     "license": "License",
     "resources": "Resources",
-    "resources_desc": "Resources for Apollo!",
+    "resources_desc": "Resources for Hermes!",
     "third_party_notice": "Third Party Notice"
   },
   "troubleshooting": {

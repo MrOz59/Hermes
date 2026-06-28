@@ -369,15 +369,15 @@
     "wan_encryption_mode_desc": "Bu, İnternet üzerinden akış yaparken şifrelemenin ne zaman kullanılacağını belirler. Şifreleme, özellikle daha az güçlü ana bilgisayarlarda ve istemcilerde akış performansını düşürebilir."
   },
   "index": {
-    "description": "Apollo, Moonlight için kendi kendine barındırılan bir oyun akışı sunucusudur.",
+    "description": "Hermes, Moonlight için kendi kendine barındırılan bir oyun akışı sunucusudur.",
     "download": "İndir",
-    "installed_version_not_stable": "Apollo'ın yayın öncesi bir sürümünü çalıştırıyorsunuz. Hatalar veya başka sorunlar yaşayabilirsiniz. Lütfen karşılaştığınız sorunları bildirin. Apollo'ın daha iyi bir yazılım olmasına yardımcı olduğunuz için teşekkür ederiz!",
+    "installed_version_not_stable": "Hermes'ın yayın öncesi bir sürümünü çalıştırıyorsunuz. Hatalar veya başka sorunlar yaşayabilirsiniz. Lütfen karşılaştığınız sorunları bildirin. Hermes'ın daha iyi bir yazılım olmasına yardımcı olduğunuz için teşekkür ederiz!",
     "loading_latest": "Son sürüm yükleniyor...",
     "new_pre_release": "Yeni Bir Yayın Öncesi Sürüm Mevcut!",
     "new_stable": "Yeni bir Kararlı Sürüm Kullanılabilir!",
-    "startup_errors": "<b>Dikkat!</b> Apollo başlatma sırasında bu hataları tespit etti. Yayınlamadan önce bunları düzeltmenizi <b>ŞİDDETLE TAVSİYE</b> EDERİZ.",
-    "version_dirty": "Apollo'ı daha iyi bir yazılım haline getirmeye yardımcı olduğunuz için teşekkür ederiz!",
-    "version_latest": "Apollo'ın en son sürümünü çalıştırıyorsunuz",
+    "startup_errors": "<b>Dikkat!</b> Hermes başlatma sırasında bu hataları tespit etti. Yayınlamadan önce bunları düzeltmenizi <b>ŞİDDETLE TAVSİYE</b> EDERİZ.",
+    "version_dirty": "Hermes'ı daha iyi bir yazılım haline getirmeye yardımcı olduğunuz için teşekkür ederiz!",
+    "version_latest": "Hermes'ın en son sürümünü çalıştırıyorsunuz",
     "welcome": "Merhaba, Günışığı!"
   },
   "navbar": {
@@ -447,7 +447,7 @@
     "confirm_password": "Şifreyi onayla",
     "create_creds": "Başlamadan önce, Web UI'ye erişmek için yeni bir kullanıcı adı ve şifre oluşturmanız gerekmektedir.",
     "create_creds_alert": "Apollo'ın Web kullanıcı arayüzüne erişmek için aşağıdaki kimlik bilgileri gereklidir. Onları güvende tutun, çünkü bir daha asla görmeyeceksiniz!",
-    "greeting": "Apollo'a hoş geldiniz!",
+    "greeting": "Hermes'a hoş geldiniz!",
     "login": "Giriş",
     "welcome_success": "Bu sayfa yakında yeniden yüklenecek, tarayıcınız sizden yeni kimlik bilgilerinizi isteyecek"
   }

@@ -108,8 +108,8 @@
   },
   "client_card": {
     "clients": "Klienter",
-    "clients_desc": "Klienter specifikt optimerade för att fungera bäst med Apollo",
-    "generic_moonlight_clients_desc": "Generiska Moonlight-klienter som kan användas med Apollo"
+    "clients_desc": "Klienter specifikt optimerade för att fungera bäst med Hermes",
+    "generic_moonlight_clients_desc": "Generiska Moonlight-klienter som kan användas med Hermes"
   },
   "config": {
     "adapter_name": "Adapternamn",
@@ -384,7 +384,7 @@
     "restart_note": "Apollo startar om för att tillämpa ändringar.",
     "server_cmd": "Serverkommandon",
     "server_cmd_desc": "Konfigurera en lista med kommandon som ska köras när de anropas från klienten under streaming.",
-    "sunshine_name": "Apollo Namn",
+    "sunshine_name": "Hermes Namn",
     "sunshine_name_desc": "Namnet som visas av Moonlight. Om det inte anges används datorns värdnamn",
     "sw_preset": "SW förinställningar",
     "sw_preset_desc": "Optimera avvägningen mellan omkodningshastighet (kodade bildrutor per sekund) och komprimeringseffektivitet (kvalitet per bit i bitström). Standard är superfast.",
@@ -428,16 +428,16 @@
     "save_password": "Kom ihåg lösenord"
   },
   "index": {
-    "description": "Apollo är en självhostad spelstreaming-värd för Moonlight.",
+    "description": "Hermes är en självhostad spelstreaming-värd för Moonlight.",
     "download": "Ladda ner",
-    "installed_version_not_stable": "Du kör en förhandsversion av Apollo. Du kan uppleva buggar eller andra problem. Vänligen rapportera eventuella problem du stöter på. Tack för att du hjälper till att göra Apollo till en bättre programvara!",
+    "installed_version_not_stable": "Du kör en förhandsversion av Hermes. Du kan uppleva buggar eller andra problem. Vänligen rapportera eventuella problem du stöter på. Tack för att du hjälper till att göra Hermes till en bättre programvara!",
     "loading_latest": "Laddar senaste versionen...",
     "new_pre_release": "En ny förhandsversion är tillgänglig!",
     "new_stable": "En ny stabil version är tillgänglig!",
-    "startup_errors": "<b>Observera!</b> Apollo upptäckte dessa fel vid uppstart. Vi <b>REKOMMENDERAR STARKT</b> att du åtgärdar dem innan streaming.",
-    "version_dirty": "Tack för att du hjälper till att göra Apollo till en bättre programvara!",
-    "version_latest": "Du kör den senaste versionen av Apollo",
-    "welcome": "Hej, Apollo!"
+    "startup_errors": "<b>Observera!</b> Hermes upptäckte dessa fel vid uppstart. Vi <b>REKOMMENDERAR STARKT</b> att du åtgärdar dem innan streaming.",
+    "version_dirty": "Tack för att du hjälper till att göra Hermes till en bättre programvara!",
+    "version_latest": "Du kör den senaste versionen av Hermes",
+    "welcome": "Hej, Hermes!"
   },
   "navbar": {
     "applications": "Applikationer",
@@ -515,7 +515,7 @@
     "license": "Licens",
     "lizardbyte_website": "LizardByte Hemsida",
     "resources": "Resurser",
-    "resources_desc": "Resurser för Apollo!",
+    "resources_desc": "Resurser för Hermes!",
     "third_party_notice": "Meddelande från tredje part"
   },
   "troubleshooting": {
@@ -544,7 +544,7 @@
     "confirm_password": "Bekräfta lösenord",
     "create_creds": "Innan vi börjar behöver du skapa ett nytt användarnamn och lösenord för att komma åt webbgränssnittet.",
     "create_creds_alert": "Inloggningsuppgifterna nedan behövs för att komma åt Apollos webbgränssnitt. Förvara dem säkert, eftersom du aldrig kommer att se dem igen!",
-    "greeting": "Välkommen till Apollo!",
+    "greeting": "Välkommen till Hermes!",
     "login": "Logga in",
     "welcome_success": "Denna sida kommer att laddas om snart, din webbläsare kommer att be om de nya inloggningsuppgifterna",
     "login_success": "Denna sida kommer att laddas om snart."

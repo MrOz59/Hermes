@@ -127,8 +127,8 @@
   },
   "client_card": {
     "clients": "客户端",
-    "clients_desc": "为 Apollo 精心特调的客户端",
-    "generic_moonlight_clients_desc": "普通 Moonlight 客户端也可与 Apollo 共同使用。"
+    "clients_desc": "为 Hermes 精心特调的客户端",
+    "generic_moonlight_clients_desc": "普通 Moonlight 客户端也可与 Hermes 共同使用。"
   },
   "config": {
     "adapter_name": "适配器名称",
@@ -419,7 +419,7 @@
     "server_cmd_desc": "配置命令列表，当串流时从客户端调用。",
     "stream_audio": "串流音频",
     "stream_audio_desc": "是否向客户端传送音频。在将客户端作为扩展显示器时比较有用。",
-    "sunshine_name": "Apollo 主机名称",
+    "sunshine_name": "Hermes 主机名称",
     "sunshine_name_desc": "在 Moonlight 中显示的名称。如果未指定，则使用 PC 的主机名",
     "sw_preset": "软件编码预设",
     "sw_preset_desc": "在编码速度和压缩效率之间权衡。默认为 superfast - 超快。",
@@ -465,16 +465,16 @@
     "save_password": "记住密码"
   },
   "index": {
-    "description": "Apollo 是供 Moonlight 使用的自建游戏串流服务。",
+    "description": "Hermes 是供 Moonlight 使用的自建游戏串流服务。",
     "download": "下载",
-    "installed_version_not_stable": "您正在运行一个 Apollo 的预发布版本。您可能会遇到 Bug 或其他问题。 请报告您遇到的任何问题。感谢您帮助将 Apollo 变得更好！",
+    "installed_version_not_stable": "您正在运行一个 Hermes 的预发布版本。您可能会遇到 Bug 或其他问题。 请报告您遇到的任何问题。感谢您帮助将 Hermes 变得更好！",
     "loading_latest": "正在检测最新版本...",
     "new_pre_release": "有新的预发布版本可用！",
     "new_stable": "新的稳定版本已发布！",
-    "startup_errors": "<b>请注意！</b>Apollo 在启动过程中检测到这些错误。我们<b>强烈建议</b>您在串流之前修复这些错误。",
-    "version_dirty": "感谢您的帮助，让 Apollo 变得更好！",
-    "version_latest": "您正在运行最新版本的 Apollo",
-    "welcome": "你好，Apollo！"
+    "startup_errors": "<b>请注意！</b>Hermes 在启动过程中检测到这些错误。我们<b>强烈建议</b>您在串流之前修复这些错误。",
+    "version_dirty": "感谢您的帮助，让 Hermes 变得更好！",
+    "version_latest": "您正在运行最新版本的 Hermes",
+    "welcome": "你好，Hermes！"
   },
   "navbar": {
     "applications": "应用程序",
@@ -559,7 +559,7 @@
     "license": "许可协议",
     "lizardbyte_website": "LizardByte 网站",
     "resources": "参考资源",
-    "resources_desc": "Apollo 相关资源！",
+    "resources_desc": "Hermes 相关资源！",
     "third_party_notice": "第三方声明"
   },
   "troubleshooting": {
@@ -588,7 +588,7 @@
     "confirm_password": "确认密码",
     "create_creds": "在开始之前，我们需要您为访问 Web UI 设置一个新的用户名和密码。",
     "create_creds_alert": "需要下面的账户信息才能访问 Apollo 的 Web UI 。请妥善保存，因为你再也不会见到它们！",
-    "greeting": "欢迎使用 Apollo！",
+    "greeting": "欢迎使用 Hermes！",
     "login": "登录",
     "welcome_success": "此页面将很快重新加载，您的浏览器将询问您新的账户信息",
     "login_success": "此页面将重新加载。"

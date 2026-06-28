@@ -328,7 +328,7 @@
     "res_fps_desc": "Die von Apollo beworbenen Anzeigenmodi Einige Versionen von Moonlight, wie Moonlight-nx (Switch), verlassen sich auf diese Listen, um sicherzustellen, dass die angeforderten Auflösungen und fps unterstützt werden. Diese Einstellung ändert nicht die Art und Weise, wie der Bildschirm an Mondlight gesendet wird.",
     "resolutions": "Angemeldete Auflösungen",
     "restart_note": "Apollo wird neu gestartet, um Änderungen anzuwenden.",
-    "sunshine_name": "Apollo Name",
+    "sunshine_name": "Hermes Name",
     "sunshine_name_desc": "Der von Mononlight angezeigte Name, falls nicht angegeben, wird der Hostname des PCs verwendet",
     "sw_preset": "SW-Voreinstellungen",
     "sw_preset_desc": "Optimieren Sie den Abgleich zwischen der Kodierungsgeschwindigkeit (kodierte Frames pro Sekunde) und der Komprimierungseffizienz (Qualität pro Bit im Bitstream). Standard ist überflüssig.",
@@ -369,16 +369,16 @@
     "wan_encryption_mode_desc": "Dies legt fest, wann Verschlüsselung beim Streaming über das Internet verwendet wird. Verschlüsselung kann die Streaming-Leistung senken, insbesondere auf weniger leistungsfähigen Hosts und Clients."
   },
   "index": {
-    "description": "Apollo ist ein selbst gehosteter Game-Stream-Host für Moonlight.",
+    "description": "Hermes ist ein selbst gehosteter Game-Stream-Host für Moonlight.",
     "download": "Download",
-    "installed_version_not_stable": "Sie verwenden eine Vor-Release-Version von Apollo. Sie können Fehler oder andere Probleme haben. Bitte melde alle Probleme, auf die du triffst. Danke, dass du dabei geholfen hast, Apollo zu einer besseren Software zu machen!",
+    "installed_version_not_stable": "Sie verwenden eine Vor-Release-Version von Hermes. Sie können Fehler oder andere Probleme haben. Bitte melde alle Probleme, auf die du triffst. Danke, dass du dabei geholfen hast, Hermes zu einer besseren Software zu machen!",
     "loading_latest": "Lade neueste Version...",
     "new_pre_release": "Eine neue Pre-Release Version ist verfügbar!",
     "new_stable": "Eine neue Stable Version ist verfügbar!",
-    "startup_errors": "<b>Achtung!</b> Apollo erkannte diese Fehler während des Starts. Wir <b>STRONGLY EMPFOHLEN</b> beheben sie vor dem Streaming.",
-    "version_dirty": "Vielen Dank, dass Sie dazu beigetragen haben, Apollo zu einer besseren Software zu machen!",
-    "version_latest": "Du verwendest die neueste Version von Apollo",
-    "welcome": "Hallo, Apollo!"
+    "startup_errors": "<b>Achtung!</b> Hermes erkannte diese Fehler während des Starts. Wir <b>STRONGLY EMPFOHLEN</b> beheben sie vor dem Streaming.",
+    "version_dirty": "Vielen Dank, dass Sie dazu beigetragen haben, Hermes zu einer besseren Software zu machen!",
+    "version_latest": "Du verwendest die neueste Version von Hermes",
+    "welcome": "Hallo, Hermes!"
   },
   "navbar": {
     "applications": "Anwendungen",
@@ -415,7 +415,7 @@
     "license": "Lizenz",
     "lizardbyte_website": "LizardByte Webseite",
     "resources": "Ressourcen",
-    "resources_desc": "Ressourcen für Apollo!",
+    "resources_desc": "Ressourcen für Hermes!",
     "third_party_notice": "Drittanbieter-Mitteilung"
   },
   "troubleshooting": {
@@ -447,7 +447,7 @@
     "confirm_password": "Passwort bestätigen",
     "create_creds": "Bevor Sie loslegen, müssen Sie einen neuen Benutzernamen und ein neues Passwort für den Zugriff auf die Web-Oberfläche erstellen.",
     "create_creds_alert": "Die unten angegebenen Anmeldedaten werden benötigt, um auf das Webinterface von Apollo zuzugreifen. Halten Sie sie sicher, da Sie sie nie wieder sehen werden!",
-    "greeting": "Willkommen bei Apollo!",
+    "greeting": "Willkommen bei Hermes!",
     "login": "Anmelden",
     "welcome_success": "Diese Seite wird bald neu geladen, Ihr Browser wird Sie nach den neuen Anmeldeinformationen fragen"
   }

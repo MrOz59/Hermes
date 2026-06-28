@@ -351,7 +351,7 @@
     "server_cmd_desc": "Configura una lista de comandos que se puedan ejecutar a petición del cliente durante la retransmisión.",
     "stream_audio": "Transmitir audio",
     "stream_audio_desc": "Si se retransmite o no el audio. Deshabilitar esto puede ser útil para retransmitir monitores headless como segundos monitores.",
-    "sunshine_name": "Nombre de Apollo",
+    "sunshine_name": "Nombre de Hermes",
     "sunshine_name_desc": "El nombre mostrado por Moonlight/Artemis. Si no se especifica, se utiliza el nombre de host del PC",
     "sw_preset": "Preajustes SW",
     "sw_preset_desc": "Optimice la compensación entre la velocidad de codificación (fotogramas codificados por segundo) y la eficiencia de la compresión (calidad por bit en el flujo de bits). Por defecto es superrápido.",
@@ -392,16 +392,16 @@
     "wan_encryption_mode_desc": "Esto determina cuándo se utilizará el cifrado al transmitir a través de Internet. El cifrado puede reducir el rendimiento de la transmisión, especialmente en hosts y clientes menos poderosos."
   },
   "index": {
-    "description": "Apollo es un servidor de transmisión de juego autoalojado para Moonlight.",
+    "description": "Hermes es un servidor de transmisión de juego autoalojado para Moonlight.",
     "download": "Descargar",
-    "installed_version_not_stable": "Está ejecutando una versión pre-lanzamiento de Apollo. Puede que experimente fallos u otros problemas. Por favor, informe de cualquier problema que encuentre. ¡Gracias por ayudar a hacer de Apollo un mejor software!",
+    "installed_version_not_stable": "Está ejecutando una versión pre-lanzamiento de Hermes. Puede que experimente fallos u otros problemas. Por favor, informe de cualquier problema que encuentre. ¡Gracias por ayudar a hacer de Hermes un mejor software!",
     "loading_latest": "Cargando la última versión...",
     "new_pre_release": "¡Una nueva versión de pre-lanzamiento está disponible!",
     "new_stable": "¡Una nueva versión estable está disponible!",
-    "startup_errors": "<b>Atención.</b> Apollo ha detectado estos errores durante el arranque. <b>RECOMENDAMOS ENCARECIDAMENTE</b> solucionarlos antes de transmitir.",
-    "version_dirty": "¡Gracias por ayudar a hacer de Apollo un mejor software!",
-    "version_latest": "Está ejecutando la última versión de Apollo",
-    "welcome": "¡Hola, Apollo!"
+    "startup_errors": "<b>Atención.</b> Hermes ha detectado estos errores durante el arranque. <b>RECOMENDAMOS ENCARECIDAMENTE</b> solucionarlos antes de transmitir.",
+    "version_dirty": "¡Gracias por ayudar a hacer de Hermes un mejor software!",
+    "version_latest": "Está ejecutando la última versión de Hermes",
+    "welcome": "¡Hola, Hermes!"
   },
   "navbar": {
     "applications": "Aplicaciones",
@@ -438,7 +438,7 @@
     "license": "Licencia",
     "lizardbyte_website": "Sitio web de LizardByte",
     "resources": "Recursos",
-    "resources_desc": "¡Recursos para Apollo!",
+    "resources_desc": "¡Recursos para Hermes!",
     "third_party_notice": "Aviso de Terceros"
   },
   "troubleshooting": {
@@ -470,7 +470,7 @@
     "confirm_password": "Confirmar contraseña",
     "create_creds": "Antes de empezar, necesitamos que crees un nuevo nombre de usuario y contraseña para acceder a la Web UI.",
     "create_creds_alert": "Las credenciales a continuación son necesarias para acceder a la interfaz web de Apollo. Manténgalas seguras, ¡ya que nunca volverá a verlas!",
-    "greeting": "¡Bienvenido a Apollo!",
+    "greeting": "¡Bienvenido a Hermes!",
     "login": "Iniciar sesión",
     "welcome_success": "Esta página se recargará pronto, su navegador le pedirá las nuevas credenciales"
   }

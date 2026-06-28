@@ -120,8 +120,8 @@
   },
   "client_card": {
     "clients": "Clientes",
-    "clients_desc": "Clientes que foram especificamente aprimorados para funcionar bem com o Apollo.",
-    "generic_moonlight_clients_desc": "Clientes genéricos Moonlight ainda funcionam com o Apollo."
+    "clients_desc": "Clientes que foram especificamente aprimorados para funcionar bem com o Hermes.",
+    "generic_moonlight_clients_desc": "Clientes genéricos Moonlight ainda funcionam com o Hermes."
   },
   "config": {
     "adapter_name": "Nome da GPU",
@@ -444,7 +444,7 @@
     "restart_note": "O Apollo está sendo reiniciado para aplicar as alterações.",
     "server_cmd": "Comandos de Servidor",
     "server_cmd_desc": "Configura uma lista de comandos a serem executados no servidor quando solicitados durante uma transmissão pelo cliente.",
-    "sunshine_name": "Nome Apollo",
+    "sunshine_name": "Nome Hermes",
     "sunshine_name_desc": "O nome exibido pelo Moonlight. Se não for especificado, será usado o nome do PC servidor",
     "sw_preset": "Predefinições de SW",
     "sw_preset_desc": "Otimiza o equilíbrio entre a velocidade de codificação (quadros codificados por segundo) e a eficiência da compactação (qualidade por bit no fluxo de bits). O padrão é super rápido.",
@@ -488,16 +488,16 @@
     "save_password": "Lembrar senha"
   },
   "index": {
-    "description": "O Apollo é um servidor de transmissão de jogos auto-hospedado para o Moonlight.",
+    "description": "O Hermes é um servidor de transmissão de jogos auto-hospedado para o Moonlight.",
     "download": "Baixar",
-    "installed_version_not_stable": "Você está executando uma versão de pré-lançamento do Apollo. É possível que você encontre bugs ou outros problemas. Informe todos os problemas que encontrar. Obrigado por ajudar a tornar o Apollo um software melhor!",
+    "installed_version_not_stable": "Você está executando uma versão de pré-lançamento do Hermes. É possível que você encontre bugs ou outros problemas. Informe todos os problemas que encontrar. Obrigado por ajudar a tornar o Hermes um software melhor!",
     "loading_latest": "Carregando a versão mais recente...",
     "new_pre_release": "Uma nova versão de pré-lançamento está disponível!",
     "new_stable": "Uma nova versão estável está disponível!",
-    "startup_errors": "<b>Atenção!</b> A Apollo detectou esses erros durante a inicialização. <b>RECOMENDAMOS FORTEMENTE</b> corrigi-los antes da transmissão.",
-    "version_dirty": "Obrigado por ajudar a tornar o Apollo um software melhor!",
-    "version_latest": "Você está executando a versão mais recente do Apollo",
-    "welcome": "Olá, Apollo!"
+    "startup_errors": "<b>Atenção!</b> A Hermes detectou esses erros durante a inicialização. <b>RECOMENDAMOS FORTEMENTE</b> corrigi-los antes da transmissão.",
+    "version_dirty": "Obrigado por ajudar a tornar o Hermes um software melhor!",
+    "version_latest": "Você está executando a versão mais recente do Hermes",
+    "welcome": "Olá, Hermes!"
   },
   "navbar": {
     "applications": "Aplicativos",
@@ -575,7 +575,7 @@
     "license": "Licença",
     "lizardbyte_website": "Site da LizardByte",
     "resources": "Recursos",
-    "resources_desc": "Recursos para o Apollo!",
+    "resources_desc": "Recursos para o Hermes!",
     "third_party_notice": "Aviso de terceiros"
   },
   "troubleshooting": {
@@ -604,7 +604,7 @@
     "confirm_password": "Confirmar senha",
     "create_creds": "Antes de começar, precisamos que você crie um novo nome de usuário e senha para acessar a interface do usuário da Web.",
     "create_creds_alert": "As credenciais abaixo são necessárias para acessar a interface de usuário da Web do Apollo. Mantenha-as em segurança, pois você nunca mais as verá!",
-    "greeting": "Bem-vindo ao Apollo!",
+    "greeting": "Bem-vindo ao Hermes!",
     "login": "Login",
     "welcome_success": "Esta página será recarregada em breve e seu navegador solicitará as novas credenciais",
     "login_success": "Essa página vai recarregar automaticamente em breve."

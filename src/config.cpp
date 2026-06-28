@@ -596,7 +596,12 @@ namespace config {
     platf::appdata().string() + "/sunshine.conf",  // config file
     {},  // cmd args
     47989,  // Base port number
-    "ipv4",  // Address family
+    // Default to dual-stack. On modern distros `localhost` often resolves to
+    // ::1 (IPv6) first, so an IPv4-only bind makes the web UI fail
+    // intermittently with "Failed to fetch" (the browser tries ::1, which
+    // nothing is listening on, before falling back to 127.0.0.1). "both" binds
+    // "::" dual-stack so localhost works regardless of how it resolves.
+    "both",  // Address family
     platf::appdata().string() + "/sunshine.log",  // log file
     false,  // notify_pre_releases
     false,  // legacy_ordering

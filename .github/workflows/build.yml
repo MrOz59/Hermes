@@ -514,6 +514,17 @@ jobs:
           git tag -f nightly "${GITHUB_SHA}"
           git push -f origin "refs/tags/nightly"
 
+      - name: Clear stale nightly assets
+        run: |
+          # Remove all assets from the existing nightly release so a version
+          # bump never leaves old-versioned packages behind. Ignores the case
+          # where the release doesn't exist yet.
+          for asset in $(gh release view nightly --json assets -q '.assets[].name' 2>/dev/null); do
+            gh release delete-asset nightly "$asset" --yes || true
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish nightly release
         uses: softprops/action-gh-release@v1
         with:

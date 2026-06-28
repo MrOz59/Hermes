@@ -85,6 +85,10 @@ TEST_P(PairingTest, Run) {
 
   setup(PRIVATE_KEY, PUBLIC_CERT);
 
+  // Start from a clean authorized-client list so we can assert exactly what
+  // a successful pairing adds.
+  erase_all_clients();
+
   // phase 1
   getservercert(*input.session, tree, input.pin);
   ASSERT_EQ(tree.get<int>("root.paired") == 1, expected.phase_1_success);
@@ -108,23 +112,22 @@ TEST_P(PairingTest, Run) {
   input.session->serverchallenge = input.override_server_challenge;
 
   // phase 4
-  auto input_client_cert = input.session->client.cert;  // Will be moved
-  auto add_cert = std::make_shared<safe::queue_t<crypto::x509_t>>(30);
-  clientpairingsecret(*input.session, add_cert, tree, input.client_pairing_secret);
+  const std::string input_client_name = input.session->client.name;
+  clientpairingsecret(*input.session, tree, input.client_pairing_secret);
   ASSERT_EQ(tree.get<int>("root.paired") == 1, expected.phase_4_success);
 
-  // Check that we actually added the input client certificate to `add_cert`
+  // On success the client is added to the authorized-client list as a named
+  // cert; confirm it landed there under the expected name.
   if (expected.phase_4_success) {
-    ASSERT_EQ(add_cert->peek(), true);
-    auto cert = add_cert->pop();
-    char added_subject_name[256];
-    X509_NAME_oneline(X509_get_subject_name(cert.get()), added_subject_name, sizeof(added_subject_name));
-
-    auto input_cert = crypto::x509(input_client_cert);
-    char original_suject_name[256];
-    X509_NAME_oneline(X509_get_subject_name(input_cert.get()), original_suject_name, sizeof(original_suject_name));
-
-    ASSERT_EQ(std::string(added_subject_name), std::string(original_suject_name));
+    const auto clients = get_all_clients();
+    bool found = false;
+    for (const auto &client : clients) {
+      if (client.value("name", std::string {}) == input_client_name) {
+        found = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(found) << "paired client '" << input_client_name << "' not in authorized list";
   }
 }
 
@@ -252,8 +255,7 @@ TEST(PairingTest, OutOfOrderCalls) {
   serverchallengeresp(sess, tree, "test");
   ASSERT_FALSE(tree.get<int>("root.paired") == 1);
 
-  auto add_cert = std::make_shared<safe::queue_t<crypto::x509_t>>(30);
-  clientpairingsecret(sess, add_cert, tree, "test");
+  clientpairingsecret(sess, tree, "test");
   ASSERT_FALSE(tree.get<int>("root.paired") == 1);
 
   // This should work, it's the first time we call it

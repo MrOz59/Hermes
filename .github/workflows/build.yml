@@ -14,6 +14,79 @@ env:
 
 jobs:
   # ===========================================
+  # Unit / integration tests (Arch container)
+  # ===========================================
+  # Builds with -DBUILD_TESTS=ON and runs the GoogleTest suite via ctest.
+  # Hardware-dependent cases self-skip with GTEST_SKIP on headless runners.
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Setup Arch Linux
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            base-devel \
+            git \
+            cmake \
+            ninja \
+            boost \
+            openssl \
+            opus \
+            ffmpeg \
+            libdrm \
+            wayland \
+            libx11 \
+            libxrandr \
+            libxfixes \
+            libxcb \
+            libva \
+            libvdpau \
+            libcap \
+            curl \
+            libnotify \
+            libayatana-appindicator \
+            libevdev \
+            systemd \
+            miniupnpc \
+            libpulse \
+            npm \
+            nodejs \
+            icu \
+            numactl
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Fix git safe directory
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      - name: Configure CMake (with tests)
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DSUNSHINE_ENABLE_WAYLAND=ON \
+            -DSUNSHINE_ENABLE_X11=ON \
+            -DSUNSHINE_ENABLE_DRM=ON \
+            -DSUNSHINE_ENABLE_CUDA=OFF \
+            -DBUILD_TESTS=ON
+
+      - name: Build tests
+        run: cmake --build build --target test_sunshine -j$(nproc)
+
+      - name: Run tests
+        # The suite is a single GoogleTest binary (no ctest registration);
+        # run it directly as documented in docs/contributing.md. Hardware-
+        # dependent cases self-skip via GTEST_SKIP on headless runners.
+        run: ./build/tests/test_sunshine --gtest_color=yes
+
+  # ===========================================
   # Windows Build
   # ===========================================
   # Temporarily disabled: Hermes targets Linux hosts, and the Windows build

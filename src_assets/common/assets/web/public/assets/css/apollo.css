@@ -63,41 +63,13 @@
 }
 
 /*
- * Give the navbar a quiet violet identity (was the default light header).
- * Drive Bootstrap's navbar color variables so links/brand/toggler all read as
- * light text on the dark violet, instead of fighting individual selectors.
+ * The navbar's violet background + light text live in Navbar.vue's own scoped
+ * <style> (it owns the .header/.navbar-background rules with !important). We
+ * only ensure the brand text/logo is light here; everything else is handled
+ * there to avoid two sources fighting on specificity.
  */
-.navbar-background {
-    background: linear-gradient(90deg, #2e1065 0%, #4c1d95 100%);
-    --bs-navbar-color: rgba(255, 255, 255, 0.85);
-    --bs-navbar-hover-color: #ffffff;
-    --bs-navbar-active-color: #ffffff;
-    --bs-navbar-brand-color: #ede9fe;
-    --bs-navbar-brand-hover-color: #ffffff;
-    --bs-navbar-toggler-border-color: rgba(255, 255, 255, 0.25);
-}
-/*
- * Force white-ish text for everything in the navbar. Use !important and an
- * explicit element list because Bootstrap's compiled navbar rules (and the
- * scoped Navbar component CSS) are more specific than the variable defaults
- * above and would otherwise keep the links dark on the violet background.
- */
-.navbar-background .navbar-brand,
-.navbar-background .nav-link,
-.navbar-background .nav-link i,
-.navbar-background .dropdown-toggle,
-.navbar-background .navbar-text {
+.navbar-background .navbar-brand {
     color: #ffffff !important;
-}
-.navbar-background .nav-link:hover,
-.navbar-background .nav-link:focus,
-.navbar-background .navbar-brand:hover {
-    color: #ffffff !important;
-    opacity: 0.85;
-}
-/* Dropdown menu items (e.g. Theme) stay readable on their own light panel. */
-.navbar-background .dropdown-menu .dropdown-item {
-    color: inherit;
 }
 
 [data-bs-theme=dark] .element {

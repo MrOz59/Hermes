@@ -84,111 +84,6 @@ jobs:
           if-no-files-found: ignore
 
   # ===========================================
-  # Linux AppImage Build (Ubuntu 24.04 for newer libs)
-  # ===========================================
-  build-linux-appimage:
-    runs-on: ubuntu-24.04
-    
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            ninja-build \
-            libssl-dev \
-            libboost-all-dev \
-            libpulse-dev \
-            libopus-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libswscale-dev \
-            libdrm-dev \
-            libgbm-dev \
-            libwayland-dev \
-            libx11-dev \
-            libxrandr-dev \
-            libxfixes-dev \
-            libxcb1-dev \
-            libxcb-shm0-dev \
-            libxcb-xfixes0-dev \
-            libva-dev \
-            libvdpau-dev \
-            libcap-dev \
-            libcurl4-openssl-dev \
-            libnotify-dev \
-            libayatana-appindicator3-dev \
-            libevdev-dev \
-            libudev-dev \
-            libsystemd-dev \
-            libminiupnpc-dev \
-            libfuse2 \
-            libicu-dev \
-            libnuma-dev \
-            wget \
-            nodejs \
-            npm
-
-      - name: Configure CMake
-        run: |
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_INSTALL_PREFIX=/usr \
-            -DSUNSHINE_ENABLE_WAYLAND=ON \
-            -DSUNSHINE_ENABLE_X11=ON \
-            -DSUNSHINE_ENABLE_DRM=ON \
-            -DSUNSHINE_ENABLE_CUDA=OFF \
-            -DFETCHCONTENT_FULLY_DISCONNECTED=OFF
-
-      - name: Build
-        run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(nproc)
-
-      - name: Install to AppDir
-        run: |
-          DESTDIR=${{github.workspace}}/AppDir cmake --install build
-          
-      - name: Create AppImage
-        run: |
-          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          chmod +x linuxdeploy-x86_64.AppImage
-          
-          # Create desktop file if not exists
-          mkdir -p AppDir/usr/share/applications
-          cat > AppDir/usr/share/applications/apollo.desktop << 'EOF'
-          [Desktop Entry]
-          Name=Apollo
-          Comment=Self-hosted game stream host
-          Exec=apollo
-          Icon=apollo
-          Type=Application
-          Categories=Network;RemoteAccess;
-          EOF
-          
-          ./linuxdeploy-x86_64.AppImage \
-            --appdir AppDir \
-            --output appimage \
-            --desktop-file AppDir/usr/share/applications/apollo.desktop \
-            || echo "AppImage creation had issues, continuing..."
-            
-          mv Apollo*.AppImage apollo-linux-x86_64.AppImage 2>/dev/null || true
-
-      - name: Upload AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: apollo-linux-appimage
-          path: "*.AppImage"
-          retention-days: 30
-          if-no-files-found: ignore
-
-  # ===========================================
   # Arch Linux Package (PKGBUILD)
   # ===========================================
   build-arch-pkg:
@@ -243,7 +138,7 @@ jobs:
       - name: Fix permissions and git
         run: |
           chown -R builder:builder .
-          git config --global --add safe.directory /__w/Apollo-Linux/Apollo-Linux
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
       - name: Build with CMake
         run: |
@@ -260,21 +155,24 @@ jobs:
 
       - name: Create Package
         run: |
-          mkdir -p pkg/usr/bin pkg/usr/share/apollo
-          cp build/sunshine* pkg/usr/bin/apollo 2>/dev/null || true
-          chmod 755 pkg/usr/bin/apollo 2>/dev/null || true
-          cp -r build/assets/* pkg/usr/share/apollo/ 2>/dev/null || true
-          
+          VERSION="$(cat VERSION)"
+          mkdir -p pkg/usr/bin pkg/usr/share/hermes
+          # The build links the binary as sunshine-<version> with a `sunshine`
+          # symlink; copy the resolved binary and install it as `hermes`.
+          cp -L build/sunshine pkg/usr/bin/hermes
+          chmod 755 pkg/usr/bin/hermes
+          cp -r build/assets/* pkg/usr/share/hermes/
+
           # Create simple tarball
-          cd pkg && tar -czvf ../apollo-arch-linux-x86_64.tar.gz .
+          cd pkg && tar -czvf "../hermes-${VERSION}-arch-linux-x86_64.tar.gz" .
 
       - name: Upload Arch Package
         uses: actions/upload-artifact@v4
         with:
-          name: apollo-arch-pkg
+          name: hermes-arch-pkg
           path: "*.tar.gz"
           retention-days: 30
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   # ===========================================
   # Debian/Ubuntu Package (.deb)
@@ -346,91 +244,91 @@ jobs:
       - name: Create DEB Package
         run: |
           VERSION="$(cat VERSION)"
-          PKGDIR="apollo_${VERSION}_amd64"
-          
+          PKGDIR="hermes_${VERSION}_amd64"
+
           mkdir -p ${PKGDIR}/DEBIAN
           mkdir -p ${PKGDIR}/usr/bin
-          mkdir -p ${PKGDIR}/usr/share/apollo
+          mkdir -p ${PKGDIR}/usr/share/hermes
           mkdir -p ${PKGDIR}/usr/share/applications
           mkdir -p ${PKGDIR}/usr/share/icons/hicolor/scalable/apps
           mkdir -p ${PKGDIR}/usr/share/icons/hicolor/scalable/status
           mkdir -p ${PKGDIR}/usr/lib/systemd/user
-          
-          # Copy files
-          cp build/sunshine* ${PKGDIR}/usr/bin/apollo 2>/dev/null || true
-          chmod 755 ${PKGDIR}/usr/bin/apollo 2>/dev/null || true
-          
-          cp -r build/assets/web ${PKGDIR}/usr/share/apollo/ 2>/dev/null || true
-          cp build/assets/*.png build/assets/*.json ${PKGDIR}/usr/share/apollo/ 2>/dev/null || true
-          
+
+          # Install the binary as `hermes` (resolve the sunshine symlink).
+          cp -L build/sunshine ${PKGDIR}/usr/bin/hermes
+          chmod 755 ${PKGDIR}/usr/bin/hermes
+
+          cp -r build/assets/web ${PKGDIR}/usr/share/hermes/
+          cp build/assets/*.png build/assets/*.json ${PKGDIR}/usr/share/hermes/ 2>/dev/null || true
+
           # Copy icons
           cp src_assets/linux/misc/icons/*.svg ${PKGDIR}/usr/share/icons/hicolor/scalable/apps/ 2>/dev/null || true
-          
+
           # Create control file
           cat > ${PKGDIR}/DEBIAN/control << EOF
-          Package: apollo
+          Package: hermes
           Version: ${VERSION}
           Section: net
           Priority: optional
           Architecture: amd64
           Depends: libssl3, libboost-all-dev, libpulse0, libopus0, libdrm2, libwayland-client0, libx11-6, libva2, libcurl4, libnotify4, libayatana-appindicator3-1, libevdev2, libcap2
           Recommends: evdi-dkms
-          Maintainer: Apollo Linux Fork
+          Maintainer: Hermes
           Description: Self-hosted game stream host with Linux virtual display support
-           Apollo is a game streaming server based on Sunshine with added
-           support for Linux virtual displays using EVDI.
+           Hermes is an Apollo-derived game streaming server with low-latency
+           Linux virtual displays via Hermes-KMS (EVDI also supported).
           EOF
-          
+
           # Create postinst script
           cat > ${PKGDIR}/DEBIAN/postinst << 'EOF'
           #!/bin/bash
           set -e
-          setcap cap_sys_admin+p /usr/bin/apollo || true
+          setcap cap_sys_admin+p /usr/bin/hermes || true
           if command -v modprobe &> /dev/null; then
             modprobe evdi 2>/dev/null || true
           fi
           gtk-update-icon-cache -f /usr/share/icons/hicolor/ 2>/dev/null || true
           EOF
           chmod 755 ${PKGDIR}/DEBIAN/postinst
-          
+
           # Create systemd service
-          cat > ${PKGDIR}/usr/lib/systemd/user/apollo.service << 'EOF'
+          cat > ${PKGDIR}/usr/lib/systemd/user/hermes.service << 'EOF'
           [Unit]
-          Description=Apollo Game Streaming Server
+          Description=Hermes Game Streaming Server
           StartLimitIntervalSec=500
           StartLimitBurst=5
 
           [Service]
           ExecStartPre=/bin/sleep 5
-          ExecStart=/usr/bin/apollo
+          ExecStart=/usr/bin/hermes
           Restart=on-failure
           RestartSec=5s
 
           [Install]
           WantedBy=xdg-desktop-autostart.target
           EOF
-          
+
           # Create desktop file
-          cat > ${PKGDIR}/usr/share/applications/apollo.desktop << 'EOF'
+          cat > ${PKGDIR}/usr/share/applications/hermes.desktop << 'EOF'
           [Desktop Entry]
-          Name=Apollo
+          Name=Hermes
           Comment=Self-hosted game stream host
-          Exec=/usr/bin/env systemctl start --user apollo
-          Icon=apollo
+          Exec=/usr/bin/env systemctl start --user hermes
+          Icon=hermes
           Type=Application
           Categories=Network;RemoteAccess;
           EOF
-          
-          # Build package (output name already matches the desired final name)
-          dpkg-deb --build ${PKGDIR} apollo_${VERSION}_amd64.deb
+
+          # Build package
+          dpkg-deb --build ${PKGDIR} hermes_${VERSION}_amd64.deb
 
       - name: Upload DEB Package
         uses: actions/upload-artifact@v4
         with:
-          name: apollo-deb
+          name: hermes-deb
           path: "*.deb"
           retention-days: 30
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   # ===========================================
   # Fedora RPM Build
@@ -501,62 +399,63 @@ jobs:
         run: |
           VERSION="$(cat VERSION)"
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-          
-          # Create tarball for RPM
-          mkdir -p apollo-${VERSION}/usr/bin
-          mkdir -p apollo-${VERSION}/usr/share/apollo
-          cp build/sunshine* apollo-${VERSION}/usr/bin/apollo 2>/dev/null || true
-          chmod 755 apollo-${VERSION}/usr/bin/apollo 2>/dev/null || true
-          cp -r build/assets/* apollo-${VERSION}/usr/share/apollo/ 2>/dev/null || true
-          tar -czvf ~/rpmbuild/SOURCES/apollo-${VERSION}.tar.gz apollo-${VERSION}
-          
-          cat > ~/rpmbuild/SPECS/apollo.spec << EOF
-          Name:           apollo
+
+          # Create source tarball; install the binary as `hermes`
+          # (resolve the sunshine symlink).
+          mkdir -p hermes-${VERSION}/usr/bin
+          mkdir -p hermes-${VERSION}/usr/share/hermes
+          cp -L build/sunshine hermes-${VERSION}/usr/bin/hermes
+          chmod 755 hermes-${VERSION}/usr/bin/hermes
+          cp -r build/assets/* hermes-${VERSION}/usr/share/hermes/
+          tar -czvf ~/rpmbuild/SOURCES/hermes-${VERSION}.tar.gz hermes-${VERSION}
+
+          cat > ~/rpmbuild/SPECS/hermes.spec << EOF
+          Name:           hermes
           Version:        ${VERSION}
           Release:        1%{?dist}
           Summary:        Self-hosted game stream host with Linux virtual display support
           License:        GPLv3
           URL:            https://github.com/MrOz59/Hermes
-          Source0:        apollo-%{version}.tar.gz
+          Source0:        hermes-%{version}.tar.gz
 
           %description
-          Apollo is a game streaming server based on Sunshine with added
-          support for Linux virtual displays using EVDI.
+          Hermes is an Apollo-derived game streaming server with low-latency
+          Linux virtual displays via Hermes-KMS (EVDI also supported).
 
           %prep
           %setup -q
 
           %install
           mkdir -p %{buildroot}/usr/bin
-          mkdir -p %{buildroot}/usr/share/apollo
-          cp -r usr/bin/* %{buildroot}/usr/bin/ || true
-          cp -r usr/share/apollo/* %{buildroot}/usr/share/apollo/ || true
+          mkdir -p %{buildroot}/usr/share/hermes
+          cp -r usr/bin/* %{buildroot}/usr/bin/
+          cp -r usr/share/hermes/* %{buildroot}/usr/share/hermes/
 
           %files
-          %attr(755,root,root) /usr/bin/apollo
-          /usr/share/apollo
+          %attr(755,root,root) /usr/bin/hermes
+          /usr/share/hermes
 
           %post
-          setcap cap_sys_admin+p /usr/bin/apollo || true
+          setcap cap_sys_admin+p /usr/bin/hermes || true
           EOF
-          
-          rpmbuild -bb ~/rpmbuild/SPECS/apollo.spec || echo "RPM build had issues"
-          cp ~/rpmbuild/RPMS/*/*.rpm . 2>/dev/null || true
+
+          rpmbuild -bb ~/rpmbuild/SPECS/hermes.spec
+          cp ~/rpmbuild/RPMS/*/*.rpm .
 
       - name: Upload RPM
         uses: actions/upload-artifact@v4
         with:
-          name: apollo-rpm
+          name: hermes-rpm
           path: "*.rpm"
           retention-days: 30
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   # ===========================================
   # Create Release (on tag)
   # ===========================================
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-linux-appimage, build-deb, build-arch-pkg, build-rpm]
+    needs: [build-deb, build-arch-pkg, build-rpm]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -589,7 +488,7 @@ jobs:
   # commit so the release always points at the newest build.
   nightly:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build-linux-appimage, build-deb, build-arch-pkg, build-rpm]
+    needs: [build-deb, build-arch-pkg, build-rpm]
     runs-on: ubuntu-latest
     permissions:
       contents: write

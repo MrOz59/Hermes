@@ -62,16 +62,27 @@
     --bs-btn-active-border-color: #6d28d9;
 }
 
-/* Give the navbar a quiet violet identity (was the default light header). */
+/*
+ * Give the navbar a quiet violet identity (was the default light header).
+ * Drive Bootstrap's navbar color variables so links/brand/toggler all read as
+ * light text on the dark violet, instead of fighting individual selectors.
+ */
 .navbar-background {
     background: linear-gradient(90deg, #2e1065 0%, #4c1d95 100%);
+    --bs-navbar-color: rgba(255, 255, 255, 0.85);
+    --bs-navbar-hover-color: #ffffff;
+    --bs-navbar-active-color: #ffffff;
+    --bs-navbar-brand-color: #ede9fe;
+    --bs-navbar-brand-hover-color: #ffffff;
+    --bs-navbar-toggler-border-color: rgba(255, 255, 255, 0.25);
 }
 .navbar-background .navbar-brand,
 .navbar-background .nav-link {
-    color: #ede9fe !important;
+    color: var(--bs-navbar-color);
 }
-.navbar-background .nav-link:hover {
-    color: #ffffff !important;
+.navbar-background .nav-link:hover,
+.navbar-background .nav-link:focus {
+    color: var(--bs-navbar-hover-color);
 }
 
 [data-bs-theme=dark] .element {

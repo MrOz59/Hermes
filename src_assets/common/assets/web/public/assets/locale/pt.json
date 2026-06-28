@@ -378,7 +378,7 @@
     "startup_errors": "<b>Atenção!</b> A Apollo detectou estes erros durante o arranque. Recomendamos <b>vivamente que</b> os corrija antes de transmitir.",
     "version_dirty": "Obrigado por ajudar a fazer do sol um software melhor!",
     "version_latest": "Você está executando a última versão do Apollo",
-    "welcome": "Olá, Apollo!"
+    "welcome": "Olá, Hermes!"
   },
   "navbar": {
     "applications": "Aplicações",
@@ -447,7 +447,7 @@
     "confirm_password": "Confirmar a senha",
     "create_creds": "Antes de começar, precisamos que você crie um novo nome de usuário e senha para acessar a interface da web.",
     "create_creds_alert": "As credenciais abaixo são necessárias para acessar a interface da Web do Apollo. Mantenha-as seguras, já que você nunca vai vê-las novamente!",
-    "greeting": "Bem-vindo ao Sol!",
+    "greeting": "Bem-vindo ao Hermes!",
     "login": "Conectar",
     "welcome_success": "Esta página será recarregada em breve, seu navegador irá pedir novas credenciais"
   }

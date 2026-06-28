@@ -1,5 +1,5 @@
 <template>
-  <nav class="navbar navbar-light navbar-expand-lg navbar-background header">
+  <nav class="navbar navbar-dark navbar-expand-lg navbar-background header">
     <div class="container">
       <a class="navbar-brand" href="./" title="Hermes">
         <img src="/images/logo-apollo-45.png" height="45" alt="Hermes">

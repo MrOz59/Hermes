@@ -774,16 +774,15 @@ namespace VDISPLAY {
         return false;
       }
 
-      std::string command = "kscreen-doctor output." + virtual_output + ".enable output." + virtual_output + ".priority.1";
+      // At display-CREATION time we only *enable* the virtual output so the
+      // compositor starts composing on it and capture can read its framebuffer.
+      // We deliberately do NOT touch the physical output's priority or disable
+      // it here: that is a SESSION-level action and must only happen once the
+      // stream actually starts (see make_exclusive), and only in isolated mode.
+      // Otherwise creating the display would steal the user's primary monitor
+      // before any session is live, blanking the physical screen prematurely.
       const bool can_manage_original = safe_output_name(original_primary) && original_primary != virtual_output;
-      if (can_manage_original) {
-        command += disable_physical ? " output." + original_primary + ".disable" : " output." + original_primary + ".priority.2";
-        if (disable_physical && !write_recovery_state(original_primary)) {
-          BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not write monitor recovery state; "
-                             << "a crash may leave the physical output disabled.";
-        }
-      }
-      if (!run_layout_command(command)) {
+      if (!run_layout_command("kscreen-doctor output." + virtual_output + ".enable")) {
         return false;
       }
 
@@ -791,9 +790,13 @@ namespace VDISPLAY {
       layouts[display_name] = {
         .original_primary = can_manage_original ? original_primary : std::string {},
         .virtual_output = virtual_output,
-        .physical_output_disabled = disable_physical && can_manage_original,
+        .physical_output_disabled = false,
       };
-      BOOST_LOG(info) << "[VDISPLAY/KScreen] Enabled " << backend_label << " output " << virtual_output;
+      BOOST_LOG(info) << "[VDISPLAY/KScreen] Enabled " << backend_label << " output " << virtual_output
+                      << " (physical output left untouched until the session starts)";
+      // disable_physical is intentionally unused here; the physical layout is
+      // managed at session start in make_exclusive().
+      (void) disable_physical;
       return true;
     }
 
@@ -802,13 +805,22 @@ namespace VDISPLAY {
       return layouts.find(display_name) != layouts.end();
     }
 
+    // Called at SESSION START (only when isolated mode is on) to hand the
+    // desktop over to the virtual output: make it primary and disable the
+    // physical monitor. This is the moment the physical screen is allowed to go
+    // dark — never before. restore() reverses it when the session ends.
     static bool make_exclusive(const std::string &display_name) {
       std::lock_guard<std::mutex> lock(layouts_mutex);
       const auto it = layouts.find(display_name);
       if (it == layouts.end() || it->second.physical_output_disabled || it->second.original_primary.empty()) {
         return it != layouts.end();
       }
-      if (!run_layout_command("kscreen-doctor output." + it->second.original_primary + ".disable")) {
+      // Promote the virtual output to primary and disable the physical one in a
+      // single atomic kscreen-doctor call so the session never lands on a
+      // transient no-primary layout.
+      std::string command = "kscreen-doctor output." + it->second.virtual_output + ".priority.1"
+        " output." + it->second.original_primary + ".disable";
+      if (!run_layout_command(command)) {
         return false;
       }
       if (!write_recovery_state(it->second.original_primary)) {
@@ -825,8 +837,15 @@ namespace VDISPLAY {
       if (it == layouts.end()) {
         return;
       }
+      // Re-enable the physical output as primary. Do this in the same command
+      // that drops the virtual output's priority so the desktop never sits with
+      // two primaries or none. The virtual connector itself disappears when the
+      // display is torn down, so we don't need to .disable it explicitly, but
+      // restoring the physical priority is what brings the screen back.
       if (!it->second.original_primary.empty()) {
-        std::string command = "kscreen-doctor output." + it->second.original_primary + ".enable output." + it->second.original_primary + ".priority.1";
+        std::string command = "kscreen-doctor"
+          " output." + it->second.original_primary + ".enable"
+          " output." + it->second.original_primary + ".priority.1";
         run_layout_command(command);
       }
       clear_recovery_state();

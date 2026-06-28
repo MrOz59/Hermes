@@ -8,12 +8,16 @@ Hermes-KMS is a purpose-built DRM/KMS virtual display driver that streams the
 compositor's scanout straight into the hardware encoder as a DMA-BUF, with no
 CPU readback. It is the default backend because it avoids the GPU→RAM→GPU copy
 that EVDI does, which lowers latency. EVDI is still fully supported and can be
-selected at any time — both backends work. (Capture cost at 720p: ~8 us/frame on
-Hermes-KMS vs ~180 us/frame for EVDI, and constant regardless of resolution.)
+selected at any time — both backends work. (Measured capture cost on KWin at
+720p: ~8 us/frame on Hermes-KMS vs ~180 us/frame for EVDI's CPU copy, and
+constant regardless of resolution.)
 
-Hermes keeps compatibility with Apollo, Sunshine, Moonlight, and Hestia. The
-normal GameStream/Sunshine flow remains the fallback path, while Hestia can use
-Hermes protocol extensions when the host reports support for them.
+Hermes keeps protocol compatibility with Sunshine, Moonlight, Artemis, and
+Hestia. The normal GameStream/Sunshine flow remains the fallback path, while
+Hestia can use Hermes protocol extensions when the host reports support for
+them. The product is branded Hermes throughout the UI, but the protocol lineage
+identifier stays `Apollo` so existing Artemis/Hestia clients keep working
+unchanged.
 
 ## Current focus
 
@@ -48,7 +52,18 @@ Important endpoints include:
 
 Clients should gate enhanced behavior on the capabilities response. If the
 Hestia API is unavailable, clients should continue through the normal
-Moonlight/Apollo/Sunshine flow.
+Moonlight/Sunshine flow.
+
+## Clients
+
+- **Android:** Artemis (ClassicOldSong's Moonlight fork) — the reference client.
+- **Desktop:** Hestia — <https://github.com/MrOz59/Hestia>. No binary release
+  yet; build from source. Hestia is the client tuned to Hermes' protocol
+  extensions; generic Moonlight clients also work through the standard flow.
+
+The web UI (`https://<host>:47990`) is branded Hermes. Set the displayed server
+name under *Configuration → General → Server Name*; it defaults to the PC's
+hostname.
 
 ## Virtual display behavior
 
@@ -160,6 +175,17 @@ The installed binary is `hermes`. The package and config paths are still named
 `apollo`/`sunshine` for compatibility with existing service/config layouts;
 renaming package IDs and config paths is a separate compatibility decision.
 
+## Notes
+
+- **Address family / web UI reachability.** The server binds dual-stack by
+  default (`address_family = both`). On distros where `localhost` resolves to
+  IPv6 (`::1`) first, an IPv4-only bind makes the web UI fail intermittently
+  with "Failed to fetch"; dual-stack avoids that. Override under
+  *Configuration → Network → Address Family* if you need IPv4-only.
+- **Isolated virtual display.** With `isolated_virtual_display_option` enabled,
+  the physical monitor is turned off only once a streaming session actually
+  starts (and restored when it ends), not when the virtual display is created.
+
 ## Credits
 
 Hermes builds on work from:
@@ -180,3 +206,12 @@ Hermes builds on work from:
 Reference fork:
 
 - <https://github.com/Sgtmetalmex/Apollo-CachyOS>
+
+## Repositories
+
+- Hermes (this host): <https://github.com/MrOz59/Apollo-Linux>
+- Hermes-KMS (virtual display driver): <https://github.com/MrOz59/Hermes-KMS>
+- Hestia (desktop client): <https://github.com/MrOz59/Hestia>
+
+Report issues for the host at
+<https://github.com/MrOz59/Apollo-Linux/issues>.

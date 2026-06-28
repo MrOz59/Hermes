@@ -44,7 +44,7 @@ jobs:
             mingw-w64-ucrt-x86_64-miniupnpc
             mingw-w64-ucrt-x86_64-nlohmann-json
             mingw-w64-ucrt-x86_64-onevpl
-            mingw-w64-ucrt-x86_64-minhook
+            mingw-w64-ucrt-x86_64-MinHook
             git
 
       - name: Configure CMake
@@ -415,9 +415,8 @@ jobs:
           Categories=Network;RemoteAccess;
           EOF
           
-          # Build package
-          dpkg-deb --build ${PKGDIR}
-          mv ${PKGDIR}.deb apollo_${VERSION}_amd64.deb
+          # Build package (output name already matches the desired final name)
+          dpkg-deb --build ${PKGDIR} apollo_${VERSION}_amd64.deb
 
       - name: Upload DEB Package
         uses: actions/upload-artifact@v4

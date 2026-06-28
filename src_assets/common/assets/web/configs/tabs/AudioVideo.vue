@@ -437,7 +437,7 @@ const validateFallbackMode = (event) => {
     <section class="border-top pt-3 mt-4" v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms'">
       <h3 class="h6 mb-2">Hermes-KMS</h3>
       <div class="alert alert-info small mb-0">
-        Hermes-KMS is experimental. Apollo will ask the driver to connect <code>HERMES-1</code> for the stream session and keep the owner fd open until the session ends. EVDI setup checks are bypassed for this backend.
+        Hermes-KMS is experimental. Hermes will ask the driver to connect <code>HERMES-1</code> for the stream session and keep the owner fd open until the session ends. EVDI setup checks are bypassed for this backend.
       </div>
     </section>
 

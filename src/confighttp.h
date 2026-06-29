@@ -9,6 +9,9 @@
 #include <chrono>
 #include <string>
 
+// lib includes
+#include <nlohmann/json.hpp>
+
 // local includes
 #include "thread_safe.h"
 
@@ -20,6 +23,14 @@ namespace confighttp {
   constexpr auto PORT_HTTPS = 1;
   constexpr auto SESSION_EXPIRE_DURATION = 24h * 15;
   void start();
+
+  /**
+   * @brief Aggregate "is the host ready to stream?" checks.
+   * @return {ready: bool, checks: [{id, status: ok|warn|fail, message}]}.
+   *         `ready` is false only when at least one check fails (warnings,
+   *         such as a software-encoding fallback, do not block).
+   */
+  nlohmann::json hestia_preflight_json();
 }  // namespace confighttp
 
 // mime types map

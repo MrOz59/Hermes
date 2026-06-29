@@ -1686,15 +1686,84 @@ namespace confighttp {
     return runtime;
   }
 
+  // Aggregate "is the host ready to stream?" checks from signals Hermes already
+  // collects, so a client (or the user) can see at a glance what's ready and
+  // what needs attention, instead of discovering problems mid-session.
+  //
+  // Each check is {id, status: ok|warn|fail, message}. `ready` is true when no
+  // check is `fail` (warnings are non-blocking, e.g. software-encoding fallback).
+  nlohmann::json hestia_preflight_json() {
+    nlohmann::json checks = nlohmann::json::array();
+    bool ready = true;
+
+    auto add = [&](const char *id, const char *status, std::string message) {
+      checks.push_back({{"id", id}, {"status", status}, {"message", std::move(message)}});
+      if (std::string_view {status} == "fail") {
+        ready = false;
+      }
+    };
+
+    // Encoder readiness.
+    const auto enc = video::get_encoder_status();
+    if (!enc.probed) {
+      add("encoder", "warn", "Encoder has not been probed yet; it is probed on the first session.");
+    } else if (enc.encoder.empty()) {
+      add("encoder", "fail", "No usable video encoder was found.");
+    } else if (!enc.hardware) {
+      add("encoder", "warn",
+          enc.fell_back_to_software ?
+            "Using software encoding: hardware encoder(s) failed probing. Expect higher CPU use and latency." :
+            "Using software encoding (no hardware encoder available). Expect higher CPU use and latency.");
+    } else {
+      add("encoder", "ok", "Hardware encoder in use: " + enc.encoder + ".");
+    }
+
+    // A capturable display must be present (unless a virtual display will be
+    // created on demand).
+    if (video::allow_encoder_probing()) {
+      add("display", "ok", "A capturable display is available.");
+    } else {
+      add("display", "warn",
+          "No active display detected; a virtual display will be created for the session if configured.");
+    }
+
+#ifdef __linux__
+    // Virtual-display backend readiness (Linux only).
+    const auto evdi = VDISPLAY::getEvdiStatus();
+    if (evdi.session_type == "wayland" || evdi.session_type == "x11") {
+      if (evdi.exclusive_layout_supported) {
+        add("virtual_display", "ok",
+            "Virtual-display layout management available via " + evdi.output_layout_backend + ".");
+      } else if (evdi.output_layout_backend.rfind("mutter", 0) == 0) {
+        add("virtual_display", "warn",
+            "GNOME/Mutter session: Hermes can only verify (not configure) the virtual output. "
+            "Isolated virtual display is unavailable.");
+      } else {
+        add("virtual_display", "warn",
+            "No output-management backend (kscreen/wlr/mutter) detected; virtual-display activation may fail.");
+      }
+    } else {
+      add("virtual_display", "warn",
+          "Session type is '" + evdi.session_type + "'; virtual-display support is limited.");
+    }
+#endif
+
+    // Session/compositor environment (informational).
+    const auto session_env = platf::detect_session_environment();
+    add("session_environment", "ok", "Detected session environment: " + session_env.describe() + ".");
+
+    return {{"ready", ready}, {"checks", std::move(checks)}};
+  }
+
   void get_hestia_diagnostics(resp_https_t response, req_https_t request) {
     if (!authenticate_hestia_client(response, request, crypto::PERM::view, "diagnostics")) {
       return;
     }
 
 #ifdef __linux__
-    send_response(response, {{"ok", true}, {"runtime", hestia_runtime_status_json()}, {"dependencies", {{"clipboard", clipboard_status_json()}}}});
+    send_response(response, {{"ok", true}, {"runtime", hestia_runtime_status_json()}, {"preflight", hestia_preflight_json()}, {"dependencies", {{"clipboard", clipboard_status_json()}}}});
 #else
-    send_response(response, {{"ok", true}, {"runtime", hestia_runtime_status_json()}, {"dependencies", {{"clipboard", {{"available", platf::clipboard_available()}, {"diagnostic", platf::clipboard_available() ? "ready" : "clipboard_unavailable"}, {"manualInstall", "Use the native clipboard service for this platform."}}}}}});
+    send_response(response, {{"ok", true}, {"runtime", hestia_runtime_status_json()}, {"preflight", hestia_preflight_json()}, {"dependencies", {{"clipboard", {{"available", platf::clipboard_available()}, {"diagnostic", platf::clipboard_available() ? "ready" : "clipboard_unavailable"}, {"manualInstall", "Use the native clipboard service for this platform."}}}}}});
 #endif
   }
 

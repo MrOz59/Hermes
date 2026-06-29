@@ -311,16 +311,21 @@ namespace nvhttp {
       return;
     }
 
-    // Check that the file contains a "root.uniqueid" value.
-    if (!tree.contains("root") || !tree["root"].contains("uniqueid")) {
+    // Check that the file contains a usable "root.uniqueid" value. Accept it
+    // only if it parses as a UUID; a missing, empty, or malformed value
+    // (e.g. a truncated/corrupted state file) regenerates a fresh id instead
+    // of throwing and taking down the host.
+    std::string uid = (tree.contains("root") && tree["root"].contains("uniqueid")) ?
+                        tree["root"]["uniqueid"].get<std::string>() :
+                        std::string {};
+    try {
+      http::uuid = uuid_util::uuid_t::parse(uid);
+      http::unique_id = uid;
+    } catch (const std::invalid_argument &) {
+      BOOST_LOG(warning) << "State file has an invalid uniqueid; regenerating"sv;
       http::uuid = uuid_util::uuid_t::generate();
       http::unique_id = http::uuid.string();
-      return;
     }
-
-    std::string uid = tree["root"]["uniqueid"];
-    http::uuid = uuid_util::uuid_t::parse(uid);
-    http::unique_id = uid;
 
     nlohmann::json root = tree["root"];
     client_t client;  // Local client to load into
@@ -646,8 +651,9 @@ namespace nvhttp {
       named_cert_p->allow_client_commands = true;
       named_cert_p->always_use_virtual_display = false;
 
-      auto it = map_id_sess.find(client.uniqueID);
-      map_id_sess.erase(it);
+      if (auto it = map_id_sess.find(client.uniqueID); it != std::end(map_id_sess)) {
+        map_id_sess.erase(it);
+      }
 
       add_authorized_client(named_cert_p);
     } else {

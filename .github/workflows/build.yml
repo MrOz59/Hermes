@@ -1,4 +1,4 @@
-name: Build Apollo
+name: Build Hermes
 
 on:
   push:

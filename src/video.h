@@ -376,6 +376,13 @@ namespace video {
    * software encoding instead of guessing. Populated at the end of
    * probe_encoders(); read by the diagnostics endpoint.
    */
+  /** @brief One encoder that was tried during probing, and how it turned out. */
+  struct encoder_attempt_t {
+    std::string name;  ///< Encoder backend name (e.g. "nvenc", "vaapi").
+    bool selected = false;  ///< True if this was the encoder ultimately chosen.
+    std::string outcome;  ///< Human-readable result, e.g. "selected", "unsupported_on_gpu", "probe_failed".
+  };
+
   struct encoder_status_t {
     bool probed = false;  ///< A probe has completed at least once.
     std::string encoder;  ///< Selected encoder backend (e.g. "nvenc", "vaapi", "software").
@@ -383,6 +390,11 @@ namespace video {
     bool h264 = false;  ///< H.264 supported by the selected encoder.
     bool hevc = false;  ///< HEVC supported.
     bool av1 = false;  ///< AV1 supported.
+    /// Hardware encoders that were tried and rejected before the final choice,
+    /// so the UI can explain *why* it fell back (e.g. to software).
+    std::vector<encoder_attempt_t> attempts;
+    /// True if a hardware encoder was rejected and we fell back to software.
+    bool fell_back_to_software = false;
   };
 
   /** @brief Snapshot of the last encoder probe result (thread-safe copy). */

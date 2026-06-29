@@ -1630,10 +1630,22 @@ namespace confighttp {
       if (enc.av1) {
         codecs.push_back("av1");
       }
+      nlohmann::json attempts = nlohmann::json::array();
+      for (const auto &attempt : enc.attempts) {
+        attempts.push_back({
+          {"name", attempt.name},
+          {"selected", attempt.selected},
+          {"outcome", attempt.outcome},
+        });
+      }
       runtime["encoder"] = {
         {"name", enc.encoder},
         {"hardware", enc.hardware},
         {"codecs", std::move(codecs)},
+        // Why this encoder was chosen: the encoders tried (and rejected) during
+        // probing, and whether we fell back to software because hardware failed.
+        {"fell_back_to_software", enc.fell_back_to_software},
+        {"attempts", std::move(attempts)},
       };
     } else {
       runtime["encoder"] = {{"name", nullptr}, {"hardware", false}, {"probed", false}};

@@ -2928,7 +2928,9 @@ namespace video {
     }
 
     // If no encoder was specified or the specified encoder was unusable, keep trying
-    // the remaining encoders until we find one that passes validation.
+    // the remaining encoders until we find one that passes validation. Record each
+    // hardware encoder we reject here so diagnostics can explain a software fallback.
+    std::vector<encoder_attempt_t> rejected_attempts;
     if (chosen_encoder == nullptr) {
       KITTY_WHILE_LOOP(auto pos = std::begin(encoder_list), pos != std::end(encoder_list), {
         auto encoder = *pos;
@@ -2937,6 +2939,9 @@ namespace video {
         // fail to validate. It will use a slightly different order of checks to more quickly
         // eliminate failing encoders.
         if (!validate_encoder(*encoder, previous_encoder && previous_encoder != encoder)) {
+          if (encoder->name != "software") {
+            rejected_attempts.push_back({std::string {encoder->name}, false, "probe_failed"});
+          }
           pos = encoder_list.erase(pos);
           continue;
         }
@@ -2985,9 +2990,28 @@ namespace video {
       status.h264 = encoder.h264[encoder_t::PASSED];
       status.hevc = encoder.hevc[encoder_t::PASSED];
       status.av1 = encoder.av1[encoder_t::PASSED];
+      status.attempts = std::move(rejected_attempts);
+      status.attempts.push_back({std::string {encoder.name}, true, "selected"});
+      status.fell_back_to_software = !status.hardware && status.attempts.size() > 1;
       if (!status.hardware) {
-        BOOST_LOG(warning) << "Using SOFTWARE video encoding (no hardware encoder passed probing). "sv
-                           << "Expect higher CPU use and latency; check GPU driver/VAAPI/NVENC availability."sv;
+        std::string tried;
+        for (const auto &attempt : status.attempts) {
+          if (attempt.selected) {
+            continue;
+          }
+          if (!tried.empty()) {
+            tried += ", ";
+          }
+          tried += attempt.name;
+        }
+        if (tried.empty()) {
+          BOOST_LOG(warning) << "Using SOFTWARE video encoding (no hardware encoder was available). "sv
+                             << "Expect higher CPU use and latency; check GPU driver/VAAPI/NVENC availability."sv;
+        } else {
+          BOOST_LOG(warning) << "Using SOFTWARE video encoding: hardware encoder(s) ["sv << tried
+                             << "] failed probing. Expect higher CPU use and latency; "sv
+                             << "check GPU driver/VAAPI/NVENC availability and permissions."sv;
+        }
       }
       std::lock_guard lg {encoder_status_mutex};
       encoder_status_state = std::move(status);

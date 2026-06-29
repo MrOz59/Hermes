@@ -93,9 +93,10 @@ TEST_P(PairingTest, Run) {
 
   setup(PRIVATE_KEY, PUBLIC_CERT);
 
-  // Start from a clean authorized-client list so we can assert exactly what
-  // a successful pairing adds.
-  erase_all_clients();
+  // Snapshot how many clients are authorized before pairing so we can assert
+  // that a successful pairing adds exactly our client (without touching
+  // on-disk state, which erase_all_clients() would).
+  const auto clients_before = get_all_clients().size();
 
   // phase 1
   getservercert(*input.session, tree, input.pin);
@@ -125,9 +126,10 @@ TEST_P(PairingTest, Run) {
   ASSERT_EQ(tree.get<int>("root.paired") == 1, expected.phase_4_success);
 
   // On success the client is added to the authorized-client list as a named
-  // cert; confirm it landed there under the expected name.
+  // cert; confirm one more client is present and that ours is among them.
   if (expected.phase_4_success) {
     const auto clients = get_all_clients();
+    ASSERT_EQ(clients.size(), clients_before + 1);
     bool found = false;
     for (const auto &client : clients) {
       if (client.value("name", std::string {}) == input_client_name) {
@@ -139,12 +141,8 @@ TEST_P(PairingTest, Run) {
   }
 }
 
-// DISABLED: the success path reaches add_authorized_client(), which parses a
-// stored UUID from on-disk state and aborts the whole binary when the runner's
-// state file is absent/invalid ("Invalid UUID string length"). Re-enable once
-// pairing persistence is made test-injectable (see VERSIONING/test notes).
 INSTANTIATE_TEST_SUITE_P(
-  DISABLED_TestWorkingPairing,
+  TestWorkingPairing,
   PairingTest,
   testing::Values(
     std::make_tuple(

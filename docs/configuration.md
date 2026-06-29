@@ -238,6 +238,29 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### global_state_cmd
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Commands run on host state transitions (e.g. session start/stop), analogous to global_prep_cmd but tied to host state changes.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            []
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            global_state_cmd = [{"do":"","undo":""}]
+            @endcode</td>
+    </tr>
+</table>
+
 ### notify_pre_releases
 
 <table>
@@ -280,6 +303,75 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example</td>
         <td colspan="2">@code{}
             system_tray = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### hide_tray_controls
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Hide interactive controls in the system-tray menu, leaving only status entries.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            hide_tray_controls = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### enable_pairing
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Allow new clients to pair with the host. Disable to lock the host to already-paired clients.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            enable_pairing = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### enable_discovery
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Advertise the host for discovery (mDNS) so clients can find it automatically on the network.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            enable_discovery = disabled
             @endcode</td>
     </tr>
 </table>
@@ -687,6 +779,52 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### enable_input_only_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Allow input-only sessions, where a client sends input without receiving a video/audio stream.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            enable_input_only_mode = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### forward_rumble
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Forward controller rumble/force-feedback events from the host back to the client gamepad.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            forward_rumble = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### keybindings
 
 <table>
@@ -873,6 +1011,52 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### keep_sink_default
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Keep the captured audio sink as the system default while streaming, instead of switching the default to the streaming sink. Disable to let Hermes take over the default sink for the session.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            keep_sink_default = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### auto_capture_sink
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Automatically capture from the current default audio sink rather than a fixed device. Disable to always capture the configured audio sink.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            auto_capture_sink = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### adapter_name
 
 <table>
@@ -1040,26 +1224,74 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
-### isolated_virtual_display_option
+### virtual_display_backend
 
 <table>
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Isolates the virtual display.
-            @note{Applies to Windows only.}
+            Selects which Linux virtual-display driver Hermes uses for new virtual-display sessions: <code>evdi</code> (stable default) or <code>hermes_kms</code> (zero-copy, experimental).
         </td>
     </tr>
     <tr>
         <td>Default</td>
-        <td colspan="2">@code{}disabled@endcode</td>
+        <td colspan="2">@code{}
+            evdi
+            @endcode</td>
     </tr>
     <tr>
-        <td>enabled</td>
-        <td>Change the position of the virtual display (and other displays if there is a hole)</td>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            virtual_display_backend = hermes_kms
+            @endcode</td>
     </tr>
 </table>
 
+### fallback_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Resolution/mode to fall back to when the requested virtual-display mode cannot be applied. Empty leaves the fallback unset.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            fallback_mode = 1920x1080x60
+            @endcode</td>
+    </tr>
+</table>
+
+### default_scale_factor
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Host-side default resolution scale factor, in percent, applied to virtual-display sessions. 100 leaves the resolution unchanged. Range 20-200.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            100
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            default_scale_factor = 125
+            @endcode</td>
+    </tr>
+</table>
 
 ### dd_configuration_option
 
@@ -1416,6 +1648,52 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### headless_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Run without requiring a physical display attached to the host. Useful for dedicated/headless streaming hosts.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            headless_mode = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### double_refreshrate
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Double the streamed refresh rate where the client and pipeline support it.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            double_refreshrate = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### max_bitrate
 
 <table>
@@ -1462,6 +1740,26 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>1-1000</td>
         <td>Specify your own value. The real minimum may differ from this value.</td>
+    </tr>
+</table>
+
+### isolated_virtual_display_option
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Isolates the virtual display.
+            @note{Applies to Windows only.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}disabled@endcode</td>
+    </tr>
+    <tr>
+        <td>enabled</td>
+        <td>Change the position of the virtual display (and other displays if there is a hole)</td>
     </tr>
 </table>
 
@@ -1930,6 +2228,98 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### limit_framerate
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Limit the host capture/encode framerate to the client's requested rate instead of running unbounded.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            limit_framerate = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### envvar_compatibility_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Enable a compatibility mode for how environment variables are passed to launched applications, for apps that expect the legacy behavior.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            envvar_compatibility_mode = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### legacy_ordering
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Use the legacy client/device ordering behavior for compatibility with older clients.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            legacy_ordering = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### ignore_encoder_probe_failure
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Continue startup even if encoder probing fails, instead of treating a failed probe as fatal. Useful on hosts where probing is unreliable but encoding works.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            ignore_encoder_probe_failure = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### hevc_mode
 
 <table>
@@ -2375,6 +2765,30 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example</td>
         <td colspan="2">@code{}
             nvenc_h264_cavlc = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### nvenc_intra_refresh
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Enable NVENC intra-refresh, spreading intra-coded data across frames to smooth bitrate spikes instead of sending full keyframes.
+            @note{Only applies to the NVIDIA NVENC [encoder](#encoder).}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            nvenc_intra_refresh = enabled
             @endcode</td>
     </tr>
 </table>
@@ -2867,6 +3281,30 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example</td>
         <td colspan="2">@code{}
             vaapi_strict_rc_buffer = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### vaapi_quality
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            FFmpeg VA-API quality (global_quality) option. -1 leaves the codec default; otherwise 0-8, where lower values mean higher quality.
+            @note{Only applies when using the VA-API [encoder](#encoder).}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            -1
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vaapi_quality = 4
             @endcode</td>
     </tr>
 </table>

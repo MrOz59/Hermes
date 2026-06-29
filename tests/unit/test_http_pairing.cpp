@@ -5,6 +5,7 @@
 
 #include "../tests_common.h"
 
+#include <src/config.h>
 #include <src/nvhttp.h>
 
 using namespace nvhttp;
@@ -76,7 +77,14 @@ X4wnh1bwdiidqpcgyuKossLOPxbS786WmsesaAWPnpoY6M8aija+ALwNNuWWmyMg
 9SVDV76xJzM36Uq7Kg3QJYTlY04WmPIdJHkCtXWf9g==
 -----END CERTIFICATE-----)";
 
-struct PairingTest: testing::TestWithParam<std::tuple<pairing_input, pairing_output>> {};
+// Pairing persists the authorized-client list to disk via save_state/
+// load_state. In a test we don't want to touch (or depend on) on-disk state,
+// so set FRESH_STATE, which makes add_authorized_client skip persistence.
+struct PairingTest: testing::TestWithParam<std::tuple<pairing_input, pairing_output>> {
+  void SetUp() override {
+    config::sunshine.flags[config::flag::FRESH_STATE] = true;
+  }
+};
 
 TEST_P(PairingTest, Run) {
   auto [input, expected] = GetParam();
@@ -243,6 +251,8 @@ INSTANTIATE_TEST_SUITE_P(
 );
 
 TEST(PairingTest, OutOfOrderCalls) {
+  config::sunshine.flags[config::flag::FRESH_STATE] = true;
+
   boost::property_tree::ptree tree;
 
   setup(PRIVATE_KEY, PUBLIC_CERT);

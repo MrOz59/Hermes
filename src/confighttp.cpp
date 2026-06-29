@@ -1643,6 +1643,7 @@ namespace confighttp {
     runtime["sessions"] = {
       {"active", sessions},
       {"streaming", sessions > 0},
+      {"last_termination", std::string(rtsp_stream::last_termination_reason())},
     };
 
     // Live per-frame pipeline metrics (only meaningful while streaming).

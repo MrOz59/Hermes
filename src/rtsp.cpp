@@ -552,7 +552,7 @@ namespace rtsp_stream {
       for (auto i = _session_slots->begin(); i != _session_slots->end();) {
         auto &slot = *(*i);
         if (all || stream::session::state(slot) == stream::session::state_e::STOPPING) {
-          stream::session::stop(slot);
+          stream::session::stop(slot, stream::session::termination_reason_e::SERVER_STOPPED);
           stream::session::join(slot);
 
           i = _session_slots->erase(i);
@@ -660,6 +660,10 @@ namespace rtsp_stream {
     server.clear(false);
 
     return server.session_count();
+  }
+
+  std::string_view last_termination_reason() {
+    return stream::session::termination_reason_str(stream::session::last_termination_reason());
   }
 
   std::shared_ptr<stream::session_t> find_session(const std::string_view& uuid) {

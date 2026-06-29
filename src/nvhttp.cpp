@@ -1861,7 +1861,7 @@ namespace nvhttp {
     if (graceful) {
       stream::session::graceful_stop(session);
     } else {
-      stream::session::stop(session);
+      stream::session::stop(session, stream::session::termination_reason_e::SERVER_STOPPED);
     }
   }
 

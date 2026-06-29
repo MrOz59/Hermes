@@ -423,6 +423,7 @@ namespace stream {
     safe::signal_t controlEnd;
 
     std::atomic<session::state_e> state;
+    std::atomic<session::termination_reason_e> termination_reason {session::termination_reason_e::UNKNOWN};
   };
 
   /**
@@ -606,7 +607,8 @@ namespace stream {
           BOOST_LOG(info) << "CLIENT DISCONNECTED"sv;
           // No more clients to send video data to ^_^
           if (session->state == session::state_e::RUNNING) {
-            session::stop(*session);
+            // ENet delivered a disconnect: the client closed the stream itself.
+            session::stop(*session, session::termination_reason_e::CLIENT_QUIT);
           }
           break;
         case ENET_EVENT_TYPE_NONE:
@@ -990,7 +992,7 @@ namespace stream {
 
         BOOST_LOG(error) << "Failed to verify tag"sv;
 
-        session::stop(*session);
+        session::stop(*session, session::termination_reason_e::PROTOCOL_ERROR);
         return;
       }
 
@@ -1096,7 +1098,7 @@ namespace stream {
 
         BOOST_LOG(error) << "Failed to verify tag"sv;
 
-        session::stop(*session);
+        session::stop(*session, session::termination_reason_e::PROTOCOL_ERROR);
         return;
       }
 
@@ -1105,7 +1107,7 @@ namespace stream {
 
       if (type == packetTypes[IDX_ENCRYPTED]) {
         BOOST_LOG(error) << "Bad packet type [IDX_ENCRYPTED] found"sv;
-        session::stop(*session);
+        session::stop(*session, session::termination_reason_e::PROTOCOL_ERROR);
         return;
       }
 
@@ -1145,7 +1147,7 @@ namespace stream {
           if (now > session->pingTimeout) {
             auto address = session->control.peer ? platf::from_sockaddr((sockaddr *) &session->control.peer->address.address) : session->control.expected_peer_address;
             BOOST_LOG(info) << address << ": Ping Timeout"sv;
-            session::stop(*session);
+            session::stop(*session, session::termination_reason_e::CLIENT_LOST);
           }
 
           if (session->state.load(std::memory_order_acquire) == session::state_e::STOPPING) {
@@ -1900,8 +1902,11 @@ namespace stream {
   }
 
   void videoThread(session_t *session) {
+    // If this is the first stop (the video handshake never completed), record
+    // it as a handshake failure. If the session already stopped for another
+    // reason, stop() keeps that earlier reason.
     auto fg = util::fail_guard([&]() {
-      session::stop(*session);
+      session::stop(*session, session::termination_reason_e::HANDSHAKE_FAILED);
     });
 
     while_starting_do_nothing(session->state);
@@ -1922,7 +1927,7 @@ namespace stream {
 
   void audioThread(session_t *session) {
     auto fg = util::fail_guard([&]() {
-      session::stop(*session);
+      session::stop(*session, session::termination_reason_e::HANDSHAKE_FAILED);
     });
 
     while_starting_do_nothing(session->state);
@@ -1964,6 +1969,7 @@ namespace stream {
       session.permission = newPerm;
       if (!(newPerm & crypto::PERM::_allow_view)) {
         BOOST_LOG(debug) << "Session: View permission revoked for [" << session.device_name << "], disconnecting...";
+        session.termination_reason.store(termination_reason_e::PERMISSION_REVOKED, std::memory_order_relaxed);
         graceful_stop(session);
         return true;
       }
@@ -1978,12 +1984,49 @@ namespace stream {
       return false;
     }
 
-    void stop(session_t &session) {
+    std::atomic<termination_reason_e> last_termination_reason_v {termination_reason_e::UNKNOWN};
+
+    std::string_view termination_reason_str(termination_reason_e reason) {
+      switch (reason) {
+        case termination_reason_e::CLIENT_QUIT:
+          return "client_quit"sv;
+        case termination_reason_e::CLIENT_LOST:
+          return "client_lost"sv;
+        case termination_reason_e::HANDSHAKE_FAILED:
+          return "handshake_failed"sv;
+        case termination_reason_e::PROTOCOL_ERROR:
+          return "protocol_error"sv;
+        case termination_reason_e::SERVER_STOPPED:
+          return "server_stopped"sv;
+        case termination_reason_e::PERMISSION_REVOKED:
+          return "permission_revoked"sv;
+        case termination_reason_e::UNKNOWN:
+        default:
+          return "unknown"sv;
+      }
+    }
+
+    termination_reason_e last_termination_reason() {
+      return last_termination_reason_v.load(std::memory_order_relaxed);
+    }
+
+    void stop(session_t &session, termination_reason_e reason) {
       while_starting_do_nothing(session.state);
       auto expected = state_e::RUNNING;
       auto already_stopping = !session.state.compare_exchange_strong(expected, state_e::STOPPING);
       if (already_stopping) {
         return;
+      }
+
+      // First stop() call for this session wins the reason; later calls (e.g. a
+      // shutdown sweep after the client already dropped) don't overwrite it.
+      session.termination_reason.store(reason, std::memory_order_relaxed);
+      last_termination_reason_v.store(reason, std::memory_order_relaxed);
+
+      if (reason == termination_reason_e::CLIENT_LOST) {
+        BOOST_LOG(warning) << "Session ended: client ["sv << session.device_name << "] stopped responding (network loss or crash)"sv;
+      } else {
+        BOOST_LOG(info) << "Session ended: ["sv << session.device_name << "] reason="sv << termination_reason_str(reason);
       }
 
       session.shutdown_event->raise(true);
@@ -1991,11 +2034,19 @@ namespace stream {
 
     void graceful_stop(session_t& session) {
       while_starting_do_nothing(session.state);
+      // Preserve a more specific reason set by the caller (e.g. permission
+      // revoked); otherwise this is a host-initiated graceful stop.
+      {
+        auto expected_reason = termination_reason_e::UNKNOWN;
+        session.termination_reason.compare_exchange_strong(expected_reason, termination_reason_e::SERVER_STOPPED);
+      }
       auto expected = state_e::RUNNING;
       auto already_stopping = !session.state.compare_exchange_strong(expected, state_e::STOPPING);
       if (already_stopping) {
         return;
       }
+
+      last_termination_reason_v.store(session.termination_reason.load(std::memory_order_relaxed), std::memory_order_relaxed);
 
       // reason: graceful termination
       std::uint32_t reason = 0x80030023;

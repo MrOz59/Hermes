@@ -853,6 +853,68 @@ namespace VDISPLAY {
     }
   }  // namespace kscreen
 
+  // GNOME / Mutter output management. Mutter does not speak kscreen-doctor or
+  // the wlroots output-management protocol; it exposes
+  // org.gnome.Mutter.DisplayConfig over D-Bus. We talk to it via `gdbus` (always
+  // present on GNOME) to avoid a libdbus build dependency.
+  //
+  // This backend is intentionally conservative: with the Hermes-KMS module
+  // loaded `initial_enabled=1`, Mutter typically adopts the hotplugged HERMES-1
+  // connector on its own, so the critical step is to *verify* that the virtual
+  // output is present and active in Mutter's current state rather than to push a
+  // full ApplyMonitorsConfig (which is all-or-nothing and risky to build blind).
+  namespace mutter {
+    static bool available() {
+      const char *desktop = std::getenv("XDG_CURRENT_DESKTOP");
+      if (!desktop) {
+        return false;
+      }
+      const std::string_view d {desktop};
+      if (d.find("GNOME") == std::string_view::npos && d.find("gnome") == std::string_view::npos) {
+        return false;
+      }
+      return ::access("/usr/bin/gdbus", X_OK) == 0 || ::access("/bin/gdbus", X_OK) == 0;
+    }
+
+    static std::string command_output(const char *command) {
+      std::array<char, 8192> buffer {};
+      std::string output;
+      FILE *pipe = ::popen(command, "r");
+      if (!pipe) {
+        return {};
+      }
+      while (::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
+        output += buffer.data();
+      }
+      if (::pclose(pipe) != 0) {
+        return {};
+      }
+      return output;
+    }
+
+    // Returns true if Mutter's current monitor state references the given DRM
+    // connector name (e.g. "HERMES-1"), meaning the compositor has adopted the
+    // virtual output and is driving it.
+    static bool output_present(const std::string &connector_name) {
+      if (!available() || connector_name.empty()) {
+        return false;
+      }
+      const std::string command =
+        "gdbus call --session "
+        "--dest org.gnome.Mutter.DisplayConfig "
+        "--object-path /org/gnome/Mutter/DisplayConfig "
+        "--method org.gnome.Mutter.DisplayConfig.GetCurrentState 2>/dev/null";
+      const auto state = command_output(command.c_str());
+      if (state.empty()) {
+        return false;
+      }
+      // GetCurrentState embeds the connector name as a string in its reply; a
+      // substring match is sufficient to know Mutter is aware of the output.
+      return state.find("'" + connector_name + "'") != std::string::npos ||
+             state.find('"' + connector_name + '"') != std::string::npos;
+    }
+  }  // namespace mutter
+
   EvdiBuffer::EvdiBuffer(uint32_t width, uint32_t height):
       data_(static_cast<size_t>(width) * height * 4, 0), width_(width), height_(height) {
   }
@@ -1158,6 +1220,13 @@ namespace VDISPLAY {
       }
     }
 #endif
+    // GNOME/Mutter: Hermes cannot push a layout, but it can verify Mutter has
+    // adopted the virtual output. Report this so diagnostics make the limited
+    // (verify-only, no exclusive layout) support explicit.
+    if (window_system == window_system_e::WAYLAND && output_layout_backend == "unavailable" &&
+        mutter::available()) {
+      output_layout_backend = "mutter-displayconfig (verify-only)";
+    }
     EvdiStatus status {
       .diagnostic = getEvdiDiagnostic(),
       .library_installed = evdi_library_installed(),
@@ -2139,6 +2208,24 @@ namespace VDISPLAY {
 
 #ifdef SUNSHINE_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND) {
+      // GNOME/Mutter exposes neither kscreen-doctor nor wlr-output-management.
+      // It typically adopts the hotplugged HERMES-1 connector on its own (the
+      // module is loaded initial_enabled=1), so confirm Mutter is driving the
+      // virtual output via its D-Bus DisplayConfig before deciding capture is
+      // safe. We do not push a layout to Mutter here.
+      if (mutter::available()) {
+        if (mutter::output_present(connector)) {
+          BOOST_LOG(info) << "[VDISPLAY] Mutter has adopted virtual output " << connector
+                          << "; capturing it directly.";
+          return true;
+        }
+        BOOST_LOG(warning) << "[VDISPLAY] GNOME/Mutter session detected but it has not adopted "
+                           << connector << ". Hermes cannot push a display layout to Mutter; "
+                           << "the virtual display may need to be enabled in GNOME Settings, "
+                           << "or use a KDE/wlroots session for automatic activation.";
+        return false;
+      }
+
       int width = 0;
       int height = 0;
       int refresh_rate = 0;

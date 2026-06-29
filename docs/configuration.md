@@ -1247,6 +1247,34 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### gamescope_backend
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Backend used when launching a desktop application through Gamescope.
+            <code>auto</code> nests Gamescope in the current Wayland compositor;
+            <code>wayland</code>, <code>sdl</code> or <code>drm</code> force a
+            specific backend.
+            @note{Ignored in a standalone Gamescope session (e.g. SteamOS Game
+            Mode), where the application runs directly in the existing session.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            auto
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            gamescope_backend = wayland
+            @endcode</td>
+    </tr>
+</table>
+
 ### fallback_mode
 
 <table>

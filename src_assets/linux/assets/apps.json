@@ -40,7 +40,7 @@
       "wait-all": true,
       "exit-timeout": 5,
       "scale-factor": 100,
-      "cmd": "apollo-gamescope-launch"
+      "cmd": "hermes-gamescope-launch"
     }
   ]
 }

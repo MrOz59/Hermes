@@ -11,7 +11,7 @@ file(COPY "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/assets/"
 file(CREATE_LINK "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/assets/shaders"
         "${CMAKE_BINARY_DIR}/assets/shaders" COPY_ON_ERROR SYMBOLIC)
 
-install(PROGRAMS "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/apollo-gamescope-launch"
+install(PROGRAMS "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-gamescope-launch"
         DESTINATION "bin")
 install(PROGRAMS "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/apollo-monitor-recovery"
         DESTINATION "bin")

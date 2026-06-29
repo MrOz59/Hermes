@@ -471,6 +471,28 @@ namespace proc {
     _env["APOLLO_CLIENT_GCMAP"] = std::to_string(launch_session->gcmap);
     _env["APOLLO_CLIENT_HOST_AUDIO"] = launch_session->host_audio ? "true" : "false";
     _env["APOLLO_CLIENT_ENABLE_SOPS"] = launch_session->enable_sops ? "true" : "false";
+
+    // Hermes-branded env vars (mirror the APOLLO_* lineage contract). New
+    // tooling (e.g. hermes-gamescope-launch) reads these; APOLLO_*/SUNSHINE_*
+    // remain for client/lineage compatibility.
+    _env["HERMES_APP_ID"] = _app.id;
+    _env["HERMES_APP_NAME"] = _app.name;
+    _env["HERMES_APP_UUID"] = _app.uuid;
+    _env["HERMES_APP_STATUS"] = "STARTING";
+    _env["HERMES_CLIENT_UUID"] = launch_session->unique_id;
+    _env["HERMES_CLIENT_NAME"] = launch_session->device_name;
+    _env["HERMES_CLIENT_WIDTH"] = std::to_string(render_width);
+    _env["HERMES_CLIENT_HEIGHT"] = std::to_string(render_height);
+    _env["HERMES_CLIENT_RENDER_WIDTH"] = std::to_string(launch_session->width);
+    _env["HERMES_CLIENT_RENDER_HEIGHT"] = std::to_string(launch_session->height);
+    _env["HERMES_CLIENT_SCALE_FACTOR"] = std::to_string(scale_factor);
+    _env["HERMES_CLIENT_FPS"] = fps_str;
+    _env["HERMES_CLIENT_HDR"] = launch_session->enable_hdr ? "true" : "false";
+    _env["HERMES_CLIENT_GCMAP"] = std::to_string(launch_session->gcmap);
+    _env["HERMES_CLIENT_HOST_AUDIO"] = launch_session->host_audio ? "true" : "false";
+    _env["HERMES_CLIENT_ENABLE_SOPS"] = launch_session->enable_sops ? "true" : "false";
+    _env["HERMES_GAMESCOPE_BACKEND"] = config::video.gamescope_backend;
+    _env["HERMES_SESSION_ENVIRONMENT"] = session_env.describe();
     if (!launch_session->enable_hdr) {
       _env["DXVK_HDR"] = "0";
       _env["PROTON_ENABLE_HDR"] = "0";
@@ -586,8 +608,15 @@ namespace proc {
           // This path is only used when a client explicitly requested Gamescope
           // on a desktop session. The primary session path above has already
           // created/activated the virtual display, so Gamescope is nested on the
-          // virtual display instead of replacing it.
-          launch_command = std::format("gamescope --backend=wayland -W {} -H {} -r {} -o {} -f -e -F fsr --fsr-sharpness 4 -- {}",
+          // virtual display instead of replacing it. The backend defaults to
+          // wayland (nesting in the desktop compositor); override with the
+          // gamescope_backend setting when a different backend is needed.
+          const std::string &configured_backend = config::video.gamescope_backend;
+          const std::string gamescope_backend = (configured_backend.empty() || configured_backend == "auto") ?
+                                                   "wayland" :
+                                                   configured_backend;
+          launch_command = std::format("gamescope --backend={} -W {} -H {} -r {} -o {} -f -e -F fsr --fsr-sharpness 4 -- {}",
+                                       gamescope_backend,
                                        launch_session->width,
                                        launch_session->height,
                                        gamescope_fps,

@@ -90,6 +90,7 @@ namespace config {
     std::string adapter_name;
     std::string output_name;
     std::string virtual_display_backend;
+    std::string gamescope_backend;
 
     struct dd_t {
       struct workarounds_t {

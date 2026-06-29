@@ -517,6 +517,8 @@
     "virtual_display_backend_desc": "Choose which Linux virtual-display driver Hermes uses for new virtual-display sessions. EVDI remains the stable default; Hermes-KMS is experimental for low-latency DMA-BUF testing.",
     "virtual_display_backend_evdi": "EVDI (stable)",
     "virtual_display_backend_hermes_kms": "Hermes-KMS (experimental)",
+    "gamescope_backend": "Gamescope Backend",
+    "gamescope_backend_desc": "Backend used when launching a desktop app through Gamescope. \"auto\" nests Gamescope in the current Wayland compositor; wayland/sdl/drm force a specific backend. Ignored in a standalone Gamescope session (SteamOS Game Mode), where the app runs directly.",
     "dd_manual_resolution": "Manual Resolution",
     "dd_manual_resolution_desc": "Resolution to request when the display-device resolution option is set to manual (e.g. 1920x1080).",
     "dd_manual_refresh_rate": "Manual Refresh Rate",

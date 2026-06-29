@@ -499,6 +499,7 @@ namespace config {
     {},  // adapter_name
     {},  // output_name
     "evdi"s,  // virtual_display_backend
+    "auto"s,  // gamescope_backend
 
     {
       video_t::dd_t::config_option_e::disabled,  // configuration_option
@@ -1193,6 +1194,7 @@ namespace config {
     string_f(vars, "adapter_name", video.adapter_name);
     string_f(vars, "output_name", video.output_name);
     string_restricted_f(vars, "virtual_display_backend", video.virtual_display_backend, {"evdi"sv, "hermes_kms"sv});
+    string_restricted_f(vars, "gamescope_backend", video.gamescope_backend, {"auto"sv, "wayland"sv, "sdl"sv, "drm"sv});
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);
     generic_f(vars, "dd_resolution_option", video.dd.resolution_option, dd::resolution_option_from_view);

@@ -881,4 +881,54 @@ namespace platf {
   bool
   clipboard_available();
 
+  /**
+   * @brief The kind of session/compositor environment Hermes is running in.
+   *
+   * This drives how Hermes handles virtual displays and Gamescope:
+   *  - DESKTOP environments own a compositor (KWin/GNOME/wlroots) that can be
+   *    asked to adopt a virtual display via output management.
+   *  - GAMESCOPE_SESSION (e.g. SteamOS Game Mode) is itself the compositor on
+   *    DRM/KMS; there is no desktop to host a virtual display, and the session
+   *    output is captured directly.
+   */
+  enum class session_environment_e {
+    unknown,  ///< Could not be determined.
+    headless,  ///< No window system / capture source available.
+    desktop_x11,  ///< X11 desktop session.
+    desktop_wayland,  ///< Wayland desktop session (KDE/GNOME/wlroots).
+    gamescope_session,  ///< Standalone Gamescope compositor (SteamOS Game Mode).
+  };
+
+  struct session_environment_t {
+    session_environment_e kind {session_environment_e::unknown};
+    bool gamescope_running {false};  ///< A Gamescope compositor is present.
+    bool can_host_virtual_display {false};  ///< A desktop compositor can adopt a virtual display.
+    std::string desktop;  ///< Raw XDG_CURRENT_DESKTOP, for diagnostics.
+
+    /// Stable string id for diagnostics/APIs, e.g. "gamescope_session".
+    std::string describe() const {
+      switch (kind) {
+        case session_environment_e::headless:
+          return "headless";
+        case session_environment_e::desktop_x11:
+          return "desktop_x11";
+        case session_environment_e::desktop_wayland:
+          return "desktop_wayland";
+        case session_environment_e::gamescope_session:
+          return "gamescope_session";
+        case session_environment_e::unknown:
+        default:
+          return "unknown";
+      }
+    }
+  };
+
+  /**
+   * @brief Detect the current session/compositor environment.
+   * @return The detected environment. On non-Linux platforms this reports
+   *         `unknown`.
+   */
+  session_environment_t
+  detect_session_environment();
+
 }  // namespace platf

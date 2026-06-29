@@ -562,6 +562,12 @@ namespace platf {
   clipboard_available() {
     return true;
   }
+
+  session_environment_t
+  detect_session_environment() {
+    // Gamescope / virtual-display session routing is Linux-only.
+    return {};
+  }
 }  // namespace platf
 
 namespace dyn {

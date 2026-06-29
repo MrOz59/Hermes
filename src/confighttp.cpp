@@ -1661,6 +1661,16 @@ namespace confighttp {
       runtime["pipeline"] = nullptr;
     }
 
+    // Session/compositor environment, used to decide virtual-display and
+    // Gamescope behavior (e.g. SteamOS Game Mode vs a desktop session).
+    const auto session_env = platf::detect_session_environment();
+    runtime["session"] = {
+      {"environment", session_env.describe()},
+      {"desktop", session_env.desktop},
+      {"gamescope_running", session_env.gamescope_running},
+      {"can_host_virtual_display", session_env.can_host_virtual_display},
+    };
+
     return runtime;
   }
 

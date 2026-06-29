@@ -23,6 +23,7 @@
 #include <pwd.h>
 
 // lib includes
+#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/host_name.hpp>
 #include <boost/process/v1/group.hpp>
@@ -1209,5 +1210,52 @@ std::string get_local_ip_for_gateway() {
       return std::getenv("DISPLAY") != nullptr && !bp::search_path("xclip").empty();
     }
     return false;
+  }
+
+  session_environment_t detect_session_environment() {
+    session_environment_t env;
+
+    const char *desktop = std::getenv("XDG_CURRENT_DESKTOP");
+    if (desktop) {
+      env.desktop = desktop;
+    }
+
+    // Gamescope's nested Wayland socket is exported by gamescope-session and by
+    // any running Gamescope compositor. When present, a Gamescope compositor is
+    // available to capture/launch into.
+    const char *gs_wl = std::getenv("GAMESCOPE_WAYLAND_DISPLAY");
+    const bool desktop_is_gamescope =
+      !env.desktop.empty() && boost::algorithm::to_lower_copy(env.desktop).find("gamescope") != std::string::npos;
+    env.gamescope_running = (gs_wl != nullptr && gs_wl[0] != '\0') || desktop_is_gamescope;
+
+    // A standalone Gamescope session (SteamOS Game Mode) is the compositor
+    // itself: it advertises itself via XDG_CURRENT_DESKTOP=gamescope, and there
+    // is no separate desktop compositor underneath. Distinguish this from a
+    // desktop that merely has Gamescope installed/nested.
+    if (desktop_is_gamescope) {
+      env.kind = session_environment_e::gamescope_session;
+      env.can_host_virtual_display = false;
+      return env;
+    }
+
+    switch (window_system) {
+      case window_system_e::WAYLAND:
+        env.kind = session_environment_e::desktop_wayland;
+        // A desktop Wayland compositor can host a virtual display when it
+        // exposes an output-management protocol (kscreen/wlr).
+        env.can_host_virtual_display = true;
+        break;
+      case window_system_e::X11:
+        env.kind = session_environment_e::desktop_x11;
+        env.can_host_virtual_display = true;
+        break;
+      case window_system_e::NONE:
+      default:
+        env.kind = session_environment_e::headless;
+        env.can_host_virtual_display = false;
+        break;
+    }
+
+    return env;
   }
 }  // namespace platf

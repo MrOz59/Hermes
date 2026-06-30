@@ -11,6 +11,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-30
+
 ### Added
 - Single-source version scheme: the top-level `VERSION` file drives the
   CMake project version, packaging, and the version shown in the WebUI/logs.
@@ -49,5 +51,6 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   host with low-latency virtual displays via Hermes-KMS (zero-copy DRM/KMS),
   EVDI still supported, and Hestia/Moonlight/Artemis protocol compatibility.
 
-[Unreleased]: https://github.com/MrOz59/Hermes/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/MrOz59/Hermes/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/MrOz59/Hermes/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MrOz59/Hermes/releases/tag/v0.1.0

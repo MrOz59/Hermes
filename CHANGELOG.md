@@ -16,6 +16,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   CMake project version, packaging, and the version shown in the WebUI/logs.
 - `scripts/bump-version.sh` to bump the version and tag a release in one step.
 - Rolling `nightly` prerelease published from `main` on every successful build.
+- Diagnostics now report the live stream resolution (`pipeline.width`/`height`).
+- Diagnostics consume the Hermes-KMS `GET_METRICS` ioctl and expose a
+  `hermes_kms` block (frame updates, acquires, DMA-BUF exports, frame waits,
+  hotplugs, output enable/disable counts, and timings) when the `hermes_kms`
+  backend is selected.
+- Reconnection/termination observability in the diagnostics `sessions` block:
+  `awaiting_reconnect`, `ms_since_last_end`, `total_ended`, and
+  `client_lost_count`.
 
 ### Changed
 - `package.json` renamed from `sunshine` to `hermes` and versioned at 0.1.0.
@@ -23,6 +31,10 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   instead of a hardcoded value.
 - The git-fallback versioning treats `main` as a release branch (no commit
   hash suffix), matching `master`.
+- The systemd user service now orders after `graphical-session.target` and
+  imports the session environment (`DISPLAY`/`WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`,
+  audio socket, session bus), so capture and launched apps inherit what they
+  need instead of failing when started at login.
 
 ### Fixed
 - CI: install GBM (`libgbm-dev` / `mesa-libgbm-devel`) so the Linux builds

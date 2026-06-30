@@ -1082,6 +1082,8 @@ namespace video {
     uint64_t window_bytes = 0;  ///< Encoded bytes in the current window.
     uint64_t frames_encoded = 0;  ///< Total this session.
     uint64_t frames_dropped = 0;
+    int width = 0;  ///< Active stream resolution, set at session start.
+    int height = 0;
     std::chrono::steady_clock::time_point window_start = std::chrono::steady_clock::now();
     pipeline_metrics_t published;  ///< Last computed averages.
   };
@@ -1107,6 +1109,8 @@ namespace video {
       s.published.bitrate_kbps = (s.window_bytes * 8.0 / 1000.0) / elapsed;
       s.published.frames_encoded = s.frames_encoded;
       s.published.frames_dropped = s.frames_dropped;
+      s.published.width = s.width;
+      s.published.height = s.height;
       s.encode_ms_sum = 0.0;
       s.capture_to_encode_ms_sum = 0.0;
       s.window_bytes = 0;
@@ -1124,6 +1128,17 @@ namespace video {
   void metrics_reset() {
     std::lock_guard lg {pipeline_metrics_mutex};
     pipeline_metrics_state = pipeline_metrics_accum_t {};
+  }
+
+  void metrics_set_resolution(int width, int height) {
+    std::lock_guard lg {pipeline_metrics_mutex};
+    auto &s = pipeline_metrics_state;
+    s.width = width;
+    s.height = height;
+    // Publish immediately so diagnostics can report the resolution even before
+    // the first averaging window completes.
+    s.published.width = width;
+    s.published.height = height;
   }
 
   pipeline_metrics_t get_pipeline_metrics() {
@@ -2033,6 +2048,10 @@ namespace video {
     if (!session) {
       return;
     }
+
+    // Record the stream resolution so diagnostics can report the real output
+    // dimensions (the RTSP layer already reset the counters at session start).
+    metrics_set_resolution(config.width, config.height);
 
     // As a workaround for NVENC hangs and to generally speed up encoder reinit,
     // we will complete the encoder teardown in a separate thread if supported.

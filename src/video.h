@@ -415,6 +415,8 @@ namespace video {
     double bitrate_kbps = 0.0;  ///< Measured output bitrate (kilobits/s).
     uint64_t frames_encoded = 0;  ///< Total frames encoded this session.
     uint64_t frames_dropped = 0;  ///< Total frames dropped (encoder errors/timeouts).
+    int width = 0;  ///< Active stream width in pixels (0 until a session sets it).
+    int height = 0;  ///< Active stream height in pixels (0 until a session sets it).
   };
 
   /**
@@ -430,6 +432,17 @@ namespace video {
 
   /** @brief Reset pipeline metrics at the start of a streaming session. */
   void metrics_reset();
+
+  /**
+   * @brief Record the active stream resolution for diagnostics.
+   *
+   * Called by the encode loop once the session resolution is known (after the
+   * RTSP layer has already reset the counters). Survives the per-window
+   * republish so it remains reported for the life of the session.
+   * @param width Active stream width in pixels.
+   * @param height Active stream height in pixels.
+   */
+  void metrics_set_resolution(int width, int height);
 
   /** @brief Snapshot of the live pipeline metrics (thread-safe copy). */
   pipeline_metrics_t get_pipeline_metrics();

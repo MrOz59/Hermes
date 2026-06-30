@@ -1668,6 +1668,8 @@ namespace confighttp {
         {"capture_to_encode_ms", pm.capture_to_encode_ms},
         {"frames_encoded", pm.frames_encoded},
         {"frames_dropped", pm.frames_dropped},
+        {"width", pm.width},
+        {"height", pm.height},
       };
     } else {
       runtime["pipeline"] = nullptr;

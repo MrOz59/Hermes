@@ -3,7 +3,7 @@
 
 pkgname=apollo
 pkgver=0.1.0
-pkgrel=4
+pkgrel=5
 pkgdesc="Self-hosted game streaming server with virtual display support"
 arch=('x86_64')
 url='https://github.com/ClassicOldSong/Apollo'
@@ -13,7 +13,6 @@ install=apollo.install
 depends=(
   'avahi'
   'curl'
-  'evdi'
   'libayatana-appindicator'
   'libcap'
   'libdrm'
@@ -44,6 +43,7 @@ makedepends=(
 
 optdepends=(
   'cuda: NVIDIA GPU encoding support'
+  'evdi: Virtual display support for streaming to headless clients (AUR)'
   'gamescope: optional Gamescope Steam Session app'
   'kscreen: KDE Plasma Wayland virtual-display activation'
   'wl-clipboard: Hermes text clipboard synchronization on Wayland'

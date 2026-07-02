@@ -11,6 +11,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-02
+
 ### Added
 - Appliance-mode groundwork (dormant): an `appliance_mode` config flag (off by
   default) and a read-only `platf::appliance_readiness()` that reports whether

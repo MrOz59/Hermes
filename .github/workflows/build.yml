@@ -251,7 +251,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hermes-arch-pkg
-          path: "*.pkg.tar.zst"
+          # The main package only; exclude any -debug package (also suppressed
+          # via options=('!debug') in the PKGBUILD).
+          path: |
+            *.pkg.tar.zst
+            !*-debug-*.pkg.tar.zst
           retention-days: 30
           if-no-files-found: error
 
@@ -316,8 +320,10 @@ jobs:
       # cudart) without the driver stack, which is all the build needs.
       - name: Install CUDA toolkit
         run: |
-          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          # Fetch the keyring into /tmp, not the checkout, so it is not picked
+          # up by the `*.deb` upload glob and published alongside the package.
+          wget -q -O /tmp/cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i /tmp/cuda-keyring.deb
           sudo apt-get update
           sudo apt-get install -y cuda-toolkit-12-6
           echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
@@ -420,7 +426,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hermes-deb
-          path: "*.deb"
+          # Only the Hermes package, not build-time debs (e.g. cuda-keyring).
+          path: "hermes_*.deb"
           retention-days: 30
           if-no-files-found: error
 

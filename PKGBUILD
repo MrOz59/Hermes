@@ -57,6 +57,11 @@ optdepends=(
 # or conflicts are declared for those packages; the binaries and unit names are
 # all distinct.
 
+# Do not emit a separate hermes-debug package. The CI container's makepkg.conf
+# has `debug` enabled by default, which would otherwise produce and publish a
+# stray hermes-debug-*.pkg.tar.zst alongside the real package.
+options=('!debug')
+
 source=()
 sha256sums=()
 

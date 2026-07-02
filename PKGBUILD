@@ -77,6 +77,9 @@ build() {
     export BRANCH=local
     export BUILD_VERSION="${pkgver}"
 
+    # CUDA is required so the package ships NVIDIA NVENC hardware encoding. The
+    # build fails if the CUDA toolkit is missing (CUDA_FAIL_ON_MISSING defaults
+    # to ON) — install the `cuda` package (a makedepend) before building.
     cmake -S . -B build \
       -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_TESTS=OFF \

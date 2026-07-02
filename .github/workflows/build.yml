@@ -172,9 +172,23 @@ jobs:
       image: archlinux:latest
 
     steps:
+      # Cache the downloaded pacman packages so the large `cuda` toolkit
+      # (~2-3 GB compressed) is not re-downloaded on every run. pacman keeps
+      # downloaded packages in /var/cache/pacman/pkg by default; we only pay
+      # the extraction cost on a cache hit, not the download.
+      - name: Cache pacman packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/pacman/pkg
+          key: pacman-arch-cuda-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: |
+            pacman-arch-cuda-
+
       - name: Setup Arch Linux
         run: |
           pacman -Syu --noconfirm
+          # cuda provides nvcc so the package ships NVIDIA NVENC hardware
+          # encoding; the CMake build fails without it (CUDA_FAIL_ON_MISSING=ON).
           pacman -S --noconfirm --needed \
             base-devel \
             git \
@@ -204,8 +218,9 @@ jobs:
             npm \
             nodejs \
             icu \
-            numactl
-          
+            numactl \
+            cuda
+
           # Create build user (makepkg can't run as root)
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
@@ -227,7 +242,10 @@ jobs:
       # `builder` user created above.
       - name: Build package with makepkg
         run: |
-          su builder -c 'makepkg -sf --noconfirm'
+          # The Arch `cuda` package installs nvcc under /opt/cuda/bin, which is
+          # not on the default PATH; CMake's check_language(CUDA) needs to find
+          # it so NVENC is compiled in.
+          su builder -c 'export PATH="/opt/cuda/bin:$PATH"; makepkg -sf --noconfirm'
 
       - name: Upload Arch Package
         uses: actions/upload-artifact@v4

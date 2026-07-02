@@ -43,14 +43,14 @@ post_install() {
     do_udev_reload
     fix_asset_permissions
     if ! load_evdi; then
-        echo "==> Apollo foi instalado, mas o display virtual EVDI não está pronto." >&2
-        echo "==> Abra Audio/Video no Apollo para ver o diagnóstico e os próximos passos." >&2
+        echo "==> Hermes foi instalado, mas o display virtual EVDI não está pronto." >&2
+        echo "==> Abra Audio/Video no Hermes para ver o diagnóstico e os próximos passos." >&2
         return 0
     fi
-    
+
     echo ""
     echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║          Apollo instalado com sucesso!                   ║"
+    echo "║          Hermes instalado com sucesso!                   ║"
     echo "╠══════════════════════════════════════════════════════════╣"
     echo "║  • Virtual display (EVDI) configurado automaticamente    ║"
     echo "║  • Capabilities para KMS capture configuradas            ║"
@@ -66,13 +66,13 @@ post_upgrade() {
     do_udev_reload
     fix_asset_permissions
     if ! load_evdi; then
-        echo "==> Apollo foi atualizado, mas o display virtual EVDI não está pronto." >&2
-        echo "==> Abra Audio/Video no Apollo para ver o diagnóstico e os próximos passos." >&2
+        echo "==> Hermes foi atualizado, mas o display virtual EVDI não está pronto." >&2
+        echo "==> Abra Audio/Video no Hermes para ver o diagnóstico e os próximos passos." >&2
         return 0
     fi
-    
+
     echo ""
-    echo "==> Apollo atualizado com sucesso!"
+    echo "==> Hermes atualizado com sucesso!"
     echo ""
 }
 

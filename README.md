@@ -180,12 +180,15 @@ makepkg --nodeps -sf
 Install the generated package with:
 
 ```bash
-sudo pacman -U ./apollo-*.pkg.tar.zst
+sudo pacman -U ./hermes-*.pkg.tar.zst
 ```
 
-The installed binary is `hermes`. The package and config paths are still named
-`apollo`/`sunshine` for compatibility with existing service/config layouts;
-renaming package IDs and config paths is a separate compatibility decision.
+The package is named `hermes` and `provides`/`conflicts` with `apollo` and
+`sunshine`, so it installs cleanly alongside the repo namespace and replaces an
+existing apollo/sunshine install. The binary and asset paths are still
+`apollo`/`sunshine` (e.g. `/usr/bin/apollo`, `/usr/share/apollo`, the
+`sunshine.service` unit) for compatibility with existing service/config
+layouts; renaming those paths is a separate compatibility decision.
 
 ## Notes
 

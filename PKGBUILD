@@ -1,14 +1,14 @@
 # Maintainer: SudoMaker
 # Apollo - Game streaming server with virtual display support
 
-pkgname=apollo
+pkgname=hermes
 pkgver=0.3.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Self-hosted game streaming server with virtual display support"
 arch=('x86_64')
-url='https://github.com/ClassicOldSong/Apollo'
+url='https://github.com/MrOz59/Hermes'
 license=('GPL-3.0-only')
-install=apollo.install
+install=hermes.install
 
 depends=(
   'avahi'
@@ -51,8 +51,13 @@ optdepends=(
   'libva-mesa-driver: AMD GPU encoding support'
 )
 
-provides=('sunshine')
-conflicts=('sunshine')
+# Hermes is a fork of Apollo (itself a fork of Sunshine) and installs into the
+# same /usr/bin/apollo and /usr/share/apollo paths, so it both provides and
+# conflicts with the apollo (AUR) and sunshine packages. Naming the package
+# 'hermes' (rather than 'apollo') lets it coexist in the repo namespace while
+# still cleanly replacing an existing apollo/sunshine install.
+provides=('sunshine' 'apollo')
+conflicts=('sunshine' 'apollo')
 
 source=()
 sha256sums=()

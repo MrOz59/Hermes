@@ -16,6 +16,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   `needs: [test]`), so nothing is compiled, released, or published as nightly
   unless the tests pass first. Pushing a `vX.Y.Z` tag re-runs test → build →
   release to promote a nightly into a stable, freshly built release.
+- Arch package renamed from `apollo` to `hermes` so it no longer conflicts with
+  the `apollo` AUR package. It `provides`/`conflicts` with `apollo` and
+  `sunshine`, so it still cleanly replaces an existing install. Binary and asset
+  paths (`/usr/bin/apollo`, `/usr/share/apollo`, `sunshine.service`) are
+  unchanged.
 
 ## [0.3.0] - 2026-07-01
 

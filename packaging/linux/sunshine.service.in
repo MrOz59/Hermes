@@ -33,7 +33,7 @@ ExecStartPre=-/usr/bin/systemctl --user import-environment \
 ExecStartPre=/bin/sleep 5
 @SUNSHINE_SERVICE_START_COMMAND@
 @SUNSHINE_SERVICE_STOP_COMMAND@
-ExecStopPost=-/usr/bin/apollo-monitor-recovery
+ExecStopPost=-/usr/bin/hermes-monitor-recovery
 Restart=on-failure
 RestartSec=5s
 

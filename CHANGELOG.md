@@ -16,11 +16,17 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   `needs: [test]`), so nothing is compiled, released, or published as nightly
   unless the tests pass first. Pushing a `vX.Y.Z` tag re-runs test → build →
   release to promote a nightly into a stable, freshly built release.
-- Arch package renamed from `apollo` to `hermes` so it no longer conflicts with
-  the `apollo` AUR package. It `provides`/`conflicts` with `apollo` and
-  `sunshine`, so it still cleanly replaces an existing install. Binary and asset
-  paths (`/usr/bin/apollo`, `/usr/share/apollo`, `sunshine.service`) are
-  unchanged.
+- Package and install paths rebranded from `apollo` to `hermes` so Hermes can
+  be installed **side by side** with the `apollo` (AUR) and `sunshine` packages:
+  package `hermes`, binary `/usr/bin/hermes`, assets `/usr/share/hermes`, unit
+  `hermes.service`, and the `hermes-monitor-recovery` helper (with its state dir
+  moved to `~/.local/state/hermes`). No `provides`/`conflicts` are declared —
+  nothing collides. Artemis protocol extensions and the internal Windows service
+  name are unchanged, so client compatibility is preserved.
+- CI builds the Arch package straight from the `PKGBUILD` via `makepkg`, so CI
+  and a local `makepkg -si` produce the identical `hermes-*.pkg.tar.zst`. Removed
+  the orphan `build-pkg.sh` (stale, hardcoded to 0.1.0 and the old evdi
+  dependency).
 
 ## [0.3.0] - 2026-07-01
 

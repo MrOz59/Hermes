@@ -2,7 +2,7 @@
 Actions=RunInTerminal;
 Categories=RemoteAccess;Network;
 Comment=@PROJECT_DESCRIPTION@
-Exec=/usr/bin/env systemctl start --user sunshine
+Exec=/usr/bin/env systemctl start --user hermes
 Icon=@SUNSHINE_DESKTOP_ICON@
 Keywords=gamestream;stream;moonlight;remote play;
 Name=@PROJECT_NAME@

@@ -1,5 +1,5 @@
 do_setcap() {
-    setcap cap_sys_admin+p /usr/bin/apollo
+    setcap cap_sys_admin+p /usr/bin/hermes
 }
 
 do_udev_reload() {
@@ -13,14 +13,14 @@ do_udev_reload() {
 fix_asset_permissions() {
     # pacman preserves existing directory modes on upgrade. Keep packaged
     # assets system-owned and non-writable after replacing older local builds.
-    chown -R root:root /usr/share/apollo
-    find /usr/share/apollo -type d -exec chmod 755 {} +
-    find /usr/share/apollo -type f -exec chmod 644 {} +
+    chown -R root:root /usr/share/hermes
+    find /usr/share/hermes -type d -exec chmod 755 {} +
+    find /usr/share/hermes -type f -exec chmod 644 {} +
 }
 
 load_evdi() {
     # Carregar módulo EVDI para virtual display
-    echo "options evdi initial_device_count=1" > /etc/modprobe.d/apollo-evdi.conf
+    echo "options evdi initial_device_count=1" > /etc/modprobe.d/hermes-evdi.conf
     modprobe -r evdi 2>/dev/null || true
     if ! modprobe evdi; then
         echo "==> AVISO: o módulo EVDI não pôde ser carregado." >&2
@@ -55,7 +55,7 @@ post_install() {
     echo "║  • Virtual display (EVDI) configurado automaticamente    ║"
     echo "║  • Capabilities para KMS capture configuradas            ║"
     echo "║                                                          ║"
-    echo "║  Execute 'apollo' para iniciar o servidor                ║"
+    echo "║  Execute 'hermes' para iniciar o servidor                ║"
     echo "║  Acesse https://localhost:47990 para configurar          ║"
     echo "╚══════════════════════════════════════════════════════════╝"
     echo ""
@@ -81,5 +81,5 @@ pre_remove() {
     if [ -f /etc/modules-load.d/evdi.conf ]; then
         rm -f /etc/modules-load.d/evdi.conf
     fi
-    rm -f /etc/modprobe.d/apollo-evdi.conf
+    rm -f /etc/modprobe.d/hermes-evdi.conf
 }

@@ -183,12 +183,17 @@ Install the generated package with:
 sudo pacman -U ./hermes-*.pkg.tar.zst
 ```
 
-The package is named `hermes` and `provides`/`conflicts` with `apollo` and
-`sunshine`, so it installs cleanly alongside the repo namespace and replaces an
-existing apollo/sunshine install. The binary and asset paths are still
-`apollo`/`sunshine` (e.g. `/usr/bin/apollo`, `/usr/share/apollo`, the
-`sunshine.service` unit) for compatibility with existing service/config
-layouts; renaming those paths is a separate compatibility decision.
+The package is named `hermes` and installs under its own paths — `/usr/bin/hermes`,
+`/usr/share/hermes`, and the `hermes.service` systemd user unit — so it can be
+installed **side by side with the `apollo` (AUR) and `sunshine` packages**. It
+declares no `provides`/`conflicts` for them; nothing collides. Start it with:
+
+```bash
+systemctl --user enable --now hermes
+```
+
+Protocol and client compatibility is unchanged: Hermes keeps the same Artemis
+protocol extensions, so existing Artemis/Hestia clients keep working.
 
 ## Notes
 

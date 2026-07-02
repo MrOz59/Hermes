@@ -13,7 +13,7 @@ file(CREATE_LINK "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/assets/shaders"
 
 install(PROGRAMS "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-gamescope-launch"
         DESTINATION "bin")
-install(PROGRAMS "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/apollo-monitor-recovery"
+install(PROGRAMS "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-monitor-recovery"
         DESTINATION "bin")
 
 if(${SUNSHINE_BUILD_APPIMAGE} OR ${SUNSHINE_BUILD_FLATPAK})

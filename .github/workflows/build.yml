@@ -30,6 +30,7 @@ jobs:
           pacman -S --noconfirm --needed \
             base-devel \
             git \
+            git-lfs \
             cmake \
             ninja \
             boost \
@@ -177,6 +178,7 @@ jobs:
           pacman -S --noconfirm --needed \
             base-devel \
             git \
+            git-lfs \
             cmake \
             ninja \
             boost \
@@ -219,37 +221,19 @@ jobs:
           chown -R builder:builder .
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
-      - name: Build with CMake
+      # Build the real Arch package straight from the PKGBUILD, so CI and a
+      # local `makepkg -si` produce the exact same hermes-*.pkg.tar.zst (same
+      # paths, service, deps). makepkg refuses to run as root, hence the
+      # `builder` user created above.
+      - name: Build package with makepkg
         run: |
-          su builder -c '
-            cmake -B build -G Ninja \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX=/usr \
-              -DSUNSHINE_ENABLE_WAYLAND=ON \
-              -DSUNSHINE_ENABLE_X11=ON \
-              -DSUNSHINE_ENABLE_DRM=ON \
-              -DSUNSHINE_ENABLE_CUDA=OFF
-            cmake --build build -j$(nproc)
-          '
-
-      - name: Create Package
-        run: |
-          VERSION="$(cat VERSION)"
-          mkdir -p pkg/usr/bin pkg/usr/share/hermes
-          # The build links the binary as sunshine-<version> with a `sunshine`
-          # symlink; copy the resolved binary and install it as `hermes`.
-          cp -L build/sunshine pkg/usr/bin/hermes
-          chmod 755 pkg/usr/bin/hermes
-          cp -r build/assets/* pkg/usr/share/hermes/
-
-          # Create simple tarball
-          cd pkg && tar -czvf "../hermes-${VERSION}-arch-linux-x86_64.tar.gz" .
+          su builder -c 'makepkg -sf --noconfirm'
 
       - name: Upload Arch Package
         uses: actions/upload-artifact@v4
         with:
           name: hermes-arch-pkg
-          path: "*.tar.gz"
+          path: "*.pkg.tar.zst"
           retention-days: 30
           if-no-files-found: error
 

@@ -2,7 +2,7 @@
 
 set -u
 
-STATE_DIR="${XDG_STATE_HOME:-${HOME:-}/.local/state}/apollo"
+STATE_DIR="${XDG_STATE_HOME:-${HOME:-}/.local/state}/hermes"
 STATE_FILE="$STATE_DIR/saved-primary"
 
 if [[ ! -s "$STATE_FILE" ]]; then

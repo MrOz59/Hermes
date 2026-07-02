@@ -763,9 +763,9 @@ namespace VDISPLAY {
       const char *home = std::getenv("HOME");
       std::string base;
       if (xdg_state && xdg_state[0]) {
-        base = std::string {xdg_state} + "/apollo";
+        base = std::string {xdg_state} + "/hermes";
       } else if (home && home[0]) {
-        base = std::string {home} + "/.local/state/apollo";
+        base = std::string {home} + "/.local/state/hermes";
       } else {
         return {};
       }

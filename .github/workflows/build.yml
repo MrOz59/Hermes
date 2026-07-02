@@ -479,16 +479,24 @@ jobs:
           dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/fedora39/x86_64/cuda-fedora39.repo
           dnf install -y cuda-toolkit-12-6
           echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
-          # nvcc 12.6 rejects Fedora 40's default GCC 14; point it at the gcc13
-          # compat compiler. Resolve the binary name rather than assuming it,
-          # since Fedora's versioned g++ naming varies.
+          # nvcc 12.6 rejects Fedora 40's default GCC 14. Build the *entire*
+          # project (C, C++, and nvcc host side) with the gcc13 compat compiler
+          # so compilation and the final link use one consistent toolchain —
+          # mixing gcc13 objects with a gcc14 link fails on __cxa_call_terminate.
+          # Resolve the binary names rather than assuming them, since Fedora's
+          # versioned gcc naming varies.
+          gcc13="$(command -v gcc-13 || command -v gcc13 || true)"
           gxx13="$(command -v g++-13 || command -v g++13 || true)"
-          if [ -z "$gxx13" ]; then
-            echo "gcc13 c++ compiler not found after install" >&2
+          if [ -z "$gcc13" ] || [ -z "$gxx13" ]; then
+            echo "gcc13 compilers not found after install" >&2
             exit 1
           fi
-          echo "Using host compiler for nvcc: $gxx13"
-          echo "NVCC_PREPEND_FLAGS=-ccbin $gxx13" >> "${GITHUB_ENV}"
+          echo "Using gcc13 toolchain: $gcc13 / $gxx13"
+          {
+            echo "CC=$gcc13"
+            echo "CXX=$gxx13"
+            echo "NVCC_PREPEND_FLAGS=-ccbin $gxx13"
+          } >> "${GITHUB_ENV}"
 
       - name: Checkout
         uses: actions/checkout@v4

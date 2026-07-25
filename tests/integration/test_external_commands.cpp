@@ -148,7 +148,7 @@ constexpr auto SIMPLE_COMMAND = IS_WINDOWS ? "where cmd" : "which sh";
 #ifdef UDEVADM_EXECUTABLE
   #define UDEV_TESTS \
     ExternalCommandTestData { \
-      std::format("{} verify {}/src_assets/linux/misc/60-sunshine.rules", UDEVADM_EXECUTABLE, SUNSHINE_TEST_BIN_DIR), \
+      std::format("{} verify {}/src_assets/linux/misc/60-hermes.rules", UDEVADM_EXECUTABLE, SUNSHINE_TEST_BIN_DIR), \
       "linux", \
       true, \
       "Test udev rules file" \

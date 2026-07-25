@@ -10,7 +10,8 @@ if(APPLE)
     endif()
 elseif(UNIX)
     # configure the .desktop file
-    set(SUNSHINE_DESKTOP_ICON "apollo")
+    # Matches the installed icon name (hermes.svg) in cmake/packaging/linux.cmake.
+    set(SUNSHINE_DESKTOP_ICON "hermes")
     if(${SUNSHINE_BUILD_APPIMAGE})
         configure_file(packaging/linux/AppImage/${PROJECT_FQDN}.desktop ${PROJECT_FQDN}.desktop @ONLY)
     elseif(${SUNSHINE_BUILD_FLATPAK})

@@ -8,7 +8,12 @@
 	branch = master
 [submodule "third-party/build-deps"]
 	path = third-party/build-deps
-	url = https://github.com/LizardByte/build-deps.git
+	# LizardByte deleted the `dist` branch that carried the pre-compiled FFmpeg
+	# binaries CMake links against, and the commit this was pinned to is no
+	# longer reachable from any ref there, so a clean clone could not build.
+	# This fork holds a snapshot of that branch. Point it back upstream if the
+	# branch is ever restored.
+	url = https://github.com/MrOz59/build-deps.git
 	branch = dist
 [submodule "third-party/doxyconfig"]
 	path = third-party/doxyconfig

@@ -2,7 +2,7 @@
 # Apollo - Game streaming server with virtual display support
 
 pkgname=hermes
-pkgver=0.4.0
+pkgver=0.4.1
 pkgrel=1
 pkgdesc="Self-hosted game streaming server with virtual display support"
 arch=('x86_64')
@@ -13,11 +13,9 @@ install=hermes.install
 depends=(
   'avahi'
   'curl'
-  'libayatana-appindicator'
   'libcap'
   'libdrm'
   'libevdev'
-  'libnotify'
   'libpulse'
   'libva'
   'libx11'
@@ -29,6 +27,8 @@ depends=(
   'numactl'
   'openssl'
   'opus'
+  'qt6-base'
+  'qt6-svg'
   'udev'
 )
 

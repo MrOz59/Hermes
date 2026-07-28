@@ -173,28 +173,6 @@ endif()
 
 # tray icon
 if(${SUNSHINE_ENABLE_TRAY})
-    pkg_check_modules(APPINDICATOR ayatana-appindicator3-0.1)
-    if(APPINDICATOR_FOUND)
-        list(APPEND SUNSHINE_DEFINITIONS TRAY_AYATANA_APPINDICATOR=1)
-    else()
-        pkg_check_modules(APPINDICATOR appindicator3-0.1)
-        if(APPINDICATOR_FOUND)
-            list(APPEND SUNSHINE_DEFINITIONS TRAY_LEGACY_APPINDICATOR=1)
-        endif ()
-    endif()
-    pkg_check_modules(LIBNOTIFY libnotify)
-    if(NOT APPINDICATOR_FOUND OR NOT LIBNOTIFY_FOUND)
-        message(STATUS "APPINDICATOR_FOUND: ${APPINDICATOR_FOUND}")
-        message(STATUS "LIBNOTIFY_FOUND: ${LIBNOTIFY_FOUND}")
-        message(FATAL_ERROR "Couldn't find either appindicator or libnotify")
-    else()
-        include_directories(SYSTEM ${APPINDICATOR_INCLUDE_DIRS} ${LIBNOTIFY_INCLUDE_DIRS})
-        link_directories(${APPINDICATOR_LIBRARY_DIRS} ${LIBNOTIFY_LIBRARY_DIRS})
-
-        list(APPEND PLATFORM_TARGET_FILES "${CMAKE_SOURCE_DIR}/third-party/tray/src/tray_linux.c")
-        list(APPEND SUNSHINE_EXTERNAL_LIBRARIES ${APPINDICATOR_LIBRARIES} ${LIBNOTIFY_LIBRARIES})
-    endif()
-
     # flatpak icons must be prefixed with the app id or they will not be included in the flatpak
     if(${SUNSHINE_BUILD_FLATPAK})
         set(SUNSHINE_TRAY_PREFIX "${PROJECT_FQDN}")

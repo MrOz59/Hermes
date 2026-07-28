@@ -106,7 +106,7 @@ const hermesKmsGuide = computed(() => {
     'git clone https://github.com/MrOz59/Hermes-KMS.git',
     'cd Hermes-KMS',
     'sudo make dkms-install',
-    'sudo modprobe hermes_kms initial_enabled=1',
+    'sudo modprobe hermes_kms initial_enabled=0',
   ]
   switch (hermesKmsState.value) {
     case 'dkms_build_failed':
@@ -114,7 +114,7 @@ const hermesKmsGuide = computed(() => {
         title: 'config.hermes_kms_dkms_build_failed_title',
         description: 'config.hermes_kms_dkms_build_failed_desc',
         steps: ['config.hermes_kms_dkms_rebuild_step', 'config.hermes_kms_restart_step'],
-        commands: ['sudo dkms autoinstall -k "$(uname -r)"', 'sudo modprobe hermes_kms initial_enabled=1'],
+        commands: ['sudo dkms autoinstall -k "$(uname -r)"', 'sudo modprobe hermes_kms initial_enabled=0'],
       }
     case 'module_not_installed':
       return {
@@ -128,7 +128,7 @@ const hermesKmsGuide = computed(() => {
         title: 'config.hermes_kms_module_not_loaded_title',
         description: 'config.hermes_kms_module_not_loaded_desc',
         steps: ['config.hermes_kms_module_not_loaded_step', 'config.hermes_kms_restart_step'],
-        commands: ['sudo modprobe hermes_kms initial_enabled=1'],
+        commands: ['sudo modprobe hermes_kms initial_enabled=0'],
       }
     case 'uapi_too_old':
       return {
@@ -149,7 +149,7 @@ const hermesKmsGuide = computed(() => {
         title: 'config.hermes_kms_device_missing_title',
         description: 'config.hermes_kms_device_missing_desc',
         steps: ['config.hermes_kms_reload_step', 'config.hermes_kms_restart_step'],
-        commands: ['sudo modprobe -r hermes_kms', 'sudo modprobe hermes_kms initial_enabled=1'],
+        commands: ['sudo modprobe -r hermes_kms', 'sudo modprobe hermes_kms initial_enabled=0'],
       }
     default:
       return {

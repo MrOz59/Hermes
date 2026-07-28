@@ -33,17 +33,16 @@ apt-get install -y --no-install-recommends \
   gdb \
   git \
   graphviz \
-  libayatana-appindicator3-dev \
   libcap-dev \
   libcurl4-openssl-dev \
   libdrm-dev \
   libevdev-dev \
   libgbm-dev \
   libminiupnpc-dev \
-  libnotify-dev \
   libnuma-dev \
   libopus-dev \
   libpulse-dev \
+  libqt6svg6-dev \
   libssl-dev \
   libva-dev \
   libwayland-dev \
@@ -55,6 +54,7 @@ apt-get install -y --no-install-recommends \
   libxrandr-dev \
   libxtst-dev \
   npm \
+  qt6-base-dev \
   udev \
   wget \
   x11-xserver-utils \

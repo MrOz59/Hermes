@@ -20,13 +20,11 @@ BuildRequires: appstream
 BuildRequires: cmake >= 3.25.0
 BuildRequires: desktop-file-utils
 BuildRequires: libappstream-glib
-BuildRequires: libayatana-appindicator3-devel
 BuildRequires: libcap-devel
 BuildRequires: libcurl-devel
 BuildRequires: libdrm-devel
 BuildRequires: libevdev-devel
 BuildRequires: libgudev
-BuildRequires: libnotify-devel
 BuildRequires: libva-devel
 BuildRequires: libX11-devel
 BuildRequires: libxcb-devel
@@ -45,6 +43,8 @@ BuildRequires: numactl-devel
 BuildRequires: openssl-devel
 BuildRequires: opus-devel
 BuildRequires: pulseaudio-libs-devel
+BuildRequires: qt6-qtbase-devel
+BuildRequires: qt6-qtsvg-devel
 BuildRequires: rpm-build
 BuildRequires: systemd-udev
 BuildRequires: systemd-rpm-macros
@@ -72,7 +72,6 @@ BuildRequires: gcc14-c++
 
 %global cuda_dir %{_builddir}/cuda
 
-Requires: libayatana-appindicator3 >= 0.5.3
 Requires: libcap >= 2.22
 Requires: libcurl >= 7.0
 Requires: libdrm > 2.4.97
@@ -85,6 +84,8 @@ Requires: miniupnpc >= 2.2.4
 Requires: numactl-libs >= 2.0.14
 Requires: openssl >= 3.0.2
 Requires: pulseaudio-libs >= 10.0
+Requires: qt6-qtbase
+Requires: qt6-qtsvg
 Requires: which >= 2.21
 
 %description

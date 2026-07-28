@@ -147,11 +147,12 @@ if(${SUNSHINE_TRAY} STREQUAL 1)
 
     set(CPACK_DEBIAN_PACKAGE_DEPENDS "\
                     ${CPACK_DEBIAN_PACKAGE_DEPENDS}, \
-                    libayatana-appindicator3-1, \
-                    libnotify4")
+                    libqt6svg6, \
+                    libqt6widgets6")
     set(CPACK_RPM_PACKAGE_REQUIRES "\
                     ${CPACK_RPM_PACKAGE_REQUIRES}, \
-                    libappindicator-gtk3 >= 12.10.0")
+                    qt6-qtbase, \
+                    qt6-qtsvg")
 endif()
 
 # desktop file

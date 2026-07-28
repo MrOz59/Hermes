@@ -47,12 +47,12 @@ jobs:
             libvdpau \
             libcap \
             curl \
-            libnotify \
-            libayatana-appindicator \
             libevdev \
             systemd \
             miniupnpc \
             libpulse \
+            qt6-base \
+            qt6-svg \
             npm \
             nodejs \
             icu \
@@ -121,12 +121,13 @@ jobs:
             mingw-w64-ucrt-x86_64-opus
             mingw-w64-ucrt-x86_64-ffmpeg
             mingw-w64-ucrt-x86_64-curl
-            mingw-w64-ucrt-x86_64-libnotify
             mingw-w64-ucrt-x86_64-miniupnpc
             mingw-w64-ucrt-x86_64-nlohmann-json
             mingw-w64-ucrt-x86_64-onevpl
             mingw-w64-ucrt-x86_64-MinHook
             mingw-w64-ucrt-x86_64-nodejs
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-svg
             git
 
       - name: Configure CMake
@@ -209,12 +210,12 @@ jobs:
             libvdpau \
             libcap \
             curl \
-            libnotify \
-            libayatana-appindicator \
             libevdev \
             systemd \
             miniupnpc \
             libpulse \
+            qt6-base \
+            qt6-svg \
             npm \
             nodejs \
             icu \
@@ -301,14 +302,14 @@ jobs:
             libvdpau-dev \
             libcap-dev \
             libcurl4-openssl-dev \
-            libnotify-dev \
-            libayatana-appindicator3-dev \
             libevdev-dev \
             libudev-dev \
             libsystemd-dev \
             libminiupnpc-dev \
             libicu-dev \
             libnuma-dev \
+            libqt6svg6-dev \
+            qt6-base-dev \
             dpkg-dev \
             debhelper \
             nodejs \
@@ -371,7 +372,7 @@ jobs:
           Section: net
           Priority: optional
           Architecture: amd64
-          Depends: libssl3, libboost-all-dev, libpulse0, libopus0, libdrm2, libwayland-client0, libx11-6, libva2, libcurl4, libnotify4, libayatana-appindicator3-1, libevdev2, libcap2
+          Depends: libssl3, libboost-all-dev, libpulse0, libopus0, libdrm2, libwayland-client0, libx11-6, libva2, libcurl4, libqt6widgets6, libqt6svg6, libevdev2, libcap2
           Recommends: evdi-dkms
           Maintainer: Hermes
           Description: Self-hosted game stream host with Linux virtual display support
@@ -463,14 +464,14 @@ jobs:
             libvdpau-devel \
             libcap-devel \
             libcurl-devel \
-            libnotify-devel \
-            libayatana-appindicator-gtk3-devel \
             libevdev-devel \
             systemd-devel \
             miniupnpc-devel \
             pulseaudio-libs-devel \
             libicu-devel \
             numactl-devel \
+            qt6-qtbase-devel \
+            qt6-qtsvg-devel \
             rpm-build \
             wget \
             nodejs \

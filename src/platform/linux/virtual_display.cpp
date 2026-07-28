@@ -251,6 +251,7 @@ namespace VDISPLAY {
     constexpr uint64_t cap_zero_copy_target = 1ULL << 33;
     constexpr uint64_t cap_sync_file = 1ULL << 35;
 
+    constexpr uint64_t status_output_enabled = 1ULL << 0;
     constexpr uint64_t status_connected = 1ULL << 1;
 
     constexpr uint32_t set_output_connected = 1U << 0;
@@ -622,6 +623,42 @@ namespace VDISPLAY {
       return ::ioctl(fd, ioctl_get_status, &status) == 0;
     }
 
+    /**
+     * Older Hermes-KMS packages load the module with initial_enabled=1. That
+     * exposes an unowned connector before Hermes starts and lets a compositor
+     * replay a saved virtual-only layout at login. Disconnect that legacy
+     * connector so virtual outputs remain tied to a live streaming session.
+     */
+    static bool disconnect_unowned_output(std::string &connector_name) {
+      device_t device {};
+      if (!open_device(device, false)) {
+        return false;
+      }
+
+      connector_name = cstr(device.identity.connector_name);
+      if (const int render_fd = open_render_node(device.fd); render_fd >= 0) {
+        ::close(device.fd);
+        device.fd = render_fd;
+      }
+
+      status_t status {};
+      const bool unowned_output_enabled =
+        get_status(device.fd, status) &&
+        (status.flags & status_output_enabled) &&
+        status.owner_pid <= 0 &&
+        status.session_id == 0;
+      if (!unowned_output_enabled) {
+        close_device(device);
+        return false;
+      }
+
+      BOOST_LOG(warning) << "[VDISPLAY/Hermes-KMS] Disconnecting an unowned virtual output left enabled at module load.";
+      uint64_t session_id = 0;
+      const bool disconnected = set_output(device.fd, false, 0, 0, 0, session_id);
+      close_device(device);
+      return disconnected;
+    }
+
     static bool get_metrics(int fd, metrics_t &metrics) {
       std::memset(&metrics, 0, sizeof(metrics));
       return ::ioctl(fd, ioctl_get_metrics, &metrics) == 0;
@@ -731,9 +768,9 @@ namespace VDISPLAY {
       return result;
     }
 
-    static std::set<std::string> connected_output_names() {
+    static std::set<std::string> connected_output_names(const std::vector<output_t> &current) {
       std::set<std::string> result;
-      for (const auto &output : outputs()) {
+      for (const auto &output : current) {
         if (output.connected) {
           result.insert(output.name);
         }
@@ -741,13 +778,23 @@ namespace VDISPLAY {
       return result;
     }
 
-    static std::string primary_output() {
-      for (const auto &output : outputs()) {
+    static std::string primary_output(const std::vector<output_t> &current) {
+      for (const auto &output : current) {
         if (output.connected && output.enabled && output.priority == 1) {
           return output.name;
         }
       }
       return {};
+    }
+
+    static std::map<std::string, int> enabled_output_priorities(const std::vector<output_t> &current) {
+      std::map<std::string, int> result;
+      for (const auto &output : current) {
+        if (output.connected && output.enabled) {
+          result.emplace(output.name, output.priority);
+        }
+      }
+      return result;
     }
 
     static bool run_layout_command(const std::string &command) {
@@ -834,17 +881,92 @@ namespace VDISPLAY {
       }
 
       BOOST_LOG(info) << "[VDISPLAY/KScreen] Recovering physical output left disabled by a previous session: " << output;
-      run_layout_command("kscreen-doctor output." + output + ".enable output." + output + ".priority.1");
-      clear_recovery_state();
+      if (run_layout_command("kscreen-doctor output." + output + ".enable output." + output + ".priority.1")) {
+        clear_recovery_state();
+      } else {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Startup recovery failed; retaining recovery state for the next attempt.";
+      }
+    }
+
+    /**
+     * Reapply the outputs that were enabled immediately before the virtual
+     * connector appeared. KWin stores a setup for each exact output
+     * combination; an exclusive streaming setup can therefore be replayed on
+     * the next hotplug even after the setting has been turned off.
+     *
+     * Apply the complete baseline in one KScreen transaction. This both keeps
+     * the local displays lit and replaces the stale saved setup. Exclusive
+     * mode, when requested for this session, is applied afterwards.
+     */
+    static bool apply_pre_session_layout(
+      const std::string &virtual_output,
+      const std::map<std::string, int> &enabled_before
+    ) {
+      std::string command = "kscreen-doctor";
+      int next_priority = 1;
+      for (const auto &[output, priority] : enabled_before) {
+        if (output == virtual_output) {
+          continue;
+        }
+        command += " output." + output + ".enable";
+        if (priority > 0) {
+          command += " output." + output + ".priority." + std::to_string(priority);
+          next_priority = std::max(next_priority, priority + 1);
+        }
+      }
+      command += " output." + virtual_output + ".enable";
+      command += " output." + virtual_output + ".priority." + std::to_string(next_priority);
+      return run_layout_command(command);
+    }
+
+    /**
+     * Loading old Hermes-KMS packages with initial_enabled=1 can make KWin
+     * disable every physical output before Hermes is running. Once the
+     * unowned connector is disconnected, restore a usable local layout if
+     * KWin has not already done so itself.
+     */
+    static void recover_after_unowned_virtual_disconnect(const std::string &virtual_connector) {
+      if (!available()) {
+        return;
+      }
+
+      for (int attempt = 0; attempt < 20; ++attempt) {
+        const auto current = outputs();
+        std::vector<std::string> physical_outputs;
+        bool physical_output_enabled = false;
+        for (const auto &output : current) {
+          if (!output.connected || output.name == virtual_connector) {
+            continue;
+          }
+          physical_outputs.emplace_back(output.name);
+          physical_output_enabled = physical_output_enabled || output.enabled;
+        }
+
+        if (physical_output_enabled) {
+          return;
+        }
+        if (!physical_outputs.empty()) {
+          std::string command = "kscreen-doctor";
+          int priority = 1;
+          for (const auto &output : physical_outputs) {
+            command += " output." + output + ".enable";
+            command += " output." + output + ".priority." + std::to_string(priority++);
+          }
+          BOOST_LOG(warning) << "[VDISPLAY/KScreen] Restoring physical outputs after disconnecting a boot-enabled virtual output.";
+          run_layout_command(command);
+          return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds {50});
+      }
     }
 
     static bool activate_evdi_output(
       const std::string &display_name,
       const std::set<std::string> &outputs_before,
       const std::string &original_primary,
+      const std::map<std::string, int> &enabled_before,
       const std::string &connector_name,
-      const char *backend_label,
-      bool disable_physical
+      const char *backend_label
     ) {
       if (!available()) {
         return false;
@@ -883,7 +1005,7 @@ namespace VDISPLAY {
       // Otherwise creating the display would steal the user's primary monitor
       // before any session is live, blanking the physical screen prematurely.
       const bool can_manage_original = safe_output_name(original_primary) && original_primary != virtual_output;
-      if (!run_layout_command("kscreen-doctor output." + virtual_output + ".enable")) {
+      if (!apply_pre_session_layout(virtual_output, enabled_before)) {
         return false;
       }
 
@@ -894,10 +1016,7 @@ namespace VDISPLAY {
         .physical_output_disabled = false,
       };
       BOOST_LOG(info) << "[VDISPLAY/KScreen] Enabled " << backend_label << " output " << virtual_output
-                      << " (physical output left untouched until the session starts)";
-      // disable_physical is intentionally unused here; the physical layout is
-      // managed at session start in make_exclusive().
-      (void) disable_physical;
+                      << " and restored the pre-session physical layout";
       return true;
     }
 
@@ -921,12 +1040,13 @@ namespace VDISPLAY {
       // transient no-primary layout.
       std::string command = "kscreen-doctor output." + it->second.virtual_output + ".priority.1"
         " output." + it->second.original_primary + ".disable";
-      if (!run_layout_command(command)) {
+      if (!write_recovery_state(it->second.original_primary)) {
+        BOOST_LOG(error) << "[VDISPLAY/KScreen] Refusing exclusive mode because monitor recovery state could not be written.";
         return false;
       }
-      if (!write_recovery_state(it->second.original_primary)) {
-        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not write monitor recovery state; "
-                           << "a crash may leave the physical output disabled.";
+      if (!run_layout_command(command)) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Exclusive layout command failed; retaining recovery state in case it was partially applied.";
+        return false;
       }
       it->second.physical_output_disabled = true;
       return true;
@@ -943,13 +1063,18 @@ namespace VDISPLAY {
       // two primaries or none. The virtual connector itself disappears when the
       // display is torn down, so we don't need to .disable it explicitly, but
       // restoring the physical priority is what brings the screen back.
+      bool restored = true;
       if (!it->second.original_primary.empty()) {
         std::string command = "kscreen-doctor"
           " output." + it->second.original_primary + ".enable"
           " output." + it->second.original_primary + ".priority.1";
-        run_layout_command(command);
+        restored = run_layout_command(command);
       }
-      clear_recovery_state();
+      if (restored) {
+        clear_recovery_state();
+      } else {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Physical output restoration failed; retaining recovery state for the next startup.";
+      }
       layouts.erase(it);
     }
   }  // namespace kscreen
@@ -959,11 +1084,11 @@ namespace VDISPLAY {
   // org.gnome.Mutter.DisplayConfig over D-Bus. We talk to it via `gdbus` (always
   // present on GNOME) to avoid a libdbus build dependency.
   //
-  // This backend is intentionally conservative: with the Hermes-KMS module
-  // loaded `initial_enabled=1`, Mutter typically adopts the hotplugged HERMES-1
-  // connector on its own, so the critical step is to *verify* that the virtual
-  // output is present and active in Mutter's current state rather than to push a
-  // full ApplyMonitorsConfig (which is all-or-nothing and risky to build blind).
+  // This backend is intentionally conservative: Mutter typically adopts the
+  // HERMES-1 connector after Hermes connects it for a stream, so the critical
+  // step is to *verify* that the virtual output is present and active in
+  // Mutter's current state rather than to push a full ApplyMonitorsConfig
+  // (which is all-or-nothing and risky to build blind).
   namespace mutter {
     static bool available() {
       const char *desktop = std::getenv("XDG_CURRENT_DESKTOP");
@@ -1926,6 +2051,11 @@ namespace VDISPLAY {
         return driver_status;
       }
 
+      std::string boot_connector;
+      if (hermes_kms::disconnect_unowned_output(boot_connector)) {
+        kscreen::recover_after_unowned_virtual_disconnect(boot_connector);
+      }
+
       driver_status = DRIVER_STATUS::OK;
       BOOST_LOG(info) << "[VDISPLAY/Hermes-KMS] Hermes-KMS available - experimental zero-copy virtual display supported.";
       return driver_status;
@@ -2123,8 +2253,10 @@ namespace VDISPLAY {
     vdinfo.evdi_buffer_id = 0;
 
     const auto backend = selected_backend();
-    const auto outputs_before = kscreen::connected_output_names();
-    const auto original_primary = kscreen::primary_output();
+    const auto kscreen_before = kscreen::outputs();
+    const auto outputs_before = kscreen::connected_output_names(kscreen_before);
+    const auto original_primary = kscreen::primary_output(kscreen_before);
+    const auto enabled_before = kscreen::enabled_output_priorities(kscreen_before);
 
     if (backend == VirtualDisplayBackend::HERMES_KMS) {
       hermes_kms::device_t device {};
@@ -2172,9 +2304,9 @@ namespace VDISPLAY {
               vdinfo.name,
               outputs_before,
               original_primary,
+              enabled_before,
               vdinfo.connector_name,
-              "Hermes-KMS",
-              config::video.isolated_virtual_display_option
+              "Hermes-KMS"
             );
           }
         }
@@ -2236,9 +2368,9 @@ namespace VDISPLAY {
               vdinfo.name,
               outputs_before,
               original_primary,
+              enabled_before,
               evdi_connector_name(vdinfo.drm_card_index),
-              "EVDI",
-              config::video.isolated_virtual_display_option
+              "EVDI"
             );
           } else {
             BOOST_LOG(error) << "[VDISPLAY] EVDI connected but no matching DRM card appeared.";
@@ -2439,10 +2571,10 @@ namespace VDISPLAY {
 #ifdef SUNSHINE_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND) {
       // GNOME/Mutter exposes neither kscreen-doctor nor wlr-output-management.
-      // It typically adopts the hotplugged HERMES-1 connector on its own (the
-      // module is loaded initial_enabled=1), so confirm Mutter is driving the
-      // virtual output via its D-Bus DisplayConfig before deciding capture is
-      // safe. We do not push a layout to Mutter here.
+      // It typically adopts the hotplugged HERMES-1 connector on its own, so
+      // confirm Mutter is driving the virtual output via its D-Bus
+      // DisplayConfig before deciding capture is safe. We do not push a layout
+      // to Mutter here.
       if (mutter::available()) {
         if (mutter::output_present(connector)) {
           BOOST_LOG(info) << "[VDISPLAY] Mutter has adopted virtual output " << connector

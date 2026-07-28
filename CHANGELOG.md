@@ -11,6 +11,40 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-28
+
+### Changed
+- Replaced the forked Linux libnotify/AppIndicator tray backend with the current
+  upstream `tray` Qt 6 backend. CMake, CI, Arch, Debian, RPM, Homebrew, and local
+  build dependencies now use Qt 6, and the tray submodule points upstream again.
+- Hermes-KMS setup now recommends `initial_enabled=0`, so the virtual connector
+  remains disconnected until Hermes owns it for an active stream.
+- Refreshed build-compatible dependency submodules while retaining the
+  deliberately pinned `nanors` and `libdisplaydevice` revisions.
+
+### Fixed
+- Packaging no longer claims Sunshine/Apollo-owned udev, module-load, desktop,
+  metainfo, or icon paths, allowing Hermes to be installed alongside them
+  without file conflicts ([#8]).
+- KDE: turning exclusive virtual-display mode off no longer allows a stale KWin
+  virtual-only layout to blank the physical monitor on a later boot or hotplug.
+  Hermes reapplies the complete pre-session layout and disconnects legacy
+  unowned Hermes-KMS outputs enabled at module load ([#9]).
+- KDE exclusive mode now persists monitor recovery state before disabling the
+  physical output, refuses the transition if that state cannot be written, and
+  retains it until restoration succeeds.
+- wlroots: an initially empty but complete output-manager snapshot now reaches
+  the existing retry loop, allowing an asynchronously hotplugged virtual
+  connector to appear instead of failing immediately ([#6]).
+- Tray shutdown no longer uses the synchronous libnotify close path that could
+  hang Hermes when the desktop notification service was unresponsive.
+- Clean clones can fetch the pinned FFmpeg build dependencies again after the
+  former upstream `dist` revision became unreachable.
+
+[#6]: https://github.com/MrOz59/Hermes/issues/6
+[#8]: https://github.com/MrOz59/Hermes/issues/8
+[#9]: https://github.com/MrOz59/Hermes/issues/9
+
 ## [0.4.0] - 2026-07-02
 
 ### Added
@@ -107,7 +141,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   host with low-latency virtual displays via Hermes-KMS (zero-copy DRM/KMS),
   EVDI still supported, and Hestia/Moonlight/Artemis protocol compatibility.
 
-[Unreleased]: https://github.com/MrOz59/Hermes/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/MrOz59/Hermes/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/MrOz59/Hermes/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/MrOz59/Hermes/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/MrOz59/Hermes/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MrOz59/Hermes/compare/v0.1.0...v0.2.0

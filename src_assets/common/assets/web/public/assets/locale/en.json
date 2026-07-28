@@ -333,7 +333,7 @@
     "hermes_kms_status_kernel": "Running kernel",
     "hermes_kms_status_installed": "installed for this kernel",
     "hermes_kms_experimental_note": "Hermes-KMS is experimental. When ready, Hermes asks the driver to connect HERMES-1 for the stream session and holds the owner fd until the session ends.",
-    "hermes_kms_boot_hint": "To load the module on every boot, install the drop-ins shipped in the Hermes-KMS repo (packaging/modules-load.d and packaging/modprobe.d). Restart Hermes after the driver is ready.",
+    "hermes_kms_boot_hint": "To load the module on every boot, install the module-load drop-in and configure the module with initial_enabled=0. Older Hermes-KMS packages used initial_enabled=1; update /etc/modprobe.d/hermes-kms.conf, then restart Hermes.",
     "hermes_kms_install_title": "Hermes-KMS driver is not installed",
     "hermes_kms_install_desc": "The Hermes-KMS backend needs its out-of-tree kernel module, built and installed via DKMS from the Hermes-KMS repository.",
     "hermes_kms_install_step": "Clone the Hermes-KMS repository and install it via DKMS (requires dkms and your kernel headers).",

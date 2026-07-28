@@ -53,11 +53,8 @@
 	branch = master
 [submodule "third-party/tray"]
 	path = third-party/tray
-	# Fork of LizardByte/tray, carrying the fix for tray_update() hanging on a
-	# synchronous libnotify call when the notification daemon stops responding.
-	# Point this back at LizardByte/tray once that fix is upstream.
-	url = https://github.com/MrOz59/tray.git
-	branch = fix/notification-close-hang
+	url = https://github.com/LizardByte/tray.git
+	branch = master
 [submodule "third-party/ViGEmClient"]
 	path = third-party/ViGEmClient
 	url = https://github.com/LizardByte/Virtual-Gamepad-Emulation-Client.git

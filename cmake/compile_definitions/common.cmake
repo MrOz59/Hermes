@@ -48,6 +48,15 @@ elseif(UNIX)
     endif()
 endif()
 
+# The upstream tray library now uses a single Qt backend on every platform and
+# owns its source selection, AUTOMOC setup, and Qt linkage through tray::tray.
+if(SUNSHINE_ENABLE_TRAY)
+    add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/tray" "${CMAKE_BINARY_DIR}/third-party/tray")
+    list(APPEND SUNSHINE_EXTERNAL_LIBRARIES tray::tray)
+else()
+    set(SUNSHINE_TRAY 0)
+endif()
+
 include_directories(BEFORE SYSTEM "${CMAKE_SOURCE_DIR}/third-party/nv-codec-headers/include")
 file(GLOB NVENC_SOURCES CONFIGURE_DEPENDS "src/nvenc/*.cpp" "src/nvenc/*.h")
 list(APPEND PLATFORM_TARGET_FILES ${NVENC_SOURCES})

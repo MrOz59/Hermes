@@ -31,6 +31,7 @@ class @PROJECT_NAME@ < Formula
   depends_on "graphviz" => :build
   depends_on "node" => :build
   depends_on "pkgconf" => :build
+  depends_on "qt"
   depends_on "curl"
   depends_on "miniupnpc"
   depends_on "openssl"
@@ -40,10 +41,8 @@ class @PROJECT_NAME@ < Formula
   on_linux do
     depends_on "avahi"
     depends_on "gnu-which"
-    depends_on "libayatana-appindicator"
     depends_on "libcap"
     depends_on "libdrm"
-    depends_on "libnotify"
     depends_on "libva"
     depends_on "libx11"
     depends_on "libxcb"

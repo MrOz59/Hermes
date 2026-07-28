@@ -22,12 +22,10 @@ _gcc_version=14
 depends=(
   'avahi'
   'curl'
-  'libayatana-appindicator'
   'libcap'
   'libdrm'
   'libevdev'
   'libmfx'
-  'libnotify'
   'libpulse'
   'libva'
   'libx11'
@@ -39,6 +37,8 @@ depends=(
   'numactl'
   'openssl'
   'opus'
+  'qt6-base'
+  'qt6-svg'
   'udev'
   'which'
 )

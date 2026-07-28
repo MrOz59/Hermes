@@ -77,8 +77,9 @@ The compositor owns the virtual card and scans out the desktop; Hermes opens the
 Hermes-KMS render node and pulls each frame as a DMA-BUF, which a real GPU
 imports and encodes. On Linux/KDE Wayland this depends on:
 
-- the `hermes_kms` kernel module loaded with `initial_enabled=1` (so the
-  compositor adopts the `HERMES-1` output), and its card left on the active seat;
+- the `hermes_kms` kernel module loaded with `initial_enabled=0`, leaving its
+  connector disconnected until Hermes owns it for a stream, and its card left
+  on the active seat;
 - `kscreen-doctor` (KWin) or a Wayland output-management protocol to enable the
   virtual output;
 - a real GPU render node (e.g. amdgpu) for VAAPI encoding;
@@ -96,16 +97,16 @@ source lives at <https://github.com/MrOz59/Hermes-KMS>.
 git clone https://github.com/MrOz59/Hermes-KMS.git
 cd Hermes-KMS
 sudo make dkms-install        # registers + builds + installs via DKMS
-sudo modprobe hermes_kms initial_enabled=1
+sudo modprobe hermes_kms initial_enabled=0
 ```
 
 The build auto-detects whether your kernel was built with clang (e.g. CachyOS)
 or gcc, so no extra flags are needed. To load it automatically on every boot,
-the repo ships drop-ins you can install:
+install the module-load drop-in and keep the connector initially disconnected:
 
 ```bash
 sudo install -Dm644 packaging/modules-load.d/hermes-kms.conf /etc/modules-load.d/hermes-kms.conf
-sudo install -Dm644 packaging/modprobe.d/hermes-kms.conf /etc/modprobe.d/hermes-kms.conf
+printf '%s\n' 'options hermes_kms initial_enabled=0' | sudo tee /etc/modprobe.d/hermes-kms.conf
 ```
 
 To remove it:
@@ -122,6 +123,11 @@ git clone https://github.com/MrOz59/Hermes-KMS.git
 cd Hermes-KMS
 makepkg -si
 ```
+
+Older Hermes-KMS packages wrote `initial_enabled=1` to
+`/etc/modprobe.d/hermes-kms.conf`. Change that option to `0` before rebooting;
+Hermes also disconnects this legacy unowned output at startup so an upgrade can
+recover without requiring the old package to be removed first.
 
 Verify the module is loaded and a Hermes render node exists:
 

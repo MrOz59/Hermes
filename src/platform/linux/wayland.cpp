@@ -204,7 +204,9 @@ namespace wl {
           return false;
         }
         display.roundtrip();
-        return ready && !manager_finished && !heads.empty();
+        // A complete layout can legitimately be empty while the compositor is
+        // waiting for a newly hotplugged DRM connector to appear.
+        return ready && !manager_finished;
       }
 
       output_head_t *find_head(const std::string &name) {

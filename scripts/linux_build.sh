@@ -175,12 +175,10 @@ function add_arch_deps() {
     "gcc${gcc_version}-libs"
     'git'
     'graphviz'
-    'libayatana-appindicator'
     'libcap'
     'libdrm'
     'libevdev'
     'libmfx'
-    'libnotify'
     'libpulse'
     'libva'
     'libx11'
@@ -195,6 +193,8 @@ function add_arch_deps() {
     'numactl'
     'openssl'
     'opus'
+    'qt6-base'
+    'qt6-svg'
     'udev'
     'wayland'
   )
@@ -232,7 +232,6 @@ function add_debian_based_deps() {
     "libevdev-dev"
     "libgbm-dev"
     "libminiupnpc-dev"
-    "libnotify-dev"
     "libnuma-dev"
     "libopus-dev"
     "libpulse-dev"
@@ -247,6 +246,8 @@ function add_debian_based_deps() {
     "libxtst-dev"  # X11
     "ninja-build"
     "npm"  # web-ui
+    "libqt6svg6-dev"
+    "qt6-base-dev"
     "udev"
     "wget"  # necessary for cuda install with `run` file
     "xvfb"  # necessary for headless unit testing
@@ -269,17 +270,11 @@ function add_test_ppa() {
 function add_debian_deps() {
   add_test_ppa
   add_debian_based_deps
-  dependencies+=(
-    "libayatana-appindicator3-dev"
-  )
 }
 
 function add_ubuntu_deps() {
   add_test_ppa
   add_debian_based_deps
-  dependencies+=(
-    "libappindicator3-dev"
-  )
 }
 
 function add_fedora_deps() {
@@ -292,13 +287,11 @@ function add_fedora_deps() {
     "gcc${gcc_version}-c++"
     "git"
     "graphviz"
-    "libappindicator-gtk3-devel"
     "libappstream-glib"
     "libcap-devel"
     "libcurl-devel"
     "libdrm-devel"
     "libevdev-devel"
-    "libnotify-devel"
     "libX11-devel"  # X11
     "libxcb-devel"  # X11
     "libXcursor-devel"  # X11
@@ -316,6 +309,8 @@ function add_fedora_deps() {
     "openssl-devel"
     "opus-devel"
     "pulseaudio-libs-devel"
+    "qt6-qtbase-devel"
+    "qt6-qtsvg-devel"
     "rpm-build"  # if you want to build an RPM binary package
     "wget"  # necessary for cuda install with `run` file
     "which"  # necessary for cuda install with `run` file

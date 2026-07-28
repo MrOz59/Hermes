@@ -1,7 +1,7 @@
 # Maintainer: SudoMaker
-# Apollo - Game streaming server with virtual display support
+# Hermes - Game streaming server with virtual display support
 
-pkgname=hermes
+pkgname=hermes-streaming
 pkgver=0.4.1
 pkgrel=1
 pkgdesc="Self-hosted game streaming server with virtual display support"
@@ -51,15 +51,23 @@ optdepends=(
   'libva-mesa-driver: AMD GPU encoding support'
 )
 
+# The Arch package was originally published as `hermes`, but that name belongs
+# to an unrelated AUR PAM authentication project. Prevent both packages from
+# owning the same files, while automatically replacing only the old Hermes
+# streaming packages whose versions were below 0.5.0.
+conflicts=('hermes')
+replaces=('hermes<0.5.0')
+
 # Hermes installs under its own /usr/bin/hermes and /usr/share/hermes paths and
 # ships hermes.service, so it can be installed side by side with the apollo (AUR)
 # and sunshine packages — useful while the project is experimental. No provides
 # or conflicts are declared for those packages; the binaries and unit names are
 # all distinct.
 
-# Do not emit a separate hermes-debug package. The CI container's makepkg.conf
-# has `debug` enabled by default, which would otherwise produce and publish a
-# stray hermes-debug-*.pkg.tar.zst alongside the real package.
+# Do not emit a separate hermes-streaming-debug package. The CI container's
+# makepkg.conf has `debug` enabled by default, which would otherwise produce
+# and publish a stray hermes-streaming-debug-*.pkg.tar.zst alongside the real
+# package.
 options=('!debug')
 
 source=()
@@ -81,6 +89,7 @@ build() {
     cd "${startdir}"
     export BRANCH=local
     export BUILD_VERSION="${pkgver}"
+    export COMMIT="${COMMIT:-$(git rev-parse HEAD)}"
 
     # CUDA is required so the package ships NVIDIA NVENC hardware encoding. The
     # build fails if the CUDA toolkit is missing (CUDA_FAIL_ON_MISSING defaults

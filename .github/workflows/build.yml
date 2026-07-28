@@ -11,6 +11,7 @@ on:
 
 env:
   BUILD_TYPE: Release
+  COMMIT: ${{ github.sha }}
 
 jobs:
   # ===========================================
@@ -238,9 +239,9 @@ jobs:
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
       # Build the real Arch package straight from the PKGBUILD, so CI and a
-      # local `makepkg -si` produce the exact same hermes-*.pkg.tar.zst (same
-      # paths, service, deps). makepkg refuses to run as root, hence the
-      # `builder` user created above.
+      # local `makepkg -si` produce the exact same
+      # hermes-streaming-*.pkg.tar.zst (same paths, service, deps). makepkg
+      # refuses to run as root, hence the `builder` user created above.
       - name: Build package with makepkg
         run: |
           # The Arch `cuda` package installs nvcc under /opt/cuda/bin, which is
@@ -251,7 +252,7 @@ jobs:
       - name: Upload Arch Package
         uses: actions/upload-artifact@v4
         with:
-          name: hermes-arch-pkg
+          name: hermes-streaming-arch-pkg
           # The main package only; exclude any -debug package (also suppressed
           # via options=('!debug') in the PKGBUILD).
           path: |

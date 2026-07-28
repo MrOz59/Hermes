@@ -25,11 +25,47 @@
     <div class="card p-2 my-4">
       <div class="card-body" v-if="config">
         <h2>Hermes {{ config.version }}</h2>
+        <div v-if="updateLoading" class="text-body-secondary">
+          {{ $t('index.loading_latest') }}
+        </div>
         <div class="alert alert-success" v-if="buildVersionIsDirty">
           {{ $t('index.version_dirty') }} 🌇
         </div>
-        <div class="alert alert-info" v-else>
-          Hermes update checks are disabled in this build. Apollo upstream releases are not shown because they are not Hermes packages.
+        <div class="alert alert-warning" v-if="updateError">
+          {{ $t('index.update_check_failed') }}
+        </div>
+        <div class="alert alert-info" v-if="installedVersionNotStable">
+          {{ $t('index.installed_version_not_stable') }}
+        </div>
+        <div class="alert alert-success"
+             v-if="!updateLoading && !updateError && !stableBuildAvailable && !nightlyBuildAvailable && !buildVersionIsDirty">
+          {{ $t('index.version_latest') }}
+        </div>
+        <div class="alert alert-warning" v-if="nightlyBuildAvailable">
+          <div class="d-flex justify-content-between align-items-center gap-3">
+            <div>
+              <p class="mb-1">{{ $t('index.new_nightly') }}</p>
+              <strong>{{ nightlyVersion.release.name }}</strong>
+            </div>
+            <a class="btn btn-success m-1"
+               :href="nightlyVersion.release.html_url"
+               target="_blank"
+               rel="noopener noreferrer">{{ $t('index.download') }}</a>
+          </div>
+          <pre class="text-wrap mt-2 mb-0">{{ nightlyVersion.release.body }}</pre>
+        </div>
+        <div class="alert alert-warning" v-if="stableBuildAvailable && !nightlyBuildAvailable">
+          <div class="d-flex justify-content-between align-items-center gap-3">
+            <div>
+              <p class="mb-1">{{ $t('index.new_stable') }}</p>
+              <strong>{{ stableVersion.release.name }}</strong>
+            </div>
+            <a class="btn btn-success m-1"
+               :href="stableVersion.release.html_url"
+               target="_blank"
+               rel="noopener noreferrer">{{ $t('index.download') }}</a>
+          </div>
+          <pre class="text-wrap mt-2 mb-0">{{ stableVersion.release.body }}</pre>
         </div>
       </div>
     </div>
@@ -39,8 +75,8 @@
       <div class="card-body">
         <div class="d-flex align-items-center justify-content-between mb-3">
           <h2 class="h4 mb-0">Hermes host readiness</h2>
-          <button type="button" class="btn btn-outline-secondary btn-sm" :disabled="loading" @click="loadStatus">
-            <i class="fa-solid fa-arrows-rotate" :class="{'fa-spin': loading}"></i>
+          <button type="button" class="btn btn-outline-secondary btn-sm" :disabled="loading || updateLoading" @click="refresh">
+            <i class="fa-solid fa-arrows-rotate" :class="{'fa-spin': loading || updateLoading}"></i>
           </button>
         </div>
         <div v-if="loading" class="text-body-secondary">Checking local status…</div>
@@ -70,8 +106,10 @@
   import Navbar from './Navbar.vue'
   import ClientCard from './ClientCard.vue'
   import ResourceCard from './ResourceCard.vue'
+  import HermesVersion from './hermes_version'
 
   console.log("Hello, Hermes!")
+  const hermesApi = "https://api.github.com/repos/MrOz59/Hermes";
   let app = createApp({
     components: {
       Navbar,
@@ -81,14 +119,24 @@
     data() {
       return {
         config: null,
+        version: null,
+        stableVersion: null,
+        nightlyVersion: null,
+        nightlyCommit: null,
         loading: true,
+        updateLoading: true,
+        updateError: false,
         logs: null,
       }
     },
     async created() {
-      await this.loadStatus();
+      await this.refresh();
     },
     methods: {
+      async refresh() {
+        await this.loadStatus();
+        await this.loadUpdates();
+      },
       async loadStatus() {
         this.loading = true;
         try {
@@ -103,11 +151,92 @@
         }
         this.loading = false;
       },
+      async fetchJson(url) {
+        const response = await fetch(url, {
+          headers: {
+            "Accept": "application/vnd.github+json",
+          },
+        });
+        if (!response.ok) {
+          throw new Error(`GitHub API request failed (${response.status})`);
+        }
+        return response.json();
+      },
+      async loadUpdates() {
+        this.updateLoading = true;
+        this.updateError = false;
+        this.stableVersion = null;
+        this.nightlyVersion = null;
+        this.nightlyCommit = null;
+        this.version = this.config?.version ? new HermesVersion(null, this.config.version) : null;
+
+        if (!this.version) {
+          this.updateError = true;
+          this.updateLoading = false;
+          return;
+        }
+
+        try {
+          const stableRelease = await this.fetchJson(`${hermesApi}/releases/latest`);
+          this.stableVersion = new HermesVersion(stableRelease, null);
+        } catch (e) {
+          console.error("Stable update check failed", e);
+          this.updateError = true;
+        }
+
+        if (this.notifyNightlyUpdates) {
+          try {
+            const [nightlyRelease, nightlyCommit] = await Promise.all([
+              this.fetchJson(`${hermesApi}/releases/tags/nightly`),
+              this.fetchJson(`${hermesApi}/commits/nightly`),
+            ]);
+            this.nightlyVersion = new HermesVersion(nightlyRelease, null);
+            this.nightlyCommit = nightlyCommit.sha;
+          } catch (e) {
+            console.error("Nightly update check failed", e);
+            this.updateError = true;
+          }
+        }
+
+        this.updateLoading = false;
+      },
     },
     computed: {
+      notifyNightlyUpdates() {
+        const value = this.config?.notify_pre_releases;
+        if (value === true || value === 1) {
+          return true;
+        }
+        return ["true", "1", "enabled", "enable", "yes", "on"].includes(`${value ?? ""}`.toLowerCase().trim());
+      },
+      installedVersionNotStable() {
+        return !!this.version && !!this.stableVersion && this.version.isGreater(this.stableVersion);
+      },
+      stableBuildAvailable() {
+        return !!this.version && !!this.stableVersion && this.stableVersion.isGreater(this.version);
+      },
+      nightlyBuildAvailable() {
+        if (!this.notifyNightlyUpdates || !this.version || !this.nightlyVersion || !this.nightlyCommit || this.buildVersionIsDirty) {
+          return false;
+        }
+        if (this.nightlyVersion.isGreater(this.version)) {
+          return true;
+        }
+        if (!this.nightlyVersion.isSame(this.version)) {
+          return false;
+        }
+
+        const installedCommit = this.config?.version_commit ?? "";
+        if (!/^[0-9a-f]{7,40}$/i.test(installedCommit)) {
+          // Older Hermes packages did not expose their build commit. Offer the
+          // current nightly once; builds produced after this change can compare
+          // exact commits and will not repeat the notification.
+          return true;
+        }
+        return !this.nightlyCommit.startsWith(installedCommit) && !installedCommit.startsWith(this.nightlyCommit);
+      },
       buildVersionIsDirty() {
-        return this.config?.version?.split(".").length === 5 &&
-          this.config.version.indexOf("dirty") !== -1
+        return this.config?.version?.includes("dirty") ?? false;
       },
       hostWarnings() {
         if (!this.config) return [];

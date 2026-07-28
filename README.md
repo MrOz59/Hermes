@@ -186,13 +186,20 @@ makepkg --nodeps -sf
 Install the generated package with:
 
 ```bash
-sudo pacman -U ./hermes-*.pkg.tar.zst
+sudo pacman -U ./hermes-streaming-*.pkg.tar.zst
 ```
 
-The package is named `hermes` and installs under its own paths — `/usr/bin/hermes`,
-`/usr/share/hermes`, and the `hermes.service` systemd user unit — so it can be
-installed **side by side with the `apollo` (AUR) and `sunshine` packages**. It
-declares no `provides`/`conflicts` for them; nothing collides. Start it with:
+The Arch package is named `hermes-streaming` because the `hermes` name belongs
+to an unrelated PAM authentication project in the AUR. Upgrading from an older
+Hermes package replaces only the old `hermes` package versions below `0.5.0`.
+The application paths remain `/usr/bin/hermes`, `/usr/share/hermes`, and the
+`hermes.service` systemd user unit, so it can still be installed **side by side
+with the `apollo` (AUR) and `sunshine` packages**. Start it with:
+
+When migrating from an older package named `hermes`, pacman will ask to remove
+that conflicting package as part of the transaction; accept the removal. User
+configuration is not package-owned and remains in place. Do not install the
+unrelated `hermes` package offered by AUR helpers.
 
 ```bash
 systemctl --user enable --now hermes

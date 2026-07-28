@@ -221,7 +221,7 @@ onMounted(() => {
               default="true"
     ></Checkbox>
 
-    <!-- Notify Pre-Releases -->
+    <!-- Opt in to rolling nightly update notifications -->
     <Checkbox class="mb-3"
               id="notify_pre_releases"
               locale-prefix="config"

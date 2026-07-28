@@ -11,6 +11,21 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+### Added
+- The Web UI updater can now opt in to the rolling Hermes nightly channel with
+  `notify_pre_releases` (disabled by default). Nightly checks compare both the
+  semantic version and the exact build commit so rolling builds at the same
+  version are detected without repeatedly notifying an up-to-date install.
+
+### Fixed
+- Re-enabled update notifications after the Hermes rebrand and pointed stable
+  and nightly release checks at `MrOz59/Hermes` instead of Apollo upstream.
+- Renamed the Arch/CachyOS package to `hermes-streaming` because `hermes` is an
+  unrelated PAM authentication package in the AUR. The new package conflicts
+  with that package and replaces only legacy Hermes streaming packages older
+  than `0.5.0`; the executable, service, assets, and user configuration paths
+  remain unchanged.
+
 ## [0.4.1] - 2026-07-28
 
 ### Changed

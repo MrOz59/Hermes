@@ -1230,6 +1230,7 @@ namespace confighttp {
     output_tree["status"] = true;
     output_tree["platform"] = SUNSHINE_PLATFORM;
     output_tree["version"] = PROJECT_VERSION;
+    output_tree["version_commit"] = PROJECT_VERSION_COMMIT;
     output_tree["vdisplayStatus"] = (int)proc::vDisplayDriverStatus;
 #ifdef __linux__
     output_tree["evdiSetupRequired"] = VDISPLAY::needsInitialDeviceConfiguration();

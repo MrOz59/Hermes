@@ -267,7 +267,10 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Whether to be notified of new pre-release versions of Sunshine.
+            Whether the Web UI should check the rolling Hermes nightly channel
+            in addition to stable releases. Disabled by default because nightly
+            builds may be unstable. This only displays an update notification
+            and download link; Hermes does not install updates automatically.
         </td>
     </tr>
     <tr>

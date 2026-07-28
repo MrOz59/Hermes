@@ -47,6 +47,15 @@ else()
                 RESULT_VARIABLE GIT_DESCRIBE_ERROR_CODE
                 OUTPUT_STRIP_TRAILING_WHITESPACE
         )
+        execute_process(
+                COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+                OUTPUT_VARIABLE GITHUB_COMMIT
+                RESULT_VARIABLE GIT_COMMIT_ERROR_CODE
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(GIT_COMMIT_ERROR_CODE)
+            set(GITHUB_COMMIT "unknown")
+        endif()
         # Check if Dirty
         execute_process(
                 COMMAND ${GIT_EXECUTABLE} diff -b --quiet --exit-code
@@ -71,6 +80,10 @@ else()
     else()
         MESSAGE(WARNING ": Git not found, cannot find git version")
     endif()
+endif()
+
+if((NOT DEFINED GITHUB_COMMIT) OR GITHUB_COMMIT STREQUAL "")
+    set(GITHUB_COMMIT "unknown")
 endif()
 
 # set date variables

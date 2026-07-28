@@ -90,6 +90,8 @@ namespace config {
     std::string adapter_name;
     std::string output_name;
     std::string virtual_display_backend;
+    bool hermes_kms_multi_output;
+    bool hermes_kms_isolated_sessions;
     std::string gamescope_backend;
 
     struct dd_t {

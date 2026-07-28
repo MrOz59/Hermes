@@ -108,11 +108,9 @@ namespace input {
     return std::clamp(from_netfloat(f), min, max);
   }
 
-  static task_pool_util::TaskPool::task_id_t key_press_repeat_id {};
-  static std::unordered_map<key_press_id_t, bool> key_press {};
-  static std::array<std::uint8_t, 5> mouse_press {};
-
-  static platf::input_t platf_input;
+  // Preserve the legacy single host input device set for normal streams.
+  // Isolated sessions get their own platform input below, keyed by session_tag.
+  static std::shared_ptr<platf::input_t> shared_platform_input;
   static std::bitset<platf::MAX_GAMEPADS> gamepadMask {};
 
   void free_gamepad(platf::input_t &platf_input, int id) {
@@ -123,17 +121,29 @@ namespace input {
   }
 
   struct gamepad_t {
-    gamepad_t():
+    explicit gamepad_t(std::shared_ptr<platf::input_t> platform_input):
         gamepad_state {},
         back_timeout_id {},
         id {-1},
+        platform_input {std::move(platform_input)},
         back_button_state {button_state_e::NONE} {
     }
 
+    gamepad_t(gamepad_t &&other) noexcept:
+        gamepad_state {other.gamepad_state},
+        back_timeout_id {other.back_timeout_id},
+        id {std::exchange(other.id, -1)},
+        platform_input {std::move(other.platform_input)},
+        back_button_state {other.back_button_state} {
+    }
+    gamepad_t &operator=(gamepad_t &&) = delete;
+    gamepad_t(const gamepad_t &) = delete;
+    gamepad_t &operator=(const gamepad_t &) = delete;
+
     ~gamepad_t() {
       if (id >= 0) {
-        task_pool.push([id = this->id]() {
-          free_gamepad(platf_input, id);
+        task_pool.push([id = this->id, platform_input = this->platform_input]() {
+          free_gamepad(*platform_input, id);
         });
       }
     }
@@ -143,6 +153,7 @@ namespace input {
     thread_pool_util::ThreadPool::task_id_t back_timeout_id;
 
     int id;
+    std::shared_ptr<platf::input_t> platform_input;
 
     // When emulating the HOME button, we may need to artificially release the back button.
     // Afterwards, the gamepad state on sunshine won't match the state on Moonlight.
@@ -162,18 +173,32 @@ namespace input {
 
     input_t(
       safe::mail_raw_t::event_t<input::touch_port_t> touch_port_event,
-      platf::feedback_queue_t feedback_queue
+      platf::feedback_queue_t feedback_queue,
+      const std::string &session_tag
     ):
+        platform_input {
+          session_tag.empty() ?
+            shared_platform_input :
+            std::make_shared<platf::input_t>(platf::input(session_tag))
+        },
         shortcutFlags {},
-        gamepads(MAX_GAMEPADS),
-        client_context {platf::allocate_client_input_context(platf_input)},
+        client_context {platf::allocate_client_input_context(*platform_input)},
         touch_port_event {std::move(touch_port_event)},
         feedback_queue {std::move(feedback_queue)},
         mouse_left_button_timeout {},
         touch_port {{0, 0, 0, 0}, 0, 0, 1.0f},
         accumulated_vscroll_delta {},
         accumulated_hscroll_delta {} {
+      gamepads.reserve(MAX_GAMEPADS);
+      for (size_t index = 0; index < MAX_GAMEPADS; ++index) {
+        gamepads.emplace_back(platform_input);
+      }
     }
+
+    std::shared_ptr<platf::input_t> platform_input;
+    task_pool_util::TaskPool::task_id_t key_press_repeat_id {};
+    std::unordered_map<key_press_id_t, bool> key_press {};
+    std::array<std::uint8_t, 5> mouse_press {};
 
     // Keep track of alt+ctrl+shift key combo
     int shortcutFlags;
@@ -447,7 +472,7 @@ namespace input {
     }
 
     input->mouse_left_button_timeout = DISABLE_LEFT_BUTTON_DELAY;
-    platf::move_mouse(platf_input, util::endian::big(packet->deltaX), util::endian::big(packet->deltaY));
+    platf::move_mouse(*input->platform_input, util::endian::big(packet->deltaX), util::endian::big(packet->deltaY));
   }
 
   /**
@@ -552,7 +577,7 @@ namespace input {
       touch_port.env_height
     };
 
-    platf::abs_mouse(platf_input, abs_port, tpcoords->first, tpcoords->second);
+    platf::abs_mouse(*input->platform_input, abs_port, tpcoords->first, tpcoords->second);
   }
 
   void passthrough(std::shared_ptr<input_t> &input, PNV_MOUSE_BUTTON_PACKET packet) {
@@ -562,13 +587,13 @@ namespace input {
 
     auto release = util::endian::little(packet->header.magic) == MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5;
     auto button = util::endian::big(packet->button);
-    if (button > 0 && button < mouse_press.size()) {
-      if (mouse_press[button] != release) {
+    if (button > 0 && button < input->mouse_press.size()) {
+      if (input->mouse_press[button] != release) {
         // button state is already what we want
         return;
       }
 
-      mouse_press[button] = !release;
+      input->mouse_press[button] = !release;
     }
     /**
      * When Moonlight sends mouse input through absolute coordinates,
@@ -586,14 +611,14 @@ namespace input {
      */
     if (button == BUTTON_LEFT && release && !input->mouse_left_button_timeout) {
       auto f = [=]() {
-        auto left_released = mouse_press[BUTTON_LEFT];
+        auto left_released = input->mouse_press[BUTTON_LEFT];
         if (left_released) {
           // Already released left button
           return;
         }
-        platf::button_mouse(platf_input, BUTTON_LEFT, release);
+        platf::button_mouse(*input->platform_input, BUTTON_LEFT, release);
 
-        mouse_press[BUTTON_LEFT] = false;
+        input->mouse_press[BUTTON_LEFT] = false;
         input->mouse_left_button_timeout = nullptr;
       };
 
@@ -605,15 +630,15 @@ namespace input {
       button == BUTTON_RIGHT && !release &&
       input->mouse_left_button_timeout > DISABLE_LEFT_BUTTON_DELAY
     ) {
-      platf::button_mouse(platf_input, BUTTON_RIGHT, false);
-      platf::button_mouse(platf_input, BUTTON_RIGHT, true);
+      platf::button_mouse(*input->platform_input, BUTTON_RIGHT, false);
+      platf::button_mouse(*input->platform_input, BUTTON_RIGHT, true);
 
-      mouse_press[BUTTON_RIGHT] = false;
+      input->mouse_press[BUTTON_RIGHT] = false;
 
       return;
     }
 
-    platf::button_mouse(platf_input, button, release);
+    platf::button_mouse(*input->platform_input, button, release);
   }
 
   short map_keycode(short keycode) {
@@ -677,46 +702,64 @@ namespace input {
     }
   }
 
-  void send_key_and_modifiers(uint16_t key_code, bool release, uint8_t flags, uint8_t synthetic_modifiers) {
+  void send_key_and_modifiers(
+    const std::shared_ptr<input_t> &input,
+    uint16_t key_code,
+    bool release,
+    uint8_t flags,
+    uint8_t synthetic_modifiers
+  ) {
     if (!release) {
       // Press any synthetic modifiers required for this key
       if (synthetic_modifiers & MODIFIER_SHIFT) {
-        platf::keyboard_update(platf_input, VKEY_SHIFT, false, flags);
+        platf::keyboard_update(*input->platform_input, VKEY_SHIFT, false, flags);
       }
       if (synthetic_modifiers & MODIFIER_CTRL) {
-        platf::keyboard_update(platf_input, VKEY_CONTROL, false, flags);
+        platf::keyboard_update(*input->platform_input, VKEY_CONTROL, false, flags);
       }
       if (synthetic_modifiers & MODIFIER_ALT) {
-        platf::keyboard_update(platf_input, VKEY_MENU, false, flags);
+        platf::keyboard_update(*input->platform_input, VKEY_MENU, false, flags);
       }
     }
 
-    platf::keyboard_update(platf_input, map_keycode(key_code), release, flags);
+    platf::keyboard_update(*input->platform_input, map_keycode(key_code), release, flags);
 
     if (!release) {
       // Raise any synthetic modifier keys we pressed
       if (synthetic_modifiers & MODIFIER_SHIFT) {
-        platf::keyboard_update(platf_input, VKEY_SHIFT, true, flags);
+        platf::keyboard_update(*input->platform_input, VKEY_SHIFT, true, flags);
       }
       if (synthetic_modifiers & MODIFIER_CTRL) {
-        platf::keyboard_update(platf_input, VKEY_CONTROL, true, flags);
+        platf::keyboard_update(*input->platform_input, VKEY_CONTROL, true, flags);
       }
       if (synthetic_modifiers & MODIFIER_ALT) {
-        platf::keyboard_update(platf_input, VKEY_MENU, true, flags);
+        platf::keyboard_update(*input->platform_input, VKEY_MENU, true, flags);
       }
     }
   }
 
-  void repeat_key(uint16_t key_code, uint8_t flags, uint8_t synthetic_modifiers) {
+  void repeat_key(
+    std::shared_ptr<input_t> input,
+    uint16_t key_code,
+    uint8_t flags,
+    uint8_t synthetic_modifiers
+  ) {
     // If key no longer pressed, stop repeating
-    if (!key_press[make_kpid(key_code, flags)]) {
-      key_press_repeat_id = nullptr;
+    if (!input->key_press[make_kpid(key_code, flags)]) {
+      input->key_press_repeat_id = nullptr;
       return;
     }
 
-    send_key_and_modifiers(key_code, false, flags, synthetic_modifiers);
+    send_key_and_modifiers(input, key_code, false, flags, synthetic_modifiers);
 
-    key_press_repeat_id = task_pool.pushDelayed(repeat_key, config::input.key_repeat_period, key_code, flags, synthetic_modifiers).task_id;
+    input->key_press_repeat_id = task_pool.pushDelayed(
+      repeat_key,
+      config::input.key_repeat_period,
+      input,
+      key_code,
+      flags,
+      synthetic_modifiers
+    ).task_id;
   }
 
   void passthrough(std::shared_ptr<input_t> &input, PNV_KEYBOARD_PACKET packet) {
@@ -742,7 +785,7 @@ namespace input {
       }
     }
 
-    auto &pressed = key_press[make_kpid(keyCode, packet->flags)];
+    auto &pressed = input->key_press[make_kpid(keyCode, packet->flags)];
     if (!pressed) {
       if (!release) {
         // A new key has been pressed down, we need to check for key combo's
@@ -751,12 +794,19 @@ namespace input {
           return;
         }
 
-        if (key_press_repeat_id) {
-          task_pool.cancel(key_press_repeat_id);
+        if (input->key_press_repeat_id) {
+          task_pool.cancel(input->key_press_repeat_id);
         }
 
         if (config::input.key_repeat_delay.count() > 0) {
-          key_press_repeat_id = task_pool.pushDelayed(repeat_key, config::input.key_repeat_delay, keyCode, packet->flags, synthetic_modifiers).task_id;
+          input->key_press_repeat_id = task_pool.pushDelayed(
+            repeat_key,
+            config::input.key_repeat_delay,
+            input,
+            keyCode,
+            packet->flags,
+            synthetic_modifiers
+          ).task_id;
         }
       } else {
         // Already released
@@ -769,7 +819,7 @@ namespace input {
 
     pressed = !release;
 
-    send_key_and_modifiers(keyCode, release, packet->flags, synthetic_modifiers);
+    send_key_and_modifiers(input, keyCode, release, packet->flags, synthetic_modifiers);
 
     update_shortcutFlags(&input->shortcutFlags, map_keycode(keyCode), release);
   }
@@ -785,13 +835,13 @@ namespace input {
     }
 
     if (config::input.high_resolution_scrolling) {
-      platf::scroll(platf_input, util::endian::big(packet->scrollAmt1));
+      platf::scroll(*input->platform_input, util::endian::big(packet->scrollAmt1));
     } else {
       input->accumulated_vscroll_delta += util::endian::big(packet->scrollAmt1);
       auto full_ticks = input->accumulated_vscroll_delta / WHEEL_DELTA;
       if (full_ticks) {
         // Send any full ticks that have accumulated and store the rest
-        platf::scroll(platf_input, full_ticks * WHEEL_DELTA);
+        platf::scroll(*input->platform_input, full_ticks * WHEEL_DELTA);
         input->accumulated_vscroll_delta -= full_ticks * WHEEL_DELTA;
       }
     }
@@ -808,25 +858,25 @@ namespace input {
     }
 
     if (config::input.high_resolution_scrolling) {
-      platf::hscroll(platf_input, util::endian::big(packet->scrollAmount));
+      platf::hscroll(*input->platform_input, util::endian::big(packet->scrollAmount));
     } else {
       input->accumulated_hscroll_delta += util::endian::big(packet->scrollAmount);
       auto full_ticks = input->accumulated_hscroll_delta / WHEEL_DELTA;
       if (full_ticks) {
         // Send any full ticks that have accumulated and store the rest
-        platf::hscroll(platf_input, full_ticks * WHEEL_DELTA);
+        platf::hscroll(*input->platform_input, full_ticks * WHEEL_DELTA);
         input->accumulated_hscroll_delta -= full_ticks * WHEEL_DELTA;
       }
     }
   }
 
-  void passthrough(PNV_UNICODE_PACKET packet) {
+  void passthrough(std::shared_ptr<input_t> &input, PNV_UNICODE_PACKET packet) {
     if (!config::input.keyboard) {
       return;
     }
 
     auto size = util::endian::big(packet->header.size) - sizeof(packet->header.magic);
-    platf::unicode(platf_input, packet->text, size);
+    platf::unicode(*input->platform_input, packet->text, size);
   }
 
   /**
@@ -861,7 +911,7 @@ namespace input {
     }
 
     // Allocate a new gamepad
-    if (platf::alloc_gamepad(platf_input, {id, packet->controllerNumber}, arrival, input->feedback_queue)) {
+    if (platf::alloc_gamepad(*input->platform_input, {id, packet->controllerNumber}, arrival, input->feedback_queue)) {
       free_id(gamepadMask, id);
       return;
     }
@@ -1013,7 +1063,7 @@ namespace input {
       from_clamped_netfloat(packet->pressure, 0.0f, 1.0f),
     };
 
-    platf::gamepad_touch(platf_input, touch);
+    platf::gamepad_touch(*input->platform_input, touch);
   }
 
   /**
@@ -1045,7 +1095,7 @@ namespace input {
       from_netfloat(packet->z),
     };
 
-    platf::gamepad_motion(platf_input, motion);
+    platf::gamepad_motion(*input->platform_input, motion);
   }
 
   /**
@@ -1075,7 +1125,7 @@ namespace input {
       packet->batteryPercentage
     };
 
-    platf::gamepad_battery(platf_input, battery);
+    platf::gamepad_battery(*input->platform_input, battery);
   }
 
   void passthrough(std::shared_ptr<input_t> &input, PNV_MULTI_CONTROLLER_PACKET packet) {
@@ -1099,7 +1149,7 @@ namespace input {
         return;
       }
 
-      if (platf::alloc_gamepad(platf_input, {id, (uint8_t) packet->controllerNumber}, {}, input->feedback_queue)) {
+      if (platf::alloc_gamepad(*input->platform_input, {id, (uint8_t) packet->controllerNumber}, {}, input->feedback_queue)) {
         free_id(gamepadMask, id);
         return;
       }
@@ -1107,7 +1157,7 @@ namespace input {
       gamepad.id = id;
     } else if (!(packet->activeGamepadMask & (1 << packet->controllerNumber)) && gamepad.id >= 0) {
       // If this is the final event for a gamepad being removed, free the gamepad and return.
-      free_gamepad(platf_input, gamepad.id);
+      free_gamepad(*input->platform_input, gamepad.id);
       gamepad.id = -1;
       return;
     }
@@ -1164,18 +1214,18 @@ namespace input {
             // Force the back button up
             gamepad.back_button_state = button_state_e::UP;
             state.buttonFlags &= ~platf::BACK;
-            platf::gamepad_update(platf_input, gamepad.id, state);
+            platf::gamepad_update(*input->platform_input, gamepad.id, state);
 
             // Press Home button
             state.buttonFlags |= platf::HOME;
-            platf::gamepad_update(platf_input, gamepad.id, state);
+            platf::gamepad_update(*input->platform_input, gamepad.id, state);
 
             // Sleep for a short time to allow the input to be detected
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             // Release Home button
             state.buttonFlags &= ~platf::HOME;
-            platf::gamepad_update(platf_input, gamepad.id, state);
+            platf::gamepad_update(*input->platform_input, gamepad.id, state);
 
             gamepad.back_timeout_id = nullptr;
           };
@@ -1188,7 +1238,7 @@ namespace input {
       }
     }
 
-    platf::gamepad_update(platf_input, gamepad.id, gamepad_state);
+    platf::gamepad_update(*input->platform_input, gamepad.id, gamepad_state);
 
     gamepad.gamepad_state = gamepad_state;
   }
@@ -1545,7 +1595,7 @@ namespace input {
         passthrough(input, (PNV_KEYBOARD_PACKET) payload);
         break;
       case UTF8_TEXT_EVENT_MAGIC:
-        passthrough((PNV_UNICODE_PACKET) payload);
+        passthrough(input, (PNV_UNICODE_PACKET) payload);
         break;
       case MULTI_CONTROLLER_MAGIC_GEN5:
         passthrough(input, (PNV_MULTI_CONTROLLER_PACKET) payload);
@@ -1644,25 +1694,25 @@ namespace input {
   }
 
   void reset(std::shared_ptr<input_t> &input) {
-    task_pool.cancel(key_press_repeat_id);
+    task_pool.cancel(input->key_press_repeat_id);
     task_pool.cancel(input->mouse_left_button_timeout);
 
     // Ensure input is synchronous, by using the task_pool
-    task_pool.push([]() {
-      for (int x = 0; x < mouse_press.size(); ++x) {
-        if (mouse_press[x]) {
-          platf::button_mouse(platf_input, x, true);
-          mouse_press[x] = false;
+    task_pool.push([input]() {
+      for (int x = 0; x < input->mouse_press.size(); ++x) {
+        if (input->mouse_press[x]) {
+          platf::button_mouse(*input->platform_input, x, true);
+          input->mouse_press[x] = false;
         }
       }
 
-      for (auto &kp : key_press) {
+      for (auto &kp : input->key_press) {
         if (!kp.second) {
           // already released
           continue;
         }
-        platf::keyboard_update(platf_input, vk_from_kpid(kp.first) & 0x00FF, true, flags_from_kpid(kp.first));
-        key_press[kp.first] = false;
+        platf::keyboard_update(*input->platform_input, vk_from_kpid(kp.first) & 0x00FF, true, flags_from_kpid(kp.first));
+        input->key_press[kp.first] = false;
       }
     });
   }
@@ -1670,18 +1720,18 @@ namespace input {
   class deinit_t: public platf::deinit_t {
   public:
     ~deinit_t() override {
-      platf_input.reset();
+      shared_platform_input.reset();
     }
   };
 
   [[nodiscard]] std::unique_ptr<platf::deinit_t> init() {
-    platf_input = platf::input();
+    shared_platform_input = std::make_shared<platf::input_t>(platf::input());
 
     return std::make_unique<deinit_t>();
   }
 
   bool probe_gamepads() {
-    auto input = static_cast<platf::input_t *>(platf_input.get());
+    auto input = static_cast<platf::input_t *>(shared_platform_input->get());
     const auto gamepads = platf::supported_gamepads(input);
     for (auto &gamepad : gamepads) {
       if (gamepad.is_enabled && gamepad.name != "auto") {
@@ -1691,16 +1741,20 @@ namespace input {
     return true;
   }
 
-  std::shared_ptr<input_t> alloc(safe::mail_t mail) {
+  std::shared_ptr<input_t> alloc(
+    safe::mail_t mail,
+    const std::string &session_tag
+  ) {
     auto input = std::make_shared<input_t>(
       mail->event<input::touch_port_t>(mail::touch_port),
-      mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback)
+      mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback),
+      session_tag
     );
 
     // Workaround to ensure new frames will be captured when a client connects
-    task_pool.pushDelayed([]() {
-      platf::move_mouse(platf_input, 1, 1);
-      platf::move_mouse(platf_input, -1, -1);
+    task_pool.pushDelayed([input]() {
+      platf::move_mouse(*input->platform_input, 1, 1);
+      platf::move_mouse(*input->platform_input, -1, -1);
     },
                           100ms);
 

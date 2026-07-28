@@ -11,13 +11,52 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-29
+
 ### Added
 - The Web UI updater can now opt in to the rolling Hermes nightly channel with
   `notify_pre_releases` (disabled by default). Nightly checks compare both the
   semantic version and the exact build commit so rolling builds at the same
   version are detected without repeatedly notifying an up-to-date install.
+- Experimental Hermes-KMS shared-desktop multi-output support. A single Hermes
+  server can assign simultaneous Moonlight clients separate driver outputs,
+  capture pipelines, modes, and absolute-input geometry inside the host
+  compositor session. Enable it with `hermes_kms_multi_output`; it requires
+  Hermes-KMS UAPI 8 or newer loaded with enough `outputs=N` ([#10]).
+- Prototype independent client sessions behind
+  `hermes_kms_isolated_sessions`. A single Hermes server now allocates one
+  Hermes-KMS UAPI 9 DRM card, private runtime directory, compositor,
+  application process tree, capture pipeline, and tagged virtual input set per
+  client. App profiles select an application-only Gamescope session or a Weston
+  desktop session. Independent DRM cards and virtual input devices share stable
+  per-card udev/libseat names, and each compositor is assigned the matching
+  packaged private seat-broker socket. Missing brokers fail the launch with an
+  actionable diagnostic instead of silently falling back to the host seat. The
+  feature defaults off and remains explicitly experimental while audio and real
+  concurrent-client behavior are validated ([#10]).
+- A disposable VM input-isolation test creates real uinput devices for two
+  sessions and verifies that udev assigns both the input parent and event nodes
+  to distinct `hermes-kms-1`/`hermes-kms-2` seats.
+
+### Changed
+- Hermes-KMS diagnostics now report UAPI compatibility, driver device/output
+  counts, multi-output and multi-device capability, selected output numbers,
+  private seat-broker readiness, and the client assigned to each active virtual
+  display.
+- Exclusive virtual-display mode is intentionally ignored while experimental
+  multi-output is enabled, keeping physical displays and other clients' outputs
+  active.
+- Remote Input is rejected while independent sessions are enabled instead of
+  falling through to the shared host input devices without an unambiguous
+  target seat.
 
 ### Fixed
+- Cancelling an isolated launch now signals its in-progress preparation and
+  compositor wait, including the atomic handoff into the active-runtime
+  registry, so a late runtime cannot appear after `/cancel` returned.
+- Cancelling after HTTP launch but before the RTSP handshake now invalidates
+  the pending launch, and the per-client terminate action also stops that
+  client's active stream without affecting other clients.
 - Re-enabled update notifications after the Hermes rebrand and pointed stable
   and nightly release checks at `MrOz59/Hermes` instead of Apollo upstream.
 - Renamed the Arch/CachyOS package to `hermes-streaming` because `hermes` is an
@@ -59,6 +98,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#6]: https://github.com/MrOz59/Hermes/issues/6
 [#8]: https://github.com/MrOz59/Hermes/issues/8
 [#9]: https://github.com/MrOz59/Hermes/issues/9
+[#10]: https://github.com/MrOz59/Hermes/issues/10
 
 ## [0.4.0] - 2026-07-02
 
@@ -156,7 +196,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   host with low-latency virtual displays via Hermes-KMS (zero-copy DRM/KMS),
   EVDI still supported, and Hestia/Moonlight/Artemis protocol compatibility.
 
-[Unreleased]: https://github.com/MrOz59/Hermes/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/MrOz59/Hermes/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/MrOz59/Hermes/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/MrOz59/Hermes/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/MrOz59/Hermes/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/MrOz59/Hermes/compare/v0.2.0...v0.3.0

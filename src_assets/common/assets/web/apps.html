@@ -386,6 +386,16 @@
                   v-model="editForm['virtual-display']"
                   default="false"
         ></Checkbox>
+        <!-- experimental isolated session profile -->
+        <div class="mb-3" v-if="platform === 'linux'">
+          <label for="sessionType" class="form-label">{{ $t('apps.session_type') }}</label>
+          <select id="sessionType" class="form-select" v-model="editForm['session-type']">
+            <option value="auto">{{ $t('apps.session_type_auto') }}</option>
+            <option value="application">{{ $t('apps.session_type_application') }}</option>
+            <option value="desktop">{{ $t('apps.session_type_desktop') }}</option>
+          </select>
+          <div class="form-text">{{ $t('apps.session_type_desc') }}</div>
+        </div>
         <!-- use app identity -->
         <Checkbox class="mb-3"
                   id="useAppIdentity"
@@ -547,6 +557,7 @@
     "per-client-app-identity": false,
     "allow-client-commands": true,
     "virtual-display": false,
+    "session-type": "auto",
     "terminate-on-pause": false,
     "gamepad": ""
   }

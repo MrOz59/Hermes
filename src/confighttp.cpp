@@ -187,6 +187,7 @@ namespace confighttp {
     for (const auto &display : status.active_displays) {
       output["activeDisplays"].push_back({
         {"name", display.name},
+        {"clientName", display.client_name},
         {"deviceIndex", display.device_index},
         {"drmCardIndex", display.drm_card_index},
         {"width", display.width},
@@ -233,6 +234,14 @@ namespace confighttp {
       {"cardIndex", status.card_index},
       {"uapiVersion", status.uapi_version},
       {"requiredUapiVersion", status.required_uapi_version},
+      {"experimentalMultiOutputEnabled", status.experimental_multi_output_enabled},
+      {"multiOutputCapable", status.multi_output_capable},
+      {"experimentalIsolatedSessionsEnabled", status.experimental_isolated_sessions_enabled},
+      {"multiDeviceCapable", status.multi_device_capable},
+      {"deviceCount", status.device_count},
+      {"outputCount", status.output_count},
+      {"privateSeatBrokerCount", status.private_seat_broker_count},
+      {"missingPrivateSeatBrokers", status.missing_private_seat_brokers},
       {"driverVersion", status.driver_version},
       {"runningKernel", status.running_kernel},
       {"dkmsKernels", status.dkms_kernels},
@@ -242,6 +251,9 @@ namespace confighttp {
     for (const auto &display : status.active_displays) {
       output["activeDisplays"].push_back({
         {"name", display.name},
+        {"clientName", display.client_name},
+        {"deviceIndex", display.device_index >= 0 ? display.device_index + 1 : 0},
+        {"outputIndex", display.output_index >= 0 ? display.output_index + 1 : 0},
         {"drmCardIndex", display.drm_card_index},
         {"width", display.width},
         {"height", display.height},
@@ -1277,6 +1289,17 @@ namespace confighttp {
       {"features", {
         {"virtual_display", true},
         {"virtual_display_backend", {"evdi", "hermes_kms"}},
+        {"hermes_kms_multi_output", {
+          {"supported", true},
+          {"experimental", true},
+          {"max_outputs", 8},
+        }},
+        {"hermes_kms_isolated_sessions", {
+          {"status", "prototype"},
+          {"experimental", true},
+          {"profiles", {"application", "desktop"}},
+          {"max_sessions", 8},
+        }},
         {"kde_kscreen", true},
         {"display_recovery", true},
         {"client_resolution_matching", true},
@@ -1778,6 +1801,8 @@ namespace confighttp {
       const auto km = VDISPLAY::getHermesKmsMetrics();
       if (km.available) {
         runtime["hermes_kms"] = {
+          {"output_index", km.output_index >= 0 ? km.output_index + 1 : 0},
+          {"output_name", km.output_name},
           {"frame_sequence", km.frame_sequence},
           {"frame_updates", km.frame_update_count},
           {"frames_acquired", km.acquire_count},

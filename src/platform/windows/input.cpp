@@ -452,7 +452,8 @@ namespace platf {
     decltype(DestroySyntheticPointerDevice) *fnDestroySyntheticPointerDevice;
   };
 
-  input_t input() {
+  input_t input(const std::string &session_tag) {
+    (void) session_tag;
     input_t result {new input_raw_t {}};
     auto &raw = *(input_raw_t *) result.get();
 

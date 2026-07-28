@@ -237,7 +237,9 @@ namespace VDISPLAY {
   }
 
   namespace hermes_kms {
-    constexpr uint32_t uapi_version = 7;
+    constexpr uint32_t base_uapi_version = 7;
+    constexpr uint32_t multi_output_uapi_version = 8;
+    constexpr uint32_t multi_device_uapi_version = 9;
     constexpr size_t name_len = 32;
 
     constexpr uint64_t cap_virtual_output = 1ULL << 0;
@@ -248,6 +250,8 @@ namespace VDISPLAY {
     constexpr uint64_t cap_session_owner = 1ULL << 8;
     constexpr uint64_t cap_frame_wait = 1ULL << 9;
     constexpr uint64_t cap_metrics = 1ULL << 10;
+    constexpr uint64_t cap_multi_output = 1ULL << 11;
+    constexpr uint64_t cap_multi_device = 1ULL << 12;
     constexpr uint64_t cap_zero_copy_target = 1ULL << 33;
     constexpr uint64_t cap_sync_file = 1ULL << 35;
 
@@ -274,7 +278,7 @@ namespace VDISPLAY {
       uint32_t preferred_width;
       uint32_t preferred_height;
       uint32_t max_refresh_hz;
-      uint32_t reserved0;
+      uint32_t output_count;
     };
 
     struct status_t {
@@ -315,6 +319,19 @@ namespace VDISPLAY {
       uint32_t crtc_id;
       uint32_t plane_id;
       uint32_t encoder_id;
+      uint32_t output_index;
+      uint32_t output_count;
+      uint32_t device_index;
+      uint32_t device_count;
+      uint32_t reserved[4];
+    };
+
+    struct select_output_t {
+      uint32_t output_index;
+      uint32_t flags;
+      uint32_t selected_output_index;
+      uint32_t output_count;
+      char output_name[name_len];
       uint32_t reserved[8];
     };
 
@@ -343,7 +360,11 @@ namespace VDISPLAY {
       int32_t dma_buf_fd[4];
       int32_t sync_file_fd;
       uint32_t reserved0;
-      uint64_t reserved[8];
+      uint32_t damage_x1;
+      uint32_t damage_y1;
+      uint32_t damage_x2;
+      uint32_t damage_y2;
+      uint64_t reserved[6];
     };
 
     struct wait_frame_t {
@@ -356,6 +377,11 @@ namespace VDISPLAY {
       uint32_t reserved0;
       uint64_t reserved[6];
     };
+
+    static_assert(sizeof(caps_t) == 40);
+    static_assert(sizeof(identity_t) == 144);
+    static_assert(sizeof(select_output_t) == 80);
+    static_assert(sizeof(acquire_frame_t) == 176);
 
     // Mirrors `struct drm_hermes_kms_metrics` in the driver UAPI header
     // (include/uapi/drm/hermes_kms_drm.h). Field order and size must match
@@ -402,10 +428,12 @@ namespace VDISPLAY {
     constexpr unsigned long ioctl_get_identity = DRM_IOR(DRM_COMMAND_BASE + 0x05, identity_t);
     constexpr unsigned long ioctl_wait_frame = DRM_IOWR(DRM_COMMAND_BASE + 0x06, wait_frame_t);
     constexpr unsigned long ioctl_get_metrics = DRM_IOR(DRM_COMMAND_BASE + 0x07, metrics_t);
+    constexpr unsigned long ioctl_select_output = DRM_IOWR(DRM_COMMAND_BASE + 0x08, select_output_t);
 
     struct device_t {
       int fd {-1};
       int card_index {-1};
+      uint32_t selected_output_index {0};
       version_t version {};
       caps_t caps {};
       identity_t identity {};
@@ -459,14 +487,41 @@ namespace VDISPLAY {
       return fd;
     }
 
-    static bool has_required_caps(uint64_t flags) {
+    static bool multi_output_requested() {
+      return config::video.hermes_kms_multi_output &&
+             !config::video.hermes_kms_isolated_sessions;
+    }
+
+    static bool isolated_sessions_requested() {
+      return config::video.hermes_kms_isolated_sessions;
+    }
+
+    static uint32_t required_uapi_version() {
+      if (isolated_sessions_requested()) {
+        return multi_device_uapi_version;
+      }
+      return multi_output_requested() ? multi_output_uapi_version : base_uapi_version;
+    }
+
+    static uint32_t output_count(const caps_t &caps) {
+      return caps.output_count ? caps.output_count : 1U;
+    }
+
+    static bool has_required_caps(
+      uint64_t flags,
+      bool require_multi_output = multi_output_requested(),
+      bool require_multi_device = isolated_sessions_requested()
+    ) {
       constexpr uint64_t required = cap_virtual_output | cap_output_control | cap_frame_acquire |
                                     cap_dmabuf_export | cap_output_identity | cap_session_owner |
                                     cap_frame_wait | cap_zero_copy_target | cap_sync_file;
-      return (flags & required) == required;
+      return (flags & required) == required &&
+             (!require_multi_output || (flags & cap_multi_output)) &&
+             (!require_multi_device || (flags & cap_multi_device));
     }
 
-    static bool open_device(device_t &out, bool log_failures) {
+    static std::vector<device_t> open_devices(bool log_failures) {
+      std::vector<device_t> devices;
       try {
         for (const auto &entry : fs::directory_iterator("/dev/dri")) {
           if (!is_card_node(entry.path())) {
@@ -490,13 +545,15 @@ namespace VDISPLAY {
           }
 
           candidate.card_index = card_index_from_path(entry.path());
-          if (candidate.version.uapi_version < uapi_version) {
+          const auto required_version = required_uapi_version();
+          if (candidate.version.uapi_version < required_version) {
             if (log_failures) {
               BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] UAPI " << candidate.version.uapi_version
-                               << " is too old; need " << uapi_version << ".";
+                               << " is too old; need " << required_version
+                               << (multi_output_requested() ? " for experimental multi-output." : ".");
             }
             close_device(candidate);
-            return false;
+            continue;
           }
 
           if (::ioctl(candidate.fd, ioctl_get_caps, &candidate.caps) != 0 || !has_required_caps(candidate.caps.flags)) {
@@ -504,7 +561,7 @@ namespace VDISPLAY {
               BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Driver is present but does not expose the required streaming capabilities.";
             }
             close_device(candidate);
-            return false;
+            continue;
           }
 
           if (::ioctl(candidate.fd, ioctl_get_identity, &candidate.identity) != 0) {
@@ -512,8 +569,7 @@ namespace VDISPLAY {
             std::strncpy(candidate.identity.output_name, "HERMES-1", name_len - 1);
           }
 
-          out = candidate;
-          return true;
+          devices.emplace_back(candidate);
         }
       } catch (const std::exception &exception) {
         if (log_failures) {
@@ -521,10 +577,33 @@ namespace VDISPLAY {
         }
       }
 
-      if (log_failures) {
+      std::sort(devices.begin(), devices.end(), [](const auto &left, const auto &right) {
+        if (left.version.uapi_version >= multi_device_uapi_version &&
+            right.version.uapi_version >= multi_device_uapi_version &&
+            left.identity.device_index != right.identity.device_index) {
+          return left.identity.device_index < right.identity.device_index;
+        }
+        return left.card_index < right.card_index;
+      });
+
+      if (devices.empty() && log_failures) {
         BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] No Hermes-KMS DRM card found. Load hermes_kms and install its udev rules.";
       }
-      return false;
+      return devices;
+    }
+
+    static bool open_device(device_t &out, bool log_failures) {
+      auto devices = open_devices(log_failures);
+      if (devices.empty()) {
+        return false;
+      }
+
+      out = devices.front();
+      devices.front().fd = -1;
+      for (auto &device : devices) {
+        close_device(device);
+      }
+      return true;
     }
 
     static bool available() {
@@ -548,6 +627,10 @@ namespace VDISPLAY {
       probe_result result {probe_result::no_device};
       int card_index {-1};
       uint32_t uapi_version {0};
+      uint32_t output_count {0};
+      uint32_t device_count {0};
+      bool multi_output_capable {false};
+      bool multi_device_capable {false};
       std::string driver_version;
     };
 
@@ -582,13 +665,27 @@ namespace VDISPLAY {
                              std::to_string(candidate.version.driver_minor) + "." +
                              std::to_string(candidate.version.driver_patch);
 
-        if (candidate.version.uapi_version < uapi_version) {
+        if (candidate.version.uapi_version < required_uapi_version()) {
           out.result = probe_result::uapi_too_old;
-        } else if (::ioctl(candidate.fd, ioctl_get_caps, &candidate.caps) != 0 ||
-                   !has_required_caps(candidate.caps.flags)) {
+        } else if (::ioctl(candidate.fd, ioctl_get_caps, &candidate.caps) != 0) {
           out.result = probe_result::missing_caps;
         } else {
-          out.result = probe_result::ok;
+          ::ioctl(candidate.fd, ioctl_get_identity, &candidate.identity);
+          out.output_count = output_count(candidate.caps);
+          out.multi_output_capable =
+            candidate.version.uapi_version >= multi_output_uapi_version &&
+            (candidate.caps.flags & cap_multi_output);
+          out.multi_device_capable =
+            candidate.version.uapi_version >= multi_device_uapi_version &&
+            (candidate.caps.flags & cap_multi_device);
+          out.device_count =
+            candidate.version.uapi_version >= multi_device_uapi_version &&
+              candidate.identity.device_count ?
+              candidate.identity.device_count :
+              1U;
+          out.result = has_required_caps(candidate.caps.flags) ?
+                         probe_result::ok :
+                         probe_result::missing_caps;
         }
         close_device(candidate);
         return out;
@@ -596,7 +693,29 @@ namespace VDISPLAY {
       return out;
     }
 
-    static bool set_output(int fd, bool enabled, uint32_t width, uint32_t height, uint32_t refresh_hz, uint64_t &session_id) {
+    static bool select_output(int fd, uint32_t output_index, select_output_t *result = nullptr, bool log_failure = true) {
+      select_output_t request {};
+      request.output_index = output_index;
+      if (::ioctl(fd, ioctl_select_output, &request) != 0) {
+        if (log_failure) {
+          BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] SELECT_OUTPUT(" << output_index
+                           << ") failed: " << std::strerror(errno);
+        }
+        return false;
+      }
+      if (result) {
+        *result = request;
+      }
+      return true;
+    }
+
+    static bool refresh_identity(device_t &device) {
+      std::memset(&device.identity, 0, sizeof(device.identity));
+      return ::ioctl(device.fd, ioctl_get_identity, &device.identity) == 0;
+    }
+
+    static bool set_output(int fd, bool enabled, uint32_t width, uint32_t height, uint32_t refresh_hz,
+                           uint64_t &session_id, bool log_failure = true) {
       set_output_t request {};
       request.enabled = enabled ? 1U : 0U;
       request.width = width;
@@ -605,7 +724,9 @@ namespace VDISPLAY {
       request.session_id = session_id;
 
       if (::ioctl(fd, ioctl_set_output, &request) != 0) {
-        BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] SET_OUTPUT failed: " << std::strerror(errno);
+        if (log_failure) {
+          BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] SET_OUTPUT failed: " << std::strerror(errno);
+        }
         return false;
       }
 
@@ -623,39 +744,130 @@ namespace VDISPLAY {
       return ::ioctl(fd, ioctl_get_status, &status) == 0;
     }
 
+    static bool claim_available_output(device_t &device, uint32_t width, uint32_t height,
+                                       uint32_t refresh_hz, uint64_t &session_id,
+                                       bool log_failure = true) {
+      const bool select_required = multi_output_requested();
+      const uint32_t count = select_required ? output_count(device.caps) : 1U;
+      for (uint32_t index = 0; index < count; ++index) {
+        if (select_required && !select_output(device.fd, index, nullptr, false)) {
+          continue;
+        }
+
+        status_t status {};
+        if (get_status(device.fd, status) &&
+            (status.owner_pid > 0 || status.session_id != 0)) {
+          continue;
+        }
+
+        uint64_t candidate_session = 0;
+        if (!set_output(device.fd, true, width, height, refresh_hz, candidate_session, false)) {
+          // Another session may have won the ownership race after GET_STATUS.
+          if (errno == EBUSY) {
+            continue;
+          }
+          BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Could not enable output " << (index + 1)
+                           << ": " << std::strerror(errno);
+          continue;
+        }
+
+        device.selected_output_index = index;
+        refresh_identity(device);
+        session_id = candidate_session;
+        return true;
+      }
+
+      if (log_failure) {
+        BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] No free virtual output is available (configured outputs="
+                         << count << ").";
+      }
+      return false;
+    }
+
+    static bool claim_available_device_output(
+      device_t &out,
+      uint32_t width,
+      uint32_t height,
+      uint32_t refresh_hz,
+      uint64_t &session_id
+    ) {
+      auto devices = open_devices(true);
+      for (auto &device : devices) {
+        if (const int render_fd = open_render_node(device.fd); render_fd >= 0) {
+          ::close(device.fd);
+          device.fd = render_fd;
+        } else {
+          BOOST_LOG(warning) << "[VDISPLAY/Hermes-KMS] No render node for card"
+                             << device.card_index << "; skipping it for an isolated session.";
+          close_device(device);
+          continue;
+        }
+
+        if (!claim_available_output(device, width, height, refresh_hz, session_id, false)) {
+          close_device(device);
+          continue;
+        }
+
+        out = device;
+        device.fd = -1;
+        for (auto &remaining : devices) {
+          close_device(remaining);
+        }
+        return true;
+      }
+
+      BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] No independent DRM device/output is free for a new session.";
+      return false;
+    }
+
     /**
      * Older Hermes-KMS packages load the module with initial_enabled=1. That
      * exposes an unowned connector before Hermes starts and lets a compositor
      * replay a saved virtual-only layout at login. Disconnect that legacy
      * connector so virtual outputs remain tied to a live streaming session.
      */
-    static bool disconnect_unowned_output(std::string &connector_name) {
-      device_t device {};
-      if (!open_device(device, false)) {
+    static bool disconnect_unowned_outputs(std::vector<std::string> &connector_names) {
+      auto devices = open_devices(false);
+      if (devices.empty()) {
         return false;
       }
 
-      connector_name = cstr(device.identity.connector_name);
-      if (const int render_fd = open_render_node(device.fd); render_fd >= 0) {
-        ::close(device.fd);
-        device.fd = render_fd;
-      }
+      bool disconnected = false;
+      for (auto &device : devices) {
+        if (const int render_fd = open_render_node(device.fd); render_fd >= 0) {
+          ::close(device.fd);
+          device.fd = render_fd;
+        }
 
-      status_t status {};
-      const bool unowned_output_enabled =
-        get_status(device.fd, status) &&
-        (status.flags & status_output_enabled) &&
-        status.owner_pid <= 0 &&
-        status.session_id == 0;
-      if (!unowned_output_enabled) {
+        const uint32_t count = output_count(device.caps);
+        for (uint32_t index = 0; index < count; ++index) {
+          if (device.version.uapi_version >= multi_output_uapi_version &&
+              !select_output(device.fd, index, nullptr, false)) {
+            continue;
+          }
+          refresh_identity(device);
+          const auto connector_name = cstr(device.identity.connector_name);
+          if (!connector_name.empty()) {
+            connector_names.emplace_back(connector_name);
+          }
+
+          status_t status {};
+          const bool unowned_output_enabled =
+            get_status(device.fd, status) &&
+            (status.flags & status_output_enabled) &&
+            status.owner_pid <= 0 &&
+            status.session_id == 0;
+          if (!unowned_output_enabled) {
+            continue;
+          }
+
+          BOOST_LOG(warning) << "[VDISPLAY/Hermes-KMS] Disconnecting unowned virtual output "
+                             << cstr(device.identity.output_name) << " left enabled at module load.";
+          uint64_t session_id = 0;
+          disconnected = set_output(device.fd, false, 0, 0, 0, session_id) || disconnected;
+        }
         close_device(device);
-        return false;
       }
-
-      BOOST_LOG(warning) << "[VDISPLAY/Hermes-KMS] Disconnecting an unowned virtual output left enabled at module load.";
-      uint64_t session_id = 0;
-      const bool disconnected = set_output(device.fd, false, 0, 0, 0, session_id);
-      close_device(device);
       return disconnected;
     }
 
@@ -669,10 +881,12 @@ namespace VDISPLAY {
   struct VirtualDisplayInfo {
     std::string name;
     std::string guid_str;
+    std::string client_name;
     uint32_t width;
     uint32_t height;
     uint32_t fps;
     int device_index;      // EVDI device index
+    int output_index;      // 0-based Hermes-KMS output index
     int drm_card_index;    // DRM card index assigned by the kernel
     evdi_handle handle;    // EVDI handle
     int drm_fd;            // DRM fd for card
@@ -696,6 +910,10 @@ namespace VDISPLAY {
       bool connected {false};
       bool enabled {false};
       int priority {0};
+      int x {0};
+      int y {0};
+      int width {0};
+      int height {0};
     };
 
     struct layout_t {
@@ -757,6 +975,10 @@ namespace VDISPLAY {
             .connected = entry.value("connected", false),
             .enabled = entry.value("enabled", false),
             .priority = entry.value("priority", 0),
+            .x = entry.value("pos", nlohmann::json::object()).value("x", 0),
+            .y = entry.value("pos", nlohmann::json::object()).value("y", 0),
+            .width = entry.value("size", nlohmann::json::object()).value("width", 0),
+            .height = entry.value("size", nlohmann::json::object()).value("height", 0),
           };
           if (safe_output_name(output.name)) {
             result.emplace_back(std::move(output));
@@ -902,6 +1124,32 @@ namespace VDISPLAY {
       const std::string &virtual_output,
       const std::map<std::string, int> &enabled_before
     ) {
+      const auto current = outputs();
+      int target_x = 0;
+      int target_y = 0;
+      bool have_existing_output = false;
+
+      // Keep the virtual desktop regions disjoint. KWin may replay a saved
+      // hotplug layout with the new connector at 0,0, directly overlapping the
+      // physical monitor. Besides mirroring physical content into the stream,
+      // overlap makes absolute input ambiguous. Append each new virtual output
+      // to the right of every output that was active before this hotplug.
+      for (const auto &output : current) {
+        if (output.name == virtual_output ||
+            !output.connected ||
+            !output.enabled ||
+            !enabled_before.contains(output.name)) {
+          continue;
+        }
+        if (!have_existing_output) {
+          target_y = output.y;
+          have_existing_output = true;
+        } else {
+          target_y = std::min(target_y, output.y);
+        }
+        target_x = std::max(target_x, output.x + output.width);
+      }
+
       std::string command = "kscreen-doctor";
       int next_priority = 1;
       for (const auto &[output, priority] : enabled_before) {
@@ -916,7 +1164,15 @@ namespace VDISPLAY {
       }
       command += " output." + virtual_output + ".enable";
       command += " output." + virtual_output + ".priority." + std::to_string(next_priority);
-      return run_layout_command(command);
+      command += " output." + virtual_output + ".position." +
+                 std::to_string(target_x) + ',' + std::to_string(target_y);
+      if (!run_layout_command(command)) {
+        return false;
+      }
+      BOOST_LOG(info) << "[VDISPLAY/KScreen] Positioned " << virtual_output
+                      << " at " << target_x << ',' << target_y
+                      << " outside the pre-session output regions";
+      return true;
     }
 
     /**
@@ -1023,6 +1279,45 @@ namespace VDISPLAY {
     static bool is_active(const std::string &display_name) {
       std::lock_guard<std::mutex> lock(layouts_mutex);
       return layouts.find(display_name) != layouts.end();
+    }
+
+    static bool geometry(const std::string &display_name, int &x, int &y, int &env_width, int &env_height) {
+      std::string output_name;
+      {
+        std::lock_guard<std::mutex> lock(layouts_mutex);
+        const auto it = layouts.find(display_name);
+        if (it == layouts.end()) {
+          return false;
+        }
+        output_name = it->second.virtual_output;
+      }
+
+      const auto current = outputs();
+      const auto selected = std::find_if(current.begin(), current.end(), [&](const auto &output) {
+        return output.connected && output.enabled && output.name == output_name;
+      });
+      if (selected == current.end()) {
+        return false;
+      }
+
+      int min_x = 0;
+      int min_y = 0;
+      int max_x = 0;
+      int max_y = 0;
+      for (const auto &output : current) {
+        if (!output.connected || !output.enabled) {
+          continue;
+        }
+        min_x = std::min(min_x, output.x);
+        min_y = std::min(min_y, output.y);
+        max_x = std::max(max_x, output.x + output.width);
+        max_y = std::max(max_y, output.y + output.height);
+      }
+      x = selected->x - min_x;
+      y = selected->y - min_y;
+      env_width = max_x - min_x;
+      env_height = max_y - min_y;
+      return env_width > 0 && env_height > 0;
     }
 
     // Called at SESSION START (only when isolated mode is on) to hand the
@@ -1541,7 +1836,9 @@ namespace VDISPLAY {
       if (display.using_evdi && display.active) {
         status.active_displays.push_back({
           .name = display.name,
+          .client_name = display.client_name,
           .device_index = display.device_index,
+          .output_index = -1,
           .drm_card_index = display.drm_card_index,
           .width = display.width,
           .height = display.height,
@@ -1595,19 +1892,43 @@ namespace VDISPLAY {
       .device_present = probe.result == hermes_kms::probe_result::ok,
       .card_index = probe.card_index,
       .uapi_version = probe.uapi_version,
-      .required_uapi_version = hermes_kms::uapi_version,
+      .required_uapi_version = hermes_kms::required_uapi_version(),
+      .experimental_multi_output_enabled = hermes_kms::multi_output_requested(),
+      .multi_output_capable = probe.multi_output_capable,
+      .experimental_isolated_sessions_enabled = config::video.hermes_kms_isolated_sessions,
+      .multi_device_capable = probe.multi_device_capable,
+      .device_count = probe.device_count,
+      .output_count = probe.output_count,
+      .private_seat_broker_count = 0,
+      .missing_private_seat_brokers = {},
       .driver_version = probe.driver_version,
       .running_kernel = running_kernel_release(),
       .dkms_kernels = dkms_kernels("hermes-kms"),
       .active_displays = {},
     };
 
+    for (uint32_t instance = 1; instance <= status.device_count; ++instance) {
+      const auto socket =
+        fs::path {"/run/hermes-kms-seatd"} /
+        std::to_string(instance) /
+        "seatd.sock";
+      std::error_code socket_ec;
+      if (fs::is_socket(socket, socket_ec) &&
+          ::access(socket.c_str(), R_OK | W_OK) == 0) {
+        ++status.private_seat_broker_count;
+      } else {
+        status.missing_private_seat_brokers.push_back(instance);
+      }
+    }
+
     std::lock_guard<std::mutex> lock(vdisplay_mutex);
     for (const auto &[guid, display] : virtual_displays) {
       if (display.using_hermes_kms && display.active) {
         status.active_displays.push_back({
           .name = display.name,
+          .client_name = display.client_name,
           .device_index = display.device_index,
+          .output_index = display.output_index,
           .drm_card_index = display.drm_card_index,
           .width = display.width,
           .height = display.height,
@@ -2051,13 +2372,16 @@ namespace VDISPLAY {
         return driver_status;
       }
 
-      std::string boot_connector;
-      if (hermes_kms::disconnect_unowned_output(boot_connector)) {
-        kscreen::recover_after_unowned_virtual_disconnect(boot_connector);
+      std::vector<std::string> boot_connectors;
+      if (hermes_kms::disconnect_unowned_outputs(boot_connectors)) {
+        for (const auto &connector : boot_connectors) {
+          kscreen::recover_after_unowned_virtual_disconnect(connector);
+        }
       }
 
       driver_status = DRIVER_STATUS::OK;
-      BOOST_LOG(info) << "[VDISPLAY/Hermes-KMS] Hermes-KMS available - experimental zero-copy virtual display supported.";
+      BOOST_LOG(info) << "[VDISPLAY/Hermes-KMS] Hermes-KMS available - experimental zero-copy virtual display supported"
+                      << (hermes_kms::multi_output_requested() ? " with session-scoped multi-output enabled." : ".");
       return driver_status;
     }
 
@@ -2221,6 +2545,10 @@ namespace VDISPLAY {
     }
 
     std::string guid_str = guid.string();
+    if (virtual_displays.contains(guid_str)) {
+      BOOST_LOG(error) << "[VDISPLAY] Client already owns an active virtual display: " << guid_str;
+      return "";
+    }
     std::string display_name = generate_display_name(guid);
 
     fps = normalize_refresh_rate(fps);
@@ -2239,10 +2567,12 @@ namespace VDISPLAY {
     VirtualDisplayInfo vdinfo;
     vdinfo.name = display_name;
     vdinfo.guid_str = guid_str;
+    vdinfo.client_name = s_client_name ? s_client_name : "";
     vdinfo.width = width;
     vdinfo.height = height;
     vdinfo.fps = fps;
     vdinfo.device_index = -1;
+    vdinfo.output_index = -1;
     vdinfo.drm_card_index = -1;
     vdinfo.handle = nullptr;
     vdinfo.drm_fd = -1;
@@ -2260,7 +2590,17 @@ namespace VDISPLAY {
 
     if (backend == VirtualDisplayBackend::HERMES_KMS) {
       hermes_kms::device_t device {};
-      if (hermes_kms::open_device(device, true)) {
+      uint64_t session_id = 0;
+      bool claimed = false;
+      if (config::video.hermes_kms_isolated_sessions) {
+        claimed = hermes_kms::claim_available_device_output(
+          device,
+          width,
+          height,
+          fps_hz,
+          session_id
+        );
+      } else if (hermes_kms::open_device(device, true)) {
         // Switch to the render node before owning the output. Holding the
         // primary card node would make this process the DRM master and block
         // the compositor (KWin/GNOME) from driving the modeset (EBUSY), so the
@@ -2277,41 +2617,55 @@ namespace VDISPLAY {
                                 "(the compositor may fail to take DRM master).";
         }
 
-        uint64_t session_id = 0;
-        if (hermes_kms::set_output(device.fd, true, width, height, fps_hz, session_id)) {
-          hermes_kms::status_t status {};
-          hermes_kms::get_status(device.fd, status);
-          vdinfo.drm_fd = device.fd;
-          device.fd = -1;
-          vdinfo.drm_card_index = device.card_index;
-          vdinfo.session_id = session_id;
-          vdinfo.using_hermes_kms = true;
-          vdinfo.connector_name = hermes_kms::cstr(device.identity.connector_name);
-          display_name = hermes_kms::cstr(device.identity.output_name);
-          if (display_name.empty()) {
-            display_name = "HERMES-1";
-          }
-          vdinfo.name = display_name;
-          BOOST_LOG(info) << "[VDISPLAY/Hermes-KMS] Connected " << display_name
-                          << " connector=" << vdinfo.connector_name
-                          << " card=" << vdinfo.drm_card_index
-                          << " session=" << vdinfo.session_id
-                          << " requested=" << status.requested_width << 'x' << status.requested_height
-                          << '@' << status.requested_refresh_hz
-                          << " flags=0x" << std::hex << status.flags << std::dec;
-          if (!vdinfo.connector_name.empty()) {
-            kscreen::activate_evdi_output(
-              vdinfo.name,
-              outputs_before,
-              original_primary,
-              enabled_before,
-              vdinfo.connector_name,
-              "Hermes-KMS"
-            );
-          }
-        }
-        hermes_kms::close_device(device);
+        claimed = hermes_kms::claim_available_output(
+          device,
+          width,
+          height,
+          fps_hz,
+          session_id
+        );
       }
+
+      if (claimed) {
+        hermes_kms::status_t status {};
+        hermes_kms::get_status(device.fd, status);
+        vdinfo.drm_fd = device.fd;
+        device.fd = -1;
+        vdinfo.device_index = device.version.uapi_version >= hermes_kms::multi_device_uapi_version ?
+                                static_cast<int>(device.identity.device_index) :
+                                0;
+        vdinfo.output_index = static_cast<int>(device.selected_output_index);
+        vdinfo.drm_card_index = device.card_index;
+        vdinfo.session_id = session_id;
+        vdinfo.using_hermes_kms = true;
+        vdinfo.connector_name = hermes_kms::cstr(device.identity.connector_name);
+        display_name = hermes_kms::cstr(device.identity.output_name);
+        if (display_name.empty()) {
+          display_name = "HERMES-1";
+        }
+        vdinfo.name = display_name;
+        BOOST_LOG(info) << "[VDISPLAY/Hermes-KMS] Connected " << display_name
+                        << " device=" << (vdinfo.device_index + 1)
+                        << " output=" << (vdinfo.output_index + 1)
+                        << " connector=" << vdinfo.connector_name
+                        << " card=" << vdinfo.drm_card_index
+                        << " session=" << vdinfo.session_id
+                        << " requested=" << status.requested_width << 'x' << status.requested_height
+                        << '@' << status.requested_refresh_hz
+                        << " flags=0x" << std::hex << status.flags << std::dec;
+        if (!config::video.hermes_kms_isolated_sessions &&
+            !vdinfo.connector_name.empty()) {
+          kscreen::activate_evdi_output(
+            vdinfo.name,
+            outputs_before,
+            original_primary,
+            enabled_before,
+            vdinfo.connector_name,
+            "Hermes-KMS"
+          );
+        }
+      }
+      hermes_kms::close_device(device);
     } else if (evdi_available) {
       // Create real virtual display using EVDI
       int device = find_available_evdi_device();
@@ -2823,17 +3177,70 @@ namespace VDISPLAY {
     return -1;
   }
 
+  std::string getHermesKmsDevicePath(const std::string &displayName) {
+    const int card_index = getHermesKmsCardIndex(displayName);
+    return card_index >= 0 ?
+             "/dev/dri/card" + std::to_string(card_index) :
+             std::string {};
+  }
+
+  std::string getHermesKmsSeatName(const std::string &displayName) {
+    std::lock_guard<std::mutex> lock(vdisplay_mutex);
+    for (const auto &[guid, vdinfo] : virtual_displays) {
+      if (vdinfo.name == displayName &&
+          vdinfo.using_hermes_kms &&
+          vdinfo.device_index >= 0) {
+        // Must match Hermes-KMS' 70-hermes-kms-session-seats.rules.
+        return "hermes-kms-" + std::to_string(vdinfo.device_index + 1);
+      }
+    }
+    return {};
+  }
+
   HermesKmsMetrics getHermesKmsMetrics() {
     HermesKmsMetrics out {};
+    int target_card_index = -1;
+    {
+      std::lock_guard<std::mutex> lock(vdisplay_mutex);
+      for (const auto &[guid, display] : virtual_displays) {
+        if (display.using_hermes_kms && display.active) {
+          out.output_index = display.output_index;
+          out.output_name = display.name;
+          target_card_index = display.drm_card_index;
+          break;
+        }
+      }
+    }
 
     hermes_kms::device_t device {};
-    if (!hermes_kms::open_device(device, false)) {
+    auto devices = hermes_kms::open_devices(false);
+    if (devices.empty()) {
       return out;
+    }
+    auto selected = target_card_index >= 0 ?
+                      std::find_if(devices.begin(), devices.end(), [target_card_index](const auto &candidate) {
+                        return candidate.card_index == target_card_index;
+                      }) :
+                      devices.begin();
+    if (selected == devices.end()) {
+      for (auto &candidate : devices) {
+        hermes_kms::close_device(candidate);
+      }
+      return out;
+    }
+    device = *selected;
+    selected->fd = -1;
+    for (auto &candidate : devices) {
+      hermes_kms::close_device(candidate);
     }
     auto guard = util::fail_guard([&device]() { hermes_kms::close_device(device); });
 
     // The driver may be present without the metrics capability (older build).
     if (!(device.caps.flags & hermes_kms::cap_metrics)) {
+      return out;
+    }
+    if (out.output_index > 0 &&
+        !hermes_kms::select_output(device.fd, static_cast<uint32_t>(out.output_index), nullptr, false)) {
       return out;
     }
 
@@ -2885,7 +3292,18 @@ namespace VDISPLAY {
   }
 
   int hermesKmsOpenCapture(const std::string &display_name) {
-    const int card_index = getHermesKmsCardIndex(display_name);
+    int card_index = -1;
+    int output_index = -1;
+    {
+      std::lock_guard<std::mutex> lock(vdisplay_mutex);
+      for (const auto &[guid, display] : virtual_displays) {
+        if (display.name == display_name && display.using_hermes_kms) {
+          card_index = display.drm_card_index;
+          output_index = display.output_index;
+          break;
+        }
+      }
+    }
     if (card_index < 0) {
       BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] No card mapping for capture of " << display_name;
       return -1;
@@ -2906,7 +3324,24 @@ namespace VDISPLAY {
       BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Card has no render node; cannot capture without DRM master.";
       return -1;
     }
+
+    if (output_index > 0 && !hermes_kms::select_output(render_fd, static_cast<uint32_t>(output_index))) {
+      ::close(render_fd);
+      return -1;
+    }
     return render_fd;
+  }
+
+  bool getHermesKmsDisplayGeometry(const std::string &display_name,
+                                   int &offset_x, int &offset_y,
+                                   int &environment_width, int &environment_height) {
+    return kscreen::geometry(
+      display_name,
+      offset_x,
+      offset_y,
+      environment_width,
+      environment_height
+    );
   }
 
   bool hermesKmsCaptureSize(int render_fd, int &width, int &height) {

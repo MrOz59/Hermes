@@ -348,6 +348,18 @@ namespace stream {
   };
 
   struct session_t {
+    ~session_t() {
+#ifdef __linux__
+      if (isolated_session) {
+        proc::proc.disconnect_isolated(isolated_runtime_owner_id);
+      } else if (session_scoped_virtual_display) {
+        if (!VDISPLAY::removeVirtualDisplay(display_guid)) {
+          BOOST_LOG(warning) << "Failed to release session-scoped virtual display " << display_name;
+        }
+      }
+#endif
+    }
+
     config_t config;
 
     safe::mail_t mail;
@@ -412,8 +424,19 @@ namespace stream {
     } control;
 
     std::uint32_t launch_session_id;
+    std::uint32_t isolated_runtime_owner_id {};
     std::string device_name;
     std::string device_uuid;
+    bool isolated_session {false};
+    std::string isolated_runtime_id;
+    std::string isolated_seat_id;
+    bool session_scoped_virtual_display {false};
+    std::string display_name;
+#ifndef _WIN32
+    uuid_util::uuid_t display_guid {};
+#else
+    GUID display_guid {};
+#endif
     crypto::PERM permission;
 
     std::list<crypto::command_entry_t> do_cmds;
@@ -1192,7 +1215,7 @@ namespace stream {
       }
 
       // Don't break until any pending sessions either expire or connect
-      if (proc::proc.running() == 0 && !has_session_awaiting_peer) {
+      if (!proc::proc.any_running() && !has_session_awaiting_peer) {
         BOOST_LOG(info) << "Process terminated"sv;
         break;
       }
@@ -2145,10 +2168,17 @@ namespace stream {
       input::reset(session.input);
 
       if (!session.undo_cmds.empty()) {
-        auto exec_thread = std::thread([cmd_list = session.undo_cmds]{
+        auto session_env = proc::proc.get_session_env(
+          session.isolated_session ?
+            session.isolated_runtime_owner_id :
+            session.launch_session_id
+        );
+        auto exec_thread = std::thread([
+          cmd_list = session.undo_cmds,
+          env = std::move(session_env)
+        ]() mutable {
           for (auto &cmd : cmd_list) {
             std::error_code ec;
-            auto env = proc::proc.get_env();
             boost::filesystem::path working_dir = proc::find_working_directory(cmd.cmd, env);
             auto child = platf::run_command(cmd.elevated, true, cmd.cmd, working_dir, env, nullptr, ec, nullptr);
             BOOST_LOG(info) << "Spawning client undo command ["sv << cmd.cmd << "] in ["sv << working_dir << ']';
@@ -2166,7 +2196,11 @@ namespace stream {
       // If this is the last session, invoke the platform callbacks
       if (--running_sessions == 0) {
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
-        if (proc::proc.running()) {
+        if (session.isolated_session) {
+          // The session destructor tears down only this compositor/app/output.
+          // Host display state and the legacy global process are unrelated.
+          revert_display_config = false;
+        } else if (proc::proc.running()) {
           proc::proc.pause();
         } else {
           // We have no app running and also no clients anymore.
@@ -2184,7 +2218,12 @@ namespace stream {
     }
 
     int start(session_t &session, const std::string &addr_string) {
-      session.input = input::alloc(session.mail);
+      session.input = input::alloc(
+        session.mail,
+        session.isolated_session ?
+          session.isolated_seat_id :
+          std::string {}
+      );
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
@@ -2217,14 +2256,23 @@ namespace stream {
       // If this is the first session, invoke the platform callbacks
       if (++running_sessions == 1) {
         platf::streaming_will_start();
-        proc::proc.resume();
+        if (!session.isolated_session) {
+          proc::proc.resume();
+        }
       }
 
       if (!session.do_cmds.empty()) {
-        auto exec_thread = std::thread([cmd_list = session.do_cmds]{
+        auto session_env = proc::proc.get_session_env(
+          session.isolated_session ?
+            session.isolated_runtime_owner_id :
+            session.launch_session_id
+        );
+        auto exec_thread = std::thread([
+          cmd_list = session.do_cmds,
+          env = std::move(session_env)
+        ]() mutable {
           for (auto &cmd : cmd_list) {
             std::error_code ec;
-            auto env = proc::proc.get_env();
             boost::filesystem::path working_dir = proc::find_working_directory(cmd.cmd, env);
             auto child = platf::run_command(cmd.elevated, true, cmd.cmd, working_dir, env, nullptr, ec, nullptr);
             BOOST_LOG(info) << "Spawning client do command ["sv << cmd.cmd << "] in ["sv << working_dir << ']';
@@ -2252,11 +2300,22 @@ namespace stream {
       session->device_name = launch_session.device_name;
       session->device_uuid = launch_session.unique_id;
       session->permission = launch_session.perm;
+      session->isolated_session = launch_session.isolated_session;
+      session->isolated_runtime_owner_id = launch_session.isolated_runtime_owner_id;
+      session->isolated_runtime_id = launch_session.isolated_runtime_id;
+      session->isolated_seat_id = launch_session.isolated_seat_id;
+      session->session_scoped_virtual_display = launch_session.session_scoped_virtual_display;
+      session->display_name = launch_session.display_name;
+      session->display_guid = launch_session.display_guid;
 
       session->do_cmds = std::move(launch_session.client_do_cmds);
       session->undo_cmds = std::move(launch_session.client_undo_cmds);
 
       session->config = config;
+      session->config.monitor.display_name = launch_session.display_name;
+      // Preserve the session-scoped marker for process-level cleanup decisions,
+      // but move responsibility for releasing the output into session_t.
+      launch_session.session_virtual_display_cleanup_pending = false;
 
       session->control.connect_data = launch_session.control_connect_data;
       session->control.feedback_queue = mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback);

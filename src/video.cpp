@@ -325,8 +325,11 @@ namespace video {
     avcodec_encode_session_t(avcodec_encode_session_t &&other) noexcept = default;
 
     ~avcodec_encode_session_t() {
-      // Flush any remaining frames in the encoder
-      if (avcodec_send_frame(avcodec_ctx.get(), nullptr) == 0) {
+      // Some hardware encoders cannot be flushed safely before accepting
+      // their first frame. This can happen when importing the first captured
+      // DMA-BUF fails and the pipeline immediately tears the session down.
+      if (frame_submitted && avcodec_ctx &&
+          avcodec_send_frame(avcodec_ctx.get(), nullptr) == 0) {
         packet_raw_avcodec pkt;
         while (avcodec_receive_packet(avcodec_ctx.get(), pkt.av_packet) == 0);
       }
@@ -345,6 +348,8 @@ namespace video {
       vps = std::move(other.vps);
 
       inject = other.inject;
+      frame_submitted = other.frame_submitted;
+      other.frame_submitted = false;
 
       return *this;
     }
@@ -387,6 +392,7 @@ namespace video {
 
     // inject sps/vps data into idr pictures
     int inject;
+    bool frame_submitted {false};
   };
 
   class nvenc_encode_session_t: public encode_session_t {
@@ -1261,8 +1267,16 @@ namespace video {
     std::vector<std::string> display_names;
     int display_p = -1;
     std::shared_ptr<platf::display_t> disp;
-    if (!proc::proc.display_name.empty()) {
-      disp = platf::display(encoder.platform_formats->dev_type, proc::proc.display_name, capture_ctxs.front().config);
+    const bool session_scoped_display = !capture_ctxs.front().config.display_name.empty();
+    std::string capture_display_name =
+      session_scoped_display ? capture_ctxs.front().config.display_name : proc::proc.display_name;
+    if (!capture_display_name.empty()) {
+      disp = platf::display(encoder.platform_formats->dev_type, capture_display_name, capture_ctxs.front().config);
+      if (!disp && session_scoped_display) {
+        BOOST_LOG(error) << "Session-scoped capture display ["sv << capture_display_name
+                         << "] is unavailable; refusing fallback to another monitor."sv;
+        return;
+      }
     }
     if (!disp) {
       // Get all the monitor names now, rather than at boot, to
@@ -1270,7 +1284,8 @@ namespace video {
       refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
       disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
       if (disp) {
-        proc::proc.display_name = display_names[display_p];
+        capture_display_name = display_names[display_p];
+        proc::proc.display_name = capture_display_name;
       } else {
         return;
       }
@@ -1404,7 +1419,7 @@ namespace video {
           capture_ctxs.emplace_back(std::move(*capture_ctx_queue->pop()));
         }
 
-        if (switch_display_event->peek()) {
+        if (!session_scoped_display && switch_display_event->peek()) {
           artificial_reinit = true;
           return false;
         }
@@ -1460,17 +1475,22 @@ namespace video {
               disp.reset();
 
               // Refresh display names since a display removal might have caused the reinitialization
-              refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, proc::proc.display_name);
+              if (!session_scoped_display) {
+                refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, proc::proc.display_name);
 
-              // Process any pending display switch with the new list of displays
-              if (switch_display_event->peek()) {
-                display_p = std::clamp(*switch_display_event->pop(), 0, (int) display_names.size() - 1);
+                // Process any pending display switch with the new list of displays
+                if (switch_display_event->peek()) {
+                  display_p = std::clamp(*switch_display_event->pop(), 0, (int) display_names.size() - 1);
+                }
+                capture_display_name = display_names[display_p];
               }
 
               // reset_display() will sleep between retries
-              reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
+              reset_display(disp, encoder.platform_formats->dev_type, capture_display_name, capture_ctxs.front().config);
               if (disp) {
-                proc::proc.display_name = display_names[display_p];
+                if (!session_scoped_display) {
+                  proc::proc.display_name = capture_display_name;
+                }
                 break;
               }
             }
@@ -1521,6 +1541,7 @@ namespace video {
       metrics_record_drop();
       return -1;
     }
+    session.frame_submitted = true;
 
     size_t packet_bytes = 0;
     auto record_frame_metrics = [&]() {
@@ -2493,7 +2514,8 @@ namespace video {
     while (encode_run_sync(synced_session_ctxs, ctx, display_names, display_p) == encode_e::reinit) {}
   }
 
-  void capture_async(
+  void capture_async_with_context(
+    capture_thread_async_ctx_t &capture_context,
     safe::mail_t mail,
     config_t &config,
     void *channel_data
@@ -2506,14 +2528,9 @@ namespace video {
       shutdown_event->raise(true);
     });
 
-    auto ref = capture_thread_async.ref();
-    if (!ref) {
-      return;
-    }
+    capture_context.capture_ctx_queue->raise(capture_ctx_t {images, config});
 
-    ref->capture_ctx_queue->raise(capture_ctx_t {images, config});
-
-    if (!ref->capture_ctx_queue->running()) {
+    if (!capture_context.capture_ctx_queue->running()) {
       return;
     }
 
@@ -2527,19 +2544,19 @@ namespace video {
 
     while (!shutdown_event->peek() && images->running()) {
       // Wait for the main capture event when the display is being reinitialized
-      if (ref->reinit_event.peek()) {
+      if (capture_context.reinit_event.peek()) {
         std::this_thread::sleep_for(20ms);
         continue;
       }
       // Wait for the display to be ready
       std::shared_ptr<platf::display_t> display;
       {
-        auto lg = ref->display_wp.lock();
-        if (ref->display_wp->expired()) {
+        auto lg = capture_context.display_wp.lock();
+        if (capture_context.display_wp->expired()) {
           continue;
         }
 
-        display = ref->display_wp->lock();
+        display = capture_context.display_wp->lock();
       }
 
       auto &encoder = *chosen_encoder;
@@ -2570,11 +2587,35 @@ namespace video {
         config,
         display,
         std::move(encode_device),
-        ref->reinit_event,
-        *ref->encoder_p,
+        capture_context.reinit_event,
+        *capture_context.encoder_p,
         channel_data
       );
     }
+  }
+
+  void capture_async(
+    safe::mail_t mail,
+    config_t &config,
+    void *channel_data
+  ) {
+    if (!config.display_name.empty()) {
+      capture_thread_async_ctx_t session_capture;
+      if (start_capture_async(session_capture)) {
+        return;
+      }
+      auto cleanup = util::fail_guard([&session_capture]() {
+        end_capture_async(session_capture);
+      });
+      capture_async_with_context(session_capture, std::move(mail), config, channel_data);
+      return;
+    }
+
+    auto ref = capture_thread_async.ref();
+    if (!ref) {
+      return;
+    }
+    capture_async_with_context(*ref.get(), std::move(mail), config, channel_data);
   }
 
   void capture(
@@ -2585,6 +2626,10 @@ namespace video {
     auto idr_events = mail->event<bool>(mail::idr);
 
     idr_events->raise(true);
+    if (!config.display_name.empty() && !(chosen_encoder->flags & PARALLEL_ENCODING)) {
+      BOOST_LOG(error) << "Session-scoped multi-output capture requires a parallel encoder pipeline."sv;
+      return;
+    }
     if (chosen_encoder->flags & PARALLEL_ENCODING) {
       capture_async(std::move(mail), config, channel_data);
     } else {

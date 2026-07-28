@@ -40,6 +40,8 @@
       "required": [
         "virtual_display",
         "virtual_display_backend",
+        "hermes_kms_multi_output",
+        "hermes_kms_isolated_sessions",
         "kde_kscreen",
         "display_recovery",
         "client_resolution_matching",
@@ -57,6 +59,31 @@
           "type": "array",
           "items": { "enum": ["evdi", "hermes_kms"] },
           "uniqueItems": true
+        },
+        "hermes_kms_multi_output": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["supported", "experimental", "max_outputs"],
+          "properties": {
+            "supported": { "const": true },
+            "experimental": { "const": true },
+            "max_outputs": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "hermes_kms_isolated_sessions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "experimental", "profiles", "max_sessions"],
+          "properties": {
+            "status": { "const": "prototype" },
+            "experimental": { "const": true },
+            "profiles": {
+              "type": "array",
+              "items": { "enum": ["application", "desktop"] },
+              "uniqueItems": true
+            },
+            "max_sessions": { "type": "integer", "minimum": 1 }
+          }
         },
         "kde_kscreen": { "type": "boolean" },
         "display_recovery": { "type": "boolean" },

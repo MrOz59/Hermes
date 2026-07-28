@@ -52,6 +52,9 @@ namespace video {
 
     int encodingFramerate; // Requested display framerate
     bool input_only;
+    // Experimental Hermes-KMS multi-output: an empty value preserves the
+    // legacy process-wide capture selection.
+    std::string display_name;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);

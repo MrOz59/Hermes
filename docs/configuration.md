@@ -1250,6 +1250,82 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### hermes_kms_multi_output
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Enables the experimental shared-desktop multi-output Hermes-KMS
+            path. Each simultaneous Moonlight client receives a separate
+            virtual output and capture pipeline, but all outputs remain part of
+            the host compositor and desktop session. Requires Hermes-KMS UAPI 8
+            or newer loaded with more than one output, for example
+            <code>initial_enabled=0 outputs=2</code>.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            false
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            virtual_display_backend = hermes_kms
+            hermes_kms_multi_output = true
+            @endcode</td>
+    </tr>
+</table>
+
+### hermes_kms_isolated_sessions
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Enables the highly experimental independent-session prototype.
+            One Hermes server allocates an independent Hermes-KMS DRM card and
+            starts a private compositor, application process tree, capture
+            pipeline, runtime directory, and tagged virtual input set for each
+            Moonlight client. Application profiles use Gamescope; desktop
+            profiles use the Weston desktop shell. Requires the development
+            Hermes-KMS UAPI 9 driver and its session-seat udev rule,
+            <code>gamescope</code>, <code>weston</code>, and one packaged
+            <code>hermes-kms-seatd@N.service</code> private broker per device.
+            The Hermes user must be a member of the <code>seat</code> group.
+            Hermes maps device N to
+            <code>/run/hermes-kms-seatd/N/seatd.sock</code>.
+            If <code>hermes_kms_multi_output</code> is also set, independent
+            sessions take precedence and the shared-desktop mode is ignored.
+            @warning{Per-session audio, a full Plasma desktop, and simultaneous
+            real clients are not validated. The private brokers are not a
+            security boundary between mutually untrusted local users. Remote
+            Input is rejected because it has no video session from which to
+            determine a target seat. Keep this disabled outside testing.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            false
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            virtual_display_backend = hermes_kms
+            hermes_kms_isolated_sessions = true
+            @endcode
+            Load the driver with:
+            @code{}
+            initial_enabled=0 devices=2 outputs=1
+            sudo systemctl enable --now hermes-kms-seatd@1.service hermes-kms-seatd@2.service
+            @endcode</td>
+    </tr>
+</table>
+
 ### gamescope_backend
 
 <table>

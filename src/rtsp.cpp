@@ -27,6 +27,7 @@ extern "C" {
 #include "input.h"
 #include "logging.h"
 #include "network.h"
+#include "process.h"
 #include "rtsp.h"
 #include "stream.h"
 #include "sync.h"
@@ -40,6 +41,32 @@ using asio::ip::udp;
 using namespace std::literals;
 
 namespace rtsp_stream {
+  static void release_pending_virtual_display(launch_session_t &session) {
+#ifdef __linux__
+    if (session.isolated_session &&
+        session.session_virtual_display_cleanup_pending) {
+      proc::proc.terminate_isolated(
+        session.isolated_runtime_owner_id ?
+          session.isolated_runtime_owner_id :
+          session.id
+      );
+      session.session_virtual_display_cleanup_pending = false;
+      session.session_scoped_virtual_display = false;
+      session.isolated_session = false;
+      session.display_name.clear();
+      return;
+    }
+    if (session.session_virtual_display_cleanup_pending) {
+      VDISPLAY::removeVirtualDisplay(session.display_guid);
+      session.session_virtual_display_cleanup_pending = false;
+      session.session_scoped_virtual_display = false;
+      session.display_name.clear();
+    }
+#else
+    (void) session;
+#endif
+  }
+
   void free_msg(PRTSP_MESSAGE msg) {
     freeMessage(msg);
 
@@ -434,6 +461,14 @@ namespace rtsp_stream {
     }
 
     void handle_msg(tcp::socket &sock, launch_session_t &session, msg_t &&req) {
+      if (session.cancelled.load(std::memory_order_acquire)) {
+        BOOST_LOG(debug) << "Ignoring RTSP request for cancelled launch "
+                         << session.id << " from " << session.device_name;
+        boost::system::error_code close_ec;
+        sock.close(close_ec);
+        return;
+      }
+
       auto func = _map_cmd_cb.find(req->message.request.command);
       if (func != std::end(_map_cmd_cb)) {
         func->second(this, sock, session, std::move(req));
@@ -489,10 +524,11 @@ namespace rtsp_stream {
      *       the session will be discarded.
      * @param launch_session Streaming session information.
      */
-    void session_raise(std::shared_ptr<launch_session_t> launch_session) {
+    bool session_raise(std::shared_ptr<launch_session_t> launch_session) {
       // If a launch event is still pending, don't overwrite it.
       if (launch_event.view(0s)) {
-        return;
+        release_pending_virtual_display(*launch_session);
+        return false;
       }
 
       // Raise the new launch session to prepare for the RTSP handshake
@@ -505,9 +541,11 @@ namespace rtsp_stream {
           auto discarded = launch_event.pop(0s);
           if (discarded) {
             BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
+            release_pending_virtual_display(*discarded);
           }
         }
       });
+      return true;
     }
 
     /**
@@ -523,9 +561,31 @@ namespace rtsp_stream {
           BOOST_LOG(error) << "Attempted to clear unexpected session: "sv << launch_session_id << " vs "sv << launch_session->id;
         } else {
           raised_timer.cancel();
-          launch_event.pop();
+          auto cleared = launch_event.pop();
+          if (cleared) {
+            release_pending_virtual_display(*cleared);
+          }
         }
       }
+    }
+
+    bool cancel_pending_launch(const std::string_view &uuid) {
+      auto launch_session = launch_event.view(0s);
+      if (!launch_session || launch_session->unique_id != uuid) {
+        return false;
+      }
+
+      {
+        // cmd_announce holds this from its final cancellation check through
+        // insertion/start. If it won the race, the HTTPS caller subsequently
+        // finds and terminates the newly active session.
+        std::lock_guard<std::mutex> lifecycle_lock {
+          launch_session->lifecycle_mutex
+        };
+        launch_session->cancelled.store(true, std::memory_order_release);
+      }
+      session_clear(launch_session->id);
+      return true;
     }
 
     /**
@@ -633,6 +693,21 @@ namespace rtsp_stream {
       return uuids;
     }
 
+    bool terminate_session(const std::string_view &uuid) {
+      auto lg = _session_slots.lock();
+      for (auto it = _session_slots->begin(); it != _session_slots->end(); ++it) {
+        const auto &slot = *it;
+        if (!slot || !stream::session::uuid_match(*slot, uuid)) {
+          continue;
+        }
+        stream::session::stop(*slot, stream::session::termination_reason_e::SERVER_STOPPED);
+        stream::session::join(*slot);
+        _session_slots->erase(it);
+        return true;
+      }
+      return false;
+    }
+
   private:
     std::unordered_map<std::string_view, cmd_func_t> _map_cmd_cb;
 
@@ -647,12 +722,16 @@ namespace rtsp_stream {
 
   rtsp_server_t server {};
 
-  void launch_session_raise(std::shared_ptr<launch_session_t> launch_session) {
-    server.session_raise(std::move(launch_session));
+  bool launch_session_raise(std::shared_ptr<launch_session_t> launch_session) {
+    return server.session_raise(std::move(launch_session));
   }
 
   void launch_session_clear(uint32_t launch_session_id) {
     server.session_clear(launch_session_id);
+  }
+
+  bool cancel_pending_launch(const std::string_view &uuid) {
+    return server.cancel_pending_launch(uuid);
   }
 
   int session_count() {
@@ -672,6 +751,10 @@ namespace rtsp_stream {
 
   std::list<std::string> get_all_session_uuids() {
     return server.get_all_session_uuids();
+  }
+
+  bool terminate_session(const std::string_view &uuid) {
+    return server.terminate_session(uuid);
   }
 
   void terminate_sessions() {
@@ -1165,9 +1248,16 @@ namespace rtsp_stream {
       return;
     }
 
+    std::lock_guard<std::mutex> lifecycle_lock {session.lifecycle_mutex};
+    if (session.cancelled.load(std::memory_order_acquire)) {
+      BOOST_LOG(info) << "Rejecting RTSP ANNOUNCE for cancelled launch "
+                      << session.id << " from " << session.device_name;
+      respond(sock, session, &option, 410, "Gone", req->sequenceNumber, {});
+      return;
+    }
+
     auto stream_session = stream::session::alloc(config, session);
     server->insert(stream_session);
-
     if (stream::session::start(*stream_session, sock.remote_endpoint().address().to_string())) {
       BOOST_LOG(error) << "Failed to start a streaming session"sv;
 

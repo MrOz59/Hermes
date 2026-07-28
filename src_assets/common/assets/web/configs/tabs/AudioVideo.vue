@@ -47,6 +47,17 @@ const clipboardInstalling = ref(false)
 const clipboardMessage = ref('')
 const clipboardInstallError = ref(false)
 
+const configFlagEnabled = (value) => {
+  if (value === true || value === 1) return true
+  return ['true', '1', 'enabled', 'enable', 'yes', 'on'].includes(`${value}`.toLowerCase().trim())
+}
+const hermesKmsMultiOutputEnabled = computed(() => configFlagEnabled(props.config.hermes_kms_multi_output))
+const hermesKmsIsolatedSessionsEnabled = computed(() => configFlagEnabled(props.config.hermes_kms_isolated_sessions))
+const hermesKmsSharedMultiOutputEnabled = computed(
+  () => hermesKmsMultiOutputEnabled.value && !hermesKmsIsolatedSessionsEnabled.value
+)
+const isolatedVirtualDisplayEnabled = computed(() => configFlagEnabled(props.config.isolated_virtual_display_option))
+
 watch(() => props.evdiDiagnostic, (diagnostic) => {
   evdiDiagnostic.value = diagnostic
 })
@@ -102,11 +113,22 @@ const hermesKmsState = computed(() => hermesKmsDiagnostic.value || hermesKmsInfo
 // out-of-tree DKMS module from a separate repo, so unlike EVDI there is no
 // one-click installer: we surface the exact commands the README documents.
 const hermesKmsGuide = computed(() => {
+  const moduleOptions = hermesKmsIsolatedSessionsEnabled.value
+    ? 'initial_enabled=0 devices=2 outputs=1'
+    : hermesKmsMultiOutputEnabled.value
+      ? 'initial_enabled=0 outputs=2'
+      : 'initial_enabled=0'
+  const withIsolatedRuntime = (commands) => hermesKmsIsolatedSessionsEnabled.value
+    ? [
+        ...commands,
+        'sudo systemctl enable --now hermes-kms-seatd@1.service hermes-kms-seatd@2.service',
+      ]
+    : commands
   const cloneAndInstall = [
     'git clone https://github.com/MrOz59/Hermes-KMS.git',
     'cd Hermes-KMS',
     'sudo make dkms-install',
-    'sudo modprobe hermes_kms initial_enabled=0',
+    `sudo modprobe hermes_kms ${moduleOptions}`,
   ]
   switch (hermesKmsState.value) {
     case 'dkms_build_failed':
@@ -114,49 +136,49 @@ const hermesKmsGuide = computed(() => {
         title: 'config.hermes_kms_dkms_build_failed_title',
         description: 'config.hermes_kms_dkms_build_failed_desc',
         steps: ['config.hermes_kms_dkms_rebuild_step', 'config.hermes_kms_restart_step'],
-        commands: ['sudo dkms autoinstall -k "$(uname -r)"', 'sudo modprobe hermes_kms initial_enabled=0'],
+        commands: withIsolatedRuntime([`sudo sh -c 'dkms autoinstall -k "$(uname -r)"'`, `sudo modprobe hermes_kms ${moduleOptions}`]),
       }
     case 'module_not_installed':
       return {
         title: 'config.hermes_kms_module_not_installed_title',
         description: 'config.hermes_kms_module_not_installed_desc',
         steps: ['config.hermes_kms_install_step', 'config.hermes_kms_restart_step'],
-        commands: cloneAndInstall,
+        commands: withIsolatedRuntime(cloneAndInstall),
       }
     case 'module_not_loaded':
       return {
         title: 'config.hermes_kms_module_not_loaded_title',
         description: 'config.hermes_kms_module_not_loaded_desc',
         steps: ['config.hermes_kms_module_not_loaded_step', 'config.hermes_kms_restart_step'],
-        commands: ['sudo modprobe hermes_kms initial_enabled=0'],
+        commands: withIsolatedRuntime([`sudo modprobe hermes_kms ${moduleOptions}`]),
       }
     case 'uapi_too_old':
       return {
         title: 'config.hermes_kms_uapi_too_old_title',
         description: 'config.hermes_kms_uapi_too_old_desc',
         steps: ['config.hermes_kms_update_step', 'config.hermes_kms_restart_step'],
-        commands: cloneAndInstall,
+        commands: withIsolatedRuntime(cloneAndInstall),
       }
     case 'missing_capabilities':
       return {
         title: 'config.hermes_kms_missing_caps_title',
         description: 'config.hermes_kms_missing_caps_desc',
         steps: ['config.hermes_kms_update_step', 'config.hermes_kms_restart_step'],
-        commands: cloneAndInstall,
+        commands: withIsolatedRuntime(cloneAndInstall),
       }
     case 'device_node_missing':
       return {
         title: 'config.hermes_kms_device_missing_title',
         description: 'config.hermes_kms_device_missing_desc',
         steps: ['config.hermes_kms_reload_step', 'config.hermes_kms_restart_step'],
-        commands: ['sudo modprobe -r hermes_kms', 'sudo modprobe hermes_kms initial_enabled=0'],
+        commands: withIsolatedRuntime(['sudo modprobe -r hermes_kms', `sudo modprobe hermes_kms ${moduleOptions}`]),
       }
     default:
       return {
         title: 'config.hermes_kms_install_title',
         description: 'config.hermes_kms_install_desc',
         steps: ['config.hermes_kms_install_step', 'config.hermes_kms_restart_step'],
-        commands: cloneAndInstall,
+        commands: withIsolatedRuntime(cloneAndInstall),
       }
   }
 })
@@ -420,6 +442,32 @@ const validateFallbackMode = (event) => {
       <div class="form-text">{{ $t('config.virtual_display_backend_desc') }}</div>
     </div>
 
+    <Checkbox class="mb-3"
+              id="hermes_kms_multi_output"
+              locale-prefix="config"
+              v-model="config.hermes_kms_multi_output"
+              default="false"
+              v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms'"
+    ></Checkbox>
+
+    <div class="alert alert-warning small"
+         v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms' && hermesKmsSharedMultiOutputEnabled">
+      {{ $t('config.hermes_kms_multi_output_warning') }}
+    </div>
+
+    <Checkbox class="mb-3"
+              id="hermes_kms_isolated_sessions"
+              locale-prefix="config"
+              v-model="config.hermes_kms_isolated_sessions"
+              default="false"
+              v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms'"
+    ></Checkbox>
+
+    <div class="alert alert-danger small"
+         v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms' && hermesKmsIsolatedSessionsEnabled">
+      {{ $t('config.hermes_kms_isolated_sessions_warning') }}
+    </div>
+
     <DisplayDeviceOptions
       :platform="platform"
       :config="config"
@@ -549,13 +597,41 @@ const validateFallbackMode = (event) => {
           {{ hermesKmsInfo.runningKernel || '—' }}
           <span v-if="hermesKmsInfo.dkmsKernels?.length" class="text-body-secondary"> · DKMS: {{ hermesKmsInfo.dkmsKernels.join(', ') }}</span>
         </dd>
+        <dt class="col-sm-4">{{ $t('config.hermes_kms_status_uapi') }}</dt>
+        <dd class="col-sm-8">
+          {{ hermesKmsInfo.uapiVersion || '—' }} / {{ hermesKmsInfo.requiredUapiVersion || '—' }}
+        </dd>
+        <dt class="col-sm-4">{{ $t('config.hermes_kms_status_outputs') }}</dt>
+        <dd class="col-sm-8">
+          {{ hermesKmsInfo.outputCount || 1 }}
+          <span v-if="hermesKmsInfo.multiOutputCapable" class="text-body-secondary"> · multi-output</span>
+        </dd>
+        <dt class="col-sm-4">{{ $t('config.hermes_kms_status_devices') }}</dt>
+        <dd class="col-sm-8">
+          {{ hermesKmsInfo.deviceCount || 1 }}
+          <span v-if="hermesKmsInfo.multiDeviceCapable" class="text-body-secondary"> · multi-device</span>
+        </dd>
+        <template v-if="hermesKmsIsolatedSessionsEnabled">
+          <dt class="col-sm-4">{{ $t('config.hermes_kms_status_brokers') }}</dt>
+          <dd class="col-sm-8">
+            {{ hermesKmsInfo.privateSeatBrokerCount || 0 }} / {{ hermesKmsInfo.deviceCount || 0 }}
+            <span v-if="hermesKmsInfo.missingPrivateSeatBrokers?.length" class="text-danger">
+              · {{ $t('config.hermes_kms_status_brokers_missing') }}:
+              {{ hermesKmsInfo.missingPrivateSeatBrokers.join(', ') }}
+            </span>
+          </dd>
+        </template>
       </dl>
       <div class="mt-3">
         <div class="small fw-semibold mb-1">{{ $t('config.evdi_status_displays') }}</div>
         <div v-if="!hermesKmsInfo.activeDisplays?.length" class="small text-body-secondary">{{ $t('config.evdi_status_none') }}</div>
         <ul v-else class="small mb-0 ps-3">
           <li v-for="display in hermesKmsInfo.activeDisplays" :key="display.name">
-            {{ display.name }} — {{ display.width }}×{{ display.height }}@{{ display.fps }} (card{{ display.drmCardIndex }})
+            {{ display.name }}
+            <span v-if="display.deviceIndex"> (device {{ display.deviceIndex }}, output {{ display.outputIndex || 1 }})</span>
+            <span v-else-if="display.outputIndex"> (#{{ display.outputIndex }})</span>
+            <span v-if="display.clientName">· {{ display.clientName }}</span>
+            — {{ display.width }}×{{ display.height }}@{{ display.fps }} (card{{ display.drmCardIndex }})
             <span v-if="display.capturePath">, {{ display.capturePath }}</span>
           </li>
         </ul>
@@ -577,6 +653,11 @@ const validateFallbackMode = (event) => {
 
     <div class="alert alert-info small" v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms'">
       {{ $t('config.hermes_kms_experimental_note') }}
+    </div>
+
+    <div class="alert alert-warning small"
+         v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms' && hermesKmsSharedMultiOutputEnabled && isolatedVirtualDisplayEnabled">
+      {{ $t('config.hermes_kms_multi_output_isolated_warning') }}
     </div>
 
     <section class="border-top pt-3 mt-4" v-if="platform === 'linux'">

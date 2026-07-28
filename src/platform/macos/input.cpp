@@ -521,7 +521,8 @@ const KeyCodeMap kKeyCodesMap[] = {
     // Unimplemented
   }
 
-  input_t input() {
+  input_t input(const std::string &session_tag) {
+    (void) session_tag;
     input_t result {new macos_input_t()};
 
     const auto macos_input = static_cast<macos_input_t *>(result.get());

@@ -2,7 +2,7 @@
 # Hermes - Game streaming server with virtual display support
 
 pkgname=hermes-streaming
-pkgver=0.4.1
+pkgver=0.5.0
 pkgrel=1
 pkgdesc="Self-hosted game streaming server with virtual display support"
 arch=('x86_64')
@@ -44,11 +44,14 @@ makedepends=(
 optdepends=(
   'cuda: NVIDIA GPU encoding support'
   'evdi: Virtual display support for streaming to headless clients (AUR)'
-  'gamescope: optional Gamescope Steam Session app'
+  'gamescope: application-only experimental independent client sessions'
+  'hermes-kms: zero-copy Hermes virtual displays and independent DRM devices'
   'kscreen: KDE Plasma Wayland virtual-display activation'
+  'libva-mesa-driver: AMD GPU encoding support'
+  'seatd: private seat brokers for experimental independent client sessions'
+  'weston: experimental independent desktop client sessions'
   'wl-clipboard: Hermes text clipboard synchronization on Wayland'
   'xclip: Hermes text clipboard synchronization on X11'
-  'libva-mesa-driver: AMD GPU encoding support'
 )
 
 # The Arch package was originally published as `hermes`, but that name belongs

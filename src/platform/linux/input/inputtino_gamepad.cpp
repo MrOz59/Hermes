@@ -26,23 +26,27 @@ namespace platf::gamepad {
     GAMEPAD_STATUS  ///< Helper to indicate the number of status
   };
 
-  auto create_xbox_one() {
+  auto create_xbox_one(const std::string &session_tag) {
     return inputtino::XboxOneJoypad::create({.name = "Sunshine X-Box One (virtual) pad",
                                              // https://github.com/torvalds/linux/blob/master/drivers/input/joystick/xpad.c#L147
                                              .vendor_id = 0x045E,
                                              .product_id = 0x02EA,
-                                             .version = 0x0408});
+                                             .version = 0x0408,
+                                             .device_phys = session_tag,
+                                             .device_uniq = session_tag});
   }
 
-  auto create_switch() {
+  auto create_switch(const std::string &session_tag) {
     return inputtino::SwitchJoypad::create({.name = "Sunshine Nintendo (virtual) pad",
                                             // https://github.com/torvalds/linux/blob/master/drivers/hid/hid-ids.h#L981
                                             .vendor_id = 0x057e,
                                             .product_id = 0x2009,
-                                            .version = 0x8111});
+                                            .version = 0x8111,
+                                            .device_phys = session_tag,
+                                            .device_uniq = session_tag});
   }
 
-  auto create_ds5(int globalIndex) {
+  auto create_ds5(int globalIndex, const std::string &session_tag) {
     std::string device_mac = "";  // Inputtino checks empty() to generate a random MAC
 
     if (!config::input.ds5_inputtino_randomize_mac && globalIndex >= 0 && globalIndex <= 255) {
@@ -50,7 +54,14 @@ namespace platf::gamepad {
       device_mac = std::format("02:00:00:00:00:{:02x}", globalIndex);
     }
 
-    return inputtino::PS5Joypad::create({.name = "Sunshine PS5 (virtual) pad", .vendor_id = 0x054C, .product_id = 0x0CE6, .version = 0x8111, .device_phys = device_mac, .device_uniq = device_mac});
+    return inputtino::PS5Joypad::create({
+      .name = "Sunshine PS5 (virtual) pad",
+      .vendor_id = 0x054C,
+      .product_id = 0x0CE6,
+      .version = 0x8111,
+      .device_phys = session_tag.empty() ? device_mac : session_tag,
+      .device_uniq = device_mac
+    });
   }
 
   int alloc(input_raw_t *raw, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
@@ -119,7 +130,7 @@ namespace platf::gamepad {
     switch (selectedGamepadType) {
       case XboxOneWired:
         {
-          auto xOne = create_xbox_one();
+          auto xOne = create_xbox_one(raw->session_tag);
           if (xOne) {
             (*xOne).set_on_rumble(on_rumble_fn);
             gamepad->joypad = std::make_unique<joypads_t>(std::move(*xOne));
@@ -132,7 +143,7 @@ namespace platf::gamepad {
         }
       case SwitchProWired:
         {
-          auto switchPro = create_switch();
+          auto switchPro = create_switch(raw->session_tag);
           if (switchPro) {
             (*switchPro).set_on_rumble(on_rumble_fn);
             gamepad->joypad = std::make_unique<joypads_t>(std::move(*switchPro));
@@ -145,7 +156,7 @@ namespace platf::gamepad {
         }
       case DualSenseWired:
         {
-          auto ds5 = create_ds5(id.globalIndex);
+          auto ds5 = create_ds5(id.globalIndex, raw->session_tag);
           if (ds5) {
             (*ds5).set_on_rumble(on_rumble_fn);
             (*ds5).set_on_led([feedback_queue, idx = id.clientRelativeIndex, gamepad](int r, int g, int b) {
@@ -274,9 +285,9 @@ namespace platf::gamepad {
       return gps;
     }
 
-    auto ds5 = create_ds5(-1);  // Index -1 will result in a random MAC virtual device, which is fine for probing
-    auto switchPro = create_switch();
-    auto xOne = create_xbox_one();
+    auto ds5 = create_ds5(-1, {});  // Index -1 will result in a random MAC virtual device, which is fine for probing
+    auto switchPro = create_switch({});
+    auto xOne = create_xbox_one({});
 
     static std::vector gps {
       supported_gamepad_t {"auto", true, ""},

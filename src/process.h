@@ -96,6 +96,10 @@ namespace proc {
     bool per_client_app_identity;
     bool allow_client_commands;
     bool terminate_on_pause;
+    // auto: desktop when cmd is empty, application otherwise.
+    // shared: legacy marker; rejected while isolation is enabled.
+    // application/desktop: force the corresponding isolated profile.
+    std::string session_type;
     int  scale_factor;
     std::chrono::seconds exit_timeout;
   };
@@ -122,6 +126,54 @@ namespace proc {
     void launch_input_only();
 
     int execute(const ctx_t& _app, std::shared_ptr<rtsp_stream::launch_session_t> launch_session);
+
+    /**
+     * Allocate and activate one experimental Hermes-KMS output for a streaming
+     * session. Used for additional clients after the app is already running.
+     * @param apply_scale Whether to apply the current app/client scale policy.
+     * @return 0 on success, or an HTTP-compatible error code.
+     */
+    int prepare_session_virtual_display(
+      std::shared_ptr<rtsp_stream::launch_session_t> launch_session,
+      bool apply_scale = true,
+      const ctx_t *session_app = nullptr
+    );
+
+    /**
+     * Start an experimental compositor/app runtime bound to one independent
+     * Hermes-KMS DRM card. This does not start another Hermes server.
+     */
+    int execute_isolated(
+      const ctx_t &app,
+      std::shared_ptr<rtsp_stream::launch_session_t> launch_session
+    );
+
+    /** Stop only the runtime owned by a streaming launch session. */
+    void terminate_isolated(uint32_t launch_session_id);
+
+    /** Apply the app's terminate-on-pause policy after a stream disconnects. */
+    void disconnect_isolated(uint32_t launch_session_id);
+
+    /** Stop the isolated runtime associated with a paired client. */
+    void terminate_isolated_client(const std::string &client_uuid);
+
+    /** Stop every experimental isolated runtime. */
+    void terminate_all_isolated();
+
+    /** Return the app exposed to a particular client in isolated mode. */
+    int running_for_client(const std::string &client_uuid);
+    std::string running_app_uuid_for_client(const std::string &client_uuid);
+
+    /** True while either the legacy global app or an isolated runtime lives. */
+    bool any_running();
+
+    /** Copy the environment belonging to an isolated runtime, or the base env. */
+    boost::process::v1::environment get_session_env(uint32_t launch_session_id);
+
+    /** Reattach launch metadata to a still-running client runtime. */
+    bool prepare_isolated_resume(
+      std::shared_ptr<rtsp_stream::launch_session_t> launch_session
+    );
 
     /**
      * @return `_app_id` if a process is running, otherwise returns `0`

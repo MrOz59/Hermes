@@ -49,7 +49,9 @@ namespace VDISPLAY {
 
   struct EvdiVirtualDisplayStatus {
     std::string name;
+    std::string client_name;
     int device_index;
+    int output_index;  ///< 0-based Hermes-KMS output, or -1 for EVDI.
     int drm_card_index;
     uint32_t width;
     uint32_t height;
@@ -83,6 +85,14 @@ namespace VDISPLAY {
     int card_index;  ///< DRM card index of the Hermes-KMS device, or -1.
     uint32_t uapi_version;  ///< UAPI version reported by the device, or 0.
     uint32_t required_uapi_version;  ///< Minimum UAPI version Hermes needs.
+    bool experimental_multi_output_enabled;
+    bool multi_output_capable;
+    bool experimental_isolated_sessions_enabled;
+    bool multi_device_capable;
+    uint32_t device_count;
+    uint32_t output_count;
+    uint32_t private_seat_broker_count;
+    std::vector<uint32_t> missing_private_seat_brokers;
     std::string driver_version;  ///< "major.minor.patch" from the device, if present.
     std::string running_kernel;
     std::vector<std::string> dkms_kernels;
@@ -116,6 +126,8 @@ namespace VDISPLAY {
    */
   struct HermesKmsMetrics {
     bool available = false;
+    int output_index = -1;  ///< 0-based output selected for this snapshot.
+    std::string output_name;
     uint64_t frame_sequence = 0;  ///< Latest frame sequence number.
     uint64_t frame_update_count = 0;  ///< Total framebuffer updates seen.
     uint64_t acquire_count = 0;  ///< ACQUIRE_FRAME ioctls served.
@@ -303,6 +315,12 @@ namespace VDISPLAY {
   /** Get the DRM card index for a Hermes-KMS display. */
   int getHermesKmsCardIndex(const std::string &displayName);
 
+  /** Get the primary DRM node path assigned to a Hermes-KMS display. */
+  std::string getHermesKmsDevicePath(const std::string &displayName);
+
+  /** Get the stable udev/libseat name assigned to an independent DRM card. */
+  std::string getHermesKmsSeatName(const std::string &displayName);
+
   /**
    * CPU-side BGRA buffer filled directly by libevdi. EVDI is a virtual DRM
    * device rather than a render GPU, so this avoids sending its card through
@@ -366,6 +384,14 @@ namespace VDISPLAY {
    * @return a render-node fd >= 0 on success, or -1 on failure.
    */
   int hermesKmsOpenCapture(const std::string &display_name);
+
+  /**
+   * Resolve the compositor position of a Hermes-KMS output for absolute input.
+   * Returns false when the desktop integration cannot expose a geometry.
+   */
+  bool getHermesKmsDisplayGeometry(const std::string &display_name,
+                                   int &offset_x, int &offset_y,
+                                   int &environment_width, int &environment_height);
 
   /** Query the active scanout geometry. @return true on success. */
   bool hermesKmsCaptureSize(int render_fd, int &width, int &height);

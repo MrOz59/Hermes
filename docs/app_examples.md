@@ -318,6 +318,28 @@ third-party tool, you can use *QRes* as an example.
 
 ### Additional Considerations
 
+#### Experimental independent Linux sessions
+
+When `hermes_kms_isolated_sessions` is enabled, each application can select a
+`session-type` in the Web UI or `apps.json`:
+
+- `auto` (default): use `application` when `cmd` is present, otherwise
+  `desktop`;
+- `application`: start only the configured application inside a DRM Gamescope
+  session, without a desktop panel;
+- `desktop`: start a Weston desktop session with its shell, panel, and Xwayland;
+  when `cmd` is set, Hermes launches it after the desktop socket and scanout
+  are ready and keeps it in that session's process group.
+
+The `desktop` profile is currently a reference Weston desktop, not a complete
+Plasma session. To use the shared host session, disable
+`hermes_kms_isolated_sessions`; mixing shared and isolated app profiles in one
+server is intentionally rejected by this prototype. These values have no
+effect while independent client sessions are disabled. Before launching, start
+one packaged `hermes-kms-seatd@N.service` for every configured Hermes-KMS
+device; Hermes assigns the corresponding private broker socket to the
+compositor automatically.
+
 #### Linux (Flatpak)
 
 > [!CAUTION]

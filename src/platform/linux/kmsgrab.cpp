@@ -1684,6 +1684,30 @@ namespace platf {
         img_offset_y = 0;
         env_width = w;
         env_height = h;
+        if (config::video.hermes_kms_multi_output &&
+            !config::video.hermes_kms_isolated_sessions) {
+          int desktop_x = 0;
+          int desktop_y = 0;
+          int desktop_width = w;
+          int desktop_height = h;
+          if (VDISPLAY::getHermesKmsDisplayGeometry(
+                display_name,
+                desktop_x,
+                desktop_y,
+                desktop_width,
+                desktop_height)) {
+            offset_x = desktop_x;
+            offset_y = desktop_y;
+            env_width = desktop_width;
+            env_height = desktop_height;
+            BOOST_LOG(info) << "Hermes-KMS input geometry for ["sv << display_name << "]: "
+                            << offset_x << ',' << offset_y << " in "
+                            << env_width << 'x' << env_height;
+          } else {
+            BOOST_LOG(warning) << "Could not resolve compositor geometry for ["sv << display_name
+                               << "]; absolute input will use output-local coordinates."sv;
+          }
+        }
 
         // The Hermes render node only exports DMA-BUFs; it is not a render GPU,
         // so VAAPI must run on a real GPU (e.g. amdgpu/renderD128). Find the

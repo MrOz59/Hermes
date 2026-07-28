@@ -21,8 +21,8 @@ using namespace std::literals;
 
 namespace platf {
 
-  input_t input() {
-    return {new input_raw_t()};
+  input_t input(const std::string &session_tag) {
+    return {new input_raw_t(session_tag)};
   }
 
   std::unique_ptr<client_input_t> allocate_client_input_context(input_t &input) {

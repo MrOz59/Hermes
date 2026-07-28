@@ -499,6 +499,8 @@ namespace config {
     {},  // adapter_name
     {},  // output_name
     "evdi"s,  // virtual_display_backend
+    false,  // hermes_kms_multi_output
+    false,  // hermes_kms_isolated_sessions
     "auto"s,  // gamescope_backend
 
     {
@@ -1195,6 +1197,13 @@ namespace config {
     string_f(vars, "adapter_name", video.adapter_name);
     string_f(vars, "output_name", video.output_name);
     string_restricted_f(vars, "virtual_display_backend", video.virtual_display_backend, {"evdi"sv, "hermes_kms"sv});
+    bool_f(vars, "hermes_kms_multi_output", video.hermes_kms_multi_output);
+    bool_f(vars, "hermes_kms_isolated_sessions", video.hermes_kms_isolated_sessions);
+    if (video.hermes_kms_multi_output && video.hermes_kms_isolated_sessions) {
+      BOOST_LOG(warning) << "hermes_kms_isolated_sessions supersedes "
+                            "hermes_kms_multi_output; shared-desktop output "
+                            "management will remain disabled.";
+    }
     string_restricted_f(vars, "gamescope_backend", video.gamescope_backend, {"auto"sv, "wayland"sv, "sdl"sv, "drm"sv});
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);

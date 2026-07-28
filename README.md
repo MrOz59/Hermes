@@ -85,6 +85,57 @@ imports and encodes. On Linux/KDE Wayland this depends on:
 - a real GPU render node (e.g. amdgpu) for VAAPI encoding;
 - a session where the Hermes process can access the user compositor environment.
 
+The unreleased branch has two distinct opt-in experiments:
+
+- `hermes_kms_multi_output = true` gives simultaneous clients separate outputs
+  and capture pipelines, but those outputs still belong to the same host
+  desktop/compositor session. It requires Hermes-KMS UAPI 8 or newer, loaded
+  with enough outputs:
+
+```bash
+sudo modprobe hermes_kms initial_enabled=0 outputs=2
+```
+
+- `hermes_kms_isolated_sessions = true` is the new independent-session
+  prototype. One Hermes server starts a separate compositor, application
+  process tree, capture path, and tagged virtual input set for each client.
+  Application profiles run directly in a DRM Gamescope session; desktop
+  profiles run Weston with its desktop shell and panel. It requires the
+  development Hermes-KMS UAPI 9 driver with one independent DRM card per
+  client:
+
+```bash
+sudo modprobe hermes_kms initial_enabled=0 devices=2 outputs=1
+```
+
+The isolated prototype also requires the driver's session-seat udev rule,
+`gamescope`, `weston`, and one private seat broker per device. For the
+two-device example, install `seatd`, add the Hermes user to the `seat` group,
+and start:
+
+```bash
+sudo systemctl enable --now hermes-kms-seatd@1.service hermes-kms-seatd@2.service
+```
+
+Hermes selects `/run/hermes-kms-seatd/N/seatd.sock` for device `N`; it will
+reject an isolated launch with an actionable log message if that broker is not
+available. The brokers are experimental process/session plumbing, not a
+security boundary for mutually untrusted local users. Per-session audio, a
+full Plasma desktop, and real concurrent Moonlight clients have not been
+validated yet. Both experiments default to off; the existing single-output
+path remains the default. If both experimental flags are present,
+`hermes_kms_isolated_sessions` takes precedence and shared-desktop
+multi-output management stays inactive.
+
+The input-only/Remote Input application is intentionally unavailable in this
+mode because it has no compositor session that identifies which private seat
+should receive its events.
+
+The repository includes `scripts/vm-isolated-input-test.sh`, which uses a
+disposable virtme-ng guest to create two real uinput keyboards and verify that
+the packaged udev rules assign them to `hermes-kms-1` and `hermes-kms-2`
+without modifying host rules.
+
 #### Installing the Hermes-KMS driver
 
 Hermes-KMS is an out-of-tree kernel module distributed via DKMS, so it rebuilds

@@ -57,7 +57,11 @@ makedepends=(
 
 optdepends=(
   'evdi: Virtual display support for streaming to headless clients'
+  'gamescope: application-only experimental independent client sessions'
+  'hermes-kms: zero-copy Hermes virtual displays and independent DRM devices'
   'libva-mesa-driver: AMD GPU encoding support'
+  'seatd: private seat brokers for experimental independent client sessions'
+  'weston: experimental independent desktop client sessions'
 )
 
 provides=()

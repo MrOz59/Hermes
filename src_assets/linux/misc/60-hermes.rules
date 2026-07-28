@@ -9,3 +9,17 @@ KERNEL=="hidraw*", ATTRS{name}=="Sunshine PS5 (virtual) pad", GROUP="input", MOD
 SUBSYSTEMS=="input", ATTRS{name}=="Sunshine X-Box One (virtual) pad", GROUP="input", MODE="0660", TAG+="uaccess"
 SUBSYSTEMS=="input", ATTRS{name}=="Sunshine gamepad (virtual) motion sensors", GROUP="input", MODE="0660", TAG+="uaccess"
 SUBSYSTEMS=="input", ATTRS{name}=="Sunshine Nintendo (virtual) pad", GROUP="input", MODE="0660", TAG+="uaccess"
+
+# Experimental isolated sessions stamp the independent DRM seat
+# (hermes-kms-N) into the uinput phys field. Assign those devices to the
+# matching compositor seat so one client's keyboard/mouse/touch devices do not
+# enter another desktop. Explicit rules avoid relying on unsupported dynamic
+# ATTRS substitution.
+SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-1", ENV{ID_SEAT}="hermes-kms-1", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-2", ENV{ID_SEAT}="hermes-kms-2", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-3", ENV{ID_SEAT}="hermes-kms-3", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-4", ENV{ID_SEAT}="hermes-kms-4", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-5", ENV{ID_SEAT}="hermes-kms-5", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-6", ENV{ID_SEAT}="hermes-kms-6", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-7", ENV{ID_SEAT}="hermes-kms-7", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-8", ENV{ID_SEAT}="hermes-kms-8", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"

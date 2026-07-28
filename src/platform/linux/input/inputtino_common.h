@@ -28,18 +28,23 @@ namespace platf {
   };
 
   struct input_raw_t {
-    input_raw_t():
+    explicit input_raw_t(std::string session_tag = {}):
+        session_tag(std::move(session_tag)),
         mouse(inputtino::Mouse::create({
-          .name = "Mouse passthrough",
+          .name = this->session_tag.empty() ? "Mouse passthrough" : "Hermes Session Mouse",
           .vendor_id = 0xBEEF,
           .product_id = 0xDEAD,
           .version = 0x111,
+          .device_phys = this->session_tag,
+          .device_uniq = this->session_tag,
         })),
         keyboard(inputtino::Keyboard::create({
-          .name = "Keyboard passthrough",
+          .name = this->session_tag.empty() ? "Keyboard passthrough" : "Hermes Session Keyboard",
           .vendor_id = 0xBEEF,
           .product_id = 0xDEAD,
           .version = 0x111,
+          .device_phys = this->session_tag,
+          .device_uniq = this->session_tag,
         })),
         gamepads(MAX_GAMEPADS) {
       if (!mouse) {
@@ -51,6 +56,8 @@ namespace platf {
     }
 
     ~input_raw_t() = default;
+
+    std::string session_tag;
 
     // All devices are wrapped in Result because it might be that we aren't able to create them (ex: udev permission denied)
     inputtino::Result<inputtino::Mouse> mouse;
@@ -65,19 +72,23 @@ namespace platf {
 
   struct client_input_raw_t: public client_input_t {
     client_input_raw_t(input_t &input):
+        global((input_raw_t *) input.get()),
         touch(inputtino::TouchScreen::create({
-          .name = "Touch passthrough",
+          .name = global->session_tag.empty() ? "Touch passthrough" : "Hermes Session Touch",
           .vendor_id = 0xBEEF,
           .product_id = 0xDEAD,
           .version = 0x111,
+          .device_phys = global->session_tag,
+          .device_uniq = global->session_tag,
         })),
         pen(inputtino::PenTablet::create({
-          .name = "Pen passthrough",
+          .name = global->session_tag.empty() ? "Pen passthrough" : "Hermes Session Pen",
           .vendor_id = 0xBEEF,
           .product_id = 0xDEAD,
           .version = 0x111,
+          .device_phys = global->session_tag,
+          .device_uniq = global->session_tag,
         })) {
-      global = (input_raw_t *) input.get();
       if (!touch) {
         BOOST_LOG(warning) << "Unable to create virtual touch screen: " << touch.getErrorMessage();
       }

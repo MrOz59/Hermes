@@ -10,6 +10,7 @@
 
 // local includes
 #include "input.h"
+#include "pipeline_metrics.h"
 #include "platform/common.h"
 #include "thread_safe.h"
 #include "video_colorspace.h"
@@ -50,7 +51,7 @@ namespace video {
 
     int enableIntraRefresh;  // 0 - disabled, 1 - enabled
 
-    int encodingFramerate; // Requested display framerate
+    int encodingFramerate;  // Requested display framerate
     bool input_only;
     // Experimental Hermes-KMS multi-output: an empty value preserves the
     // legacy process-wide capture selection.
@@ -210,18 +211,6 @@ namespace video {
     uint32_t flags;
   };
 
-  struct encode_session_t {
-    virtual ~encode_session_t() = default;
-
-    virtual int convert(platf::img_t &img) = 0;
-
-    virtual void request_idr_frame() = 0;
-
-    virtual void request_normal_frame() = 0;
-
-    virtual void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) = 0;
-  };
-
   // encoders
   extern encoder_t software;
 
@@ -268,7 +257,13 @@ namespace video {
     std::vector<replace_t> *replacements = nullptr;
     void *channel_data = nullptr;
     bool after_ref_frame_invalidation = false;
+    // Monotonic per-frame timeline. frame_timestamp is capture time; the
+    // remaining fields are filled as the frame crosses encode and transport.
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
+    std::optional<std::chrono::steady_clock::time_point> encoded_timestamp;
+    std::optional<std::chrono::steady_clock::time_point> packetized_timestamp;
+    std::optional<std::chrono::steady_clock::time_point> first_sent_timestamp;
+    std::optional<std::chrono::steady_clock::time_point> last_sent_timestamp;
   };
 
   struct packet_raw_avcodec: packet_raw_t {
@@ -328,6 +323,39 @@ namespace video {
   };
 
   using packet_t = std::unique_ptr<packet_raw_t>;
+
+  /**
+   * @brief Insert an encoded access unit and account for bounded-queue loss.
+   */
+  void enqueue_video_packet(
+    safe::mail_raw_t::queue_t<packet_t> &packets,
+    packet_t packet
+  );
+
+  /**
+   * @brief Per-stream encoder session and hot-path ABI.
+   */
+  struct encode_session_t {
+    virtual ~encode_session_t() = default;
+
+    virtual int convert(platf::img_t &img) = 0;
+
+    virtual int encode_frame(
+      int64_t frame_number,
+      safe::mail_raw_t::queue_t<packet_t> &packets,
+      void *channel_data,
+      std::optional<std::chrono::steady_clock::time_point> frame_timestamp
+    ) = 0;
+
+    virtual void request_idr_frame() = 0;
+
+    virtual void request_normal_frame() = 0;
+
+    virtual void invalidate_ref_frames(
+      int64_t first_frame,
+      int64_t last_frame
+    ) = 0;
+  };
 
   struct hdr_info_raw_t {
     explicit hdr_info_raw_t(bool enabled):
@@ -404,37 +432,54 @@ namespace video {
   encoder_status_t get_encoder_status();
 
   /**
-   * @brief Live per-frame pipeline metrics, for diagnostics/metrics.
-   *
-   * Rolling averages over a short window so users (and the web UI) can see where
-   * time goes instead of only an overall FPS number. Updated from the encode
-   * loop; read by the diagnostics endpoint. Zero/`valid=false` until frames flow.
-   */
-  struct pipeline_metrics_t {
-    bool valid = false;  ///< At least one frame has been measured.
-    double encode_ms = 0.0;  ///< Avg time spent in the encoder per frame.
-    double capture_to_encode_ms = 0.0;  ///< Avg latency from capture to encode start.
-    double fps = 0.0;  ///< Measured frames encoded per second.
-    double bitrate_kbps = 0.0;  ///< Measured output bitrate (kilobits/s).
-    uint64_t frames_encoded = 0;  ///< Total frames encoded this session.
-    uint64_t frames_dropped = 0;  ///< Total frames dropped (encoder errors/timeouts).
-    int width = 0;  ///< Active stream width in pixels (0 until a session sets it).
-    int height = 0;  ///< Active stream height in pixels (0 until a session sets it).
-  };
-
-  /**
    * @brief Record one encoded frame's timings and output size.
    * @param encode_ms Time spent in the encoder for this frame.
    * @param capture_to_encode_ms Latency from capture to encode start.
    * @param packet_bytes Encoded packet size, for the measured bitrate.
    */
-  void metrics_record_frame(double encode_ms, double capture_to_encode_ms, size_t packet_bytes);
+  void metrics_record_frame(
+    void *session,
+    double encode_ms,
+    double capture_to_encode_ms,
+    size_t packet_bytes
+  );
 
-  /** @brief Record one dropped frame (encoder error/timeout). */
-  void metrics_record_drop();
+  /**
+   * @brief Record the completed host-side network path for one encoded frame.
+   *
+   * All durations are monotonic milliseconds. Shard counts describe original
+   * data versus Reed-Solomon repair shards produced for the frame.
+   */
+  void metrics_record_network_frame(
+    void *session,
+    double send_queue_ms,
+    double packetization_ms,
+    double fec_ms,
+    double pacer_ms,
+    double send_ms,
+    double capture_to_last_send_ms,
+    size_t wire_bytes,
+    uint64_t data_shards,
+    uint64_t fec_shards
+  );
 
-  /** @brief Reset pipeline metrics at the start of a streaming session. */
-  void metrics_reset();
+  /** @brief Record one or more dropped frames with their pipeline stage. */
+  void metrics_record_drop(
+    void *session,
+    pipeline_drop_reason_e reason = pipeline_drop_reason_e::encode,
+    uint64_t count = 1
+  );
+
+  /** @brief Record an accepted or rate-limited IDR request attempt. */
+  void metrics_record_idr_request(
+    void *session,
+    bool accepted,
+    uint64_t count = 1
+  );
+
+  /** @brief Register/remove a bounded collector with the RTSP session lifecycle. */
+  bool metrics_register_session(void *session);
+  void metrics_unregister_session(void *session);
 
   /**
    * @brief Record the active stream resolution for diagnostics.
@@ -445,8 +490,14 @@ namespace video {
    * @param width Active stream width in pixels.
    * @param height Active stream height in pixels.
    */
-  void metrics_set_resolution(int width, int height);
+  void metrics_set_resolution(void *session, int width, int height);
 
-  /** @brief Snapshot of the live pipeline metrics (thread-safe copy). */
+  /** @brief Aggregate snapshot for the authenticated administrative UI. */
   pipeline_metrics_t get_pipeline_metrics();
+
+  /** @brief Snapshot for exactly one active streaming session. */
+  std::optional<pipeline_metrics_t> get_pipeline_metrics(void *session);
+
+  /** @brief Process-lifetime diagnostics for capture/session context queues. */
+  pipeline_queue_metrics_t get_pipeline_queue_metrics();
 }  // namespace video

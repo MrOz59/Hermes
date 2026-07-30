@@ -19,15 +19,20 @@ extern "C" {
 }
 
 // local includes
-#include "process.h"
+#include "capture_backend.h"
 #include "cbs.h"
 #include "config.h"
 #include "display_device.h"
+#include "encoder_backend.h"
+#include "frame_queue_policy.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
+#include "media_priority.h"
 #include "nvenc/nvenc_base.h"
 #include "platform/common.h"
+#include "process.h"
+#include "session_telemetry.h"
 #include "sync.h"
 #include "video.h"
 
@@ -56,13 +61,13 @@ namespace video {
     // }
 
     if (devices.empty()) {
-      #ifdef _WIN32
+#ifdef _WIN32
       // We'll create a temporary virtual display for probing anyways.
       if (proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
         return false;
       }
-      #endif
-        return true;
+#endif
+      return true;
     }
 
     // Since Windows 11 24H2, it is possible that there will be no active devices present
@@ -328,8 +333,7 @@ namespace video {
       // Some hardware encoders cannot be flushed safely before accepting
       // their first frame. This can happen when importing the first captured
       // DMA-BUF fails and the pipeline immediately tears the session down.
-      if (frame_submitted && avcodec_ctx &&
-          avcodec_send_frame(avcodec_ctx.get(), nullptr) == 0) {
+      if (frame_submitted && avcodec_ctx && avcodec_send_frame(avcodec_ctx.get(), nullptr) == 0) {
         packet_raw_avcodec pkt;
         while (avcodec_receive_packet(avcodec_ctx.get(), pkt.av_packet) == 0);
       }
@@ -360,6 +364,13 @@ namespace video {
       }
       return device->convert(img);
     }
+
+    int encode_frame(
+      int64_t frame_number,
+      safe::mail_raw_t::queue_t<packet_t> &packets,
+      void *channel_data,
+      std::optional<std::chrono::steady_clock::time_point> frame_timestamp
+    ) override;
 
     void request_idr_frame() override {
       if (device && device->frame) {
@@ -408,6 +419,13 @@ namespace video {
       return device->convert(img);
     }
 
+    int encode_frame(
+      int64_t frame_number,
+      safe::mail_raw_t::queue_t<packet_t> &packets,
+      void *channel_data,
+      std::optional<std::chrono::steady_clock::time_point> frame_timestamp
+    ) override;
+
     void request_idr_frame() override {
       force_idr = true;
     }
@@ -441,6 +459,132 @@ namespace video {
     bool force_idr = false;
   };
 
+  /**
+   * @brief Fixed-size registry that reads live depth/overflow stats from queues.
+   *
+   * Lock ordering: this registry's mutex is always acquired before a queue's
+   * own lock (taken inside safe::queue_t::stats()), and never the other way
+   * around -- queue operations must not call back into the registry, or the two
+   * orders would deadlock. Retired queues fold their totals into the counters
+   * here so process-lifetime numbers survive session teardown.
+   */
+  class queue_metrics_registry_t {
+  public:
+    static constexpr std::size_t max_sources = pipeline_metrics_registry_t::max_sessions * 2;
+
+    template<class T>
+    bool register_queue(const safe::queue_t<T> *queue) {
+      std::lock_guard lg {mutex_};
+      auto slot = std::find_if(sources_.begin(), sources_.end(), [](const source_t &candidate) {
+        return candidate.queue == nullptr;
+      });
+      if (slot == sources_.end()) {
+        return false;
+      }
+
+      slot->queue = queue;
+      slot->read = [](const void *source) {
+        return static_cast<const safe::queue_t<T> *>(source)->stats();
+      };
+      return true;
+    }
+
+    void unregister_queue(const void *queue) {
+      std::lock_guard lg {mutex_};
+      auto slot = std::find_if(sources_.begin(), sources_.end(), [&](const source_t &candidate) {
+        return candidate.queue == queue;
+      });
+      if (slot == sources_.end()) {
+        return;
+      }
+
+      const auto stats = slot->read(slot->queue);
+      retired_overflow_events_ += stats.overflow_events;
+      retired_dropped_elements_ += stats.dropped_elements;
+      lifetime_high_watermark_ = std::max<uint64_t>(
+        lifetime_high_watermark_,
+        stats.high_watermark
+      );
+      *slot = {};
+    }
+
+    [[nodiscard]] pipeline_queue_metrics_t::queue_t snapshot() const {
+      std::lock_guard lg {mutex_};
+      pipeline_queue_metrics_t::queue_t result {
+        .overflow_events = retired_overflow_events_,
+        .dropped_elements = retired_dropped_elements_,
+      };
+
+      for (const auto &source : sources_) {
+        if (!source.queue) {
+          continue;
+        }
+
+        const auto stats = source.read(source.queue);
+        ++result.active_instances;
+        result.depth += stats.depth;
+        result.capacity += stats.capacity;
+        result.high_watermark = std::max<uint64_t>(
+          result.high_watermark,
+          stats.high_watermark
+        );
+        result.overflow_events += stats.overflow_events;
+        result.dropped_elements += stats.dropped_elements;
+      }
+
+      result.high_watermark = std::max(
+        result.high_watermark,
+        lifetime_high_watermark_
+      );
+      return result;
+    }
+
+  private:
+    struct source_t {
+      const void *queue = nullptr;
+      safe::queue_stats_t (*read)(const void *) = nullptr;
+    };
+
+    mutable std::mutex mutex_;
+    std::array<source_t, max_sources> sources_ {};
+    uint64_t retired_overflow_events_ = 0;
+    uint64_t retired_dropped_elements_ = 0;
+    uint64_t lifetime_high_watermark_ = 0;
+  };
+
+  template<class T>
+  class monitored_queue_t: public safe::queue_t<T> {
+  public:
+    monitored_queue_t(std::uint32_t max_elements, queue_metrics_registry_t &registry):
+        safe::queue_t<T> {max_elements},
+        registry_ {registry} {
+      registered_ = registry_.register_queue(
+        static_cast<const safe::queue_t<T> *>(this)
+      );
+      if (!registered_) {
+        BOOST_LOG(error) << "Video queue diagnostics exhausted fixed source slots"sv;
+      }
+    }
+
+    ~monitored_queue_t() {
+      if (registered_) {
+        registry_.unregister_queue(
+          static_cast<const safe::queue_t<T> *>(this)
+        );
+      }
+    }
+
+    monitored_queue_t(const monitored_queue_t &) = delete;
+    monitored_queue_t &operator=(const monitored_queue_t &) = delete;
+
+  private:
+    queue_metrics_registry_t &registry_;
+    bool registered_ = false;
+  };
+
+  static queue_metrics_registry_t capture_context_queue_metrics;
+  static queue_metrics_registry_t encode_session_context_queue_metrics;
+
   struct sync_session_ctx_t {
     safe::signal_t *join_event;
     safe::mail_raw_t::event_t<bool> shutdown_event;
@@ -459,25 +603,35 @@ namespace video {
     std::unique_ptr<encode_session_t> session;
   };
 
-  using encode_session_ctx_queue_t = safe::queue_t<sync_session_ctx_t>;
+  using encode_session_ctx_queue_t = monitored_queue_t<sync_session_ctx_t>;
   using encode_e = platf::capture_e;
 
   struct capture_ctx_t {
     img_event_t images;
     config_t config;
+    void *channel_data;
   };
 
+  using capture_ctx_queue_t = monitored_queue_t<capture_ctx_t>;
+
   struct capture_thread_async_ctx_t {
-    std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue;
+    std::shared_ptr<capture_ctx_queue_t> capture_ctx_queue;
     std::thread capture_thread;
 
     safe::signal_t reinit_event;
     const encoder_t *encoder_p;
     sync_util::sync_t<std::weak_ptr<platf::display_t>> display_wp;
+    std::unique_ptr<capture_backend::ICaptureBackend> capture_backend;
+    std::unique_ptr<encoder_backend::IEncoderBackend> encoder_backend;
   };
 
   struct capture_thread_sync_ctx_t {
-    encode_session_ctx_queue_t encode_session_ctx_queue {30};
+    encode_session_ctx_queue_t encode_session_ctx_queue {
+      30,
+      encode_session_context_queue_metrics
+    };
+    std::unique_ptr<capture_backend::ICaptureBackend> capture_backend;
+    std::unique_ptr<encoder_backend::IEncoderBackend> encoder_backend;
   };
 
   int start_capture_sync(capture_thread_sync_ctx_t &ctx);
@@ -833,8 +987,12 @@ namespace video {
       {
         // SDR-specific options
         {"profile"s, [](const config_t &cfg) {
-           if (cfg.profile == 66) return "baseline"s;
-           if (cfg.profile == 77) return "main"s;
+           if (cfg.profile == 66) {
+             return "baseline"s;
+           }
+           if (cfg.profile == 77) {
+             return "main"s;
+           }
            return "high"s;
          }},
       },
@@ -1078,79 +1236,94 @@ namespace video {
     return encoder_status_state;
   }
 
-  // Live per-frame pipeline metrics. Accumulated over a window and averaged so
-  // the diagnostics endpoint can show where per-frame time goes.
-  static std::mutex pipeline_metrics_mutex;
-  struct pipeline_metrics_accum_t {
-    double encode_ms_sum = 0.0;
-    double capture_to_encode_ms_sum = 0.0;
-    uint64_t window_frames = 0;  ///< Frames in the current averaging window.
-    uint64_t window_bytes = 0;  ///< Encoded bytes in the current window.
-    uint64_t frames_encoded = 0;  ///< Total this session.
-    uint64_t frames_dropped = 0;
-    int width = 0;  ///< Active stream resolution, set at session start.
-    int height = 0;
-    std::chrono::steady_clock::time_point window_start = std::chrono::steady_clock::now();
-    pipeline_metrics_t published;  ///< Last computed averages.
+  // The legacy pipeline publishes typed local events through the H1 boundary.
+  // This default sink retains the bounded H0 collector and owns synchronization
+  // across RTSP, encoder, broadcaster, and diagnostics threads.
+  static bounded_session_telemetry_t bounded_session_telemetry;
+  static legacy_session_telemetry_adapter_t session_telemetry {
+    bounded_session_telemetry
   };
-  static pipeline_metrics_accum_t pipeline_metrics_state;
 
-  void metrics_record_frame(double encode_ms, double capture_to_encode_ms, size_t packet_bytes) {
-    std::lock_guard lg {pipeline_metrics_mutex};
-    auto &s = pipeline_metrics_state;
-    s.encode_ms_sum += encode_ms;
-    s.capture_to_encode_ms_sum += capture_to_encode_ms;
-    s.window_bytes += packet_bytes;
-    s.window_frames++;
-    s.frames_encoded++;
-
-    // Recompute the published averages roughly once per second.
-    const auto now = std::chrono::steady_clock::now();
-    const auto elapsed = std::chrono::duration<double>(now - s.window_start).count();
-    if (elapsed >= 1.0 && s.window_frames > 0) {
-      s.published.valid = true;
-      s.published.encode_ms = s.encode_ms_sum / s.window_frames;
-      s.published.capture_to_encode_ms = s.capture_to_encode_ms_sum / s.window_frames;
-      s.published.fps = s.window_frames / elapsed;
-      s.published.bitrate_kbps = (s.window_bytes * 8.0 / 1000.0) / elapsed;
-      s.published.frames_encoded = s.frames_encoded;
-      s.published.frames_dropped = s.frames_dropped;
-      s.published.width = s.width;
-      s.published.height = s.height;
-      s.encode_ms_sum = 0.0;
-      s.capture_to_encode_ms_sum = 0.0;
-      s.window_bytes = 0;
-      s.window_frames = 0;
-      s.window_start = now;
-    }
+  void metrics_record_frame(void *session, double encode_ms, double capture_to_encode_ms, size_t packet_bytes) {
+    session_telemetry.record_encoded_frame(
+      session,
+      encode_ms,
+      capture_to_encode_ms,
+      packet_bytes
+    );
   }
 
-  void metrics_record_drop() {
-    std::lock_guard lg {pipeline_metrics_mutex};
-    pipeline_metrics_state.frames_dropped++;
-    pipeline_metrics_state.published.frames_dropped = pipeline_metrics_state.frames_dropped;
+  void metrics_record_network_frame(
+    void *session,
+    double send_queue_ms,
+    double packetization_ms,
+    double fec_ms,
+    double pacer_ms,
+    double send_ms,
+    double capture_to_last_send_ms,
+    size_t wire_bytes,
+    uint64_t data_shards,
+    uint64_t fec_shards
+  ) {
+    session_telemetry.record_network_frame(
+      session,
+      send_queue_ms,
+      packetization_ms,
+      fec_ms,
+      pacer_ms,
+      send_ms,
+      capture_to_last_send_ms,
+      wire_bytes,
+      data_shards,
+      fec_shards
+    );
   }
 
-  void metrics_reset() {
-    std::lock_guard lg {pipeline_metrics_mutex};
-    pipeline_metrics_state = pipeline_metrics_accum_t {};
+  void metrics_record_drop(void *session, pipeline_drop_reason_e reason, uint64_t count) {
+    session_telemetry.record_frame_drop(session, reason, count);
   }
 
-  void metrics_set_resolution(int width, int height) {
-    std::lock_guard lg {pipeline_metrics_mutex};
-    auto &s = pipeline_metrics_state;
-    s.width = width;
-    s.height = height;
-    // Publish immediately so diagnostics can report the resolution even before
-    // the first averaging window completes.
-    s.published.width = width;
-    s.published.height = height;
+  void metrics_record_idr_request(
+    void *session,
+    bool accepted,
+    uint64_t count
+  ) {
+    session_telemetry.record_idr_request(
+      session,
+      accepted,
+      count
+    );
+  }
+
+  bool metrics_register_session(void *session) {
+    stream::queueing::encoded_frame_queue_policy().erase(session);
+    return session_telemetry.register_session(session);
+  }
+
+  void metrics_unregister_session(void *session) {
+    stream::queueing::encoded_frame_queue_policy().erase(session);
+    session_telemetry.unregister_session(session);
+  }
+
+  void metrics_set_resolution(void *session, int width, int height) {
+    session_telemetry.set_resolution(session, width, height);
   }
 
   pipeline_metrics_t get_pipeline_metrics() {
-    std::lock_guard lg {pipeline_metrics_mutex};
-    return pipeline_metrics_state.published;
+    return session_telemetry.aggregate_snapshot();
   }
+
+  std::optional<pipeline_metrics_t> get_pipeline_metrics(void *session) {
+    return session_telemetry.snapshot(session);
+  }
+
+  pipeline_queue_metrics_t get_pipeline_queue_metrics() {
+    return {
+      .capture_contexts = capture_context_queue_metrics.snapshot(),
+      .encode_session_contexts = encode_session_context_queue_metrics.snapshot(),
+    };
+  }
+
   bool last_encoder_probe_supported_ref_frames_invalidation = false;
   std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {
     true,
@@ -1158,11 +1331,17 @@ namespace video {
     true
   };
 
-  void reset_display(std::shared_ptr<platf::display_t> &disp, const platf::mem_type_e &type, const std::string &display_name, const config_t &config) {
+  void reset_display(
+    capture_backend::ICaptureBackend &capture_backend,
+    std::shared_ptr<platf::display_t> &disp,
+    const platf::mem_type_e &type,
+    const std::string &display_name,
+    const config_t &config
+  ) {
     // We try this twice, in case we still get an error on reinitialization
     for (int x = 0; x < 2; ++x) {
       disp.reset();
-      disp = platf::display(type, display_name, config);
+      disp = capture_backend.create_display(type, display_name, config);
       if (disp) {
         break;
       }
@@ -1179,9 +1358,15 @@ namespace video {
    * @param display_names The list of display names to repopulate.
    * @param current_display_index The current display index or -1 if not yet known.
    */
-  void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index, std::string &preferred_display_name) {
+  void refresh_displays(
+    capture_backend::ICaptureBackend &capture_backend,
+    platf::mem_type_e dev_type,
+    std::vector<std::string> &display_names,
+    int &current_display_index,
+    std::string &preferred_display_name
+  ) {
     // It is possible that the output name may be empty even if it wasn't before (device disconnected) or vice-versa
-    const auto output_name { display_device::map_output_name(config::video.output_name) };
+    const auto output_name {display_device::map_output_name(config::video.output_name)};
     std::string current_display_name = preferred_display_name;
 
     // If we have a current display index, let's start with that
@@ -1191,7 +1376,7 @@ namespace video {
 
     // Refresh the display names
     auto old_display_names = std::move(display_names);
-    display_names = platf::display_names(dev_type);
+    display_names = capture_backend.enumerate_displays(dev_type);
 
     // If we now have no displays, let's put the old display array back and fail
     if (display_names.empty() && !old_display_names.empty()) {
@@ -1230,16 +1415,28 @@ namespace video {
     }
   }
 
-  void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
+  void refresh_displays(
+    capture_backend::ICaptureBackend &capture_backend,
+    platf::mem_type_e dev_type,
+    std::vector<std::string> &display_names,
+    int &current_display_index
+  ) {
     static std::string empty_str = "";
-    refresh_displays(dev_type, display_names, current_display_index, empty_str);
+    refresh_displays(
+      capture_backend,
+      dev_type,
+      display_names,
+      current_display_index,
+      empty_str
+    );
   }
 
   void captureThread(
-    std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue,
+    std::shared_ptr<capture_ctx_queue_t> capture_ctx_queue,
     sync_util::sync_t<std::weak_ptr<platf::display_t>> &display_wp,
     safe::signal_t &reinit_event,
-    const encoder_t &encoder
+    const encoder_t &encoder,
+    capture_backend::ICaptureBackend &capture_backend
   ) {
     std::vector<capture_ctx_t> capture_ctxs;
 
@@ -1271,7 +1468,11 @@ namespace video {
     std::string capture_display_name =
       session_scoped_display ? capture_ctxs.front().config.display_name : proc::proc.display_name;
     if (!capture_display_name.empty()) {
-      disp = platf::display(encoder.platform_formats->dev_type, capture_display_name, capture_ctxs.front().config);
+      disp = capture_backend.create_display(
+        encoder.platform_formats->dev_type,
+        capture_display_name,
+        capture_ctxs.front().config
+      );
       if (!disp && session_scoped_display) {
         BOOST_LOG(error) << "Session-scoped capture display ["sv << capture_display_name
                          << "] is unavailable; refusing fallback to another monitor."sv;
@@ -1281,8 +1482,17 @@ namespace video {
     if (!disp) {
       // Get all the monitor names now, rather than at boot, to
       // get the most up-to-date list available monitors
-      refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
-      disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
+      refresh_displays(
+        capture_backend,
+        encoder.platform_formats->dev_type,
+        display_names,
+        display_p
+      );
+      disp = capture_backend.create_display(
+        encoder.platform_formats->dev_type,
+        display_names[display_p],
+        capture_ctxs.front().config
+      );
       if (disp) {
         capture_display_name = display_names[display_p];
         proc::proc.display_name = capture_display_name;
@@ -1405,7 +1615,13 @@ namespace video {
           }
 
           if (frame_captured) {
-            capture_ctx->images->raise(img);
+            const auto result = capture_ctx->images->raise(img);
+            if (result.replaced) {
+              metrics_record_drop(
+                capture_ctx->channel_data,
+                pipeline_drop_reason_e::capture_replaced
+              );
+            }
           }
 
           ++capture_ctx;
@@ -1476,7 +1692,13 @@ namespace video {
 
               // Refresh display names since a display removal might have caused the reinitialization
               if (!session_scoped_display) {
-                refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, proc::proc.display_name);
+                refresh_displays(
+                  capture_backend,
+                  encoder.platform_formats->dev_type,
+                  display_names,
+                  display_p,
+                  proc::proc.display_name
+                );
 
                 // Process any pending display switch with the new list of displays
                 if (switch_display_event->peek()) {
@@ -1486,7 +1708,13 @@ namespace video {
               }
 
               // reset_display() will sleep between retries
-              reset_display(disp, encoder.platform_formats->dev_type, capture_display_name, capture_ctxs.front().config);
+              reset_display(
+                capture_backend,
+                disp,
+                encoder.platform_formats->dev_type,
+                capture_display_name,
+                capture_ctxs.front().config
+              );
               if (disp) {
                 if (!session_scoped_display) {
                   proc::proc.display_name = capture_display_name;
@@ -1515,6 +1743,109 @@ namespace video {
     }
   }
 
+  void enqueue_video_packet(safe::mail_raw_t::queue_t<packet_t> &packets, packet_t packet) {
+    struct dropped_session_t {
+      void *channel_data = nullptr;
+      uint64_t count = 0;
+    };
+
+    std::array<dropped_session_t, pipeline_metrics_registry_t::max_sessions> dropped_sessions {};
+    const auto record_overflow = [&](packet_t &dropped_packet) {
+      if (!dropped_packet || !dropped_packet->channel_data) {
+        return;
+      }
+
+      stream::queueing::encoded_frame_queue_policy()
+        .mark_recovery_required(dropped_packet->channel_data);
+
+      auto session = std::find_if(
+        dropped_sessions.begin(),
+        dropped_sessions.end(),
+        [&](const dropped_session_t &candidate) {
+          return !candidate.channel_data ||
+                 candidate.channel_data == dropped_packet->channel_data;
+        }
+      );
+      if (session == dropped_sessions.end()) {
+        return;
+      }
+
+      if (!session->channel_data) {
+        session->channel_data = dropped_packet->channel_data;
+      }
+      ++session->count;
+    };
+
+    const auto incoming_session =
+      packet ? packet->channel_data : nullptr;
+    const auto incoming_priority =
+      stream::priority::video_frame_priority(
+        packet && packet->is_idr()
+      );
+    std::size_t superseded = 0;
+    std::size_t overflow_dropped = 0;
+
+    if (
+      stream::priority::precedes(
+        incoming_priority,
+        stream::priority::media_priority_e::video_normal
+      )
+    ) {
+      const auto result = packets->raise_prioritized_with_cleanup(
+        [incoming_session](const packet_t &queued_packet) {
+          return incoming_session &&
+                 queued_packet &&
+                 queued_packet->channel_data == incoming_session;
+        },
+        [](packet_t &) {},
+        record_overflow,
+        std::move(packet)
+      );
+      superseded = result.superseded;
+      overflow_dropped = result.overflow_dropped;
+    } else {
+      const auto result = packets->raise_with_overflow_handler(
+        record_overflow,
+        std::move(packet)
+      );
+      overflow_dropped = result.dropped;
+    }
+
+    if (superseded > 0 && incoming_session) {
+      metrics_record_drop(
+        incoming_session,
+        pipeline_drop_reason_e::reference_superseded,
+        superseded
+      );
+      BOOST_LOG(debug)
+        << "Prioritized IDR superseded "sv
+        << superseded
+        << " older access units for its session"sv;
+    }
+
+    if (overflow_dropped == 0) {
+      return;
+    }
+
+    uint64_t attributed = 0;
+    for (const auto &session : dropped_sessions) {
+      if (!session.channel_data) {
+        continue;
+      }
+
+      metrics_record_drop(
+        session.channel_data,
+        pipeline_drop_reason_e::encoded_queue,
+        session.count
+      );
+      attributed += session.count;
+    }
+
+    BOOST_LOG(warning) << "Encoded video queue overflow discarded "sv
+                       << overflow_dropped << " access units ("sv
+                       << attributed << " attributed to active sessions)"sv;
+  }
+
   int encode_avcodec(int64_t frame_nr, avcodec_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
     auto &frame = session.device->frame;
     frame->pts = frame_nr;
@@ -1538,7 +1869,7 @@ namespace video {
       char err_str[AV_ERROR_MAX_STRING_SIZE] {0};
       BOOST_LOG(error) << "Could not send a frame for encoding: "sv << av_make_error_string(err_str, AV_ERROR_MAX_STRING_SIZE, ret);
 
-      metrics_record_drop();
+      metrics_record_drop(channel_data);
       return -1;
     }
     session.frame_submitted = true;
@@ -1546,9 +1877,10 @@ namespace video {
     size_t packet_bytes = 0;
     auto record_frame_metrics = [&]() {
       const auto encode_ms = std::chrono::duration<double, std::milli>(
-                               std::chrono::steady_clock::now() - encode_start)
+                               std::chrono::steady_clock::now() - encode_start
+      )
                                .count();
-      metrics_record_frame(encode_ms, capture_to_encode_ms, packet_bytes);
+      metrics_record_frame(channel_data, encode_ms, capture_to_encode_ms, packet_bytes);
     };
 
     while (ret >= 0) {
@@ -1606,7 +1938,8 @@ namespace video {
 
       packet->replacements = &session.replacements;
       packet->channel_data = channel_data;
-      packets->raise(std::move(packet));
+      packet->encoded_timestamp = std::chrono::steady_clock::now();
+      enqueue_video_packet(packets, std::move(packet));
     }
 
     record_frame_metrics();
@@ -1624,7 +1957,7 @@ namespace video {
     auto encoded_frame = session.encode_frame(frame_nr);
     if (encoded_frame.data.empty()) {
       BOOST_LOG(error) << "NvENC returned empty packet";
-      metrics_record_drop();
+      metrics_record_drop(channel_data);
       return -1;
     }
 
@@ -1639,24 +1972,46 @@ namespace video {
     packet->channel_data = channel_data;
     packet->after_ref_frame_invalidation = encoded_frame.after_ref_frame_invalidation;
     packet->frame_timestamp = frame_timestamp;
-    packets->raise(std::move(packet));
+    packet->encoded_timestamp = std::chrono::steady_clock::now();
+    enqueue_video_packet(packets, std::move(packet));
 
     const auto encode_ms = std::chrono::duration<double, std::milli>(
-                             std::chrono::steady_clock::now() - encode_start)
+                             std::chrono::steady_clock::now() - encode_start
+    )
                              .count();
-    metrics_record_frame(encode_ms, capture_to_encode_ms, packet_bytes);
+    metrics_record_frame(channel_data, encode_ms, capture_to_encode_ms, packet_bytes);
 
     return 0;
   }
 
-  int encode(int64_t frame_nr, encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
-    if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
-      return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp);
-    } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
-      return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp);
-    }
+  int avcodec_encode_session_t::encode_frame(
+    int64_t frame_number,
+    safe::mail_raw_t::queue_t<packet_t> &packets,
+    void *channel_data,
+    std::optional<std::chrono::steady_clock::time_point> frame_timestamp
+  ) {
+    return encode_avcodec(
+      frame_number,
+      *this,
+      packets,
+      channel_data,
+      frame_timestamp
+    );
+  }
 
-    return -1;
+  int nvenc_encode_session_t::encode_frame(
+    int64_t frame_number,
+    safe::mail_raw_t::queue_t<packet_t> &packets,
+    void *channel_data,
+    std::optional<std::chrono::steady_clock::time_point> frame_timestamp
+  ) {
+    return encode_nvenc(
+      frame_number,
+      *this,
+      packets,
+      channel_data,
+      frame_timestamp
+    );
   }
 
   std::unique_ptr<avcodec_encode_session_t> make_avcodec_encode_session(
@@ -2042,10 +2397,25 @@ namespace video {
     return std::make_unique<nvenc_encode_session_t>(std::move(encode_device));
   }
 
-  std::unique_ptr<encode_session_t> make_encode_session(platf::display_t *disp, const encoder_t &encoder, const config_t &config, int width, int height, std::unique_ptr<platf::encode_device_t> encode_device) {
+  std::unique_ptr<encode_session_t>
+    encoder_backend::legacy_video_encoder_backend_t::create_session(
+      platf::display_t &display,
+      const encoder_t &encoder,
+      const config_t &config,
+      int input_width,
+      int input_height,
+      std::unique_ptr<platf::encode_device_t> encode_device
+    ) {
     if (dynamic_cast<platf::avcodec_encode_device_t *>(encode_device.get())) {
       auto avcodec_encode_device = boost::dynamic_pointer_cast<platf::avcodec_encode_device_t>(std::move(encode_device));
-      return make_avcodec_encode_session(disp, encoder, config, width, height, std::move(avcodec_encode_device));
+      return make_avcodec_encode_session(
+        &display,
+        encoder,
+        config,
+        input_width,
+        input_height,
+        std::move(avcodec_encode_device)
+      );
     } else if (dynamic_cast<platf::nvenc_encode_device_t *>(encode_device.get())) {
       auto nvenc_encode_device = boost::dynamic_pointer_cast<platf::nvenc_encode_device_t>(std::move(encode_device));
       return make_nvenc_encode_session(config, std::move(nvenc_encode_device));
@@ -2063,16 +2433,24 @@ namespace video {
     std::unique_ptr<platf::encode_device_t> encode_device,
     safe::signal_t &reinit_event,
     const encoder_t &encoder,
+    encoder_backend::IEncoderBackend &encoder_backend,
     void *channel_data
   ) {
-    auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
+    auto session = encoder_backend.create_session(
+      *disp,
+      encoder,
+      config,
+      disp->width,
+      disp->height,
+      std::move(encode_device)
+    );
     if (!session) {
       return;
     }
 
     // Record the stream resolution so diagnostics can report the real output
     // dimensions (the RTSP layer already reset the counters at session start).
-    metrics_set_resolution(config.width, config.height);
+    metrics_set_resolution(channel_data, config.width, config.height);
 
     // As a workaround for NVENC hangs and to generally speed up encoder reinit,
     // we will complete the encoder teardown in a separate thread if supported.
@@ -2120,7 +2498,7 @@ namespace video {
       BOOST_LOG(info) << "Input only session, video will not be captured."sv;
 
       // Encode the dummy img only once
-      if (encode(frame_nr++, *session, packets, channel_data, std::chrono::steady_clock::now())) {
+      if (session->encode_frame(frame_nr++, packets, channel_data, std::chrono::steady_clock::now())) {
         BOOST_LOG(error) << "Could not encode dummy video packet"sv;
         return;
       }
@@ -2205,7 +2583,7 @@ namespace video {
         }
       }
 
-      if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp)) {
+      if (session->encode_frame(frame_nr++, packets, channel_data, frame_timestamp)) {
         BOOST_LOG(error) << "Could not encode video packet"sv;
         break;
       }
@@ -2244,10 +2622,16 @@ namespace video {
     };
   }
 
-  std::unique_ptr<platf::encode_device_t> make_encode_device(platf::display_t &disp, const encoder_t &encoder, const config_t &config) {
+  std::unique_ptr<platf::encode_device_t>
+    encoder_backend::legacy_video_encoder_backend_t::create_device(
+      platf::display_t &display,
+      const encoder_t &encoder,
+      const config_t &config
+    ) {
     std::unique_ptr<platf::encode_device_t> result;
 
-    auto colorspace = colorspace_from_client_config(config, disp.is_hdr());
+    auto colorspace =
+      colorspace_from_client_config(config, display.is_hdr());
 
     platf::pix_fmt_e pix_fmt;
     if (config.chromaSamplingType == 1) {
@@ -2283,9 +2667,9 @@ namespace video {
     }
 
     if (dynamic_cast<const encoder_platform_formats_avcodec *>(encoder.platform_formats.get())) {
-      result = disp.make_avcodec_encode_device(pix_fmt);
+      result = display.make_avcodec_encode_device(pix_fmt);
     } else if (dynamic_cast<const encoder_platform_formats_nvenc *>(encoder.platform_formats.get())) {
-      result = disp.make_nvenc_encode_device(pix_fmt);
+      result = display.make_nvenc_encode_device(pix_fmt);
     }
 
     if (result) {
@@ -2295,12 +2679,19 @@ namespace video {
     return result;
   }
 
-  std::optional<sync_session_t> make_synced_session(platf::display_t *disp, const encoder_t &encoder, platf::img_t &img, sync_session_ctx_t &ctx) {
+  std::optional<sync_session_t> make_synced_session(
+    platf::display_t *disp,
+    const encoder_t &encoder,
+    platf::img_t &img,
+    sync_session_ctx_t &ctx,
+    encoder_backend::IEncoderBackend &encoder_backend
+  ) {
     sync_session_t encode_session;
 
     encode_session.ctx = &ctx;
 
-    auto encode_device = make_encode_device(*disp, encoder, ctx.config);
+    auto encode_device =
+      encoder_backend.create_device(*disp, encoder, ctx.config);
     if (!encode_device) {
       return std::nullopt;
     }
@@ -2319,7 +2710,14 @@ namespace video {
     }
     ctx.hdr_events->raise(std::move(hdr_info));
 
-    auto session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(encode_device));
+    auto session = encoder_backend.create_session(
+      *disp,
+      encoder,
+      ctx.config,
+      img.width,
+      img.height,
+      std::move(encode_device)
+    );
     if (!session) {
       return std::nullopt;
     }
@@ -2339,7 +2737,9 @@ namespace video {
     std::vector<std::unique_ptr<sync_session_ctx_t>> &synced_session_ctxs,
     encode_session_ctx_queue_t &encode_session_ctx_queue,
     std::vector<std::string> &display_names,
-    int &display_p
+    int &display_p,
+    capture_backend::ICaptureBackend &capture_backend,
+    encoder_backend::IEncoderBackend &encoder_backend
   ) {
     const auto &encoder = *chosen_encoder;
 
@@ -2358,7 +2758,12 @@ namespace video {
 
     while (encode_session_ctx_queue.running()) {
       // Refresh display names since a display removal might have caused the reinitialization
-      refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+      refresh_displays(
+        capture_backend,
+        encoder.platform_formats->dev_type,
+        display_names,
+        display_p
+      );
 
       // Process any pending display switch with the new list of displays
       if (switch_display_event->peek()) {
@@ -2366,7 +2771,13 @@ namespace video {
       }
 
       // reset_display() will sleep between retries
-      reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], synced_session_ctxs.front()->config);
+      reset_display(
+        capture_backend,
+        disp,
+        encoder.platform_formats->dev_type,
+        display_names[display_p],
+        synced_session_ctxs.front()->config
+      );
       if (disp) {
         break;
       }
@@ -2383,7 +2794,13 @@ namespace video {
 
     std::vector<sync_session_t> synced_sessions;
     for (auto &ctx : synced_session_ctxs) {
-      auto synced_session = make_synced_session(disp.get(), encoder, *img, *ctx);
+      auto synced_session = make_synced_session(
+        disp.get(),
+        encoder,
+        *img,
+        *ctx,
+        encoder_backend
+      );
       if (!synced_session) {
         return encode_e::error;
       }
@@ -2402,7 +2819,13 @@ namespace video {
 
           synced_session_ctxs.emplace_back(std::make_unique<sync_session_ctx_t>(std::move(*encode_session_ctx)));
 
-          auto encode_session = make_synced_session(disp.get(), encoder, *img, *synced_session_ctxs.back());
+          auto encode_session = make_synced_session(
+            disp.get(),
+            encoder,
+            *img,
+            *synced_session_ctxs.back(),
+            encoder_backend
+          );
           if (!encode_session) {
             ec = platf::capture_e::error;
             return false;
@@ -2446,7 +2869,7 @@ namespace video {
             frame_timestamp = img->frame_timestamp;
           }
 
-          if (encode(ctx->frame_nr++, *pos->session, ctx->packets, ctx->channel_data, frame_timestamp)) {
+          if (pos->session->encode_frame(ctx->frame_nr++, ctx->packets, ctx->channel_data, frame_timestamp)) {
             BOOST_LOG(error) << "Could not encode video packet"sv;
             ctx->shutdown_event->raise(true);
 
@@ -2486,7 +2909,10 @@ namespace video {
     return encode_e::ok;
   }
 
-  void captureThreadSync() {
+  void captureThreadSync(
+    capture_backend::ICaptureBackend &capture_backend,
+    encoder_backend::IEncoderBackend &encoder_backend
+  ) {
     auto ref = capture_thread_sync.ref();
 
     std::vector<std::unique_ptr<sync_session_ctx_t>> synced_session_ctxs;
@@ -2511,7 +2937,15 @@ namespace video {
 
     std::vector<std::string> display_names;
     int display_p = -1;
-    while (encode_run_sync(synced_session_ctxs, ctx, display_names, display_p) == encode_e::reinit) {}
+    while (
+      encode_run_sync(
+        synced_session_ctxs,
+        ctx,
+        display_names,
+        display_p,
+        capture_backend,
+        encoder_backend
+      ) == encode_e::reinit) {}
   }
 
   void capture_async_with_context(
@@ -2528,7 +2962,7 @@ namespace video {
       shutdown_event->raise(true);
     });
 
-    capture_context.capture_ctx_queue->raise(capture_ctx_t {images, config});
+    capture_context.capture_ctx_queue->raise(capture_ctx_t {images, config, channel_data});
 
     if (!capture_context.capture_ctx_queue->running()) {
       return;
@@ -2561,7 +2995,11 @@ namespace video {
 
       auto &encoder = *chosen_encoder;
 
-      auto encode_device = make_encode_device(*display, encoder, config);
+      auto encode_device = capture_context.encoder_backend->create_device(
+        *display,
+        encoder,
+        config
+      );
       if (!encode_device) {
         return;
       }
@@ -2589,6 +3027,7 @@ namespace video {
         std::move(encode_device),
         capture_context.reinit_event,
         *capture_context.encoder_p,
+        *capture_context.encoder_backend,
         channel_data
       );
     }
@@ -2656,13 +3095,26 @@ namespace video {
     VUI_PARAMS = 0x01,  ///< VUI parameters
   };
 
-  int validate_config(std::shared_ptr<platf::display_t> disp, const encoder_t &encoder, const config_t &config) {
-    auto encode_device = make_encode_device(*disp, encoder, config);
+  int validate_config(
+    std::shared_ptr<platf::display_t> disp,
+    const encoder_t &encoder,
+    const config_t &config,
+    encoder_backend::IEncoderBackend &encoder_backend
+  ) {
+    auto encode_device =
+      encoder_backend.create_device(*disp, encoder, config);
     if (!encode_device) {
       return -1;
     }
 
-    auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
+    auto session = encoder_backend.create_session(
+      *disp,
+      encoder,
+      config,
+      disp->width,
+      disp->height,
+      std::move(encode_device)
+    );
     if (!session) {
       return -1;
     }
@@ -2679,7 +3131,7 @@ namespace video {
 
     auto packets = mail::man->queue<packet_t>(mail::video_packets);
     while (!packets->peek()) {
-      if (encode(1, *session, packets, nullptr, {})) {
+      if (session->encode_frame(1, packets, nullptr, {})) {
         return -1;
       }
     }
@@ -2709,6 +3161,8 @@ namespace video {
   }
 
   bool validate_encoder(encoder_t &encoder, bool expect_failure) {
+    capture_backend::legacy_platform_capture_backend_t capture_backend;
+    encoder_backend::legacy_video_encoder_backend_t encoder_backend;
     const auto output_name {display_device::map_output_name(config::video.output_name)};
     std::shared_ptr<platf::display_t> disp;
 
@@ -2729,7 +3183,13 @@ namespace video {
     config_t config_autoselect {1920, 1080, 60, 1000, 1, 0, 1, 0, 0, 0};
 
     // If the encoder isn't supported at all (not even H.264), bail early
-    reset_display(disp, encoder.platform_formats->dev_type, output_name, config_autoselect);
+    reset_display(
+      capture_backend,
+      disp,
+      encoder.platform_formats->dev_type,
+      output_name,
+      config_autoselect
+    );
     if (!disp) {
       return false;
     }
@@ -2741,13 +3201,32 @@ namespace video {
 
     // If we're expecting failure, use the autoselect ref config first since that will always succeed
     // if the encoder is available.
-    auto max_ref_frames_h264 = expect_failure ? -1 : validate_config(disp, encoder, config_max_ref_frames);
-    auto autoselect_h264 = max_ref_frames_h264 >= 0 ? max_ref_frames_h264 : validate_config(disp, encoder, config_autoselect);
+    auto max_ref_frames_h264 = expect_failure ?
+                                 -1 :
+                                 validate_config(
+                                   disp,
+                                   encoder,
+                                   config_max_ref_frames,
+                                   encoder_backend
+                                 );
+    auto autoselect_h264 = max_ref_frames_h264 >= 0 ?
+                             max_ref_frames_h264 :
+                             validate_config(
+                               disp,
+                               encoder,
+                               config_autoselect,
+                               encoder_backend
+                             );
     if (autoselect_h264 < 0) {
       return false;
     } else if (expect_failure) {
       // We expected failure, but actually succeeded. Do the max_ref_frames probe we skipped.
-      max_ref_frames_h264 = validate_config(disp, encoder, config_max_ref_frames);
+      max_ref_frames_h264 = validate_config(
+        disp,
+        encoder,
+        config_max_ref_frames,
+        encoder_backend
+      );
     }
 
     std::vector<std::pair<validate_flag_e, encoder_t::flag_e>> packet_deficiencies {
@@ -2766,13 +3245,23 @@ namespace video {
       config_autoselect.videoFormat = 1;
 
       if (disp->is_codec_supported(encoder.hevc.name, config_autoselect)) {
-        auto max_ref_frames_hevc = validate_config(disp, encoder, config_max_ref_frames);
+        auto max_ref_frames_hevc = validate_config(
+          disp,
+          encoder,
+          config_max_ref_frames,
+          encoder_backend
+        );
 
         // If H.264 succeeded with max ref frames specified, assume that we can count on
         // HEVC to also succeed with max ref frames specified if HEVC is supported.
         auto autoselect_hevc = (max_ref_frames_hevc >= 0 || max_ref_frames_h264 >= 0) ?
                                  max_ref_frames_hevc :
-                                 validate_config(disp, encoder, config_autoselect);
+                                 validate_config(
+                                   disp,
+                                   encoder,
+                                   config_autoselect,
+                                   encoder_backend
+                                 );
 
         for (auto [validate_flag, encoder_flag] : packet_deficiencies) {
           encoder.hevc[encoder_flag] = (max_ref_frames_hevc & validate_flag && autoselect_hevc & validate_flag);
@@ -2794,13 +3283,23 @@ namespace video {
       config_autoselect.videoFormat = 2;
 
       if (disp->is_codec_supported(encoder.av1.name, config_autoselect)) {
-        auto max_ref_frames_av1 = validate_config(disp, encoder, config_max_ref_frames);
+        auto max_ref_frames_av1 = validate_config(
+          disp,
+          encoder,
+          config_max_ref_frames,
+          encoder_backend
+        );
 
         // If H.264 succeeded with max ref frames specified, assume that we can count on
         // AV1 to also succeed with max ref frames specified if AV1 is supported.
         auto autoselect_av1 = (max_ref_frames_av1 >= 0 || max_ref_frames_h264 >= 0) ?
                                 max_ref_frames_av1 :
-                                validate_config(disp, encoder, config_autoselect);
+                                validate_config(
+                                  disp,
+                                  encoder,
+                                  config_autoselect,
+                                  encoder_backend
+                                );
 
         for (auto [validate_flag, encoder_flag] : packet_deficiencies) {
           encoder.av1[encoder_flag] = (max_ref_frames_av1 & validate_flag && autoselect_av1 & validate_flag);
@@ -2822,8 +3321,17 @@ namespace video {
       // H.264 is special because encoders may support YUV 4:4:4 without supporting 10-bit color depth
       if (encoder.flags & YUV444_SUPPORT) {
         config_t config_h264_yuv444 {1920, 1080, 60, 1000, 1, 0, 1, 0, 0, 1};
-        encoder.h264[encoder_t::YUV444] = disp->is_codec_supported(encoder.h264.name, config_h264_yuv444) &&
-                                          validate_config(disp, encoder, config_h264_yuv444) >= 0;
+        encoder.h264[encoder_t::YUV444] =
+          disp->is_codec_supported(
+            encoder.h264.name,
+            config_h264_yuv444
+          ) &&
+          validate_config(
+            disp,
+            encoder,
+            config_h264_yuv444,
+            encoder_backend
+          ) >= 0;
       } else {
         encoder.h264[encoder_t::YUV444] = false;
       }
@@ -2831,7 +3339,13 @@ namespace video {
       const config_t generic_hdr_config = {1920, 1080, 60, 1000, 1, 0, 3, 1, 1, 0};
 
       // Reset the display since we're switching from SDR to HDR
-      reset_display(disp, encoder.platform_formats->dev_type, output_name, generic_hdr_config);
+      reset_display(
+        capture_backend,
+        disp,
+        encoder.platform_formats->dev_type,
+        output_name,
+        generic_hdr_config
+      );
       if (!disp) {
         return false;
       }
@@ -2848,9 +3362,16 @@ namespace video {
 
         // Test 4:4:4 HDR first. If 4:4:4 is supported, 4:2:0 should also be supported.
         config.chromaSamplingType = 1;
-        if ((encoder.flags & YUV444_SUPPORT) &&
-            disp->is_codec_supported(encoder_codec_name, config) &&
-            validate_config(disp, encoder, config) >= 0) {
+        if (
+          (encoder.flags & YUV444_SUPPORT) &&
+          disp->is_codec_supported(encoder_codec_name, config) &&
+          validate_config(
+            disp,
+            encoder,
+            config,
+            encoder_backend
+          ) >= 0
+        ) {
           flag_map[encoder_t::DYNAMIC_RANGE] = true;
           flag_map[encoder_t::YUV444] = true;
           return;
@@ -2860,8 +3381,15 @@ namespace video {
 
         // Test 4:2:0 HDR
         config.chromaSamplingType = 0;
-        if (disp->is_codec_supported(encoder_codec_name, config) &&
-            validate_config(disp, encoder, config) >= 0) {
+        if (
+          disp->is_codec_supported(encoder_codec_name, config) &&
+          validate_config(
+            disp,
+            encoder,
+            config,
+            encoder_backend
+          ) >= 0
+        ) {
           flag_map[encoder_t::DYNAMIC_RANGE] = true;
         } else {
           flag_map[encoder_t::DYNAMIC_RANGE] = false;
@@ -2969,15 +3497,13 @@ namespace video {
         }
 
         // Skip it if it doesn't support the specified codec at all
-        if ((active_hevc_mode >= 2 && !encoder->hevc[encoder_t::PASSED]) ||
-            (active_av1_mode >= 2 && !encoder->av1[encoder_t::PASSED])) {
+        if ((active_hevc_mode >= 2 && !encoder->hevc[encoder_t::PASSED]) || (active_av1_mode >= 2 && !encoder->av1[encoder_t::PASSED])) {
           pos++;
           continue;
         }
 
         // Skip it if it doesn't support HDR on the specified codec
-        if ((active_hevc_mode == 3 && !encoder->hevc[encoder_t::DYNAMIC_RANGE]) ||
-            (active_av1_mode == 3 && !encoder->av1[encoder_t::DYNAMIC_RANGE])) {
+        if ((active_hevc_mode == 3 && !encoder->hevc[encoder_t::DYNAMIC_RANGE]) || (active_av1_mode == 3 && !encoder->av1[encoder_t::DYNAMIC_RANGE])) {
           pos++;
           continue;
         }
@@ -3212,15 +3738,25 @@ namespace video {
   int start_capture_async(capture_thread_async_ctx_t &capture_thread_ctx) {
     capture_thread_ctx.encoder_p = chosen_encoder;
     capture_thread_ctx.reinit_event.reset();
+    capture_thread_ctx.capture_backend =
+      std::make_unique<
+        capture_backend::legacy_platform_capture_backend_t>();
+    capture_thread_ctx.encoder_backend =
+      std::make_unique<
+        encoder_backend::legacy_video_encoder_backend_t>();
 
-    capture_thread_ctx.capture_ctx_queue = std::make_shared<safe::queue_t<capture_ctx_t>>(30);
+    capture_thread_ctx.capture_ctx_queue = std::make_shared<capture_ctx_queue_t>(
+      30,
+      capture_context_queue_metrics
+    );
 
     capture_thread_ctx.capture_thread = std::thread {
       captureThread,
       capture_thread_ctx.capture_ctx_queue,
       std::ref(capture_thread_ctx.display_wp),
       std::ref(capture_thread_ctx.reinit_event),
-      std::ref(*capture_thread_ctx.encoder_p)
+      std::ref(*capture_thread_ctx.encoder_p),
+      std::ref(*capture_thread_ctx.capture_backend)
     };
 
     return 0;
@@ -3233,7 +3769,18 @@ namespace video {
   }
 
   int start_capture_sync(capture_thread_sync_ctx_t &ctx) {
-    std::thread {&captureThreadSync}.detach();
+    ctx.capture_backend =
+      std::make_unique<
+        capture_backend::legacy_platform_capture_backend_t>();
+    ctx.encoder_backend =
+      std::make_unique<
+        encoder_backend::legacy_video_encoder_backend_t>();
+    std::thread {
+      &captureThreadSync,
+      std::ref(*ctx.capture_backend),
+      std::ref(*ctx.encoder_backend)
+    }
+      .detach();
     return 0;
   }
 

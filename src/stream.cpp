@@ -4,9 +4,13 @@
  */
 
 // standard includes
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <future>
 #include <queue>
+#include <string>
 
 // lib includes
 #include <boost/endian/arithmetic.hpp>
@@ -15,24 +19,29 @@
 extern "C" {
   // clang-format off
 #include <moonlight-common-c/src/Limelight-internal.h>
-#include "rswrapper.h"
   // clang-format on
 }
 
 // local includes
 #include "config.h"
+#include "congestion_controller.h"
 #include "crypto.h"
 #include "display_device.h"
+#include "fec_controller.h"
+#include "frame_queue_policy.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
+#include "media_priority.h"
 #include "network.h"
+#include "packet_pacer.h"
 #include "platform/common.h"
 #include "process.h"
 #include "stream.h"
 #include "sync.h"
 #include "system_tray.h"
 #include "thread_safe.h"
+#include "transport.h"
 #include "utility.h"
 
 #define IDX_START_A 0
@@ -85,6 +94,73 @@ using asio::ip::udp;
 using namespace std::literals;
 
 namespace stream {
+  static_assert(
+    SS_FRAME_FEC_PTYPE ==
+    congestion::gamestream_frame_fec_feedback_type
+  );
+  static_assert(
+    sizeof(SS_FRAME_FEC_STATUS) ==
+    congestion::gamestream_frame_fec_feedback_size
+  );
+
+  namespace {
+    /**
+     * @brief Whether per-frame timeline tracing is enabled.
+     *
+     * Set HERMES_FRAME_TRACE to any value to enable it, except the usual
+     * off-spellings ("0", "false", "no", "off", case-insensitive) and the empty
+     * string. Read once: tracing cannot be toggled mid-process.
+     */
+    bool frame_trace_enabled() {
+      static const bool enabled = []() {
+        const auto value = std::getenv("HERMES_FRAME_TRACE");
+        if (value == nullptr || value[0] == '\0') {
+          return false;
+        }
+
+        auto normalized = std::string {value};
+        std::transform(
+          normalized.begin(),
+          normalized.end(),
+          normalized.begin(),
+          [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+          }
+        );
+        return normalized != "0" && normalized != "false" &&
+               normalized != "no" && normalized != "off";
+      }();
+      return enabled;
+    }
+
+    int64_t trace_time_us(const std::optional<std::chrono::steady_clock::time_point> &timestamp) {
+      if (!timestamp) {
+        return 0;
+      }
+      return std::chrono::duration_cast<std::chrono::microseconds>(
+               timestamp->time_since_epoch())
+        .count();
+    }
+
+    void emit_frame_trace(
+      video::packet_raw_t &packet,
+      const std::optional<std::chrono::steady_clock::time_point> &source_capture_timestamp,
+      std::string_view outcome
+    ) {
+      if (!frame_trace_enabled()) {
+        return;
+      }
+
+      BOOST_LOG(info) << "HERMES_FRAME_TRACE {\"schema\":1,\"frame_id\":"sv
+                      << packet.frame_index()
+                      << ",\"capture_us\":"sv << trace_time_us(source_capture_timestamp)
+                      << ",\"encode_us\":"sv << trace_time_us(packet.encoded_timestamp)
+                      << ",\"packetize_us\":"sv << trace_time_us(packet.packetized_timestamp)
+                      << ",\"first_send_us\":"sv << trace_time_us(packet.first_sent_timestamp)
+                      << ",\"last_send_us\":"sv << trace_time_us(packet.last_sent_timestamp)
+                      << ",\"outcome\":\""sv << outcome << "\"}"sv;
+    }
+  }  // namespace
 
   enum class socket_e : int {
     video,  ///< Video
@@ -270,7 +346,7 @@ namespace stream {
     }
   }
 
-  class control_server_t {
+  class control_server_t: public transport::IReliableChannel {
   public:
     int bind(net::af_e address_family, std::uint16_t port) {
       _host = net::host_create(address_family, _addr, port);
@@ -314,6 +390,13 @@ namespace stream {
       return 0;
     }
 
+    [[nodiscard]] bool send_reliable(
+      const std::string_view &payload,
+      net::peer_t peer
+    ) override {
+      return send(payload, peer) == 0;
+    }
+
     void flush() {
       enet_host_flush(_host.get());
     }
@@ -345,6 +428,7 @@ namespace stream {
     udp::socket audio_sock {io_context};
 
     control_server_t control_server;
+    std::unique_ptr<transport::ITransport> transport;
   };
 
   struct session_t {
@@ -427,6 +511,7 @@ namespace stream {
     std::uint32_t isolated_runtime_owner_id {};
     std::string device_name;
     std::string device_uuid;
+    std::string hestia_session_id;
     bool isolated_session {false};
     std::string isolated_runtime_id;
     std::string isolated_seat_id;
@@ -447,6 +532,7 @@ namespace stream {
 
     std::atomic<session::state_e> state;
     std::atomic<session::termination_reason_e> termination_reason {session::termination_reason_e::UNKNOWN};
+    std::unique_ptr<congestion::ICongestionController> congestion_controller;
   };
 
   /**
@@ -640,116 +726,6 @@ namespace stream {
     }
   }
 
-  namespace fec {
-    using rs_t = util::safe_ptr<reed_solomon, [](reed_solomon *rs) {
-      reed_solomon_release(rs);
-    }>;
-
-    struct fec_t {
-      size_t data_shards;
-      size_t nr_shards;
-      size_t percentage;
-
-      size_t blocksize;
-      size_t prefixsize;
-      util::buffer_t<char> shards;
-      util::buffer_t<char> headers;
-      util::buffer_t<uint8_t *> shards_p;
-
-      std::vector<platf::buffer_descriptor_t> payload_buffers;
-
-      char *data(size_t el) {
-        return (char *) shards_p[el];
-      }
-
-      char *prefix(size_t el) {
-        return prefixsize ? &headers[el * prefixsize] : nullptr;
-      }
-
-      size_t size() const {
-        return nr_shards;
-      }
-    };
-
-    static fec_t encode(const std::string_view &payload, size_t blocksize, size_t fecpercentage, size_t minparityshards, size_t prefixsize) {
-      auto payload_size = payload.size();
-
-      auto pad = payload_size % blocksize != 0;
-
-      auto aligned_data_shards = payload_size / blocksize;
-      auto data_shards = aligned_data_shards + (pad ? 1 : 0);
-      auto parity_shards = (data_shards * fecpercentage + 99) / 100;
-
-      // increase the FEC percentage for this frame if the parity shard minimum is not met
-      if (parity_shards < minparityshards && fecpercentage != 0) {
-        parity_shards = minparityshards;
-        fecpercentage = (100 * parity_shards) / data_shards;
-
-        BOOST_LOG(verbose) << "Increasing FEC percentage to "sv << fecpercentage << " to meet parity shard minimum"sv << std::endl;
-      }
-
-      auto nr_shards = data_shards + parity_shards;
-
-      // If we need to store a zero-padded data shard, allocate that first to
-      // to keep the shards in order and reduce buffer fragmentation
-      auto parity_shard_offset = pad ? 1 : 0;
-      util::buffer_t<char> shards {(parity_shard_offset + parity_shards) * blocksize};
-      util::buffer_t<uint8_t *> shards_p {nr_shards};
-      std::vector<platf::buffer_descriptor_t> payload_buffers;
-      payload_buffers.reserve(2);
-
-      // Point into the payload buffer for all except the final padded data shard
-      auto next = std::begin(payload);
-      for (auto x = 0; x < aligned_data_shards; ++x) {
-        shards_p[x] = (uint8_t *) next;
-        next += blocksize;
-      }
-      payload_buffers.emplace_back(std::begin(payload), aligned_data_shards * blocksize);
-
-      // If the last data shard needs to be zero-padded, we must use the shards buffer
-      if (pad) {
-        shards_p[aligned_data_shards] = (uint8_t *) &shards[0];
-
-        // GCC doesn't figure out that std::copy_n() can be replaced with memcpy() here
-        // and ends up compiling a horribly slow element-by-element copy loop, so we
-        // help it by using memcpy()/memset() directly.
-        auto copy_len = std::min<size_t>(blocksize, std::end(payload) - next);
-        std::memcpy(shards_p[aligned_data_shards], next, copy_len);
-        if (copy_len < blocksize) {
-          // Zero any additional space after the end of the payload
-          std::memset(shards_p[aligned_data_shards] + copy_len, 0, blocksize - copy_len);
-        }
-      }
-
-      // Add a payload buffer describing the shard buffer
-      payload_buffers.emplace_back(std::begin(shards), shards.size());
-
-      if (fecpercentage != 0) {
-        // Point into our allocated buffer for the parity shards
-        for (auto x = 0; x < parity_shards; ++x) {
-          shards_p[data_shards + x] = (uint8_t *) &shards[(parity_shard_offset + x) * blocksize];
-        }
-
-        // packets = parity_shards + data_shards
-        rs_t rs {reed_solomon_new(data_shards, parity_shards)};
-
-        reed_solomon_encode(rs.get(), shards_p.begin(), nr_shards, blocksize);
-      }
-
-      return {
-        data_shards,
-        nr_shards,
-        fecpercentage,
-        blocksize,
-        prefixsize,
-        std::move(shards),
-        util::buffer_t<char> {nr_shards * prefixsize},
-        std::move(shards_p),
-        std::move(payload_buffers),
-      };
-    }
-  }  // namespace fec
-
   /**
    * @brief Combines two buffers and inserts new buffers at each slice boundary of the result.
    * @param insert_size The number of bytes to insert.
@@ -913,7 +889,13 @@ namespace stream {
       return -1;
     }
 
-    if (session->broadcast_ref->control_server.send(payload, session->control.peer)) {
+    const auto result =
+      session->broadcast_ref->transport->send_reliable({
+        .payload = payload,
+        .channel = session->broadcast_ref->control_server,
+        .peer = session->control.peer,
+      });
+    if (!result.succeeded()) {
       TUPLE_2D(port, addr, platf::from_sockaddr_ex((sockaddr *) &session->control.peer->address.address));
       BOOST_LOG(warning) << "Couldn't send gamepad feedback to ["sv << addr << ':' << port << ']';
 
@@ -941,7 +923,13 @@ namespace stream {
       encrypted_payload;
 
     auto payload = encode_control(session, util::view(plaintext), encrypted_payload);
-    if (session->broadcast_ref->control_server.send(payload, session->control.peer)) {
+    const auto result =
+      session->broadcast_ref->transport->send_reliable({
+        .payload = payload,
+        .channel = session->broadcast_ref->control_server,
+        .peer = session->control.peer,
+      });
+    if (!result.succeeded()) {
       TUPLE_2D(port, addr, platf::from_sockaddr_ex((sockaddr *) &session->control.peer->address.address));
       BOOST_LOG(warning) << "Couldn't send HDR mode to ["sv << addr << ':' << port << ']';
 
@@ -952,7 +940,10 @@ namespace stream {
     return 0;
   }
 
-  void controlBroadcastThread(control_server_t *server) {
+  void controlBroadcastThread(
+    control_server_t *server,
+    transport::ITransport &transport
+  ) {
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
     });
@@ -966,25 +957,72 @@ namespace stream {
     });
 
     server->map(packetTypes[IDX_LOSS_STATS], [&](session_t *session, const std::string_view &payload) {
-      int32_t *stats = (int32_t *) payload.data();
-      auto count = stats[0];
-      std::chrono::milliseconds t {stats[1]};
+      const auto report =
+        congestion::parse_gamestream_legacy_loss_report(payload);
+      if (!report) {
+        BOOST_LOG(warning) << "Control: Runt legacy loss report";
+        return;
+      }
 
-      auto lastGoodFrame = stats[3];
+      session->congestion_controller->on_feedback({
+        .frame_reports = {},
+        .legacy_loss = *report,
+        .received_at = congestion::congestion_clock_t::now(),
+      });
 
       BOOST_LOG(verbose)
         << "type [IDX_LOSS_STATS]"sv << std::endl
         << "---begin stats---" << std::endl
-        << "loss count since last report [" << count << ']' << std::endl
-        << "time in milli since last report [" << t.count() << ']' << std::endl
-        << "last good frame [" << lastGoodFrame << ']' << std::endl
+        << "loss count since last report [" << report->lost_packets << ']' << std::endl
+        << "time in milli since last report [" << report->report_interval.count() << ']' << std::endl
+        << "last good frame [" << report->last_good_frame << ']' << std::endl
         << "---end stats---";
+    });
+
+    server->map(congestion::gamestream_frame_fec_feedback_type, [&](session_t *session, const std::string_view &payload) {
+      const auto report =
+        congestion::parse_gamestream_frame_fec_feedback(payload);
+      if (!report) {
+        BOOST_LOG(warning) << "Control: Runt frame FEC feedback";
+        return;
+      }
+
+      const std::array reports {*report};
+      session->congestion_controller->on_feedback({
+        .frame_reports = reports,
+        .legacy_loss = std::nullopt,
+        .received_at = congestion::congestion_clock_t::now(),
+      });
+
+      BOOST_LOG(verbose)
+        << "type [SS_FRAME_FEC_PTYPE]"sv << std::endl
+        << "frame [" << report->frame_id << "] missing ["
+        << report->missing_packets_before_highest_received << "] received ["
+        << report->received_data_packets << "/"
+        << report->total_data_packets << " data, "
+        << report->received_repair_packets << "/"
+        << report->total_repair_packets << " FEC]";
     });
 
     server->map(packetTypes[IDX_REQUEST_IDR_FRAME], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_REQUEST_IDR_FRAME]"sv;
 
-      session->video.idr_events->raise(true);
+      const auto request_allowed =
+        queueing::encoded_frame_queue_policy()
+          .allow_idr_request(
+            session,
+            queueing::frame_queue_clock_t::now()
+          );
+      video::metrics_record_idr_request(
+        session,
+        request_allowed
+      );
+      if (request_allowed) {
+        session->video.idr_events->raise(true);
+      } else {
+        BOOST_LOG(debug)
+          << "Suppressed rate-limited IDR request"sv;
+      }
     });
 
     server->map(packetTypes[IDX_INVALIDATE_REF_FRAMES], [&](session_t *session, const std::string_view &payload) {
@@ -1144,7 +1182,9 @@ namespace stream {
     });
 
     // This thread handles latency-sensitive control messages
-    platf::adjust_thread_priority(platf::thread_priority_e::critical);
+    platf::adjust_thread_priority(
+      priority::worker_priority(priority::media_priority_e::control)
+    );
 
     // Check for both the full shutdown event and the shutdown event for this
     // broadcast to ensure we can inform connected clients of our graceful
@@ -1243,7 +1283,12 @@ namespace stream {
       if (session->control.peer) {
         auto payload = encode_control(session, util::view(plaintext), encrypted_payload);
 
-        if (server->send(payload, session->control.peer)) {
+        const auto result = transport.send_reliable({
+          .payload = payload,
+          .channel = *server,
+          .peer = session->control.peer,
+        });
+        if (!result.succeeded()) {
           TUPLE_2D(port, addr, platf::from_sockaddr_ex((sockaddr *) &session->control.peer->address.address));
           BOOST_LOG(warning) << "Couldn't send termination code to ["sv << addr << ':' << port << ']';
         }
@@ -1349,13 +1394,22 @@ namespace stream {
     }
   }
 
-  void videoBroadcastThread(udp::socket &sock) {
+  void videoBroadcastThread(
+    udp::socket &sock,
+    transport::ITransport &transport
+  ) {
     auto shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     auto packets = mail::man->queue<video::packet_t>(mail::video_packets);
     auto video_epoch = std::chrono::steady_clock::now();
+    fec::legacy_reed_solomon_fec_controller_t legacy_fec_controller;
+    fec::IFecController &fec_controller = legacy_fec_controller;
 
     // Video traffic is sent on this thread
-    platf::adjust_thread_priority(platf::thread_priority_e::high);
+    platf::adjust_thread_priority(
+      priority::worker_priority(
+        priority::media_priority_e::video_normal
+      )
+    );
 
     logging::min_max_avg_periodic_logger<double> frame_processing_latency_logger(debug, "Frame processing latency", "ms");
 
@@ -1371,16 +1425,118 @@ namespace stream {
       return;
     }
 
-    auto ratecontrol_next_frame_start = std::chrono::steady_clock::now();
+    pacing::high_precision_pacer_timer_t pacer_timer {*timer};
+    pacing::rate_limited_pacer_registry_t packet_pacers {
+      pacer_timer
+    };
+    auto &frame_queue_policy =
+      queueing::encoded_frame_queue_policy();
 
     while (auto packet = packets->pop()) {
       if (shutdown_event->peek()) {
         break;
       }
 
-      frame_network_latency_logger.first_point_now();
+      const auto frame_broadcast_started = std::chrono::steady_clock::now();
+      const auto frame_capture_timestamp = packet->frame_timestamp;
+      auto frame_packetization_started = frame_broadcast_started;
+      auto frame_packetization_time = std::chrono::steady_clock::duration::zero();
+      auto frame_fec_time = std::chrono::steady_clock::duration::zero();
+      auto frame_pacer_time = std::chrono::steady_clock::duration::zero();
+      auto frame_send_time = std::chrono::steady_clock::duration::zero();
+      size_t frame_wire_bytes = 0;
+      uint64_t frame_data_shards = 0;
+      uint64_t frame_fec_shards = 0;
 
       auto session = (session_t *) packet->channel_data;
+      const auto congestion_target =
+        session->congestion_controller->target();
+      const auto queue_decision = frame_queue_policy.evaluate({
+        .session_key = session,
+        .is_idr = packet->is_idr(),
+        .encoded_at = packet->encoded_timestamp,
+        .max_queue_time = std::chrono::microseconds {
+          congestion_target.max_frame_queue_us
+        },
+        .now = frame_broadcast_started,
+      });
+      if (!queue_decision.should_send()) {
+        const auto deadline_expired =
+          queue_decision.drop_reason ==
+          queueing::frame_queue_drop_reason_e::deadline_expired;
+        video::metrics_record_drop(
+          packet->channel_data,
+          deadline_expired ?
+            video::pipeline_drop_reason_e::send_deadline :
+            video::pipeline_drop_reason_e::recovery_wait
+        );
+        if (queue_decision.request_idr) {
+          video::metrics_record_idr_request(
+            session,
+            true
+          );
+          session->video.idr_events->raise(true);
+          if (
+            queue_decision.recovery_cause ==
+            queueing::frame_recovery_cause_e::
+              encoded_queue_overflow
+          ) {
+            BOOST_LOG(warning)
+              << "Encoded video queue overflow broke the reference chain; "
+                 "dropped frame "sv
+              << packet->frame_index()
+              << " and requested a fresh IDR"sv;
+          } else if (
+            queue_decision.recovery_cause ==
+            queueing::frame_recovery_cause_e::
+              packet_deadline_expired
+          ) {
+            BOOST_LOG(warning)
+              << "Previous video frame exceeded its packet deadline; "
+                 "dropped dependent frame "sv
+              << packet->frame_index()
+              << " and requested a fresh IDR"sv;
+          } else {
+            BOOST_LOG(warning)
+              << "Video send queue exceeded "
+              << congestion_target.max_frame_queue_us
+              << " us; dropped frame "
+              << packet->frame_index()
+              << " and requested a fresh IDR"sv;
+          }
+        } else if (queue_decision.idr_request_rate_limited) {
+          video::metrics_record_idr_request(
+            session,
+            false
+          );
+        }
+        emit_frame_trace(
+          *packet,
+          frame_capture_timestamp,
+          deadline_expired ?
+            "send_deadline_expired"sv :
+            "awaiting_idr"sv
+        );
+        continue;
+      }
+
+      std::optional<std::chrono::steady_clock::time_point>
+        frame_packet_deadline;
+      if (
+        congestion_target.max_frame_queue_us > 0 &&
+        packet->encoded_timestamp
+      ) {
+        frame_packet_deadline =
+          *packet->encoded_timestamp +
+          std::chrono::microseconds {
+            congestion_target.max_frame_queue_us
+          };
+      }
+      bool frame_packet_deadline_expired = false;
+
+      frame_network_latency_logger.first_point_now();
+      pacing::IPacketPacer &packet_pacer =
+        packet_pacers.for_session(session);
       auto lowseq = session->video.lowseq;
 
       std::string_view payload {(char *) packet->data(), packet->data_size()};
@@ -1484,10 +1640,12 @@ namespace stream {
         }
       }
 
-      try {
-        // Use around 80% of 1Gbps          1Gbps            percent    ms     packet      byte
-        size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
+      // Packetization includes payload/header shaping and the per-block packet
+      // headers. FEC, pacing, encryption, and socket calls are excluded from
+      // this timer.
+      frame_packetization_time += std::chrono::steady_clock::now() - frame_packetization_started;
 
+      try {
         // Send less than 64K in a single batch.
         // On Windows, batches above 64K seem to bypass SO_SNDBUF regardless of its size,
         // appear in "Other I/O" and begin waiting for interrupts.
@@ -1498,16 +1656,49 @@ namespace stream {
         // Generic Segmentation Offload on Linux can't do more than 64.
         send_batch_size = std::min<size_t>(64, send_batch_size);
 
-        // Don't ignore the last ratecontrol group of the previous frame
-        auto ratecontrol_frame_start = std::max(ratecontrol_next_frame_start, std::chrono::steady_clock::now());
-
-        size_t ratecontrol_frame_packets_sent = 0;
-        size_t ratecontrol_group_packets_sent = 0;
+        auto peer_address = session->video.peer.address();
+        constexpr size_t udp_header_size = 8;
+        const size_t ip_header_size =
+          peer_address.is_v6() ? 40 : 20;
+        const auto wire_bytes_per_shard =
+          blocksize +
+          (
+            session->video.cipher ?
+              sizeof(video_packet_enc_prefix_t) :
+              0
+          ) +
+          udp_header_size +
+          ip_header_size;
+        auto pacing_bitrate =
+          congestion_target.pacing_bitrate_bps;
+        if (pacing_bitrate == 0) {
+          pacing_bitrate =
+            congestion::gamestream_pacing_ceiling_bps;
+        }
+        packet_pacer.begin_frame({
+          .packet_size_bytes = wire_bytes_per_shard,
+          .bitrate_bps = pacing_bitrate,
+          .max_burst_duration = 1ms,
+          .packet_deadline = frame_packet_deadline,
+        });
+        send_batch_size =
+          packet_pacer.maximum_batch_packets(send_batch_size);
 
         auto blockIndex = 0;
         std::for_each(fec_blocks_begin, fec_blocks_end, [&](std::string_view &current_payload) {
+          if (
+            frame_packet_deadline_expired ||
+            (frame_packet_deadline &&
+             std::chrono::steady_clock::now() >
+               *frame_packet_deadline)
+          ) {
+            frame_packet_deadline_expired = true;
+            return;
+          }
+
           auto packets = (current_payload.size() + (blocksize - 1)) / blocksize;
 
+          frame_packetization_started = std::chrono::steady_clock::now();
           for (int x = 0; x < packets; ++x) {
             auto *inspect = (video_packet_raw_t *) &current_payload[x * blocksize];
 
@@ -1526,18 +1717,37 @@ namespace stream {
               inspect->packet.flags |= FLAG_EOF;
             }
           }
+          frame_packetization_time += std::chrono::steady_clock::now() - frame_packetization_started;
 
           frame_fec_latency_logger.first_point_now();
+          const auto fec_started = std::chrono::steady_clock::now();
           // If video encryption is enabled, we allocate space for the encryption header before each shard
-          auto shards = fec::encode(current_payload, blocksize, fecPercentage, session->config.minRequiredFecPackets, session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+          auto shards = fec_controller.encode({
+            .payload = current_payload,
+            .block_size = static_cast<std::size_t>(blocksize),
+            .fec_percentage =
+              static_cast<std::size_t>(fecPercentage),
+            .minimum_parity_shards =
+              static_cast<std::size_t>(
+                session->config.minRequiredFecPackets
+              ),
+            .prefix_size =
+              session->video.cipher ?
+                sizeof(video_packet_enc_prefix_t) :
+                0,
+          });
+          const auto fec_finished = std::chrono::steady_clock::now();
+          frame_fec_time += fec_finished - fec_started;
+          if (!packet->packetized_timestamp) {
+            packet->packetized_timestamp = fec_finished;
+          }
           frame_fec_latency_logger.second_point_now_and_log();
 
-          auto peer_address = session->video.peer.address();
           auto batch_info = platf::batched_send_info_t {
-            shards.headers.begin(),
-            shards.prefixsize,
-            shards.payload_buffers,
-            shards.blocksize,
+            shards.prefix_data(),
+            shards.prefix_size(),
+            shards.payload_buffers(),
+            shards.block_size(),
             0,
             0,
             (uintptr_t) sock.native_handle(),
@@ -1552,7 +1762,7 @@ namespace stream {
           // When a timestamp isn't available (duplicate frames), the timestamp from rate control is used instead.
           bool frame_is_dupe = false;
           if (!packet->frame_timestamp) {
-            packet->frame_timestamp = ratecontrol_next_frame_start;
+            packet->frame_timestamp = packet_pacer.next_frame_start();
             frame_is_dupe = true;
           }
           using rtp_tick = std::chrono::duration<uint32_t, std::ratio<1, 90000>>;
@@ -1564,8 +1774,8 @@ namespace stream {
 
             inspect->packet.fecInfo =
               (x << 12 |
-               shards.data_shards << 22 |
-               shards.percentage << 4);
+               shards.data_shard_count() << 22 |
+               shards.fec_percentage() << 4);
 
             inspect->rtp.header = 0x80 | FLAG_EXTENSION;
             inspect->rtp.sequenceNumber = util::endian::big<uint16_t>(lowseq + x);
@@ -1595,23 +1805,16 @@ namespace stream {
               session->video.cipher->encrypt(std::string_view {(char *) inspect, (size_t) blocksize}, prefix->tag, (uint8_t *) inspect, &iv);
             }
 
-            if (x - next_shard_to_send + 1 >= send_batch_size ||
-                x + 1 == shards.size()) {
+            if (x - next_shard_to_send + 1 >= send_batch_size || x + 1 == shards.size()) {
               // Do pacing within the frame.
               // Also trigger pacing before the first send_batch() of the frame
               // to account for the last send_batch() of the previous frame.
-              if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms ||
-                  ratecontrol_frame_packets_sent == 0) {
-                auto due = ratecontrol_frame_start +
-                           std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                             ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
-
-                auto now = std::chrono::steady_clock::now();
-                if (now < due) {
-                  timer->sleep_for(due - now);
-                }
-
-                ratecontrol_group_packets_sent = 0;
+              const auto pacing_wait =
+                packet_pacer.wait_before_batch();
+              frame_pacer_time += pacing_wait.waited;
+              if (pacing_wait.deadline_expired) {
+                frame_packet_deadline_expired = true;
+                break;
               }
 
               size_t current_batch_size = x - next_shard_to_send + 1;
@@ -1619,52 +1822,217 @@ namespace stream {
               batch_info.block_count = current_batch_size;
 
               frame_send_batch_latency_logger.first_point_now();
+              const auto send_started = std::chrono::steady_clock::now();
               // Use a batched send if it's supported on this platform
-              if (!platf::send_batch(batch_info)) {
+              const auto batch_result =
+                transport.send_datagram_batch(batch_info);
+              auto current_batch_processed = current_batch_size;
+              if (batch_result.requires_fallback()) {
                 // Batched send is not available, so send each packet individually
                 BOOST_LOG(verbose) << "Falling back to unbatched send"sv;
+                current_batch_processed = 0;
                 for (auto y = 0; y < current_batch_size; y++) {
+                  if (
+                    frame_packet_deadline &&
+                    std::chrono::steady_clock::now() >
+                      *frame_packet_deadline
+                  ) {
+                    frame_packet_deadline_expired = true;
+                    break;
+                  }
+
                   auto send_info = platf::send_info_t {
                     shards.prefix(next_shard_to_send + y),
-                    shards.prefixsize,
+                    shards.prefix_size(),
                     shards.data(next_shard_to_send + y),
-                    shards.blocksize,
+                    shards.block_size(),
                     (uintptr_t) sock.native_handle(),
                     peer_address,
                     session->video.peer.port(),
                     session->localAddress,
                   };
 
-                  platf::send(send_info);
+                  if (!packet->first_sent_timestamp) {
+                    packet->first_sent_timestamp =
+                      std::chrono::steady_clock::now();
+                  }
+                  static_cast<void>(
+                    transport.send_datagram(send_info)
+                  );
+                  ++current_batch_processed;
                 }
+              } else if (!packet->first_sent_timestamp) {
+                packet->first_sent_timestamp = send_started;
               }
+              const auto send_finished = std::chrono::steady_clock::now();
+              frame_send_time += send_finished - send_started;
               frame_send_batch_latency_logger.second_point_now_and_log();
 
-              ratecontrol_group_packets_sent += current_batch_size;
-              ratecontrol_frame_packets_sent += current_batch_size;
-              next_shard_to_send = x + 1;
+              if (current_batch_processed == 0) {
+                break;
+              }
+
+              packet->last_sent_timestamp = send_finished;
+              const auto batch_data_end = std::min(
+                next_shard_to_send + current_batch_processed,
+                shards.data_shard_count()
+              );
+              const auto batch_data_start = std::min(
+                next_shard_to_send,
+                shards.data_shard_count()
+              );
+              const auto batch_data_packets =
+                batch_data_end - batch_data_start;
+              session->congestion_controller->on_packets_sent({
+                .frame_id =
+                  static_cast<std::uint32_t>(packet->frame_index()),
+                .first_sequence_number = static_cast<std::uint16_t>(
+                  lowseq + next_shard_to_send
+                ),
+                .packet_count =
+                  static_cast<std::uint16_t>(
+                    current_batch_processed
+                  ),
+                .data_packet_count =
+                  static_cast<std::uint16_t>(batch_data_packets),
+                .repair_packet_count = static_cast<std::uint16_t>(
+                  current_batch_processed -
+                  batch_data_packets
+                ),
+                .wire_bytes_per_packet =
+                  static_cast<std::uint32_t>(wire_bytes_per_shard),
+                .is_key_frame = packet->is_idr(),
+                .sent_at = send_finished,
+              });
+
+              packet_pacer.record_batch(
+                current_batch_processed
+              );
+              next_shard_to_send +=
+                current_batch_processed;
+              if (frame_packet_deadline_expired) {
+                break;
+              }
             }
           }
 
           // remember this in case the next frame comes immediately
-          ratecontrol_next_frame_start = ratecontrol_frame_start +
-                                         std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                                           ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+          packet_pacer.finish_block();
 
-          frame_network_latency_logger.second_point_now_and_log();
+          // Account only for the shards actually submitted to the transport.
+          // The deadline path can abort a frame partway through, so counting
+          // every shard up front would systematically overstate the wire rate
+          // exactly when the deadline feature is doing its job. Shards are
+          // ordered data-first, so the split below is exact. The UDP/IP header
+          // sizes are still synthesized rather than read back from the socket.
+          const auto sent_data_shards = std::min(
+            next_shard_to_send,
+            shards.data_shard_count()
+          );
+          frame_data_shards += sent_data_shards;
+          frame_fec_shards += next_shard_to_send - sent_data_shards;
+          frame_wire_bytes += next_shard_to_send * wire_bytes_per_shard;
 
           BOOST_LOG(verbose) << "Sent Frame seq ["sv << packet->frame_index() << "] pts ["sv << timestamp
-                             << "] shards ["sv << shards.size() << "/"sv << shards.percentage << "%]"sv
+                             << "] shards ["sv << next_shard_to_send << "/"sv << shards.size()
+                             << " @ "sv << shards.fec_percentage() << "%]"sv
                              << (frame_is_dupe ? " Dupe" : "")
                              << (packet->is_idr() ? " Key" : "")
-                             << (packet->after_ref_frame_invalidation ? " RFI" : "");
+                             << (packet->after_ref_frame_invalidation ? " RFI" : "")
+                             << (frame_packet_deadline_expired ? " Deadline" : "");
 
           ++blockIndex;
-          lowseq += shards.size();
+          // Advance by every stamped shard, not just the ones that left the
+          // host -- see sequence_numbers_consumed() for why a partial send must
+          // not rewind the sequence space.
+          lowseq += queueing::sequence_numbers_consumed(
+            shards.size(),
+            next_shard_to_send
+          );
         });
+
+        frame_network_latency_logger.second_point_now_and_log();
+
+        if (frame_packet_deadline_expired) {
+          video::metrics_record_drop(
+            packet->channel_data,
+            video::pipeline_drop_reason_e::packet_deadline
+          );
+          frame_queue_policy.mark_recovery_required(
+            session,
+            queueing::frame_recovery_cause_e::
+              packet_deadline_expired
+          );
+          const auto request_allowed =
+            frame_queue_policy.allow_idr_request(
+              session,
+              queueing::frame_queue_clock_t::now()
+            );
+          video::metrics_record_idr_request(
+            session,
+            request_allowed
+          );
+          if (request_allowed) {
+            session->video.idr_events->raise(true);
+          }
+
+          const auto recovery_log_suffix =
+            request_allowed ?
+              " and requested a fresh IDR" :
+              "; IDR retry remains pending";
+          BOOST_LOG(warning)
+            << "Video frame "
+            << packet->frame_index()
+            << " exceeded its "
+            << congestion_target.max_frame_queue_us
+            << " us packet deadline; aborted remaining packets"
+            << recovery_log_suffix;
+        }
+
+        if (packet->last_sent_timestamp) {
+          auto duration_ms = [](std::chrono::steady_clock::duration duration) {
+            return std::chrono::duration<double, std::milli>(duration).count();
+          };
+
+          const auto send_queue_time =
+            packet->encoded_timestamp ?
+              frame_broadcast_started - *packet->encoded_timestamp :
+              std::chrono::steady_clock::duration::zero();
+          const auto capture_to_last_send_time =
+            frame_capture_timestamp ?
+              *packet->last_sent_timestamp - *frame_capture_timestamp :
+              std::chrono::steady_clock::duration::zero();
+
+          video::metrics_record_network_frame(
+            packet->channel_data,
+            duration_ms(send_queue_time),
+            duration_ms(frame_packetization_time),
+            duration_ms(frame_fec_time),
+            duration_ms(frame_pacer_time),
+            duration_ms(frame_send_time),
+            duration_ms(capture_to_last_send_time),
+            frame_wire_bytes,
+            frame_data_shards,
+            frame_fec_shards
+          );
+          emit_frame_trace(
+            *packet,
+            frame_capture_timestamp,
+            frame_packet_deadline_expired ?
+              "packet_deadline_expired"sv :
+              "sent"sv
+          );
+        } else if (frame_packet_deadline_expired) {
+          emit_frame_trace(
+            *packet,
+            frame_capture_timestamp,
+            "packet_deadline_expired"sv
+          );
+        }
 
         session->video.lowseq = lowseq;
       } catch (const std::exception &e) {
+        emit_frame_trace(*packet, frame_capture_timestamp, "send_failed");
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();
         std::this_thread::sleep_for(100ms);
       }
@@ -1673,12 +2041,14 @@ namespace stream {
     shutdown_event->raise(true);
   }
 
-  void audioBroadcastThread(udp::socket &sock) {
+  void audioBroadcastThread(
+    udp::socket &sock,
+    transport::ITransport &transport
+  ) {
     auto shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     auto packets = mail::man->queue<audio::packet_t>(mail::audio_packets);
 
     audio_packet_t audio_packet;
-    fec::rs_t rs {reed_solomon_new(RTPA_DATA_SHARDS, RTPA_FEC_SHARDS)};
     crypto::aes_t iv(16);
 
     // For unknown reasons, the RS parity matrix computed by our RS implementation
@@ -1686,15 +2056,50 @@ namespace stream {
     // but we can simply replace it with the matrix generated by OpenFEC which
     // works correctly. This is possible because the data and FEC shard count is
     // constant and known in advance.
-    const unsigned char parity[] = {0x77, 0x40, 0x38, 0x0e, 0xc7, 0xa7, 0x0d, 0x6c};
-    memcpy(rs.get()->p, parity, sizeof(parity));
+    constexpr uint8_t parity[] = {
+      0x77,
+      0x40,
+      0x38,
+      0x0e,
+      0xc7,
+      0xa7,
+      0x0d,
+      0x6c
+    };
+    fec::legacy_reed_solomon_fec_controller_t legacy_fec_controller;
+    fec::IFecController &fec_controller = legacy_fec_controller;
+    auto audio_fec_encoder = fec_controller.create_in_place_encoder({
+      .data_shards = RTPA_DATA_SHARDS,
+      .parity_shards = RTPA_FEC_SHARDS,
+      .generator_matrix = std::span<const uint8_t> {parity},
+    });
+    if (!audio_fec_encoder) {
+      BOOST_LOG(error)
+        << "Failed to create the legacy audio FEC encoder"sv;
+      shutdown_event->raise(true);
+      return;
+    }
+
+    auto timer = platf::create_high_precision_timer();
+    if (!timer || !*timer) {
+      BOOST_LOG(error)
+        << "Failed to create timer, aborting audio broadcast thread";
+      shutdown_event->raise(true);
+      return;
+    }
+    pacing::high_precision_pacer_timer_t pacer_timer {*timer};
+    pacing::rate_limited_pacer_registry_t packet_pacers {
+      pacer_timer
+    };
 
     audio_packet.rtp.header = 0x80;
     audio_packet.rtp.packetType = 97;
     audio_packet.rtp.ssrc = 0;
 
     // Audio traffic is sent on this thread
-    platf::adjust_thread_priority(platf::thread_priority_e::high);
+    platf::adjust_thread_priority(
+      priority::worker_priority(priority::media_priority_e::audio)
+    );
 
     while (auto packet = packets->pop()) {
       if (shutdown_event->peek()) {
@@ -1703,6 +2108,8 @@ namespace stream {
 
       TUPLE_2D_REF(channel_data, packet_data, *packet);
       auto session = (session_t *) channel_data;
+      pacing::IPacketPacer &packet_pacer =
+        packet_pacers.for_session(session);
 
       auto sequenceNumber = session->audio.sequenceNumber;
       auto timestamp = session->audio.timestamp;
@@ -1726,6 +2133,29 @@ namespace stream {
       session->audio.timestamp += session->config.audio.packetDuration;
 
       auto peer_address = session->audio.peer.address();
+      constexpr size_t udp_header_size = 8;
+      const size_t ip_header_size =
+        peer_address.is_v6() ? 40 : 20;
+      const auto maximum_wire_packet_size =
+        std::max(sizeof(audio_packet), sizeof(audio_fec_packet_t)) +
+        static_cast<std::size_t>(bytes) +
+        udp_header_size +
+        ip_header_size;
+      const auto packet_duration_ms = std::max(
+        session->config.audio.packetDuration,
+        1
+      );
+      const auto audio_pacing_bitrate =
+        static_cast<std::uint64_t>(maximum_wire_packet_size) *
+        8 *
+        (1 + RTPA_FEC_SHARDS) *
+        1000 /
+        static_cast<std::uint64_t>(packet_duration_ms);
+      packet_pacer.begin_frame({
+        .packet_size_bytes = maximum_wire_packet_size,
+        .bitrate_bps = audio_pacing_bitrate,
+        .max_burst_duration = 1ms,
+      });
       try {
         auto send_info = platf::send_info_t {
           (const char *) &audio_packet,
@@ -1737,7 +2167,9 @@ namespace stream {
           session->audio.peer.port(),
           session->localAddress,
         };
-        platf::send(send_info);
+        static_cast<void>(packet_pacer.wait_before_batch());
+        static_cast<void>(transport.send_datagram(send_info));
+        packet_pacer.record_batch(1);
 
         auto &fec_packet = session->audio.fec_packet;
         // initialize the FEC header at the beginning of the FEC block
@@ -1748,7 +2180,13 @@ namespace stream {
 
         // generate parity shards at the end of the FEC block
         if ((sequenceNumber + 1) % RTPA_DATA_SHARDS == 0) {
-          reed_solomon_encode(rs.get(), shards_p.begin(), RTPA_TOTAL_SHARDS, bytes);
+          audio_fec_encoder->encode(
+            std::span<uint8_t *> {
+              shards_p.begin(),
+              RTPA_TOTAL_SHARDS
+            },
+            static_cast<std::size_t>(bytes)
+          );
 
           for (auto x = 0; x < RTPA_FEC_SHARDS; ++x) {
             fec_packet.rtp.sequenceNumber = util::endian::big<std::uint16_t>(sequenceNumber + x + 1);
@@ -1764,10 +2202,13 @@ namespace stream {
               session->audio.peer.port(),
               session->localAddress,
             };
-            platf::send(send_info);
+            static_cast<void>(packet_pacer.wait_before_batch());
+            static_cast<void>(transport.send_datagram(send_info));
+            packet_pacer.record_batch(1);
             BOOST_LOG(verbose) << "Audio FEC ["sv << (sequenceNumber & ~(RTPA_DATA_SHARDS - 1)) << ' ' << x << "] ::  send..."sv;
           }
         }
+        packet_pacer.finish_block();
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Broadcast audio failed "sv << e.what();
         std::this_thread::sleep_for(100ms);
@@ -1827,10 +2268,24 @@ namespace stream {
     }
 
     ctx.message_queue_queue = std::make_shared<message_queue_queue_t::element_type>(30);
+    ctx.transport =
+      std::make_unique<transport::game_stream_transport_t>();
 
-    ctx.video_thread = std::thread {videoBroadcastThread, std::ref(ctx.video_sock)};
-    ctx.audio_thread = std::thread {audioBroadcastThread, std::ref(ctx.audio_sock)};
-    ctx.control_thread = std::thread {controlBroadcastThread, &ctx.control_server};
+    ctx.video_thread = std::thread {
+      videoBroadcastThread,
+      std::ref(ctx.video_sock),
+      std::ref(*ctx.transport)
+    };
+    ctx.audio_thread = std::thread {
+      audioBroadcastThread,
+      std::ref(ctx.audio_sock),
+      std::ref(*ctx.transport)
+    };
+    ctx.control_thread = std::thread {
+      controlBroadcastThread,
+      &ctx.control_server,
+      std::ref(*ctx.transport)
+    };
 
     ctx.recv_thread = std::thread {recvThread, std::ref(ctx)};
 
@@ -1942,6 +2397,19 @@ namespace stream {
 
     // Enable local prioritization and QoS tagging on video traffic if requested by the client
     auto address = session->video.peer.address();
+    session->congestion_controller->on_path_changed({
+      .address_family =
+        address.is_v6() ?
+          congestion::path_address_family_e::ipv6 :
+          congestion::path_address_family_e::ipv4,
+      .remote_port = session->video.peer.port(),
+      .maximum_datagram_size_bytes = static_cast<std::uint32_t>(
+        session->config.packetsize + MAX_RTP_HEADER_SIZE +
+        (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0)
+      ),
+      .is_relayed = false,
+      .observed_at = congestion::congestion_clock_t::now(),
+    });
     session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
 
     BOOST_LOG(debug) << "Start capturing Video"sv;
@@ -1977,7 +2445,13 @@ namespace stream {
     }
 
     inline bool send(session_t& session, const std::string_view &payload) {
-      return session.broadcast_ref->control_server.send(payload, session.control.peer);
+      const auto result =
+        session.broadcast_ref->transport->send_reliable({
+          .payload = payload,
+          .channel = session.broadcast_ref->control_server,
+          .peer = session.control.peer,
+        });
+      return !result.succeeded();
     }
 
     std::string uuid(const session_t& session) {
@@ -1986,6 +2460,27 @@ namespace stream {
 
     bool uuid_match(const session_t &session, const std::string_view& uuid) {
       return session.device_uuid == uuid;
+    }
+
+    bool hestia_session_match(
+      const session_t &session,
+      const std::string_view &uuid,
+      const std::string_view &session_id
+    ) {
+      return session.device_uuid == uuid &&
+             (session_id.empty() || session.hestia_session_id == session_id);
+    }
+
+    display_snapshot_t display_snapshot(const session_t &session) {
+      return {
+        .hestia_session_id = session.hestia_session_id,
+        .display_name = session.display_name,
+        .width = session.config.monitor.width,
+        .height = session.config.monitor.height,
+        .fps = session.config.monitor.framerate,
+        .virtual_display = session.session_scoped_virtual_display,
+        .isolated = session.isolated_session,
+      };
     }
 
     bool update_device_info(session_t& session, const std::string& name, const crypto::PERM& newPerm) {
@@ -2299,6 +2794,7 @@ namespace stream {
       session->launch_session_id = launch_session.id;
       session->device_name = launch_session.device_name;
       session->device_uuid = launch_session.unique_id;
+      session->hestia_session_id = launch_session.hestia_session_id;
       session->permission = launch_session.perm;
       session->isolated_session = launch_session.isolated_session;
       session->isolated_runtime_owner_id = launch_session.isolated_runtime_owner_id;
@@ -2313,6 +2809,30 @@ namespace stream {
 
       session->config = config;
       session->config.monitor.display_name = launch_session.display_name;
+      const auto encoder_bitrate_bps =
+        static_cast<std::uint64_t>(
+          std::max(session->config.monitor.bitrate, 0)
+        ) * 1000;
+      const auto fec_ratio_ppm =
+        static_cast<std::uint32_t>(
+          std::clamp(config::stream.fec_percentage, 0, 100)
+        ) * 10'000;
+      session->congestion_controller =
+        std::make_unique<
+          congestion::legacy_fixed_congestion_controller_t
+        >(congestion::congestion_target_t {
+          .encoder_bitrate_bps = encoder_bitrate_bps,
+          .pacing_bitrate_bps =
+            congestion::gamestream_fixed_pacing_bitrate_bps(
+              encoder_bitrate_bps,
+              fec_ratio_ppm
+            ),
+          .fec_ratio_ppm = fec_ratio_ppm,
+          .max_frame_queue_us =
+            congestion::gamestream_fixed_frame_queue_us(
+              session->config.monitor.framerate
+            ),
+        });
       // Preserve the session-scoped marker for process-level cleanup decisions,
       // but move responsibility for releasing the output into session_t.
       launch_session.session_virtual_display_cleanup_pending = false;

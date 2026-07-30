@@ -81,12 +81,28 @@ namespace stream {
       uint64_t client_lost_count {0};  ///< Of those, ended by client loss (drops).
     };
 
+    struct display_snapshot_t {
+      std::string hestia_session_id;
+      std::string display_name;
+      int width {0};
+      int height {0};
+      int fps {0};
+      bool virtual_display {false};
+      bool isolated {false};
+    };
+
     /** @brief Snapshot of the termination/reconnection stats. */
     termination_stats_t termination_stats();
 
     std::shared_ptr<session_t> alloc(config_t &config, rtsp_stream::launch_session_t &launch_session);
     std::string uuid(const session_t& session);
     bool uuid_match(const session_t& session, const std::string_view& uuid);
+    bool hestia_session_match(
+      const session_t &session,
+      const std::string_view &uuid,
+      const std::string_view &session_id
+    );
+    display_snapshot_t display_snapshot(const session_t &session);
     bool update_device_info(session_t& session, const std::string& name, const crypto::PERM& newPerm);
     int start(session_t &session, const std::string &addr_string);
     void stop(session_t &session, termination_reason_e reason = termination_reason_e::UNKNOWN);

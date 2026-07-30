@@ -108,6 +108,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/confighttp.h"
         "${CMAKE_SOURCE_DIR}/src/rtsp.cpp"
         "${CMAKE_SOURCE_DIR}/src/rtsp.h"
+        "${CMAKE_SOURCE_DIR}/src/shard_dispatch.cpp"
+        "${CMAKE_SOURCE_DIR}/src/shard_dispatch.h"
         "${CMAKE_SOURCE_DIR}/src/stream.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream.h"
         "${CMAKE_SOURCE_DIR}/src/pipeline_metrics.cpp"

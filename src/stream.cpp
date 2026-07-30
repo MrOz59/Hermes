@@ -37,6 +37,7 @@ extern "C" {
 #include "packet_pacer.h"
 #include "platform/common.h"
 #include "process.h"
+#include "shard_dispatch.h"
 #include "stream.h"
 #include "sync.h"
 #include "system_tray.h"
@@ -1756,8 +1757,6 @@ namespace stream {
             session->localAddress,
           };
 
-          size_t next_shard_to_send = 0;
-
           // RTP video timestamps use a 90 KHz clock and the frame_timestamp from when the frame was captured
           // When a timestamp isn't available (duplicate frames), the timestamp from rate control is used instead.
           bool frame_is_dupe = false;
@@ -1768,8 +1767,10 @@ namespace stream {
           using rtp_tick = std::chrono::duration<uint32_t, std::ratio<1, 90000>>;
           uint32_t timestamp = std::chrono::round<rtp_tick>(*packet->frame_timestamp - video_epoch).count();
 
-          // set FEC info now that we know for sure what our percentage will be for this frame
-          for (auto x = 0; x < shards.size(); ++x) {
+          // Stamp, and optionally encrypt, one shard before it may be batched.
+          // Every shard reaching this point consumes its sequence number,
+          // whether or not the deadline later stops it from being sent.
+          auto prepare_shard = [&](std::size_t x) {
             auto *inspect = (video_packet_raw_t *) shards.data(x);
 
             inspect->packet.fecInfo =
@@ -1804,116 +1805,94 @@ namespace stream {
               std::copy(std::begin(iv), std::end(iv), prefix->iv);
               session->video.cipher->encrypt(std::string_view {(char *) inspect, (size_t) blocksize}, prefix->tag, (uint8_t *) inspect, &iv);
             }
+          };
 
-            if (x - next_shard_to_send + 1 >= send_batch_size || x + 1 == shards.size()) {
-              // Do pacing within the frame.
-              // Also trigger pacing before the first send_batch() of the frame
-              // to account for the last send_batch() of the previous frame.
-              const auto pacing_wait =
-                packet_pacer.wait_before_batch();
-              frame_pacer_time += pacing_wait.waited;
-              if (pacing_wait.deadline_expired) {
-                frame_packet_deadline_expired = true;
-                break;
-              }
+          auto send_shard_batch = [&](std::size_t offset, std::size_t count) -> std::size_t {
+            batch_info.block_offset = offset;
+            batch_info.block_count = count;
 
-              size_t current_batch_size = x - next_shard_to_send + 1;
-              batch_info.block_offset = next_shard_to_send;
-              batch_info.block_count = current_batch_size;
-
-              frame_send_batch_latency_logger.first_point_now();
-              const auto send_started = std::chrono::steady_clock::now();
-              // Use a batched send if it's supported on this platform
-              const auto batch_result =
-                transport.send_datagram_batch(batch_info);
-              auto current_batch_processed = current_batch_size;
-              if (batch_result.requires_fallback()) {
-                // Batched send is not available, so send each packet individually
-                BOOST_LOG(verbose) << "Falling back to unbatched send"sv;
-                current_batch_processed = 0;
-                for (auto y = 0; y < current_batch_size; y++) {
-                  if (
-                    frame_packet_deadline &&
-                    std::chrono::steady_clock::now() >
-                      *frame_packet_deadline
-                  ) {
-                    frame_packet_deadline_expired = true;
-                    break;
-                  }
-
-                  auto send_info = platf::send_info_t {
-                    shards.prefix(next_shard_to_send + y),
-                    shards.prefix_size(),
-                    shards.data(next_shard_to_send + y),
-                    shards.block_size(),
-                    (uintptr_t) sock.native_handle(),
-                    peer_address,
-                    session->video.peer.port(),
-                    session->localAddress,
-                  };
-
-                  if (!packet->first_sent_timestamp) {
-                    packet->first_sent_timestamp =
-                      std::chrono::steady_clock::now();
-                  }
-                  static_cast<void>(
-                    transport.send_datagram(send_info)
-                  );
-                  ++current_batch_processed;
+            frame_send_batch_latency_logger.first_point_now();
+            const auto send_started = std::chrono::steady_clock::now();
+            // Use a batched send if it's supported on this platform
+            const auto batch_result = transport.send_datagram_batch(batch_info);
+            auto processed = count;
+            if (batch_result.requires_fallback()) {
+              // Batched send is not available, so send each packet individually
+              BOOST_LOG(verbose) << "Falling back to unbatched send"sv;
+              processed = 0;
+              for (std::size_t y = 0; y < count; y++) {
+                if (
+                  frame_packet_deadline &&
+                  std::chrono::steady_clock::now() > *frame_packet_deadline
+                ) {
+                  break;
                 }
-              } else if (!packet->first_sent_timestamp) {
-                packet->first_sent_timestamp = send_started;
-              }
-              const auto send_finished = std::chrono::steady_clock::now();
-              frame_send_time += send_finished - send_started;
-              frame_send_batch_latency_logger.second_point_now_and_log();
 
-              if (current_batch_processed == 0) {
-                break;
-              }
+                auto send_info = platf::send_info_t {
+                  shards.prefix(offset + y),
+                  shards.prefix_size(),
+                  shards.data(offset + y),
+                  shards.block_size(),
+                  (uintptr_t) sock.native_handle(),
+                  peer_address,
+                  session->video.peer.port(),
+                  session->localAddress,
+                };
 
-              packet->last_sent_timestamp = send_finished;
-              const auto batch_data_end = std::min(
-                next_shard_to_send + current_batch_processed,
-                shards.data_shard_count()
-              );
-              const auto batch_data_start = std::min(
-                next_shard_to_send,
-                shards.data_shard_count()
-              );
-              const auto batch_data_packets =
-                batch_data_end - batch_data_start;
-              session->congestion_controller->on_packets_sent({
-                .frame_id =
-                  static_cast<std::uint32_t>(packet->frame_index()),
-                .first_sequence_number = static_cast<std::uint16_t>(
-                  lowseq + next_shard_to_send
-                ),
-                .packet_count =
-                  static_cast<std::uint16_t>(
-                    current_batch_processed
-                  ),
-                .data_packet_count =
-                  static_cast<std::uint16_t>(batch_data_packets),
-                .repair_packet_count = static_cast<std::uint16_t>(
-                  current_batch_processed -
-                  batch_data_packets
-                ),
-                .wire_bytes_per_packet =
-                  static_cast<std::uint32_t>(wire_bytes_per_shard),
-                .is_key_frame = packet->is_idr(),
-                .sent_at = send_finished,
-              });
-
-              packet_pacer.record_batch(
-                current_batch_processed
-              );
-              next_shard_to_send +=
-                current_batch_processed;
-              if (frame_packet_deadline_expired) {
-                break;
+                if (!packet->first_sent_timestamp) {
+                  packet->first_sent_timestamp = std::chrono::steady_clock::now();
+                }
+                static_cast<void>(transport.send_datagram(send_info));
+                ++processed;
               }
+            } else if (!packet->first_sent_timestamp) {
+              packet->first_sent_timestamp = send_started;
             }
+            frame_send_batch_latency_logger.second_point_now_and_log();
+            return processed;
+          };
+
+          auto report_batch = [&](
+                                std::size_t offset,
+                                std::size_t count,
+                                std::size_t data_count,
+                                std::chrono::steady_clock::time_point sent_at
+                              ) {
+            session->congestion_controller->on_packets_sent({
+              .frame_id = static_cast<std::uint32_t>(packet->frame_index()),
+              .first_sequence_number = static_cast<std::uint16_t>(lowseq + offset),
+              .packet_count = static_cast<std::uint16_t>(count),
+              .data_packet_count = static_cast<std::uint16_t>(data_count),
+              .repair_packet_count = static_cast<std::uint16_t>(count - data_count),
+              .wire_bytes_per_packet = static_cast<std::uint32_t>(wire_bytes_per_shard),
+              .is_key_frame = packet->is_idr(),
+              .sent_at = sent_at,
+            });
+          };
+
+          const auto dispatched = dispatch::dispatch_shards(
+            {
+              .shard_count = shards.size(),
+              .data_shard_count = shards.data_shard_count(),
+              .batch_size = send_batch_size,
+              .wire_bytes_per_shard = wire_bytes_per_shard,
+              .packet_deadline = frame_packet_deadline,
+            },
+            packet_pacer,
+            {
+              .prepare_shard = prepare_shard,
+              .send_batch = send_shard_batch,
+              .on_batch_sent = report_batch,
+            }
+          );
+
+          frame_pacer_time += dispatched.pacer_time;
+          frame_send_time += dispatched.send_time;
+          if (dispatched.deadline_expired) {
+            frame_packet_deadline_expired = true;
+          }
+          if (dispatched.last_sent_at) {
+            packet->last_sent_timestamp = *dispatched.last_sent_at;
           }
 
           // remember this in case the next frame comes immediately
@@ -1922,19 +1901,15 @@ namespace stream {
           // Account only for the shards actually submitted to the transport.
           // The deadline path can abort a frame partway through, so counting
           // every shard up front would systematically overstate the wire rate
-          // exactly when the deadline feature is doing its job. Shards are
-          // ordered data-first, so the split below is exact. The UDP/IP header
-          // sizes are still synthesized rather than read back from the socket.
-          const auto sent_data_shards = std::min(
-            next_shard_to_send,
-            shards.data_shard_count()
-          );
-          frame_data_shards += sent_data_shards;
-          frame_fec_shards += next_shard_to_send - sent_data_shards;
-          frame_wire_bytes += next_shard_to_send * wire_bytes_per_shard;
+          // exactly when the deadline feature is doing its job. The UDP/IP
+          // header sizes are still synthesized rather than read back from the
+          // socket.
+          frame_data_shards += dispatched.data_shards_sent;
+          frame_fec_shards += dispatched.repair_shards_sent;
+          frame_wire_bytes += dispatched.wire_bytes_sent;
 
           BOOST_LOG(verbose) << "Sent Frame seq ["sv << packet->frame_index() << "] pts ["sv << timestamp
-                             << "] shards ["sv << next_shard_to_send << "/"sv << shards.size()
+                             << "] shards ["sv << dispatched.shards_sent << "/"sv << shards.size()
                              << " @ "sv << shards.fec_percentage() << "%]"sv
                              << (frame_is_dupe ? " Dupe" : "")
                              << (packet->is_idr() ? " Key" : "")
@@ -1947,7 +1922,7 @@ namespace stream {
           // not rewind the sequence space.
           lowseq += queueing::sequence_numbers_consumed(
             shards.size(),
-            next_shard_to_send
+            dispatched.shards_sent
           );
         });
 

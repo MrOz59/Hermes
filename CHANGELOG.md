@@ -11,8 +11,6 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-07-29
-
 ### Added
 - The Web UI updater can now opt in to the rolling Hermes nightly channel with
   `notify_pre_releases` (disabled by default). Nightly checks compare both the

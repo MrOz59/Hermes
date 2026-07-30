@@ -2,6 +2,26 @@
 
 Thank you for your interest in contributing to this project! We welcome contributions from the community and appreciate your efforts to make this project better.
 
+## Branches
+
+- **`main`** — the released line. It takes reported bug fixes and small,
+  self-contained features. It is the default branch, so this is where a pull
+  request lands unless you say otherwise, and it is the right target for
+  anything users are waiting on.
+- **`dev`** — the transport and virtual-display migration (the `H*` phases in
+  `HERMES-PRODUCT-ROADMAP.md`). It reorganizes internals and moves faster than
+  a release can absorb, which is exactly why it is kept separate. Help is
+  welcome here too; just say in the pull request that you are targeting `dev`,
+  so review can account for ground that is still moving.
+
+`dev` merges `main` regularly; `main` never merges `dev`. A fix that users are
+waiting on therefore belongs in `main` first and reaches `dev` on the next
+merge — landing it only in `dev` means it misses the release.
+
+Add changelog entries under `## [Unreleased]` in `CHANGELOG.md`. Dated release
+sections are created by `scripts/bump-version.sh` when a version is cut, so
+please do not add one by hand.
+
 ## How to Contribute
 
 ### Reporting Issues

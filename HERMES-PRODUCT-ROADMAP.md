@@ -29,8 +29,10 @@ Legend: `[x]` done · `[~]` partially done · `[ ]` not started.
   transport, congestion, pacing, FEC, and telemetry boundaries without changing
   GameStream behavior.
 - [~] H2: bounded, deadline-aware GameStream pacing and recovery are
-  implemented. The remaining gate is the paired Hestia reference/candidate
-  matrix on LAN and constrained network profiles.
+  implemented. The first real paired Hestia test exposed an IDR
+  burst/deadline recovery loop; the candidate now uses bounded frame bursts,
+  serialization-aware send windows, and a stronger IDR cooldown. The
+  LAN/constrained reference/candidate matrix must still validate the fix.
 - [ ] H3: conservative adaptive bitrate using feedback already available in the
   compatible ecosystem.
 - [ ] H4–H6: optional Hermes feedback extensions, ICE/connectivity, and native

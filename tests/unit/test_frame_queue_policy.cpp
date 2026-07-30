@@ -151,11 +151,11 @@ TEST(FrameQueuePolicyTest, RateLimitsExternalIdrRequestsPerSession) {
   ));
   EXPECT_FALSE(policy.allow_idr_request(
     session_key(1),
-    now + 99ms
+    now + 249ms
   ));
   EXPECT_TRUE(policy.allow_idr_request(
     session_key(1),
-    now + 100ms
+    now + 250ms
   ));
   EXPECT_TRUE(policy.allow_idr_request(
     session_key(2),
@@ -221,9 +221,9 @@ TEST(FrameQueuePolicyTest, DeferredRecoveryRetriesWhenGateOpens) {
   });
   const auto retried = policy.evaluate({
     .session_key = key,
-    .encoded_at = now + 100ms,
+    .encoded_at = now + 250ms,
     .max_queue_time = 30ms,
-    .now = now + 100ms,
+    .now = now + 250ms,
   });
 
   EXPECT_FALSE(limited.should_send());
@@ -252,7 +252,7 @@ TEST(FrameQueuePolicyTest, PacketDeadlineCauseSurvivesDeferredRetry) {
   });
   const auto retried = policy.evaluate({
     .session_key = key,
-    .now = now + 100ms,
+    .now = now + 250ms,
   });
 
   EXPECT_EQ(
@@ -285,9 +285,9 @@ TEST(FrameQueuePolicyTest, ExpiredReplacementIdrKeepsDeferredRetry) {
   });
   const auto retried = policy.evaluate({
     .session_key = key,
-    .encoded_at = now + 100ms,
+    .encoded_at = now + 250ms,
     .max_queue_time = 30ms,
-    .now = now + 100ms,
+    .now = now + 250ms,
   });
 
   EXPECT_FALSE(expired_idr.should_send());

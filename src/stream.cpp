@@ -1452,13 +1452,16 @@ namespace stream {
       auto session = (session_t *) packet->channel_data;
       const auto congestion_target =
         session->congestion_controller->target();
+      const auto frame_queue_budget =
+        congestion::gamestream_frame_queue_budget(
+          congestion_target.max_frame_queue_us,
+          packet->is_idr()
+        );
       const auto queue_decision = frame_queue_policy.evaluate({
         .session_key = session,
         .is_idr = packet->is_idr(),
         .encoded_at = packet->encoded_timestamp,
-        .max_queue_time = std::chrono::microseconds {
-          congestion_target.max_frame_queue_us
-        },
+        .max_queue_time = frame_queue_budget,
         .now = frame_broadcast_started,
       });
       if (!queue_decision.should_send()) {
@@ -1500,7 +1503,7 @@ namespace stream {
           } else {
             BOOST_LOG(warning)
               << "Video send queue exceeded "
-              << congestion_target.max_frame_queue_us
+              << frame_queue_budget.count()
               << " us; dropped frame "
               << packet->frame_index()
               << " and requested a fresh IDR"sv;
@@ -1523,16 +1526,10 @@ namespace stream {
 
       std::optional<std::chrono::steady_clock::time_point>
         frame_packet_deadline;
-      if (
-        congestion_target.max_frame_queue_us > 0 &&
-        packet->encoded_timestamp
-      ) {
-        frame_packet_deadline =
-          *packet->encoded_timestamp +
-          std::chrono::microseconds {
-            congestion_target.max_frame_queue_us
-          };
-      }
+      auto frame_packet_send_window =
+        std::chrono::microseconds {
+          congestion_target.max_frame_queue_us
+        };
       bool frame_packet_deadline_expired = false;
 
       frame_network_latency_logger.first_point_now();
@@ -1676,7 +1673,7 @@ namespace stream {
           pacing_bitrate =
             congestion::gamestream_pacing_ceiling_bps;
         }
-        if (frame_packet_deadline) {
+        if (congestion_target.max_frame_queue_us > 0) {
           std::size_t estimated_shards = 0;
           for (
             auto block = fec_blocks_begin;
@@ -1703,28 +1700,46 @@ namespace stream {
           }
 
           const auto now = std::chrono::steady_clock::now();
-          if (now < *frame_packet_deadline) {
-            const auto deadline_pacing_bitrate =
-              congestion::gamestream_deadline_pacing_bitrate_bps(
-                pacing_bitrate,
-                estimated_shards * wire_bytes_per_shard,
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                  *frame_packet_deadline - now
-                )
+          const auto pacing_plan =
+            congestion::gamestream_frame_pacing_plan(
+              pacing_bitrate,
+              estimated_shards * wire_bytes_per_shard,
+              frame_packet_send_window,
+              packet->is_idr()
+            );
+          const auto base_pacing_bitrate = pacing_bitrate;
+          pacing_bitrate = pacing_plan.pacing_bitrate_bps;
+          frame_packet_send_window = pacing_plan.send_window;
+          frame_packet_deadline =
+            now + frame_packet_send_window;
+
+          if (packet->is_idr()) {
+            BOOST_LOG(info)
+              << "IDR pacing plan: "
+              << base_pacing_bitrate
+              << " -> "
+              << pacing_bitrate
+              << " bps, "
+              << estimated_shards
+              << " shards, "
+              << frame_packet_send_window.count()
+              << " us send window"
+              << (
+                pacing_plan.window_extended ?
+                  " (serialization-aware extension)" :
+                  ""
               );
-            if (deadline_pacing_bitrate > pacing_bitrate) {
-              if (packet->is_idr()) {
-                BOOST_LOG(info)
-                  << "Raising IDR pacing from "
-                  << pacing_bitrate
-                  << " to "
-                  << deadline_pacing_bitrate
-                  << " bps to fit "
-                  << estimated_shards
-                  << " shards inside the remaining packet deadline";
-              }
-              pacing_bitrate = deadline_pacing_bitrate;
-            }
+          }
+          if (pacing_plan.window_capped) {
+            BOOST_LOG(warning)
+              << (
+                packet->is_idr() ?
+                  "IDR" :
+                  "Video frame"
+              )
+              << " serialization window hit its safety cap at "
+              << frame_packet_send_window.count()
+              << " us";
           }
         }
         packet_pacer.begin_frame({
@@ -2010,7 +2025,7 @@ namespace stream {
             << "Video frame "
             << packet->frame_index()
             << " exceeded its "
-            << congestion_target.max_frame_queue_us
+            << frame_packet_send_window.count()
             << " us packet deadline; aborted remaining packets"
             << recovery_log_suffix;
         }

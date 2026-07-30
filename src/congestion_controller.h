@@ -83,6 +83,13 @@ namespace stream::congestion {
     std::uint32_t estimated_available_bitrate_bps = 0;
   };
 
+  struct frame_pacing_plan_t {
+    std::uint64_t pacing_bitrate_bps = 0;
+    std::chrono::microseconds send_window {};
+    bool window_extended = false;
+    bool window_capped = false;
+  };
+
   /**
    * @brief Per-session congestion-control policy.
    *
@@ -127,6 +134,8 @@ namespace stream::congestion {
   inline constexpr std::size_t gamestream_frame_fec_feedback_size = 21;
   inline constexpr std::uint64_t gamestream_pacing_ceiling_bps =
     800'000'000;
+  inline constexpr std::uint64_t gamestream_frame_burst_ceiling_bps =
+    100'000'000;
 
   /**
    * @brief Derive the fixed H2 pacing rate from the configured encoder rate.
@@ -154,6 +163,29 @@ namespace stream::congestion {
    */
   [[nodiscard]] std::uint32_t gamestream_fixed_frame_queue_us(
     int framerate
+  ) noexcept;
+  /**
+   * @brief Give recovery frames extra admission time without relaxing normal
+   * frame queue bounds.
+   */
+  [[nodiscard]] std::chrono::microseconds
+    gamestream_frame_queue_budget(
+      std::uint32_t base_queue_us,
+      bool is_key_frame
+    ) noexcept;
+  /**
+   * @brief Plan a bounded frame burst and a feasible host-departure window.
+   *
+   * Large recovery frames may use more than the average encoder bitrate, but
+   * the burst is capped and the send window is extended when serialization
+   * cannot fit the nominal two-frame budget. This avoids converting one late
+   * IDR into another impossible IDR request.
+   */
+  [[nodiscard]] frame_pacing_plan_t gamestream_frame_pacing_plan(
+    std::uint64_t base_pacing_bitrate_bps,
+    std::size_t estimated_wire_bytes,
+    std::chrono::microseconds nominal_send_window,
+    bool is_key_frame
   ) noexcept;
   [[nodiscard]] std::optional<legacy_loss_report_t>
     parse_gamestream_legacy_loss_report(std::string_view payload) noexcept;

@@ -35,7 +35,7 @@ captureThreadSync (capture + encode for active sessions)
 | `capture_ctx_queue` | 30 session contexts per capture worker | `safe::queue_t` clears the queued batch when full, then inserts the newest item | Aggregated live depth/capacity, per-instance high watermark, and process-lifetime clear/discard counters under `runtime.video_queues.capture_contexts`. |
 | Per-session `images` event | one pending image | A newer capture replaces the pending image | `frames_replaced_before_encode`, attributed per session. |
 | `encode_session_ctx_queue` | 30 session contexts | Clears the queued batch when full, then inserts the newest item | Live depth/capacity, lifetime high watermark, and process-lifetime clear/discard counters under `runtime.video_queues.encode_session_contexts`. |
-| Global `mail::video_packets` | 32 encoded access units | IDRs atomically supersede older units from their own session and enter at the front; ordinary overflow still clears the batch and marks affected sessions for recovery; over-budget units are discarded on dequeue; explicit and recovery IDR requests share a 100 ms per-session cooldown | Per-frame encode-entry timestamp, send-queue p50/p95/p99, overflow attribution, `frames_dropped_send_deadline`, `frames_dropped_packet_deadline`, `frames_dropped_recovery_wait`, `frames_dropped_reference_superseded`, `idr_requests_accepted`, and `idr_requests_rate_limited`. |
+| Global `mail::video_packets` | 32 encoded access units | IDRs atomically supersede older units from their own session and enter at the front; ordinary overflow still clears the batch and marks affected sessions for recovery; over-budget units are discarded on dequeue; explicit and recovery IDR requests share a 250 ms per-session cooldown | Per-frame encode-entry timestamp, send-queue p50/p95/p99, overflow attribution, `frames_dropped_send_deadline`, `frames_dropped_packet_deadline`, `frames_dropped_recovery_wait`, `frames_dropped_reference_superseded`, `idr_requests_accepted`, and `idr_requests_rate_limited`. |
 | Intra-frame shard batches | at most 64 packets, 64 KiB, or 1 ms of the pacing target per send call | Processed inline; no persistent application queue. A batch whose scheduled departure exceeds the frame's absolute deadline is discarded; fallback datagrams are checked individually | Packetization, FEC, pacing, socket-send, wire-byte, shard, packet-deadline, and recovery metrics. |
 
 The global encoded queue mixes active sessions, but every packet carries its
@@ -194,12 +194,15 @@ target and actual synthesized wire packet size. Consecutive batches are
 scheduled with the high-resolution monotonic timer. Idle time and scheduler
 oversleep reset the next departure to the actual current time, so late wakeups
 cannot accumulate credit and trigger catch-up microbursts. When an access
-unit's estimated wire size cannot fit the remaining packet deadline at the
-average target, Hermes raises only that frame's pacing rate enough to use at
-most 85% of the remaining window, capped at the legacy 800 Mbps ceiling. This
-handles normal encoder size variation and prevents an unrecoverable
-IDR/deadline loop without restoring the old unbounded burst. Existing
-`pacer_ms` session telemetry records the effective wait.
+unit's estimated wire size cannot fit the nominal packet window at the average
+target, Hermes builds a serialization-aware plan. Normal frames may burst up
+to 4× the average rate and recovery frames up to 8×, with a shared 100 Mbps
+ceiling. If that bounded rate cannot serialize the frame inside the nominal
+window, the host-departure deadline is extended to the calculated cost, capped
+at 100 ms for normal frames and 250 ms for IDRs. This handles encoder size
+variation without either restoring the old 800 Mbps microburst or turning one
+large IDR into an impossible deadline/recovery loop. Existing `pacer_ms`
+session telemetry records the effective wait.
 
 The audio broadcaster now owns the same kind of per-session state. Ordinary
 Opus packets retain their natural capture cadence. At the end of each 4+2 FEC
@@ -221,9 +224,12 @@ H2 increments below.
 
 ## Hermes H2 encoded-frame queue protection
 
-The fixed GameStream congestion target now sets `max_frame_queue_us` to two
+The fixed GameStream congestion target sets `max_frame_queue_us` to two
 negotiated frame intervals, rounded up and clamped to 8–100 ms. Invalid
-framerates use a defensive 50 ms fallback. A zero budget still explicitly
+framerates use a defensive 50 ms fallback. Normal frames use that admission
+budget directly; IDRs receive up to three times the budget, capped at 100 ms,
+so a recovery frame queued behind a short in-flight burst is not rejected
+before it can repair the reference chain. A zero budget still explicitly
 disables deadline enforcement for injected or future controllers.
 
 Immediately after dequeue, the video broadcaster compares this budget with the
@@ -259,10 +265,13 @@ the subsequent H2 sections.
 
 ## Hermes H2 packet-deadline enforcement
 
-The queue budget is now also an absolute departure deadline:
-`encoded_timestamp + max_frame_queue_us`. `packet_pacing_config_t` carries it
-as an optional monotonic time point. A zero budget or missing encode timestamp
-keeps the previous no-deadline behavior.
+After queue admission and packet sizing, Hermes derives a separate
+host-departure deadline from the frame's estimated wire bytes and bounded
+pacing rate. The deadline begins when packet transmission is ready rather than
+reusing `encoded_timestamp`; queue wait and serialization cost therefore are
+not charged against the same two-frame window twice.
+`packet_pacing_config_t` carries the resulting optional monotonic time point.
+A zero queue budget keeps the previous no-deadline behavior.
 
 The video broadcaster checks the deadline before beginning another FEC block,
 before every paced batch, and before every individual datagram when the
@@ -278,7 +287,7 @@ are consumed; remaining shards and later FEC blocks are abandoned.
 
 Any deadline abort increments `frames_dropped_packet_deadline`, emits the
 `packet_deadline_expired` frame trace, marks the reference chain broken, and
-requests a fresh IDR through the same 100 ms per-session gate. A suppressed
+requests a fresh IDR through the same 250 ms per-session gate. A suppressed
 request remains pending and is retried by a later dependent frame.
 
 This remains host-only GameStream policy: packet headers, encryption,
@@ -316,7 +325,7 @@ Tests cover class order, worker mapping, generic priority insertion, mixed
 session FIFO preservation, and the new counter.
 
 Explicit GameStream IDR requests and internal queue-recovery requests pass
-through the same monotonic 100 ms gate keyed by session. A rejected internal
+through the same monotonic 250 ms gate keyed by session. A rejected internal
 attempt does not consume the recovery retry: dependent frames remain suppressed
 and retry when the window opens. The mandatory capture-start IDR is exempt,
 and accepted IDRs continue through the normal rate-aware video pacer.

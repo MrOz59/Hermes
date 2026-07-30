@@ -380,3 +380,95 @@ TEST(CongestionControllerTest, FixedQueueBudgetUsesTwoFrameIntervals) {
     50'000
   );
 }
+
+TEST(CongestionControllerTest, KeyFramesGetBoundedQueueAdmissionHeadroom) {
+  EXPECT_EQ(
+    stream::congestion::gamestream_frame_queue_budget(
+      33'334,
+      false
+    ),
+    33'334us
+  );
+  EXPECT_EQ(
+    stream::congestion::gamestream_frame_queue_budget(
+      33'334,
+      true
+    ),
+    100ms
+  );
+  EXPECT_EQ(
+    stream::congestion::gamestream_frame_queue_budget(
+      16'668,
+      true
+    ),
+    50'004us
+  );
+  EXPECT_EQ(
+    stream::congestion::gamestream_frame_queue_budget(
+      0,
+      true
+    ),
+    0us
+  );
+}
+
+TEST(CongestionControllerTest, RecoveryFrameExtendsImpossibleWindow) {
+  constexpr std::uint64_t base_pacing_bitrate = 7'534'560;
+  const auto plan =
+    stream::congestion::gamestream_frame_pacing_plan(
+      base_pacing_bitrate,
+      434 * 1200,
+      33'334us,
+      true
+    );
+
+  EXPECT_EQ(
+    plan.pacing_bitrate_bps,
+    base_pacing_bitrate * 8
+  );
+  EXPECT_GT(plan.send_window, 33'334us);
+  EXPECT_LT(plan.send_window, 250ms);
+  EXPECT_TRUE(plan.window_extended);
+  EXPECT_FALSE(plan.window_capped);
+}
+
+TEST(CongestionControllerTest, NormalFrameKeepsNominalWindow) {
+  const auto plan =
+    stream::congestion::gamestream_frame_pacing_plan(
+      8'000'000,
+      20'000,
+      33'334us,
+      false
+    );
+
+  EXPECT_EQ(plan.pacing_bitrate_bps, 8'000'000);
+  EXPECT_EQ(plan.send_window, 33'334us);
+  EXPECT_FALSE(plan.window_extended);
+  EXPECT_FALSE(plan.window_capped);
+}
+
+TEST(CongestionControllerTest, FrameBurstAndWindowRemainBounded) {
+  const auto high_bitrate =
+    stream::congestion::gamestream_frame_pacing_plan(
+      40'000'000,
+      1'000'000,
+      33'334us,
+      true
+    );
+  EXPECT_EQ(
+    high_bitrate.pacing_bitrate_bps,
+    stream::congestion::gamestream_frame_burst_ceiling_bps
+  );
+
+  const auto enormous =
+    stream::congestion::gamestream_frame_pacing_plan(
+      1'000'000,
+      10'000'000,
+      33'334us,
+      true
+    );
+  EXPECT_EQ(enormous.pacing_bitrate_bps, 8'000'000);
+  EXPECT_EQ(enormous.send_window, 250ms);
+  EXPECT_TRUE(enormous.window_extended);
+  EXPECT_TRUE(enormous.window_capped);
+}

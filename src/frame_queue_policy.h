@@ -67,7 +67,7 @@ namespace stream::queueing {
   public:
     static constexpr std::size_t max_sessions = 32;
     static constexpr auto minimum_idr_request_interval =
-      std::chrono::milliseconds {100};
+      std::chrono::milliseconds {250};
 
     [[nodiscard]] frame_queue_decision_t evaluate(
       const frame_queue_request_t &request

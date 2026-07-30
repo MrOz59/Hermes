@@ -1294,21 +1294,37 @@ namespace confighttp {
     send_response(response, output_tree);
   }
 
+  bool hestia_multi_user_sessions_enabled() {
+#ifdef __linux__
+    return config::video.virtual_display_backend == "hermes_kms" &&
+           config::video.hermes_kms_isolated_sessions.load();
+#else
+    return false;
+#endif
+  }
+
   /**
-   * @brief Return the static Hestia extension capabilities.
+   * @brief Return Hestia extension capabilities and the host-selected session policy.
    *
    * This endpoint is deliberately read-only and unauthenticated so clients can
-   * detect Hermes before an extension authentication flow is available. It does
-   * not expose host state or permit any host-control operation.
+   * detect Hermes before an extension authentication flow is available. It
+   * exposes only feature/readiness booleans and permits no host-control
+   * operation.
    */
   void getHestiaCapabilities(resp_https_t response, req_https_t request) {
     print_req(request);
 
 #ifdef __linux__
-    const bool multi_user_sessions =
+    const bool isolated_sessions_supported =
       config::video.virtual_display_backend == "hermes_kms";
+    const bool multi_user_sessions = hestia_multi_user_sessions_enabled();
+    const bool isolated_sessions_ready =
+      multi_user_sessions &&
+      VDISPLAY::getHermesKmsStatus().isolated_runtime_ready;
 #else
+    const bool isolated_sessions_supported = false;
     const bool multi_user_sessions = false;
+    const bool isolated_sessions_ready = false;
 #endif
     const nlohmann::json capabilities {
       {"ok", true},
@@ -1330,9 +1346,10 @@ namespace confighttp {
       {"features", {
         {"virtual_display", true},
         {"virtual_display_backend", {"evdi", "hermes_kms"}},
-        // Additive protocol-v1 capability. Older Hestia builds ignore it;
-        // aware clients require a successful reservation instead of silently
-        // falling back to the legacy single-user stream.
+        // This is the host-selected session policy, not merely a statement
+        // that the binary contains experimental isolation code. Older Hestia
+        // builds use this boolean directly, so it must remain false while the
+        // host configuration has independent sessions disabled.
         {"multi_user_sessions", multi_user_sessions},
         {"hermes_kms_multi_output", {
           {"supported", true},
@@ -1342,6 +1359,9 @@ namespace confighttp {
         {"hermes_kms_isolated_sessions", {
           {"status", "prototype"},
           {"experimental", true},
+          {"supported", isolated_sessions_supported},
+          {"enabled", multi_user_sessions},
+          {"ready", isolated_sessions_ready},
           {"profiles", {"application", "desktop"}},
           {"max_sessions", 8},
         }},
@@ -1520,30 +1540,25 @@ namespace confighttp {
   }
 
   /**
-   * Enable the isolated Hermes-KMS execution path for an API-aware client.
+   * Validate the host-selected isolated Hermes-KMS execution policy.
    *
-   * This is intentionally a runtime opt-in: it removes the old requirement to
-   * edit hermes.conf before Hestia can reserve an independent display, while
-   * refusing to switch modes underneath a legacy global session.
+   * A client request must never enable independent sessions implicitly. The
+   * Hermes configuration remains authoritative, while Hestia negotiates the
+   * mode advertised by the capabilities endpoint.
    */
-  bool enable_hestia_isolated_sessions(
+  bool validate_hestia_isolated_sessions(
     std::string &error_code,
     std::string &error_message
   ) {
 #ifdef __linux__
-    static std::mutex activation_mutex;
-    std::lock_guard lock(activation_mutex);
-
     if (config::video.virtual_display_backend != "hermes_kms") {
       error_code = "hermes_kms_required";
       error_message = "Independent Hestia sessions require the Hermes-KMS virtual display backend";
       return false;
     }
-    const bool already_enabled = config::video.hermes_kms_isolated_sessions;
-    if (!already_enabled &&
-        (rtsp_stream::session_count() > 0 || proc::proc.running() > 0)) {
-      error_code = "legacy_session_active";
-      error_message = "Stop the existing shared session before enabling independent Hestia sessions";
+    if (!config::video.hermes_kms_isolated_sessions.load()) {
+      error_code = "isolated_sessions_disabled";
+      error_message = "Independent sessions are disabled in the Hermes configuration";
       return false;
     }
 
@@ -1556,10 +1571,6 @@ namespace confighttp {
       return false;
     }
 
-    if (!already_enabled) {
-      config::video.hermes_kms_isolated_sessions = true;
-      BOOST_LOG(info) << "[HestiaAPI] Enabled experimental independent-session mode at runtime";
-    }
     return true;
 #else
     error_code = "unsupported_platform";
@@ -1613,10 +1624,10 @@ namespace confighttp {
       if (isolated) {
         std::string error_code;
         std::string error_message;
-        if (!enable_hestia_isolated_sessions(error_code, error_message)) {
+        if (!validate_hestia_isolated_sessions(error_code, error_message)) {
           send_hestia_error(
             response,
-            error_code == "legacy_session_active" ?
+            error_code == "isolated_sessions_disabled" ?
               SimpleWeb::StatusCode::client_error_conflict :
               SimpleWeb::StatusCode::server_error_service_unavailable,
             error_code.c_str(),

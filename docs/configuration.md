@@ -1299,6 +1299,10 @@ editing the `conf` file in a text editor. Use the examples as reference.
             service user access with one administrator prompt. Hermes maps
             private session index N to
             <code>/run/hermes-kms-seatd/N/seatd.sock</code>.
+            This setting is controlled only by the host administrator. Hestia
+            follows the value advertised by Hermes and cannot enable
+            independent sessions through a prepare request. When disabled,
+            API-aware clients continue with the normal shared GameStream path.
             If <code>hermes_kms_multi_output</code> is also set, independent
             sessions take precedence and the shared-desktop mode is ignored.
             @warning{Per-session audio, a full Plasma desktop, and simultaneous

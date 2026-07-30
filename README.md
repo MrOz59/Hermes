@@ -99,7 +99,8 @@ Clients should gate enhanced behavior on the capabilities response. If the
 Hestia API is unavailable, clients should continue through the normal
 Moonlight/Sunshine flow.
 
-When `features.multi_user_sessions` is true, an updated Hestia client can add
+When `features.multi_user_sessions` is true, the host administrator has
+explicitly enabled independent sessions and an updated Hestia client can add
 `"session": {"isolation": "required"}` to `session/prepare`. Hermes then
 reserves a private Hermes-KMS card, compositor, process tree, capture pipeline,
 and input seat for that paired client. The returned `session_id` must be sent
@@ -107,6 +108,10 @@ back to `session/stop`; it is a lifecycle token, while the paired TLS
 certificate remains the authorization boundary.
 Display status is resolved through that same certificate, so each Hestia sees
 only its own active session and Hermes-KMS output.
+
+A client request never enables this host setting. When it is false, Hestia
+prepares a normal shared GameStream session even if the installed Hermes binary
+supports the experimental code.
 
 ## Clients
 
@@ -183,6 +188,13 @@ validated yet. Both experiments default to off; the existing single-output
 path remains the default. If both experimental flags are present,
 `hermes_kms_isolated_sessions` takes precedence and shared-desktop
 multi-output management stays inactive.
+
+The capabilities response mirrors this host choice:
+`features.multi_user_sessions` is true only while
+`hermes_kms_isolated_sessions` is enabled with the Hermes-KMS backend. The
+`features.hermes_kms_isolated_sessions` object separately reports
+`supported`, `enabled`, and runtime `ready` state. Hestia follows the host
+policy; it does not turn isolation on by itself.
 
 The input-only/Remote Input application is intentionally unavailable in this
 mode because it has no compositor session that identifies which private seat

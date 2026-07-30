@@ -42,3 +42,26 @@ TEST_F(PreflightTest, ShapeIsWellFormed) {
   // `ready` must be the negation of "any check failed".
   ASSERT_EQ(preflight["ready"].get<bool>(), !any_fail);
 }
+
+TEST(HestiaCapabilitiesTest, MultiUserSessionsFollowHostConfiguration) {
+  const auto original_backend = config::video.virtual_display_backend;
+  const bool original_isolated =
+    config::video.hermes_kms_isolated_sessions.load();
+
+#ifdef __linux__
+  config::video.virtual_display_backend = "hermes_kms";
+  config::video.hermes_kms_isolated_sessions.store(false);
+  EXPECT_FALSE(confighttp::hestia_multi_user_sessions_enabled());
+
+  config::video.hermes_kms_isolated_sessions.store(true);
+  EXPECT_TRUE(confighttp::hestia_multi_user_sessions_enabled());
+
+  config::video.virtual_display_backend = "evdi";
+  EXPECT_FALSE(confighttp::hestia_multi_user_sessions_enabled());
+#else
+  EXPECT_FALSE(confighttp::hestia_multi_user_sessions_enabled());
+#endif
+
+  config::video.virtual_display_backend = original_backend;
+  config::video.hermes_kms_isolated_sessions.store(original_isolated);
+}

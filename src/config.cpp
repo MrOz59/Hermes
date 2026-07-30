@@ -1198,8 +1198,9 @@ namespace config {
     string_f(vars, "output_name", video.output_name);
     string_restricted_f(vars, "virtual_display_backend", video.virtual_display_backend, {"evdi"sv, "hermes_kms"sv});
     bool_f(vars, "hermes_kms_multi_output", video.hermes_kms_multi_output);
-    // hermes_kms_isolated_sessions is atomic (the Hestia API may enable it at
-    // runtime), so parse into a plain bool and store the result.
+    // This flag is read concurrently by the Hestia API and the session
+    // runtime. Configuration remains authoritative; client requests never
+    // enable independent sessions implicitly.
     bool isolated_sessions = video.hermes_kms_isolated_sessions.load();
     bool_f(vars, "hermes_kms_isolated_sessions", isolated_sessions);
     video.hermes_kms_isolated_sessions.store(isolated_sessions);

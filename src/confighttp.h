@@ -31,6 +31,14 @@ namespace confighttp {
    *         such as a software-encoding fallback, do not block).
    */
   nlohmann::json hestia_preflight_json();
+
+  /**
+   * @brief Return whether the host configuration requires independent Hestia sessions.
+   *
+   * This is a negotiated policy flag, not a compile-time support flag. Client
+   * requests cannot change it.
+   */
+  bool hestia_multi_user_sessions_enabled();
 }  // namespace confighttp
 
 // mime types map

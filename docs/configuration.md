@@ -1290,12 +1290,14 @@ editing the `conf` file in a text editor. Use the examples as reference.
             starts a private compositor, application process tree, capture
             pipeline, runtime directory, and tagged virtual input set for each
             Moonlight client. Application profiles use Gamescope; desktop
-            profiles use the Weston desktop shell. Requires the development
-            Hermes-KMS UAPI 9 driver and its session-seat udev rule,
-            <code>gamescope</code>, <code>weston</code>, and one packaged
-            <code>hermes-kms-seatd@N.service</code> private broker per device.
-            The Hermes user must be a member of the <code>seat</code> group.
-            Hermes maps device N to
+            profiles use the Weston desktop shell. Requires Hermes-KMS UAPI 9
+            or newer, <code>gamescope</code>, and <code>weston</code>. The
+            UAPI 10 package supplies a host-compatible card plus four private
+            session cards by default. Its role-aware udev rule starts one
+            packaged <code>hermes-kms-seatd@N.service</code> broker per private
+            card automatically; the Audio/Video setup button grants the Hermes
+            service user access with one administrator prompt. Hermes maps
+            private session index N to
             <code>/run/hermes-kms-seatd/N/seatd.sock</code>.
             If <code>hermes_kms_multi_output</code> is also set, independent
             sessions take precedence and the shared-desktop mode is ignored.
@@ -1318,10 +1320,9 @@ editing the `conf` file in a text editor. Use the examples as reference.
             virtual_display_backend = hermes_kms
             hermes_kms_isolated_sessions = true
             @endcode
-            Load the driver with:
+            Prepare the packaged pool with:
             @code{}
-            initial_enabled=0 devices=2 outputs=1
-            sudo systemctl enable --now hermes-kms-seatd@1.service hermes-kms-seatd@2.service
+            sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto
             @endcode</td>
     </tr>
 </table>

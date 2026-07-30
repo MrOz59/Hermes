@@ -13,6 +13,7 @@ extern "C" {
 #include <array>
 #include <cctype>
 #include <format>
+#include <ranges>
 #include <set>
 #include <unordered_map>
 #include <utility>
@@ -41,6 +42,145 @@ using asio::ip::udp;
 using namespace std::literals;
 
 namespace rtsp_stream {
+  launch_raise_result_e pending_launch_registry_t::insert(
+    std::shared_ptr<launch_session_t> launch_session,
+    clock_t::time_point expires_at
+  ) {
+    std::lock_guard lock(mutex_);
+    const auto &address = launch_session->expected_remote_address;
+
+    // An address-less launch can only be matched positionally by
+    // find_for_address, so at most one may ever be pending. Likewise, a bound
+    // launch cannot coexist with an unbound one that could steal its
+    // connection.
+    const auto unbound_pending = std::ranges::any_of(entries_, [](const entry_t &entry) {
+      return entry.launch_session &&
+             entry.launch_session->expected_remote_address.empty();
+    });
+    if (address.empty() || unbound_pending) {
+      if (!entries_.empty()) {
+        return launch_raise_result_e::unbound_launch_pending;
+      }
+      entries_.push_back({std::move(launch_session), expires_at});
+      return launch_raise_result_e::accepted;
+    }
+
+    const auto same_address = [&address](const entry_t &entry) {
+      return entry.launch_session &&
+             entry.launch_session->expected_remote_address == address;
+    };
+    if (std::ranges::any_of(entries_, same_address)) {
+      return launch_raise_result_e::address_conflict;
+    }
+
+    entries_.push_back({std::move(launch_session), expires_at});
+    return launch_raise_result_e::accepted;
+  }
+
+  std::shared_ptr<launch_session_t>
+  pending_launch_registry_t::find_for_address(
+    const std::string_view &address
+  ) const {
+    std::lock_guard lock(mutex_);
+    const auto exact = std::ranges::find_if(entries_, [address](const entry_t &entry) {
+      return entry.launch_session &&
+             !entry.launch_session->expected_remote_address.empty() &&
+             entry.launch_session->expected_remote_address == address;
+    });
+    if (exact != entries_.end()) {
+      return exact->launch_session;
+    }
+
+    // Preserve compatibility for internal/legacy launches that predate peer
+    // binding. Only an unbound launch may match an arbitrary peer: a launch
+    // that recorded an address is claimed by that address alone, so an
+    // unrelated connection (port scan, or an unreadable peer endpoint) can
+    // never be handed another client's session keys.
+    const auto unbound = std::ranges::find_if(entries_, [](const entry_t &entry) {
+      return entry.launch_session &&
+             entry.launch_session->expected_remote_address.empty();
+    });
+    return unbound == entries_.end() ? nullptr : unbound->launch_session;
+  }
+
+  std::shared_ptr<launch_session_t>
+  pending_launch_registry_t::erase(uint32_t launch_session_id) {
+    std::lock_guard lock(mutex_);
+    const auto it = std::ranges::find_if(entries_, [launch_session_id](const entry_t &entry) {
+      return entry.launch_session && entry.launch_session->id == launch_session_id;
+    });
+    if (it == entries_.end()) {
+      return nullptr;
+    }
+    auto launch_session = std::move(it->launch_session);
+    entries_.erase(it);
+    return launch_session;
+  }
+
+  std::vector<std::shared_ptr<launch_session_t>>
+  pending_launch_registry_t::erase_client(const std::string_view &uuid) {
+    std::vector<std::shared_ptr<launch_session_t>> removed;
+    std::lock_guard lock(mutex_);
+    for (auto it = entries_.begin(); it != entries_.end();) {
+      if (it->launch_session && it->launch_session->unique_id == uuid) {
+        removed.emplace_back(std::move(it->launch_session));
+        it = entries_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    return removed;
+  }
+
+  std::vector<std::shared_ptr<launch_session_t>>
+  pending_launch_registry_t::expire(clock_t::time_point now) {
+    std::vector<std::shared_ptr<launch_session_t>> expired;
+    std::lock_guard lock(mutex_);
+    for (auto it = entries_.begin(); it != entries_.end();) {
+      if (it->expires_at <= now) {
+        if (it->launch_session) {
+          expired.emplace_back(std::move(it->launch_session));
+        }
+        it = entries_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    return expired;
+  }
+
+  std::vector<std::shared_ptr<launch_session_t>>
+  pending_launch_registry_t::drain() {
+    std::vector<std::shared_ptr<launch_session_t>> launches;
+    std::lock_guard lock(mutex_);
+    launches.reserve(entries_.size());
+    for (auto &entry : entries_) {
+      if (entry.launch_session) {
+        launches.emplace_back(std::move(entry.launch_session));
+      }
+    }
+    entries_.clear();
+    return launches;
+  }
+
+  std::optional<pending_launch_registry_t::clock_t::time_point>
+  pending_launch_registry_t::next_expiry() const {
+    std::lock_guard lock(mutex_);
+    if (entries_.empty()) {
+      return std::nullopt;
+    }
+    return std::ranges::min_element(
+      entries_,
+      {},
+      &entry_t::expires_at
+    )->expires_at;
+  }
+
+  size_t pending_launch_registry_t::size() const {
+    std::lock_guard lock(mutex_);
+    return entries_.size();
+  }
+
   static void release_pending_virtual_display(launch_session_t &session) {
 #ifdef __linux__
     if (session.isolated_session &&
@@ -428,6 +568,8 @@ namespace rtsp_stream {
   class rtsp_server_t {
   public:
     ~rtsp_server_t() {
+      raised_timer.cancel();
+      release_pending_launches(pending_launches.drain());
       clear();
     }
 
@@ -491,7 +633,15 @@ namespace rtsp_stream {
 
       auto socket = std::move(next_socket);
 
-      auto launch_session {launch_event.view(0s)};
+      release_pending_launches(
+        pending_launches.expire(pending_launch_registry_t::clock_t::now())
+      );
+      boost::system::error_code peer_ec;
+      const auto peer_endpoint = socket->sock.remote_endpoint(peer_ec);
+      const auto peer_address = peer_ec ?
+        std::string {} :
+        net::addr_to_normalized_string(peer_endpoint.address());
+      auto launch_session = pending_launches.find_for_address(peer_address);
       if (launch_session) {
         // Associate the current RTSP session with this socket and start reading
         socket->session = launch_session;
@@ -524,28 +674,34 @@ namespace rtsp_stream {
      *       the session will be discarded.
      * @param launch_session Streaming session information.
      */
-    bool session_raise(std::shared_ptr<launch_session_t> launch_session) {
-      // If a launch event is still pending, don't overwrite it.
-      if (launch_event.view(0s)) {
+    launch_raise_result_e session_raise(std::shared_ptr<launch_session_t> launch_session) {
+      release_pending_launches(
+        pending_launches.expire(pending_launch_registry_t::clock_t::now())
+      );
+
+      const auto client_name = launch_session->device_name;
+      const auto client_address = launch_session->expected_remote_address;
+      const auto result = pending_launches.insert(
+        launch_session,
+        pending_launch_registry_t::clock_t::now() +
+          config::stream.ping_timeout
+      );
+      if (result != launch_raise_result_e::accepted) {
+        if (result == launch_raise_result_e::address_conflict) {
+          BOOST_LOG(warning) << "RTSP launch from " << client_name
+                             << " collides with another pending handshake at address "
+                             << client_address
+                             << "; clients sharing one address must launch one at a time";
+        } else {
+          BOOST_LOG(warning) << "RTSP launch from " << client_name
+                             << " cannot overlap a pending handshake that has no bound address";
+        }
         release_pending_virtual_display(*launch_session);
-        return false;
+        return result;
       }
 
-      // Raise the new launch session to prepare for the RTSP handshake
-      launch_event.raise(std::move(launch_session));
-
-      // Arm the timer to expire this launch session if the client times out
-      raised_timer.expires_after(config::stream.ping_timeout);
-      raised_timer.async_wait([this](const boost::system::error_code &ec) {
-        if (!ec) {
-          auto discarded = launch_event.pop(0s);
-          if (discarded) {
-            BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
-            release_pending_virtual_display(*discarded);
-          }
-        }
-      });
-      return true;
+      request_pending_timer_rearm();
+      return result;
     }
 
     /**
@@ -553,38 +709,39 @@ namespace rtsp_stream {
      * @param launch_session_id The ID of the session to clear.
      */
     void session_clear(uint32_t launch_session_id) {
-      // We currently only support a single pending RTSP session,
-      // so the ID should always match the one for that session.
-      auto launch_session = launch_event.view(0s);
-      if (launch_session) {
-        if (launch_session->id != launch_session_id) {
-          BOOST_LOG(error) << "Attempted to clear unexpected session: "sv << launch_session_id << " vs "sv << launch_session->id;
-        } else {
-          raised_timer.cancel();
-          auto cleared = launch_event.pop();
-          if (cleared) {
-            release_pending_virtual_display(*cleared);
-          }
-        }
+      auto launch_session = pending_launches.erase(launch_session_id);
+      if (!launch_session) {
+        // With several launches in flight, an unmatched ID means the launch
+        // already expired or was cancelled -- worth seeing when tracing
+        // lifecycle problems, but not an error on its own.
+        BOOST_LOG(debug) << "No pending launch to clear for session "sv
+                         << launch_session_id;
+        return;
       }
+
+      release_pending_virtual_display(*launch_session);
+      request_pending_timer_rearm();
     }
 
     bool cancel_pending_launch(const std::string_view &uuid) {
-      auto launch_session = launch_event.view(0s);
-      if (!launch_session || launch_session->unique_id != uuid) {
+      auto launches = pending_launches.erase_client(uuid);
+      if (launches.empty()) {
         return false;
       }
 
-      {
-        // cmd_announce holds this from its final cancellation check through
-        // insertion/start. If it won the race, the HTTPS caller subsequently
-        // finds and terminates the newly active session.
-        std::lock_guard<std::mutex> lifecycle_lock {
-          launch_session->lifecycle_mutex
-        };
-        launch_session->cancelled.store(true, std::memory_order_release);
+      for (auto &launch_session : launches) {
+        {
+          // cmd_announce holds this from its final cancellation check through
+          // insertion/start. If it won the race, the HTTPS caller subsequently
+          // finds and terminates the newly active session.
+          std::lock_guard<std::mutex> lifecycle_lock {
+            launch_session->lifecycle_mutex
+          };
+          launch_session->cancelled.store(true, std::memory_order_release);
+        }
+        release_pending_virtual_display(*launch_session);
       }
-      session_clear(launch_session->id);
+      request_pending_timer_rearm();
       return true;
     }
 
@@ -596,8 +753,6 @@ namespace rtsp_stream {
       auto lg = _session_slots.lock();
       return _session_slots->size();
     }
-
-    safe::event_t<std::shared_ptr<launch_session_t>> launch_event;
 
     /**
      * @brief Clear launch sessions.
@@ -615,6 +770,7 @@ namespace rtsp_stream {
           stream::session::stop(slot, stream::session::termination_reason_e::SERVER_STOPPED);
           stream::session::join(slot);
 
+          video::metrics_unregister_session(&slot);
           i = _session_slots->erase(i);
         } else {
           i++;
@@ -628,6 +784,7 @@ namespace rtsp_stream {
      */
     void remove(const std::shared_ptr<stream::session_t> &session) {
       auto lg = _session_slots.lock();
+      video::metrics_unregister_session(session.get());
       _session_slots->erase(session);
     }
 
@@ -637,11 +794,9 @@ namespace rtsp_stream {
      */
     void insert(const std::shared_ptr<stream::session_t> &session) {
       auto lg = _session_slots.lock();
-      const bool first = _session_slots->empty();
       _session_slots->emplace(session);
-      if (first) {
-        // Start pipeline metrics fresh for a new streaming session.
-        video::metrics_reset();
+      if (!video::metrics_register_session(session.get())) {
+        BOOST_LOG(warning) << "Pipeline metrics capacity reached; session will stream without telemetry";
       }
       BOOST_LOG(info) << "New streaming session started [active sessions: "sv << _session_slots->size() << ']';
     }
@@ -664,6 +819,8 @@ namespace rtsp_stream {
      */
     void stop() {
       acceptor.close();
+      raised_timer.cancel();
+      release_pending_launches(pending_launches.drain());
       io_context.stop();
       clear();
     }
@@ -679,6 +836,44 @@ namespace rtsp_stream {
       }
 
       return nullptr;
+    }
+
+    std::shared_ptr<stream::session_t>
+    find_hestia_session(
+      const std::string_view &uuid,
+      const std::string_view &session_id
+    ) {
+      auto lg = _session_slots.lock();
+
+      for (auto &slot : *_session_slots) {
+        if (slot && stream::session::hestia_session_match(*slot, uuid, session_id)) {
+          return slot;
+        }
+      }
+
+      return nullptr;
+    }
+
+    std::optional<session_display_snapshot_t>
+    session_display_snapshot(const std::string_view &uuid) {
+      auto lg = _session_slots.lock();
+
+      for (auto &slot : *_session_slots) {
+        if (!slot || !stream::session::uuid_match(*slot, uuid)) {
+          continue;
+        }
+        const auto snapshot = stream::session::display_snapshot(*slot);
+        return session_display_snapshot_t {
+          .hestia_session_id = snapshot.hestia_session_id,
+          .display_name = snapshot.display_name,
+          .width = snapshot.width,
+          .height = snapshot.height,
+          .fps = snapshot.fps,
+          .virtual_display = snapshot.virtual_display,
+          .isolated = snapshot.isolated,
+        };
+      }
+      return std::nullopt;
     }
 
     std::list<std::string>
@@ -702,6 +897,7 @@ namespace rtsp_stream {
         }
         stream::session::stop(*slot, stream::session::termination_reason_e::SERVER_STOPPED);
         stream::session::join(*slot);
+        video::metrics_unregister_session(slot.get());
         _session_slots->erase(it);
         return true;
       }
@@ -709,6 +905,42 @@ namespace rtsp_stream {
     }
 
   private:
+    static void release_pending_launches(
+      std::vector<std::shared_ptr<launch_session_t>> launches
+    ) {
+      for (auto &launch_session : launches) {
+        if (launch_session) {
+          BOOST_LOG(debug) << "Pending RTSP launch expired/cleared: "
+                           << launch_session->unique_id;
+          release_pending_virtual_display(*launch_session);
+        }
+      }
+    }
+
+    void request_pending_timer_rearm() {
+      boost::asio::post(io_context, [this]() {
+        arm_pending_timer();
+      });
+    }
+
+    void arm_pending_timer() {
+      raised_timer.cancel();
+      const auto next_expiry = pending_launches.next_expiry();
+      if (!next_expiry) {
+        return;
+      }
+      raised_timer.expires_at(*next_expiry);
+      raised_timer.async_wait([this](const boost::system::error_code &ec) {
+        if (ec) {
+          return;
+        }
+        release_pending_launches(
+          pending_launches.expire(pending_launch_registry_t::clock_t::now())
+        );
+        arm_pending_timer();
+      });
+    }
+
     std::unordered_map<std::string_view, cmd_func_t> _map_cmd_cb;
 
     sync_util::sync_t<std::set<std::shared_ptr<stream::session_t>>> _session_slots;
@@ -716,14 +948,22 @@ namespace rtsp_stream {
     boost::asio::io_context io_context;
     tcp::acceptor acceptor {io_context};
     boost::asio::steady_timer raised_timer {io_context};
+    pending_launch_registry_t pending_launches;
 
     std::shared_ptr<socket_t> next_socket;
   };
 
   rtsp_server_t server {};
 
-  bool launch_session_raise(std::shared_ptr<launch_session_t> launch_session) {
+  launch_raise_result_e launch_session_raise_ex(
+    std::shared_ptr<launch_session_t> launch_session
+  ) {
     return server.session_raise(std::move(launch_session));
+  }
+
+  bool launch_session_raise(std::shared_ptr<launch_session_t> launch_session) {
+    return launch_session_raise_ex(std::move(launch_session)) ==
+           launch_raise_result_e::accepted;
   }
 
   void launch_session_clear(uint32_t launch_session_id) {
@@ -747,6 +987,18 @@ namespace rtsp_stream {
 
   std::shared_ptr<stream::session_t> find_session(const std::string_view& uuid) {
     return server.find_session(uuid);
+  }
+
+  std::shared_ptr<stream::session_t> find_hestia_session(
+    const std::string_view &uuid,
+    const std::string_view &session_id
+  ) {
+    return server.find_hestia_session(uuid, session_id);
+  }
+
+  std::optional<session_display_snapshot_t>
+  session_display_snapshot(const std::string_view &uuid) {
+    return server.session_display_snapshot(uuid);
   }
 
   std::list<std::string> get_all_session_uuids() {

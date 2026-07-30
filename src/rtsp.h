@@ -6,10 +6,14 @@
 
 // standard includes
 #include <atomic>
+#include <chrono>
+#include <deque>
 #include <list>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <vector>
 
 // local includes
 #include "crypto.h"
@@ -43,6 +47,12 @@ namespace rtsp_stream {
 
     std::string device_name;
     std::string unique_id;
+    // Opaque Hestia API reservation token. It never replaces certificate
+    // authentication; it narrows lifecycle operations to this launch.
+    std::string hestia_session_id;
+    // Address of the HTTPS peer that created this launch. Concurrent pending
+    // RTSP handshakes are associated with their originating client by address.
+    std::string expected_remote_address;
     crypto::PERM perm;
 
     bool input_only;
@@ -90,6 +100,75 @@ namespace rtsp_stream {
   };
 
   /**
+   * Why a pending launch could not be published for the RTSP handshake.
+   *
+   * The distinction matters to API-aware clients: an address collision is
+   * resolved by serializing the two launches, whereas an unbound-launch
+   * conflict means the host is genuinely mid-handshake.
+   */
+  enum class launch_raise_result_e {
+    accepted,
+    /// Another pending launch already claims this HTTPS peer address. Two
+    /// clients sharing one public address (NAT/CGNAT) hit this legitimately.
+    address_conflict,
+    /// An address-less legacy/internal launch is already pending; it can only
+    /// be matched positionally, so it must complete before another is queued.
+    unbound_launch_pending,
+  };
+
+  /**
+   * Thread-safe registry for launches waiting for their RTSP handshake.
+   *
+   * GameStream does not carry the paired-client certificate into RTSP. The
+   * HTTPS peer address is therefore used to disambiguate simultaneous clients.
+   * A second pending launch from the same address is rejected until the first
+   * handshake completes, preventing the wrong encryption key/session from
+   * being assigned.
+   *
+   * Note that a peer address is not an identity: clients behind one NAT share
+   * it. Concurrency is therefore per-address, not per-client, and colliding
+   * clients are serialized rather than served in parallel.
+   */
+  class pending_launch_registry_t {
+  public:
+    using clock_t = std::chrono::steady_clock;
+
+    launch_raise_result_e insert(
+      std::shared_ptr<launch_session_t> launch_session,
+      clock_t::time_point expires_at
+    );
+    std::shared_ptr<launch_session_t> find_for_address(
+      const std::string_view &address
+    ) const;
+    std::shared_ptr<launch_session_t> erase(uint32_t launch_session_id);
+    std::vector<std::shared_ptr<launch_session_t>> erase_client(
+      const std::string_view &uuid
+    );
+    std::vector<std::shared_ptr<launch_session_t>> expire(
+      clock_t::time_point now
+    );
+    std::vector<std::shared_ptr<launch_session_t>> drain();
+    std::optional<clock_t::time_point> next_expiry() const;
+    size_t size() const;
+
+  private:
+    struct entry_t {
+      std::shared_ptr<launch_session_t> launch_session;
+      clock_t::time_point expires_at;
+    };
+
+    mutable std::mutex mutex_;
+    std::deque<entry_t> entries_;
+  };
+
+  /**
+   * Publish a launch for the RTSP handshake, reporting why it was refused.
+   */
+  launch_raise_result_e launch_session_raise_ex(
+    std::shared_ptr<launch_session_t> launch_session
+  );
+
+  /**
    * Publish a launch for the RTSP handshake.
    * @return false when another handshake is already pending.
    */
@@ -121,6 +200,25 @@ namespace rtsp_stream {
 
   std::shared_ptr<stream::session_t>
   find_session(const std::string_view& uuid);
+
+  std::shared_ptr<stream::session_t>
+  find_hestia_session(
+    const std::string_view &uuid,
+    const std::string_view &session_id
+  );
+
+  struct session_display_snapshot_t {
+    std::string hestia_session_id;
+    std::string display_name;
+    int width {0};
+    int height {0};
+    int fps {0};
+    bool virtual_display {false};
+    bool isolated {false};
+  };
+
+  std::optional<session_display_snapshot_t>
+  session_display_snapshot(const std::string_view &uuid);
 
   std::list<std::string>
   get_all_session_uuids();

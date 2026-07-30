@@ -2044,6 +2044,27 @@ namespace confighttp {
       } else {
         runtime["pipeline"]["network"] = nullptr;
       }
+
+      // What the congestion controller measured and what it would ask the
+      // encoder for. Advisory: the encoder's bitrate is fixed at configuration
+      // time, so `available_bitrate_kbps` describes the path, not the stream.
+      if (pm.congestion.valid) {
+        runtime["pipeline"]["congestion"] = {
+          {"adaptive", pm.congestion.adaptive},
+          {"loss_percent", pm.congestion.loss_percent},
+          {"unrecovered_loss_percent", pm.congestion.unrecovered_loss_percent},
+          {"clean_frame_percent", pm.congestion.clean_frame_percent},
+          {"observed_frames", pm.congestion.observed_frames},
+          {"unrecovered_frames", pm.congestion.unrecovered_frames},
+          {"fec_percent", pm.congestion.fec_percent},
+          {"key_frame_fec_percent", pm.congestion.key_frame_fec_percent},
+          {"configured_fec_percent", pm.congestion.configured_fec_percent},
+          {"available_bitrate_kbps", pm.congestion.available_bitrate_kbps},
+          {"configured_bitrate_kbps", pm.congestion.configured_bitrate_kbps},
+        };
+      } else {
+        runtime["pipeline"]["congestion"] = nullptr;
+      }
     } else {
       runtime["pipeline"] = nullptr;
     }

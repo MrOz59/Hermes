@@ -201,9 +201,19 @@ namespace video {
     }
   }
 
+  void pipeline_metrics_collector_t::record_congestion(
+    const congestion_pipeline_metrics_t &congestion
+  ) {
+    // Published as it arrives rather than on the window boundary: the value is
+    // already smoothed by the controller, and holding it back would report a
+    // link state the controller has since moved away from.
+    congestion_published_ = congestion;
+  }
+
   pipeline_metrics_t pipeline_metrics_collector_t::snapshot() const {
     auto snapshot = published_;
     snapshot.network = network_published_;
+    snapshot.congestion = congestion_published_;
     return snapshot;
   }
 
@@ -475,6 +485,24 @@ namespace video {
       fec_shards,
       now
     );
+    return true;
+  }
+
+  bool pipeline_metrics_registry_t::record_congestion(
+    session_id_t session_id,
+    const congestion_pipeline_metrics_t &congestion
+  ) {
+    auto entry = find(session_id);
+    if (!entry) {
+      return false;
+    }
+
+    entry->collector.record_congestion(congestion);
+    // The aggregate keeps the most recent session's view. Congestion is a
+    // property of one client's path, so averaging two clients would describe a
+    // link neither of them is on; the per-session snapshot is the honest
+    // source when several are streaming.
+    aggregate_.record_congestion(congestion);
     return true;
   }
 

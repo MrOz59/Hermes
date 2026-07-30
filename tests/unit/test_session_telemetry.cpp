@@ -67,6 +67,14 @@ namespace {
       return true;
     }
 
+    bool publish_congestion(
+      const video::congestion_telemetry_t &event
+    ) override {
+      ++congestion_calls;
+      last_congestion = event;
+      return true;
+    }
+
     std::optional<video::pipeline_metrics_t> snapshot(
       video::session_telemetry_id_t session_id
     ) const override {
@@ -100,6 +108,7 @@ namespace {
     video::network_frame_telemetry_t last_network_frame;
     video::frame_drop_telemetry_t last_frame_drop;
     video::idr_request_telemetry_t last_idr_request;
+    video::congestion_telemetry_t last_congestion;
     int start_calls = 0;
     int end_calls = 0;
     int resolution_calls = 0;
@@ -107,6 +116,7 @@ namespace {
     int network_frame_calls = 0;
     int frame_drop_calls = 0;
     int idr_request_calls = 0;
+    int congestion_calls = 0;
     mutable int snapshot_calls = 0;
     mutable int aggregate_snapshot_calls = 0;
   };
@@ -267,4 +277,74 @@ TEST(SessionTelemetryTest, BoundedSinkPreservesPerSessionMetrics) {
 
   ASSERT_TRUE(sink.end_session(session_id));
   EXPECT_FALSE(sink.snapshot(session_id).has_value());
+}
+
+// Congestion state is published on feedback rather than per frame, so it must
+// survive in the snapshot without waiting for a frame window to close.
+TEST(SessionTelemetryTest, BoundedSinkPublishesCongestionImmediately) {
+  const video::session_telemetry_clock_t::time_point start {};
+  video::bounded_session_telemetry_t bounded {start};
+  video::ISessionTelemetry &sink = bounded;
+  constexpr video::session_telemetry_id_t session_id = 7;
+
+  ASSERT_TRUE(sink.start_session(session_id, start));
+  ASSERT_TRUE(sink.publish_congestion({
+    .session_id = session_id,
+    .state = {
+      .valid = true,
+      .adaptive = true,
+      .loss_percent = 4.0,
+      .unrecovered_loss_percent = 1.5,
+      .clean_frame_percent = 92.0,
+      .observed_frames = 120,
+      .unrecovered_frames = 2,
+      .fec_percent = 20.0,
+      .key_frame_fec_percent = 30.0,
+      .configured_fec_percent = 10.0,
+      .available_bitrate_kbps = 17'000.0,
+      .configured_bitrate_kbps = 20'000.0,
+    },
+  }));
+
+  const auto snapshot = sink.snapshot(session_id);
+  ASSERT_TRUE(snapshot.has_value());
+  EXPECT_TRUE(snapshot->congestion.valid);
+  EXPECT_TRUE(snapshot->congestion.adaptive);
+  EXPECT_DOUBLE_EQ(snapshot->congestion.unrecovered_loss_percent, 1.5);
+  EXPECT_EQ(snapshot->congestion.observed_frames, 120u);
+  EXPECT_DOUBLE_EQ(snapshot->congestion.key_frame_fec_percent, 30.0);
+  EXPECT_DOUBLE_EQ(snapshot->congestion.available_bitrate_kbps, 17'000.0);
+  EXPECT_DOUBLE_EQ(snapshot->congestion.configured_bitrate_kbps, 20'000.0);
+
+  // An unknown session must not silently succeed: diagnostics would then show
+  // one client's path under another's.
+  EXPECT_FALSE(sink.publish_congestion({
+    .session_id = session_id + 1,
+    .state = {.valid = true},
+  }));
+}
+
+TEST(SessionTelemetryTest, LegacyAdapterForwardsCongestionState) {
+  fake_session_telemetry_t fake;
+  video::ISessionTelemetry &sink = fake;
+  video::legacy_session_telemetry_adapter_t adapter {sink};
+  int session_marker = 0;
+
+  adapter.record_congestion(
+    &session_marker,
+    {
+      .valid = true,
+      .unrecovered_loss_percent = 3.25,
+      .available_bitrate_kbps = 12'000.0,
+    }
+  );
+
+  ASSERT_EQ(fake.congestion_calls, 1);
+  EXPECT_EQ(
+    fake.last_congestion.session_id,
+    reinterpret_cast<video::session_telemetry_id_t>(&session_marker)
+  );
+  EXPECT_TRUE(fake.last_congestion.state.valid);
+  EXPECT_DOUBLE_EQ(fake.last_congestion.state.unrecovered_loss_percent, 3.25);
+  EXPECT_DOUBLE_EQ(fake.last_congestion.state.available_bitrate_kbps, 12'000.0);
 }

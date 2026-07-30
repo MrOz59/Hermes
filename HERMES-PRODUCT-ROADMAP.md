@@ -35,8 +35,16 @@ Legend: `[x]` done · `[~]` partially done · `[ ]` not started.
   serialization-aware send windows, bounded post-IDR catch-up, and queued
   media ownership during teardown. The LAN/constrained reference/candidate
   matrix must still validate the fix.
-- [ ] H3: conservative adaptive bitrate using feedback already available in the
-  compatible ecosystem.
+- [~] H3: conservative adaptation from feedback already available in the
+  compatible ecosystem. Loss estimation, adaptive FEC (including extra
+  protection for key frames from the first frame of a session), and a
+  conservative available-bitrate estimate are implemented behind `adaptive_fec`
+  and reported under `pipeline.congestion` in diagnostics. The bitrate estimate
+  is advisory only: the encoder fixes its bitrate at configuration time and has
+  no runtime reconfiguration path, so applying it needs an encoder re-init
+  (visible hitch plus an IDR) that has not been built. Publishing the estimate
+  first is what makes the adaptation reviewable against real sessions before
+  anything acts on it.
 - [ ] H4–H6: optional Hermes feedback extensions, ICE/connectivity, and native
   identity/pairing, each with explicit capability negotiation and fallback.
 - [ ] H7: first experimental HDT implementation.

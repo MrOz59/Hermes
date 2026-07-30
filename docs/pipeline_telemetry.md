@@ -134,6 +134,34 @@ was added to capture callbacks or encoder frame processing.
   counts attempts, not frames or unique cooldown windows. The mandatory IDR at
   capture startup is outside both counters.
 
+The `congestion` block describes the client's path as the congestion controller
+sees it. Unlike the frame metrics it is not windowed here: the controller
+already smooths its own estimate, and it is republished whenever feedback
+arrives rather than on a one-second boundary. The block is `null` until enough
+feedback has accumulated for the estimate to be conclusive, which is what
+distinguishes a healthy link from one nothing is known about yet.
+
+- `congestion.adaptive`: whether an adapting controller is driving the session.
+  With `adaptive_fec` off the fixed controller reports no estimate at all.
+- `congestion.loss_percent`: every packet the client did not receive.
+- `congestion.unrecovered_loss_percent`: only the frames the client's FEC could
+  not repair. This is the signal the controller acts on; loss that FEC already
+  repaired is invisible to the user and must not drive adaptation.
+- `congestion.clean_frame_percent`: frames whose data shards all arrived.
+- `congestion.observed_frames`, `congestion.unrecovered_frames`: sample sizes
+  behind the ratios, for judging how much weight the estimate deserves.
+- `congestion.fec_percent`, `congestion.key_frame_fec_percent`: protection in
+  force for normal and key frames, against `congestion.configured_fec_percent`.
+- `congestion.available_bitrate_kbps`: conservative estimate of what the path
+  can carry, derived from unrecovered loss because the compatible feedback
+  carries no per-packet acknowledgements to measure a delivery rate with. It
+  never exceeds `congestion.configured_bitrate_kbps`.
+  **Advisory only.** The encoder fixes its bitrate when it is configured and has
+  no runtime reconfiguration path, so nothing in the pipeline consumes this
+  value; it is published so the adaptation can be reviewed against real sessions
+  before anything is wired to apply it. A gap in this number and the measured
+  `bitrate_kbps` therefore describes the path, not the stream.
+
 These definitions intentionally separate pacing waits from socket-call time and
 must remain stable when comparing p50, p95, and p99 between builds.
 

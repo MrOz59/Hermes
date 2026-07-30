@@ -65,6 +65,33 @@ namespace video {
   };
 
   /**
+   * @brief Last congestion-control state published for a session.
+   *
+   * Unlike the frame metrics this is not windowed here: the controller already
+   * smooths its own estimate over a sample window, so re-averaging it would
+   * only add lag. `valid` is false until the controller has seen enough
+   * feedback to have an opinion, which is what distinguishes a healthy link
+   * from one nothing is known about yet.
+   */
+  struct congestion_pipeline_metrics_t {
+    bool valid = false;
+    /// True when an adapting controller is driving the session.
+    bool adaptive = false;
+    double loss_percent = 0.0;
+    double unrecovered_loss_percent = 0.0;
+    double clean_frame_percent = 0.0;
+    uint64_t observed_frames = 0;
+    uint64_t unrecovered_frames = 0;
+    double fec_percent = 0.0;
+    double key_frame_fec_percent = 0.0;
+    double configured_fec_percent = 0.0;
+    /// Advisory: what the path looks able to carry. Nothing applies it yet.
+    double available_bitrate_kbps = 0.0;
+    /// What the encoder was actually configured with.
+    double configured_bitrate_kbps = 0.0;
+  };
+
+  /**
    * @brief Published snapshot of one completed metrics window.
    *
    * Latency fields use milliseconds at this diagnostics boundary. Pipeline
@@ -100,6 +127,7 @@ namespace video {
     int width = 0;
     int height = 0;
     network_pipeline_metrics_t network;
+    congestion_pipeline_metrics_t congestion;
   };
 
   /**
@@ -141,6 +169,7 @@ namespace video {
       uint64_t fec_shards,
       clock_t::time_point now = clock_t::now()
     );
+    void record_congestion(const congestion_pipeline_metrics_t &congestion);
 
     [[nodiscard]] pipeline_metrics_t snapshot() const;
 
@@ -191,6 +220,7 @@ namespace video {
     clock_t::time_point network_window_start_;
     pipeline_metrics_t published_;
     network_pipeline_metrics_t network_published_;
+    congestion_pipeline_metrics_t congestion_published_;
   };
 
   /**
@@ -244,6 +274,10 @@ namespace video {
       uint64_t data_shards,
       uint64_t fec_shards,
       clock_t::time_point now = clock_t::now()
+    );
+    bool record_congestion(
+      session_id_t session_id,
+      const congestion_pipeline_metrics_t &congestion
     );
 
     [[nodiscard]] std::optional<pipeline_metrics_t> snapshot(session_id_t session_id) const;

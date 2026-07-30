@@ -1254,6 +1254,13 @@ namespace video {
     );
   }
 
+  void metrics_record_congestion(
+    void *session,
+    const congestion_pipeline_metrics_t &state
+  ) {
+    session_telemetry.record_congestion(session, state);
+  }
+
   void metrics_record_network_frame(
     void *session,
     double send_queue_ms,

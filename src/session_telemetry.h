@@ -58,6 +58,11 @@ namespace video {
     uint64_t count = 1;
   };
 
+  struct congestion_telemetry_t {
+    session_telemetry_id_t session_id = 0;
+    congestion_pipeline_metrics_t state;
+  };
+
   /**
    * @brief Local telemetry boundary shared by session pipeline producers.
    *
@@ -92,6 +97,15 @@ namespace video {
     ) = 0;
     virtual bool publish_idr_request(
       const idr_request_telemetry_t &event
+    ) = 0;
+    /**
+     * @brief Publish the controller's current view of the client's path.
+     *
+     * Called from the control thread on feedback rather than per frame: the
+     * value only changes when feedback arrives.
+     */
+    virtual bool publish_congestion(
+      const congestion_telemetry_t &event
     ) = 0;
 
     [[nodiscard]] virtual std::optional<pipeline_metrics_t> snapshot(
@@ -133,6 +147,9 @@ namespace video {
     ) override;
     bool publish_idr_request(
       const idr_request_telemetry_t &event
+    ) override;
+    bool publish_congestion(
+      const congestion_telemetry_t &event
     ) override;
     [[nodiscard]] std::optional<pipeline_metrics_t> snapshot(
       session_telemetry_id_t session_id
@@ -191,6 +208,10 @@ namespace video {
       void *session,
       bool accepted,
       uint64_t count
+    );
+    void record_congestion(
+      void *session,
+      const congestion_pipeline_metrics_t &state
     );
     [[nodiscard]] std::optional<pipeline_metrics_t> snapshot(
       void *session

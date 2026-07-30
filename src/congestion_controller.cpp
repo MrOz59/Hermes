@@ -69,6 +69,12 @@ namespace stream::congestion {
     baseline_.key_frame_fec_ratio_ppm =
       key_frame_protection_ppm(baseline_.fec_ratio_ppm);
     current_.key_frame_fec_ratio_ppm = baseline_.key_frame_fec_ratio_ppm;
+    // Until feedback says otherwise the path is assumed to carry what the
+    // encoder was configured for, so a session that never sees loss reports
+    // the configured bitrate rather than zero.
+    baseline_.estimated_available_bitrate_bps = baseline_.encoder_bitrate_bps;
+    current_.estimated_available_bitrate_bps =
+      baseline_.estimated_available_bitrate_bps;
   }
 
   void adaptive_congestion_controller_t::on_packets_sent(
@@ -88,6 +94,7 @@ namespace stream::congestion {
     if (!started_) {
       estimator_.reset(now);
       last_raise_ = now;
+      last_bitrate_change_ = now;
       started_ = true;
     }
 
@@ -124,6 +131,7 @@ namespace stream::congestion {
     estimator_.reset(path.observed_at);
     last_estimate_ = {};
     last_raise_ = path.observed_at;
+    last_bitrate_change_ = path.observed_at;
     packets_sent_since_report_ = 0;
     started_ = true;
   }
@@ -144,13 +152,17 @@ namespace stream::congestion {
     const auto estimate = estimator_.estimate(now);
     last_estimate_ = estimate;
 
-    // Publish what was measured even before there is enough signal to act, so
-    // diagnostics can distinguish "healthy" from "not yet known".
-    current_.estimated_available_bitrate_bps =
-      baseline_.encoder_bitrate_bps;
     if (!estimate.valid) {
+      // No signal is not evidence of a healthy path. The sample window empties
+      // whenever feedback pauses, which happens routinely between report
+      // bursts, so resetting here would erase the adaptation every few seconds
+      // and re-derive it from scratch. The last conclusion stands until new
+      // feedback moves it; the session starts at the configured bitrate and a
+      // path change puts it back there.
       return;
     }
+
+    reevaluate_available_bitrate(estimate, now);
 
     // A host may configure protection above the adaptive ceiling. The ceiling
     // must then yield: raising must never end up lowering what was configured.
@@ -191,6 +203,64 @@ namespace stream::congestion {
         fec_ratio_ppm
       )
     );
+  }
+
+  void adaptive_congestion_controller_t::reevaluate_available_bitrate(
+    const network_estimate_t &estimate,
+    estimator_time_point_t now
+  ) {
+    const auto configured = baseline_.encoder_bitrate_bps;
+    if (configured == 0) {
+      // Nothing to scale against, so there is nothing meaningful to report.
+      return;
+    }
+
+    auto available = current_.estimated_available_bitrate_bps;
+    if (available == 0 || available > configured) {
+      available = configured;
+    }
+
+    // One move per hold-down window at most. The estimate is already smoothed
+    // over the sample window; reacting again before the previous move could
+    // show up in the feedback would compound decreases on stale evidence.
+    if (now - last_bitrate_change_ < bitrate_hold_down) {
+      current_.estimated_available_bitrate_bps = available;
+      return;
+    }
+
+    const auto floor_bps = std::max<std::uint64_t>(
+      configured * minimum_bitrate_permille / 1000,
+      1
+    );
+
+    if (estimate.unrecovered_loss_ratio > raise_threshold) {
+      // Multiplicative decrease: loss the client could not repair means the
+      // path is already past what it can carry, and backing off in proportion
+      // is what converges quickly enough to matter.
+      available = std::max(
+        available * bitrate_decrease_permille / 1000,
+        floor_bps
+      );
+      last_bitrate_change_ = now;
+    } else if (estimate.unrecovered_loss_ratio < release_threshold) {
+      // Additive recovery in fixed steps of the configured bitrate, so a link
+      // that just recovered is probed gently instead of being handed back
+      // everything it had just failed to carry.
+      const auto step = std::max<std::uint64_t>(
+        configured * bitrate_recovery_step_permille / 1000,
+        1
+      );
+      available = std::min(
+        available > configured - step ? configured : available + step,
+        configured
+      );
+      last_bitrate_change_ = now;
+    }
+    // Between the thresholds the estimate is held, for the same reason
+    // protection is: a deadband is what keeps a link hovering near one
+    // threshold from oscillating every window.
+
+    current_.estimated_available_bitrate_bps = available;
   }
 
   std::uint64_t gamestream_fixed_pacing_bitrate_bps(

@@ -91,7 +91,21 @@ namespace stream::congestion {
     std::uint32_t max_frame_queue_us = 0;
     std::uint32_t estimated_rtt_us = 0;
     std::uint32_t estimated_queue_delay_us = 0;
-    std::uint32_t estimated_available_bitrate_bps = 0;
+    /**
+     * @brief What the path looks able to carry, in bits per second.
+     *
+     * Derived from unrecovered loss, which is the only capacity signal the
+     * compatible feedback carries: there are no per-packet acknowledgements to
+     * measure a delivery rate with. It is therefore a conservative bound on
+     * the configured bitrate rather than a measurement of spare capacity, and
+     * it never exceeds `encoder_bitrate_bps`.
+     *
+     * Advisory only. The encoder fixes its bitrate when it is configured and
+     * has no runtime reconfiguration path, so nothing in the pipeline consumes
+     * this value -- it is published so the adaptation can be observed against
+     * real sessions before anything is wired to act on it.
+     */
+    std::uint64_t estimated_available_bitrate_bps = 0;
   };
 
   /**
@@ -137,6 +151,16 @@ namespace stream::congestion {
     virtual void on_feedback(const feedback_batch_t &feedback) = 0;
     virtual void on_path_changed(const path_info_t &path) = 0;
     [[nodiscard]] virtual congestion_target_t target() const = 0;
+
+    /**
+     * @brief What the controller believes about the path, for diagnostics.
+     *
+     * A controller that measures nothing returns an invalid estimate, which is
+     * what tells diagnostics to report "not adapting" rather than "healthy".
+     */
+    [[nodiscard]] virtual network_estimate_t estimate() const {
+      return {};
+    }
   };
 
   /**
@@ -168,7 +192,16 @@ namespace stream::congestion {
    * pacing rate would not slow frame production -- it would only queue frames
    * until they miss their deadline, which costs an IDR and looks far worse than
    * the original congestion. This controller therefore never lowers pacing
-   * below the configured baseline and never claims to adapt encoder bitrate.
+   * below the configured baseline and never changes what the encoder produces.
+   *
+   * It does maintain a conservative estimate of what the path can carry
+   * (`estimated_available_bitrate_bps`), moved by the same feedback that drives
+   * protection: multiplicative decrease under loss the client could not repair,
+   * slow additive recovery toward the configured bitrate, and never above it.
+   * That estimate is published for diagnostics only. Acting on it requires
+   * encoder reconfiguration the compatible pipeline does not have, and
+   * publishing it first is what makes the adaptation observable against real
+   * sessions before anything is wired to apply it.
    *
    * What it does adapt is FEC: under loss the client cannot repair, more repair
    * shards directly reduce what the user sees, and pacing rises just enough to
@@ -198,6 +231,21 @@ namespace stream::congestion {
     static constexpr std::uint32_t key_frame_fec_bonus_ppm = 100'000;
     /// Ceiling for key frames, above the one that bounds normal frames.
     static constexpr std::uint32_t maximum_key_frame_fec_ratio_ppm = 600'000;
+    /// Share of the estimate retained on each decrease, in per mille (85%).
+    static constexpr std::uint64_t bitrate_decrease_permille = 850;
+    /// Share of the configured bitrate given back per recovery step (5%).
+    static constexpr std::uint64_t bitrate_recovery_step_permille = 50;
+    /// The estimate never falls below this share of the configured bitrate.
+    static constexpr std::uint64_t minimum_bitrate_permille = 500;
+    /**
+     * @brief Minimum time between two moves of the bitrate estimate.
+     *
+     * Longer than the FEC hold-down on purpose. Protection can follow a link
+     * closely because raising it costs bandwidth that is released again within
+     * seconds, while a capacity estimate that chases every burst of loss would
+     * report a link far worse than the one the user is on.
+     */
+    static constexpr auto bitrate_hold_down = std::chrono::seconds {5};
 
     /**
      * @brief Key-frame protection for a given normal-frame level.
@@ -232,10 +280,14 @@ namespace stream::congestion {
     [[nodiscard]] congestion_target_t target() const override;
 
     /** @brief Current estimate, for diagnostics and tests. */
-    [[nodiscard]] network_estimate_t estimate() const;
+    [[nodiscard]] network_estimate_t estimate() const override;
 
   private:
     void reevaluate(estimator_time_point_t now);
+    void reevaluate_available_bitrate(
+      const network_estimate_t &estimate,
+      estimator_time_point_t now
+    );
 
     mutable std::mutex mutex_;
     congestion_target_t baseline_;
@@ -243,6 +295,7 @@ namespace stream::congestion {
     bandwidth_estimator_t estimator_;
     network_estimate_t last_estimate_ {};
     estimator_time_point_t last_raise_ {};
+    estimator_time_point_t last_bitrate_change_ {};
     std::uint64_t packets_sent_since_report_ = 0;
     bool started_ = false;
   };

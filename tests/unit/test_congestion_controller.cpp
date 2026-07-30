@@ -914,3 +914,162 @@ TEST(CongestionControllerTest, FixedControllerTreatsEveryFrameTypeAlike) {
     target.fec_ratio_ppm
   );
 }
+
+// The capacity estimate is advisory, so its whole value is being trustworthy:
+// a session that never loses anything must keep reporting exactly what the
+// encoder was configured for.
+TEST(AdaptiveCongestionTest, ReportsTheConfiguredBitrateWhileTheStreamIsClean) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  EXPECT_EQ(
+    controller.target().estimated_available_bitrate_bps,
+    adaptive_baseline().encoder_bitrate_bps
+  );
+
+  feed_frames(controller, 30, 10, 2, 10, 2, now);
+
+  EXPECT_EQ(
+    controller.target().estimated_available_bitrate_bps,
+    adaptive_baseline().encoder_bitrate_bps
+  );
+}
+
+TEST(AdaptiveCongestionTest, LowersTheBitrateEstimateOnUnrecoverableLoss) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+  const auto configured = adaptive_baseline().encoder_bitrate_bps;
+
+  // The hold-down has not elapsed yet, so the first lossy window only moves
+  // protection: capacity claims wait for evidence that outlives one window.
+  feed_frames(controller, 30, 10, 2, 5, 2, now);
+  EXPECT_EQ(
+    controller.target().estimated_available_bitrate_bps,
+    configured
+  );
+
+  feed_frames(
+    controller,
+    30,
+    10,
+    2,
+    5,
+    2,
+    now +
+      stream::congestion::adaptive_congestion_controller_t::bitrate_hold_down
+  );
+
+  const auto lowered =
+    controller.target().estimated_available_bitrate_bps;
+  EXPECT_LT(lowered, configured);
+  // One multiplicative step, not one per report in the batch.
+  EXPECT_EQ(
+    lowered,
+    configured *
+      stream::congestion::adaptive_congestion_controller_t::
+        bitrate_decrease_permille /
+      1000
+  );
+}
+
+TEST(AdaptiveCongestionTest, NeverEstimatesBelowTheConfiguredFloor) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  auto now = stream::congestion::congestion_time_point_t {};
+  const auto configured = adaptive_baseline().encoder_bitrate_bps;
+  const auto floor_bps =
+    configured *
+    stream::congestion::adaptive_congestion_controller_t::
+      minimum_bitrate_permille /
+    1000;
+
+  for (int round = 0; round < 20; ++round) {
+    feed_frames(controller, 20, 10, 2, 3, 1, now);
+    now +=
+      stream::congestion::adaptive_congestion_controller_t::
+        bitrate_hold_down;
+  }
+
+  EXPECT_EQ(
+    controller.target().estimated_available_bitrate_bps,
+    floor_bps
+  );
+}
+
+TEST(AdaptiveCongestionTest, RecoversTheBitrateEstimateInSteps) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  auto now = stream::congestion::congestion_time_point_t {};
+  const auto configured = adaptive_baseline().encoder_bitrate_bps;
+  const auto hold_down =
+    stream::congestion::adaptive_congestion_controller_t::bitrate_hold_down;
+
+  feed_frames(controller, 20, 10, 2, 5, 2, now);
+  now += hold_down;
+  feed_frames(controller, 20, 10, 2, 5, 2, now);
+  const auto lowered =
+    controller.target().estimated_available_bitrate_bps;
+  ASSERT_LT(lowered, configured);
+
+  // A link that just failed is probed, not trusted: one clean window gives
+  // back a step, not everything it had failed to carry.
+  now += hold_down;
+  feed_frames(controller, 20, 10, 2, 10, 2, now);
+  const auto probing =
+    controller.target().estimated_available_bitrate_bps;
+  EXPECT_GT(probing, lowered);
+  EXPECT_LT(probing, configured);
+
+  for (int round = 0; round < 10; ++round) {
+    now += hold_down;
+    feed_frames(controller, 20, 10, 2, 10, 2, now);
+  }
+
+  // Recovery stops exactly at what the encoder produces. Reporting more would
+  // describe capacity this controller has no way to measure.
+  EXPECT_EQ(
+    controller.target().estimated_available_bitrate_bps,
+    configured
+  );
+}
+
+TEST(AdaptiveCongestionTest, PathChangeReturnsTheBitrateEstimateToBaseline) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  auto now = stream::congestion::congestion_time_point_t {};
+  const auto configured = adaptive_baseline().encoder_bitrate_bps;
+
+  feed_frames(controller, 20, 10, 2, 5, 2, now);
+  now +=
+    stream::congestion::adaptive_congestion_controller_t::bitrate_hold_down;
+  feed_frames(controller, 20, 10, 2, 5, 2, now);
+  ASSERT_LT(
+    controller.target().estimated_available_bitrate_bps,
+    configured
+  );
+
+  controller.on_path_changed({.observed_at = now + 1s});
+
+  EXPECT_EQ(
+    controller.target().estimated_available_bitrate_bps,
+    configured
+  );
+}
+
+// Diagnostics decide "not adapting" from the estimate's validity, so the fixed
+// controller must not answer as if it had measured a healthy link.
+TEST(CongestionControllerTest, FixedControllerReportsNoEstimate) {
+  stream::congestion::legacy_fixed_congestion_controller_t controller {
+    {.encoder_bitrate_bps = 20'000'000}
+  };
+  stream::congestion::ICongestionController &boundary = controller;
+
+  EXPECT_FALSE(boundary.estimate().valid);
+}

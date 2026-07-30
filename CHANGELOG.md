@@ -35,6 +35,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 - A disposable VM input-isolation test creates real uinput devices for two
   sessions and verifies that udev assigns both the input parent and event nodes
   to distinct `hermes-kms-1`/`hermes-kms-2` seats.
+- Diagnostics report the congestion controller's view of each client's path
+  under `pipeline.congestion`: measured loss, the share of it the client's FEC
+  could not repair, the protection in force for normal and key frames, and a
+  conservative estimate of what the path can carry. The bitrate estimate is
+  advisory — the encoder's bitrate is fixed when it is configured, so the value
+  describes the path rather than the stream, and it is published so the
+  adaptation can be reviewed against real sessions before anything acts on it.
 - Experimental adaptive FEC behind `adaptive_fec` (off by default). Protection
   rises above `fec_percentage` when the client reports loss its own FEC could
   not repair, and is released again once the path recovers; loss the client

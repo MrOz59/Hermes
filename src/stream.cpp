@@ -950,6 +950,44 @@ namespace stream {
     return 0;
   }
 
+  /**
+   * @brief Mirror the controller's view of the path into diagnostics.
+   *
+   * Runs on the control thread each time feedback arrives, which is where the
+   * state actually changes. Nothing here feeds back into the pipeline: the
+   * bitrate is what the controller would ask for, not what the encoder was
+   * told, and the fixed controller reports an invalid estimate so diagnostics
+   * can say "not adapting" instead of implying a healthy link.
+   */
+  void publish_congestion_telemetry(session_t *session) {
+    const auto target = session->congestion_controller->target();
+    const auto estimate = session->congestion_controller->estimate();
+    const auto configured_bitrate_kbps = static_cast<double>(
+      std::max(session->config.monitor.bitrate, 0)
+    );
+
+    video::metrics_record_congestion(
+      session,
+      {
+        .valid = estimate.valid,
+        .adaptive = config::stream.adaptive_fec,
+        .loss_percent = estimate.loss_ratio * 100.0,
+        .unrecovered_loss_percent = estimate.unrecovered_loss_ratio * 100.0,
+        .clean_frame_percent = estimate.clean_frame_ratio * 100.0,
+        .observed_frames = estimate.observed_frames,
+        .unrecovered_frames = estimate.unrecovered_frames,
+        .fec_percent = target.fec_ratio_ppm / 10'000.0,
+        .key_frame_fec_percent =
+          congestion::frame_fec_ratio_ppm(target, true) / 10'000.0,
+        .configured_fec_percent =
+          static_cast<double>(std::max(config::stream.fec_percentage, 0)),
+        .available_bitrate_kbps =
+          static_cast<double>(target.estimated_available_bitrate_bps) / 1000.0,
+        .configured_bitrate_kbps = configured_bitrate_kbps,
+      }
+    );
+  }
+
   void controlBroadcastThread(
     control_server_t *server,
     transport::ITransport &transport
@@ -979,6 +1017,7 @@ namespace stream {
         .legacy_loss = *report,
         .received_at = congestion::congestion_clock_t::now(),
       });
+      publish_congestion_telemetry(session);
 
       BOOST_LOG(verbose)
         << "type [IDX_LOSS_STATS]"sv << std::endl
@@ -1003,6 +1042,7 @@ namespace stream {
         .legacy_loss = std::nullopt,
         .received_at = congestion::congestion_clock_t::now(),
       });
+      publish_congestion_telemetry(session);
 
       BOOST_LOG(verbose)
         << "type [SS_FRAME_FEC_PTYPE]"sv << std::endl

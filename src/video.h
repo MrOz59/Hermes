@@ -481,6 +481,17 @@ namespace video {
     uint64_t count = 1
   );
 
+  /**
+   * @brief Record the congestion controller's current view of the path.
+   *
+   * Diagnostics only: the values describe what the controller measured and
+   * what it would ask for, not anything the encoder has been told to do.
+   */
+  void metrics_record_congestion(
+    void *session,
+    const congestion_pipeline_metrics_t &state
+  );
+
   /** @brief Register/remove a bounded collector with the RTSP session lifecycle. */
   bool metrics_register_session(void *session);
   void metrics_unregister_session(void *session);

@@ -100,6 +100,13 @@ namespace video {
     );
   }
 
+  bool bounded_session_telemetry_t::publish_congestion(
+    const congestion_telemetry_t &event
+  ) {
+    std::lock_guard lock {mutex_};
+    return metrics_.record_congestion(event.session_id, event.state);
+  }
+
   std::optional<pipeline_metrics_t>
     bounded_session_telemetry_t::snapshot(
       session_telemetry_id_t session_id
@@ -210,6 +217,16 @@ namespace video {
       .session_id = session_id(session),
       .accepted = accepted,
       .count = count,
+    });
+  }
+
+  void legacy_session_telemetry_adapter_t::record_congestion(
+    void *session,
+    const congestion_pipeline_metrics_t &state
+  ) {
+    telemetry_.publish_congestion({
+      .session_id = session_id(session),
+      .state = state,
     });
   }
 

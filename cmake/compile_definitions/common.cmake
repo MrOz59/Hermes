@@ -76,6 +76,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/uuid.h"
         "${CMAKE_SOURCE_DIR}/src/config.h"
         "${CMAKE_SOURCE_DIR}/src/config.cpp"
+        "${CMAKE_SOURCE_DIR}/src/bandwidth_estimator.cpp"
+        "${CMAKE_SOURCE_DIR}/src/bandwidth_estimator.h"
         "${CMAKE_SOURCE_DIR}/src/congestion_controller.cpp"
         "${CMAKE_SOURCE_DIR}/src/congestion_controller.h"
         "${CMAKE_SOURCE_DIR}/src/display_device.h"

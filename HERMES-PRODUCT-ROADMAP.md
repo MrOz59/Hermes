@@ -30,9 +30,11 @@ Legend: `[x]` done · `[~]` partially done · `[ ]` not started.
   GameStream behavior.
 - [~] H2: bounded, deadline-aware GameStream pacing and recovery are
   implemented. The first real paired Hestia test exposed an IDR
-  burst/deadline recovery loop; the candidate now uses bounded frame bursts,
-  serialization-aware send windows, and a stronger IDR cooldown. The
-  LAN/constrained reference/candidate matrix must still validate the fix.
+  burst/deadline recovery loop and a later disconnect exposed an audio-FEC
+  session-lifetime race. The candidate now uses bounded frame bursts,
+  serialization-aware send windows, bounded post-IDR catch-up, and queued
+  media ownership during teardown. The LAN/constrained reference/candidate
+  matrix must still validate the fix.
 - [ ] H3: conservative adaptive bitrate using feedback already available in the
   compatible ecosystem.
 - [ ] H4–H6: optional Hermes feedback extensions, ICE/connectivity, and native

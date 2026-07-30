@@ -28,6 +28,7 @@ extern "C" {
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
+#include "media_session_lifetime.h"
 #include "media_priority.h"
 #include "nvenc/nvenc_base.h"
 #include "platform/common.h"
@@ -1778,6 +1779,10 @@ namespace video {
 
     const auto incoming_session =
       packet ? packet->channel_data : nullptr;
+    if (packet && incoming_session && !packet->channel_ref) {
+      packet->channel_ref =
+        stream::lifetime::retain_channel(incoming_session);
+    }
     const auto incoming_priority =
       stream::priority::video_frame_priority(
         packet && packet->is_idr()

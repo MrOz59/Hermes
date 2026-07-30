@@ -435,3 +435,81 @@ TEST(FrameQueuePolicyTest, PartialSendStillConsumesEverySequenceNumber) {
   EXPECT_EQ(sequence_numbers_consumed(40, 0), 40u);
   EXPECT_EQ(sequence_numbers_consumed(0, 0), 0u);
 }
+
+TEST(FrameQueuePolicyTest, FreshIdrOpensBoundedRecoveryDrain) {
+  stream::queueing::frame_queue_policy_t policy;
+  const auto key = session_key(44);
+  const auto start =
+    stream::queueing::frame_queue_clock_t::now();
+
+  const auto idr = policy.evaluate({
+    .session_key = key,
+    .is_idr = true,
+    .encoded_at = start,
+    .max_queue_time = 33'334us,
+    .max_recovery_queue_time = 100ms,
+    .now = start,
+  });
+  const auto queued_dependent = policy.evaluate({
+    .session_key = key,
+    .encoded_at = start,
+    .max_queue_time = 33'334us,
+    .max_recovery_queue_time = 100ms,
+    .now = start + 60ms,
+  });
+  const auto caught_up = policy.evaluate({
+    .session_key = key,
+    .encoded_at = start + 60ms,
+    .max_queue_time = 33'334us,
+    .max_recovery_queue_time = 100ms,
+    .now = start + 80ms,
+  });
+  const auto stale_after_drain = policy.evaluate({
+    .session_key = key,
+    .encoded_at = start + 80ms,
+    .max_queue_time = 33'334us,
+    .max_recovery_queue_time = 100ms,
+    .now = start + 120ms,
+  });
+
+  EXPECT_TRUE(idr.should_send());
+  EXPECT_TRUE(queued_dependent.should_send());
+  EXPECT_TRUE(queued_dependent.recovery_drain);
+  EXPECT_EQ(queued_dependent.admission_budget, 100ms);
+  EXPECT_TRUE(caught_up.should_send());
+  EXPECT_FALSE(caught_up.recovery_drain);
+  EXPECT_EQ(caught_up.admission_budget, 33'334us);
+  EXPECT_FALSE(stale_after_drain.should_send());
+  EXPECT_TRUE(stale_after_drain.request_idr);
+}
+
+TEST(FrameQueuePolicyTest, RecoveryDrainStillHasHardDeadline) {
+  stream::queueing::frame_queue_policy_t policy;
+  const auto key = session_key(45);
+  const auto start =
+    stream::queueing::frame_queue_clock_t::now();
+
+  EXPECT_TRUE(policy.evaluate({
+    .session_key = key,
+    .is_idr = true,
+    .encoded_at = start,
+    .max_queue_time = 33'334us,
+    .max_recovery_queue_time = 100ms,
+    .now = start,
+  }).should_send());
+
+  const auto too_old = policy.evaluate({
+    .session_key = key,
+    .encoded_at = start,
+    .max_queue_time = 33'334us,
+    .max_recovery_queue_time = 100ms,
+    .now = start + 101ms,
+  });
+
+  EXPECT_FALSE(too_old.should_send());
+  EXPECT_EQ(
+    too_old.drop_reason,
+    stream::queueing::frame_queue_drop_reason_e::deadline_expired
+  );
+  EXPECT_TRUE(too_old.request_idr);
+}

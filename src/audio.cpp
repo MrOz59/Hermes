@@ -13,6 +13,7 @@
 #include "config.h"
 #include "globals.h"
 #include "logging.h"
+#include "media_session_lifetime.h"
 #include "platform/common.h"
 #include "thread_safe.h"
 #include "utility.h"
@@ -29,6 +30,19 @@ namespace audio {
   int map_stream(int channels, bool quality);
 
   constexpr auto SAMPLE_RATE = 48000;
+
+  void enqueue_packet(
+    safe::mail_raw_t::queue_t<packet_t> &packets,
+    void *channel_data,
+    buffer_t packet
+  ) {
+    packets->raise(packet_t {
+      .first = channel_data,
+      .second = std::move(packet),
+      .channel_ref =
+        stream::lifetime::retain_channel(channel_data),
+    });
+  }
 
   // NOTE: If you adjust the bitrates listed here, make sure to update the
   // corresponding bitrate adjustment logic in rtsp_stream::cmd_announce()
@@ -123,7 +137,7 @@ namespace audio {
       }
 
       packet.fake_resize(bytes);
-      packets->raise(channel_data, std::move(packet));
+      enqueue_packet(packets, channel_data, std::move(packet));
     }
   }
 

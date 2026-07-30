@@ -74,8 +74,24 @@ namespace audio {
   };
 
   using buffer_t = util::buffer_t<std::uint8_t>;
-  using packet_t = std::pair<void *, buffer_t>;
+  struct packet_t {
+    // Keep pair-style names for compatibility with existing packet consumers.
+    void *first = nullptr;
+    buffer_t second;
+    // Global audio queues outlive individual RTSP session containers. Keep
+    // the channel owner alive until this packet is sent or discarded.
+    std::shared_ptr<void> channel_ref;
+  };
   using audio_ctx_ref_t = safe::shared_t<audio_ctx_t>::ptr_t;
+
+  /**
+   * @brief Enqueue one encoded packet while retaining its session owner.
+   */
+  void enqueue_packet(
+    safe::mail_raw_t::queue_t<packet_t> &packets,
+    void *channel_data,
+    buffer_t packet
+  );
 
   void capture(safe::mail_t mail, config_t config, void *channel_data);
 

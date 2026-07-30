@@ -419,6 +419,7 @@ TEST(CongestionControllerTest, RecoveryFrameExtendsImpossibleWindow) {
       base_pacing_bitrate,
       434 * 1200,
       33'334us,
+      0us,
       true
     );
 
@@ -438,6 +439,7 @@ TEST(CongestionControllerTest, NormalFrameKeepsNominalWindow) {
       8'000'000,
       20'000,
       33'334us,
+      0us,
       false
     );
 
@@ -453,6 +455,7 @@ TEST(CongestionControllerTest, FrameBurstAndWindowRemainBounded) {
       40'000'000,
       1'000'000,
       33'334us,
+      0us,
       true
     );
   EXPECT_EQ(
@@ -465,10 +468,47 @@ TEST(CongestionControllerTest, FrameBurstAndWindowRemainBounded) {
       1'000'000,
       10'000'000,
       33'334us,
+      0us,
       true
     );
   EXPECT_EQ(enormous.pacing_bitrate_bps, 8'000'000);
   EXPECT_EQ(enormous.send_window, 250ms);
   EXPECT_TRUE(enormous.window_extended);
   EXPECT_TRUE(enormous.window_capped);
+}
+
+TEST(CongestionControllerTest, QueuedNormalFrameUsesBoundedCatchUp) {
+  constexpr std::uint64_t base_pacing_bitrate = 8'000'000;
+  const auto plan =
+    stream::congestion::gamestream_frame_pacing_plan(
+      base_pacing_bitrate,
+      20'000,
+      33'334us,
+      40ms,
+      false
+    );
+
+  EXPECT_EQ(
+    plan.pacing_bitrate_bps,
+    base_pacing_bitrate * 4
+  );
+  EXPECT_GT(plan.send_window, 0us);
+  EXPECT_LT(plan.send_window, 10ms);
+  EXPECT_TRUE(plan.catch_up);
+  EXPECT_FALSE(plan.window_capped);
+}
+
+TEST(CongestionControllerTest, QueueDelayConsumesNormalFrameWindow) {
+  const auto plan =
+    stream::congestion::gamestream_frame_pacing_plan(
+      8'000'000,
+      20'000,
+      33'334us,
+      20ms,
+      false
+    );
+
+  EXPECT_GT(plan.pacing_bitrate_bps, 8'000'000);
+  EXPECT_LE(plan.send_window, 13'334us);
+  EXPECT_TRUE(plan.catch_up);
 }

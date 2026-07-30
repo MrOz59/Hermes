@@ -93,6 +93,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/globals.h"
         "${CMAKE_SOURCE_DIR}/src/logging.cpp"
         "${CMAKE_SOURCE_DIR}/src/logging.h"
+        "${CMAKE_SOURCE_DIR}/src/media_session_lifetime.cpp"
+        "${CMAKE_SOURCE_DIR}/src/media_session_lifetime.h"
         "${CMAKE_SOURCE_DIR}/src/media_priority.h"
         "${CMAKE_SOURCE_DIR}/src/main.cpp"
         "${CMAKE_SOURCE_DIR}/src/main.h"

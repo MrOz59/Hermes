@@ -166,6 +166,7 @@ namespace stream::congestion {
     std::uint64_t base_pacing_bitrate_bps,
     std::size_t estimated_wire_bytes,
     std::chrono::microseconds nominal_send_window,
+    std::chrono::microseconds queue_delay,
     bool is_key_frame
   ) noexcept {
     const auto bounded_base = std::min(
@@ -180,6 +181,14 @@ namespace stream::congestion {
         .pacing_bitrate_bps = bounded_base,
         .send_window = nominal_send_window,
       };
+    }
+
+    auto target_send_window = nominal_send_window;
+    if (!is_key_frame && queue_delay > std::chrono::microseconds::zero()) {
+      target_send_window =
+        queue_delay >= nominal_send_window ?
+          std::chrono::microseconds {1} :
+          nominal_send_window - queue_delay;
     }
 
     constexpr std::uint64_t normal_frame_burst_multiplier = 4;
@@ -204,7 +213,7 @@ namespace stream::congestion {
       gamestream_deadline_pacing_bitrate_bps(
         bounded_base,
         estimated_wire_bytes,
-        nominal_send_window
+        target_send_window
       );
     const auto pacing_bitrate =
       std::min(required_bitrate, burst_ceiling);
@@ -246,8 +255,12 @@ namespace stream::congestion {
         );
     const auto bounded_maximum_window =
       std::max(nominal_send_window, maximum_send_window);
+    const auto minimum_send_window =
+      is_key_frame ?
+        nominal_send_window :
+        target_send_window;
     const auto send_window = std::max(
-      nominal_send_window,
+      minimum_send_window,
       std::min(serialization_window, bounded_maximum_window)
     );
 
@@ -257,6 +270,10 @@ namespace stream::congestion {
       .window_extended = send_window > nominal_send_window,
       .window_capped =
         serialization_window > bounded_maximum_window,
+      .catch_up =
+        !is_key_frame &&
+        queue_delay > std::chrono::microseconds::zero() &&
+        pacing_bitrate > bounded_base,
     };
   }
 

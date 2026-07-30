@@ -88,6 +88,7 @@ namespace stream::congestion {
     std::chrono::microseconds send_window {};
     bool window_extended = false;
     bool window_capped = false;
+    bool catch_up = false;
   };
 
   /**
@@ -185,6 +186,7 @@ namespace stream::congestion {
     std::uint64_t base_pacing_bitrate_bps,
     std::size_t estimated_wire_bytes,
     std::chrono::microseconds nominal_send_window,
+    std::chrono::microseconds queue_delay,
     bool is_key_frame
   ) noexcept;
   [[nodiscard]] std::optional<legacy_loss_report_t>

@@ -32,6 +32,7 @@ extern "C" {
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
+#include "media_session_lifetime.h"
 #include "media_priority.h"
 #include "network.h"
 #include "packet_pacer.h"
@@ -434,6 +435,14 @@ namespace stream {
 
   struct session_t {
     ~session_t() {
+      lifetime::unregister_channel(this);
+      // Normally session::join() releases this while every member is still
+      // alive. Keep the destructor fallback safe for partially started
+      // sessions too: end_broadcast() must join the global media workers before
+      // audio/video storage is destroyed in reverse member order.
+      if (broadcast_ref) {
+        broadcast_ref.release();
+      }
 #ifdef __linux__
       if (isolated_session) {
         proc::proc.disconnect_isolated(isolated_runtime_owner_id);
@@ -1452,16 +1461,22 @@ namespace stream {
       auto session = (session_t *) packet->channel_data;
       const auto congestion_target =
         session->congestion_controller->target();
-      const auto frame_queue_budget =
+      const auto nominal_frame_queue_budget =
+        std::chrono::microseconds {
+          congestion_target.max_frame_queue_us
+        };
+      const auto recovery_frame_queue_budget =
         congestion::gamestream_frame_queue_budget(
           congestion_target.max_frame_queue_us,
-          packet->is_idr()
+          true
         );
       const auto queue_decision = frame_queue_policy.evaluate({
         .session_key = session,
         .is_idr = packet->is_idr(),
         .encoded_at = packet->encoded_timestamp,
-        .max_queue_time = frame_queue_budget,
+        .max_queue_time = nominal_frame_queue_budget,
+        .max_recovery_queue_time =
+          recovery_frame_queue_budget,
         .now = frame_broadcast_started,
       });
       if (!queue_decision.should_send()) {
@@ -1503,7 +1518,7 @@ namespace stream {
           } else {
             BOOST_LOG(warning)
               << "Video send queue exceeded "
-              << frame_queue_budget.count()
+              << queue_decision.admission_budget.count()
               << " us; dropped frame "
               << packet->frame_index()
               << " and requested a fresh IDR"sv;
@@ -1705,6 +1720,9 @@ namespace stream {
               pacing_bitrate,
               estimated_shards * wire_bytes_per_shard,
               frame_packet_send_window,
+              std::chrono::duration_cast<
+                std::chrono::microseconds
+              >(queue_decision.queue_time),
               packet->is_idr()
             );
           const auto base_pacing_bitrate = pacing_bitrate;
@@ -1729,6 +1747,18 @@ namespace stream {
                   " (serialization-aware extension)" :
                   ""
               );
+          } else if (pacing_plan.catch_up) {
+            BOOST_LOG(debug)
+              << "Video pacing catch-up: "
+              << base_pacing_bitrate
+              << " -> "
+              << pacing_bitrate
+              << " bps after "
+              << std::chrono::duration_cast<
+                   std::chrono::microseconds
+                 >(queue_decision.queue_time)
+                   .count()
+              << " us queued";
           }
           if (pacing_plan.window_capped) {
             BOOST_LOG(warning)
@@ -2147,8 +2177,8 @@ namespace stream {
         break;
       }
 
-      TUPLE_2D_REF(channel_data, packet_data, *packet);
-      auto session = (session_t *) channel_data;
+      auto session = (session_t *) packet->first;
+      auto &packet_data = packet->second;
       pacing::IPacketPacer &packet_pacer =
         packet_pacers.for_session(session);
 
@@ -2685,7 +2715,7 @@ namespace stream {
       auto task = []() {
         BOOST_LOG(fatal) << "Hang detected! Session failed to terminate in 10 seconds."sv;
         logging::log_flush();
-        lifetime::debug_trap();
+        ::lifetime::debug_trap();
       };
       auto force_kill = task_pool.pushDelayed(task, 10s).task_id;
       auto fg = util::fail_guard([&force_kill]() {
@@ -2699,6 +2729,14 @@ namespace stream {
       session.audioThread.join();
       BOOST_LOG(debug) << "Waiting for control to end..."sv;
       session.controlEnd.view();
+      // No producer can enqueue another packet after both capture threads have
+      // joined. Existing queue entries retain the session independently. Drop
+      // this session's broadcaster reference now so the last session stops and
+      // joins the global media workers before member destruction.
+      if (session.broadcast_ref) {
+        session.broadcast_ref.release();
+      }
+      lifetime::unregister_channel(&session);
       // Reset input on session stop to avoid stuck repeated keys
       BOOST_LOG(debug) << "Resetting Input..."sv;
       input::reset(session.input);
@@ -2828,6 +2866,7 @@ namespace stream {
 
     std::shared_ptr<session_t> alloc(config_t &config, rtsp_stream::launch_session_t &launch_session) {
       auto session = std::make_shared<session_t>();
+      lifetime::register_channel(session.get(), session);
 
       auto mail = std::make_shared<safe::mail_raw_t>();
 

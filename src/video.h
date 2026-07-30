@@ -256,6 +256,10 @@ namespace video {
 
     std::vector<replace_t> *replacements = nullptr;
     void *channel_data = nullptr;
+    // The encoded queue is process-wide. This ownership reference prevents a
+    // session from being destroyed while a broadcaster still dereferences the
+    // raw channel_data key.
+    std::shared_ptr<void> channel_ref;
     bool after_ref_frame_invalidation = false;
     // Monotonic per-frame timeline. frame_timestamp is capture time; the
     // remaining fields are filled as the frame crosses encode and transport.

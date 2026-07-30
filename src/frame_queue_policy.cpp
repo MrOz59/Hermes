@@ -23,16 +23,37 @@ namespace stream::queueing {
       decision.queue_time = request.now - *request.encoded_at;
     }
 
+    const auto recovery_queue_time =
+      request.max_recovery_queue_time >
+          std::chrono::microseconds::zero() ?
+        request.max_recovery_queue_time :
+        request.max_queue_time;
+    if (
+      entry.draining_recovery &&
+      !request.is_idr &&
+      request.encoded_at &&
+      decision.queue_time <= request.max_queue_time
+    ) {
+      entry.draining_recovery = false;
+    }
+    decision.recovery_drain =
+      request.is_idr || entry.draining_recovery;
+    decision.admission_budget =
+      decision.recovery_drain ?
+        recovery_queue_time :
+        request.max_queue_time;
     const auto deadline_enabled =
-      request.max_queue_time > std::chrono::microseconds::zero();
+      decision.admission_budget >
+        std::chrono::microseconds::zero();
     const auto deadline_expired =
       deadline_enabled &&
       request.encoded_at &&
-      decision.queue_time > request.max_queue_time;
+      decision.queue_time > decision.admission_budget;
 
     if (request.is_idr) {
       if (deadline_expired) {
         entry.awaiting_idr = true;
+        entry.draining_recovery = false;
         entry.recovery_cause =
           frame_recovery_cause_e::deadline_expired;
         decision.drop_reason =
@@ -48,6 +69,7 @@ namespace stream::queueing {
 
       entry.awaiting_idr = false;
       entry.idr_requested = false;
+      entry.draining_recovery = true;
       entry.recovery_cause = frame_recovery_cause_e::none;
       return decision;
     }
@@ -70,6 +92,7 @@ namespace stream::queueing {
       entry.awaiting_idr = true;
       entry.recovery_cause =
         frame_recovery_cause_e::deadline_expired;
+      entry.draining_recovery = false;
       decision.drop_reason =
         frame_queue_drop_reason_e::deadline_expired;
       decision.recovery_cause = entry.recovery_cause;
@@ -108,6 +131,7 @@ namespace stream::queueing {
 
     entry.awaiting_idr = true;
     entry.idr_requested = false;
+    entry.draining_recovery = false;
     entry.recovery_cause = cause;
   }
 
@@ -174,6 +198,7 @@ namespace stream::queueing {
       .active = true,
       .awaiting_idr = false,
       .idr_requested = false,
+      .draining_recovery = false,
       .recovery_cause = frame_recovery_cause_e::none,
       .next_idr_request_at = {},
       .last_used = generation_,

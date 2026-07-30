@@ -37,6 +37,7 @@ namespace stream::queueing {
     bool is_idr = false;
     std::optional<frame_queue_time_point_t> encoded_at;
     std::chrono::microseconds max_queue_time {};
+    std::chrono::microseconds max_recovery_queue_time {};
     frame_queue_time_point_t now {};
   };
 
@@ -48,8 +49,10 @@ namespace stream::queueing {
     frame_recovery_cause_e recovery_cause =
       frame_recovery_cause_e::none;
     frame_queue_duration_t queue_time {};
+    std::chrono::microseconds admission_budget {};
     bool request_idr = false;
     bool idr_request_rate_limited = false;
+    bool recovery_drain = false;
 
     [[nodiscard]] constexpr bool should_send() const noexcept {
       return drop_reason == frame_queue_drop_reason_e::none;
@@ -93,6 +96,7 @@ namespace stream::queueing {
       bool active = false;
       bool awaiting_idr = false;
       bool idr_requested = false;
+      bool draining_recovery = false;
       frame_recovery_cause_e recovery_cause =
         frame_recovery_cause_e::none;
       frame_queue_time_point_t next_idr_request_at {};

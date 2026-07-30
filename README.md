@@ -32,10 +32,11 @@ unchanged.
 - Keep Gamescope optional. Gamescope is useful for a SteamOS-like session, but
   Hermes should only use it when enabled by app configuration, settings, or an
   explicit Hestia request.
-- Validate the serialization-aware IDR pacing, bounded recovery-frame windows,
-  and stronger IDR cooldown added after the first real paired Hestia test
-  exposed a burst/deadline recovery loop. Then finish the constrained-network
-  matrix before moving to conservative adaptive bitrate work.
+- Validate the serialization-aware IDR pacing, bounded post-IDR catch-up, and
+  media-session lifetime fix added after paired Hestia tests exposed a
+  burst/recovery loop and an audio-FEC teardown race. Then finish the
+  constrained-network matrix before moving to conservative adaptive bitrate
+  work.
 
 ## Transition plan: GameStream today, HDT later
 
@@ -50,10 +51,11 @@ The transition is intentionally staged:
    changing the wire protocol.
 2. Hermes H2 improves pacing, queue bounds, packet deadlines, and recovery on
    the compatible GameStream path. The first real paired Hestia test exposed
-   an IDR burst/deadline recovery loop; the candidate now caps frame bursts,
-   derives a feasible departure window from serialization cost, and applies a
-   stronger recovery cooldown. The full reference/candidate matrix remains an
-   acceptance requirement.
+   an IDR burst/deadline recovery loop and a later disconnect exposed queued
+   audio outliving its session. The candidate now caps frame bursts, derives a
+   feasible departure window from serialization cost, drains the bounded
+   post-IDR backlog, and retains each session until its queued media is gone.
+   The full reference/candidate matrix remains an acceptance requirement.
 3. The next stages cover conservative bitrate adaptation, richer
    Hermes↔Hestia feedback, deadline-aware recovery, automatic connectivity, and
    native identity/pairing while preserving fallback.

@@ -41,6 +41,9 @@ const evdiInfoLoading = ref(false)
 const hermesKmsInfo = ref(props.hermesKmsInfo || {})
 const hermesKmsDiagnostic = ref(props.hermesKmsDiagnostic)
 const hermesKmsInfoLoading = ref(false)
+const hermesKmsSetupRunning = ref(false)
+const hermesKmsSetupError = ref(false)
+const hermesKmsSetupMessage = ref('')
 const clipboardInfo = ref({})
 const clipboardLoading = ref(false)
 const clipboardInstalling = ref(false)
@@ -108,20 +111,23 @@ const refreshHermesKmsInfo = async () => {
 }
 
 const hermesKmsState = computed(() => hermesKmsDiagnostic.value || hermesKmsInfo.value.diagnostic || 'ready')
+const hermesKmsIsolatedRuntimeReady = computed(
+  () => !hermesKmsIsolatedSessionsEnabled.value || hermesKmsInfo.value.isolatedRuntimeReady === true
+)
 
 // Manual, per-diagnostic install/repair guidance. Hermes-KMS ships as an
-// out-of-tree DKMS module from a separate repo, so unlike EVDI there is no
-// one-click installer: we surface the exact commands the README documents.
+// out-of-tree DKMS module from a separate repo, so driver installation remains
+// separate; once installed, the private-session runtime has one-click setup.
 const hermesKmsGuide = computed(() => {
   const moduleOptions = hermesKmsIsolatedSessionsEnabled.value
-    ? 'initial_enabled=0 devices=2 outputs=1'
+    ? 'initial_enabled=0 outputs=1 session_devices=4'
     : hermesKmsMultiOutputEnabled.value
       ? 'initial_enabled=0 outputs=2'
       : 'initial_enabled=0'
   const withIsolatedRuntime = (commands) => hermesKmsIsolatedSessionsEnabled.value
     ? [
         ...commands,
-        'sudo systemctl enable --now hermes-kms-seatd@1.service hermes-kms-seatd@2.service',
+        'sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto',
       ]
     : commands
   const cloneAndInstall = [
@@ -279,6 +285,62 @@ const installEvdi = async () => {
   } catch (_) {
     evdiInstallError.value = true
     evdiMessage.value = $t('config.evdi_install_failed')
+  }
+}
+
+const checkHermesKmsSetup = async () => {
+  try {
+    const response = await fetch('./api/hermes-kms/setup/status', {credentials: 'include'})
+    const result = await response.json()
+    hermesKmsInfo.value = result.hermesKmsInfo || hermesKmsInfo.value
+    if (result.setupStatus === 1) {
+      hermesKmsSetupRunning.value = true
+      hermesKmsSetupMessage.value = $t('config.hermes_kms_setup_running')
+      window.setTimeout(checkHermesKmsSetup, 1500)
+    } else if (result.setupStatus === 2) {
+      hermesKmsSetupRunning.value = false
+      hermesKmsSetupError.value = false
+      hermesKmsSetupMessage.value = $t('config.hermes_kms_setup_succeeded')
+    } else if (result.setupStatus === 4) {
+      hermesKmsSetupRunning.value = false
+      hermesKmsSetupError.value = false
+      hermesKmsSetupMessage.value = $t('config.hermes_kms_setup_reboot')
+    } else if (result.setupStatus === 3) {
+      hermesKmsSetupRunning.value = false
+      hermesKmsSetupError.value = true
+      hermesKmsSetupMessage.value = $t('config.hermes_kms_setup_failed')
+    }
+  } catch (_) {
+    hermesKmsSetupRunning.value = false
+    hermesKmsSetupError.value = true
+    hermesKmsSetupMessage.value = $t('config.hermes_kms_setup_failed')
+  }
+}
+
+const configureHermesKms = async () => {
+  if (!window.confirm($t('config.hermes_kms_setup_confirm'))) return
+
+  hermesKmsSetupMessage.value = ''
+  hermesKmsSetupError.value = false
+  try {
+    const response = await fetch('./api/hermes-kms/setup', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({confirm: true}),
+    })
+    const result = await response.json()
+    if (result.status && result.setupStatus === 1) {
+      hermesKmsSetupRunning.value = true
+      hermesKmsSetupMessage.value = $t('config.hermes_kms_setup_running')
+      window.setTimeout(checkHermesKmsSetup, 1500)
+    } else {
+      hermesKmsSetupError.value = true
+      hermesKmsSetupMessage.value = result.error || $t('config.hermes_kms_setup_failed')
+    }
+  } catch (_) {
+    hermesKmsSetupError.value = true
+    hermesKmsSetupMessage.value = $t('config.hermes_kms_setup_failed')
   }
 }
 
@@ -468,6 +530,23 @@ const validateFallbackMode = (event) => {
       {{ $t('config.hermes_kms_isolated_sessions_warning') }}
     </div>
 
+    <div class="alert alert-warning small"
+         v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms' && hermesKmsIsolatedSessionsEnabled && !hermesKmsIsolatedRuntimeReady">
+      <p class="mb-2">{{ $t('config.hermes_kms_setup_desc') }}</p>
+      <button type="button"
+              class="btn btn-warning btn-sm"
+              :disabled="hermesKmsSetupRunning"
+              @click="configureHermesKms">
+        <i class="fa-solid fa-gears me-1"></i>
+        {{ $t('config.hermes_kms_setup_button') }}
+      </button>
+      <div v-if="hermesKmsSetupMessage"
+           class="mt-2"
+           :class="hermesKmsSetupError ? 'text-danger' : 'text-body-secondary'">
+        {{ hermesKmsSetupMessage }}
+      </div>
+    </div>
+
     <DisplayDeviceOptions
       :platform="platform"
       :config="config"
@@ -610,11 +689,14 @@ const validateFallbackMode = (event) => {
         <dd class="col-sm-8">
           {{ hermesKmsInfo.deviceCount || 1 }}
           <span v-if="hermesKmsInfo.multiDeviceCapable" class="text-body-secondary"> · multi-device</span>
+          <span v-if="hermesKmsInfo.sessionDevicePoolCapable" class="text-body-secondary">
+            · {{ hermesKmsInfo.sessionDeviceCount || 0 }} {{ $t('config.hermes_kms_status_session_devices') }}
+          </span>
         </dd>
         <template v-if="hermesKmsIsolatedSessionsEnabled">
           <dt class="col-sm-4">{{ $t('config.hermes_kms_status_brokers') }}</dt>
           <dd class="col-sm-8">
-            {{ hermesKmsInfo.privateSeatBrokerCount || 0 }} / {{ hermesKmsInfo.deviceCount || 0 }}
+            {{ hermesKmsInfo.privateSeatBrokerCount || 0 }} / {{ hermesKmsInfo.sessionDeviceCount || 0 }}
             <span v-if="hermesKmsInfo.missingPrivateSeatBrokers?.length" class="text-danger">
               · {{ $t('config.hermes_kms_status_brokers_missing') }}:
               {{ hermesKmsInfo.missingPrivateSeatBrokers.join(', ') }}

@@ -270,3 +270,137 @@ TEST(ShardDispatchTest, AccumulatesPacerAndSendTime) {
   EXPECT_TRUE(result.first_sent_at.has_value());
   EXPECT_TRUE(result.last_sent_at.has_value());
 }
+
+// A frame carries up to MAX_FEC_BLOCKS blocks, each dispatched separately while
+// the caller carries one sequence space across all of them. This is the
+// multi-block shape of the invariant that a partial send must not rewind.
+TEST(ShardDispatchTest, SequenceSpaceStaysContiguousAcrossBlocks) {
+  scripted_pacer_t pacer;
+  // Third block aborts partway: 4 + 4 batches accepted, then refused.
+  pacer.expire_after_waits = 8;
+
+  const std::vector<std::size_t> block_shard_counts {10, 10, 10};
+  std::uint16_t lowseq = 1000;
+  std::vector<std::uint16_t> stamped;
+  std::size_t total_sent = 0;
+
+  for (const auto shard_count : block_shard_counts) {
+    capture_t capture;
+    auto callbacks = make_callbacks(capture);
+    // Record the sequence number each shard would carry.
+    callbacks.prepare_shard = [&, base = lowseq](std::size_t index) {
+      stamped.push_back(static_cast<std::uint16_t>(base + index));
+    };
+
+    const auto result = dispatch::dispatch_shards(
+      {
+        .shard_count = shard_count,
+        .data_shard_count = shard_count,
+        .batch_size = 4,
+      },
+      pacer,
+      callbacks
+    );
+    total_sent += result.shards_sent;
+
+    lowseq += static_cast<std::uint16_t>(
+      stream::queueing::sequence_numbers_consumed(
+        shard_count,
+        result.shards_sent
+      )
+    );
+  }
+
+  // 30 shards stamped, every number used exactly once and strictly increasing.
+  ASSERT_EQ(stamped.size(), 30u);
+  for (std::size_t i = 1; i < stamped.size(); ++i) {
+    EXPECT_EQ(stamped[i], stamped[i - 1] + 1)
+      << "sequence gap or rewind at stamped index " << i;
+  }
+  // The next frame resumes exactly after the last stamped number, even though
+  // fewer shards actually left the host.
+  EXPECT_EQ(lowseq, 1030);
+  EXPECT_LT(total_sent, 30u);
+}
+
+// A block that aborts must not leave the pacer mid-batch for the next block.
+TEST(ShardDispatchTest, AbortedBlockDoesNotStrandPacerState) {
+  scripted_pacer_t pacer;
+  pacer.expire_after_waits = 1;
+  capture_t first;
+
+  const auto aborted = dispatch::dispatch_shards(
+    {.shard_count = 12, .data_shard_count = 12, .batch_size = 4},
+    pacer,
+    make_callbacks(first)
+  );
+  ASSERT_TRUE(aborted.deadline_expired);
+  ASSERT_EQ(aborted.shards_sent, 4u);
+
+  // The next block starts clean once the pacer stops reporting expiry.
+  pacer.expire_after_waits.reset();
+  capture_t second;
+  const auto recovered = dispatch::dispatch_shards(
+    {.shard_count = 8, .data_shard_count = 8, .batch_size = 4},
+    pacer,
+    make_callbacks(second)
+  );
+
+  EXPECT_FALSE(recovered.deadline_expired);
+  EXPECT_EQ(recovered.shards_sent, 8u);
+  EXPECT_EQ(second.batches.size(), 2u);
+}
+
+// on_batch_sent feeds the congestion controller, so it must report exactly what
+// was accepted -- never the requested count when a batch came up short.
+TEST(ShardDispatchTest, ReportsOnlyAcceptedPacketsToTheController) {
+  scripted_pacer_t pacer;
+  capture_t capture;
+  std::vector<std::size_t> reported_counts;
+
+  auto callbacks = make_callbacks(capture, [](std::size_t offset, std::size_t count) {
+    return offset == 0 ? count : count - 2;
+  });
+  callbacks.on_batch_sent = [&reported_counts](
+                              std::size_t,
+                              std::size_t count,
+                              std::size_t,
+                              dispatch::dispatch_time_point_t
+                            ) {
+    reported_counts.push_back(count);
+  };
+
+  const auto result = dispatch::dispatch_shards(
+    {.shard_count = 8, .data_shard_count = 8, .batch_size = 4},
+    pacer,
+    callbacks
+  );
+
+  EXPECT_EQ(reported_counts, (std::vector<std::size_t> {4, 2}));
+  EXPECT_EQ(result.shards_sent, 6u);
+  // The pacer is charged for what was sent, not what was attempted.
+  EXPECT_EQ(pacer.recorded, (std::vector<std::size_t> {4, 2}));
+}
+
+// Wire-byte accounting must follow the shards that actually departed, since
+// the deadline path makes partial frames normal rather than exceptional.
+TEST(ShardDispatchTest, WireBytesTrackOnlyDepartedShards) {
+  scripted_pacer_t pacer;
+  pacer.expire_after_waits = 1;
+  capture_t capture;
+
+  const auto result = dispatch::dispatch_shards(
+    {
+      .shard_count = 20,
+      .data_shard_count = 16,
+      .batch_size = 5,
+      .wire_bytes_per_shard = 1300,
+    },
+    pacer,
+    make_callbacks(capture)
+  );
+
+  EXPECT_EQ(result.shards_sent, 5u);
+  EXPECT_EQ(result.wire_bytes_sent, 5u * 1300u);
+  EXPECT_EQ(result.data_shards_sent + result.repair_shards_sent, 5u);
+}

@@ -89,7 +89,10 @@ namespace VDISPLAY {
     bool multi_output_capable;
     bool experimental_isolated_sessions_enabled;
     bool multi_device_capable;
+    bool session_device_pool_capable;
+    bool isolated_runtime_ready;
     uint32_t device_count;
+    uint32_t session_device_count;
     uint32_t output_count;
     uint32_t private_seat_broker_count;
     std::vector<uint32_t> missing_private_seat_brokers;

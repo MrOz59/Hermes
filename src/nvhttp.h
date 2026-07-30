@@ -89,7 +89,9 @@ namespace nvhttp {
   bool verify_paired_client_certificate(X509 *certificate, crypto::p_named_cert_t &named_cert_out);
 
   struct hestia_session_prepare_t {
+    std::string session_id;
     bool virtual_display = false;
+    bool isolated = false;
     int width = 0;
     int height = 0;
     int fps = 0;
@@ -104,8 +106,14 @@ namespace nvhttp {
   /** Consume unexpired preparation hints for a paired client's next launch. */
   std::optional<hestia_session_prepare_t> take_hestia_session_prepare(const std::string &client_uuid);
 
-  /** Remove any unconsumed preparation hints for a paired client. */
-  void clear_hestia_session_prepare(const std::string &client_uuid);
+  /**
+   * Remove unconsumed preparation hints for a paired client.
+   * When session_id is non-empty, only that reservation may be removed.
+   */
+  bool clear_hestia_session_prepare(
+    const std::string &client_uuid,
+    const std::string_view &session_id = {}
+  );
 
   class SunshineHTTPS: public SimpleWeb::HTTPS {
   public:
@@ -266,6 +274,16 @@ namespace nvhttp {
    * @param[in]  graceful  Whether to stop gracefully
    */
   bool find_and_stop_session(const std::string& uuid, bool graceful);
+
+  /**
+   * Stop a Hestia session only when both its paired-client owner and API
+   * session token match. An empty token preserves the protocol-v1 fallback.
+   */
+  bool find_and_stop_hestia_session(
+    const std::string &uuid,
+    const std::string_view &session_id,
+    bool graceful
+  );
 
   /**
    * @brief      Update device info associated to the session

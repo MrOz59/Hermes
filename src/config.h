@@ -5,6 +5,7 @@
 #pragma once
 
 // standard includes
+#include <atomic>
 #include <bitset>
 #include <chrono>
 #include <optional>
@@ -91,7 +92,13 @@ namespace config {
     std::string output_name;
     std::string virtual_display_backend;
     bool hermes_kms_multi_output;
-    bool hermes_kms_isolated_sessions;
+    /**
+     * Atomic because the Hestia API can enable it at runtime (see
+     * enable_hestia_isolated_sessions) while capture, process, and virtual
+     * display threads read it. Only ever transitions false -> true, and only
+     * while no session is active.
+     */
+    std::atomic<bool> hermes_kms_isolated_sessions;
     std::string gamescope_backend;
 
     struct dd_t {

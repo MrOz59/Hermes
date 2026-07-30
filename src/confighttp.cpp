@@ -10,12 +10,18 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <mutex>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <numeric>
 #include <algorithm>
 #include <atomic>
+
+#ifdef __linux__
+  #include <unistd.h>
+#endif
 
 // lib includes
 #include <boost/algorithm/string.hpp>
@@ -55,7 +61,9 @@ namespace confighttp {
   namespace fs = std::filesystem;
 
   // Defined later; declared here so the web-UI metrics handler can reuse it.
-  nlohmann::json hestia_runtime_status_json();
+  nlohmann::json hestia_runtime_status_json(
+    const std::optional<video::pipeline_metrics_t> &pipeline_metrics
+  );
 
   class HestiaHTTPSServer: public SimpleWeb::ServerBase<SimpleWeb::HTTPS> {
   public:
@@ -142,6 +150,27 @@ namespace confighttp {
 
   // 0 = idle, 1 = running, 2 = succeeded, 3 = failed/cancelled.
   static std::atomic<int> evdi_install_status {0};
+  // 0 = idle, 1 = running, 2 = ready, 3 = failed, 4 = reboot required.
+  // Only state 1 blocks a new attempt; 3 and 4 are both retryable, so the UI
+  // needs hermes_kms_setup_message to explain which one it is.
+  static std::atomic<int> hermes_kms_setup_status {0};
+  static std::mutex hermes_kms_setup_message_mutex;
+  static std::string hermes_kms_setup_message;
+
+  static void set_hermes_kms_setup_result(int status, std::string message) {
+    {
+      std::lock_guard lock(hermes_kms_setup_message_mutex);
+      hermes_kms_setup_message = std::move(message);
+    }
+    // Publish the message before the status so a poll that observes a terminal
+    // status always sees the matching explanation.
+    hermes_kms_setup_status.store(status);
+  }
+
+  static std::string get_hermes_kms_setup_message() {
+    std::lock_guard lock(hermes_kms_setup_message_mutex);
+    return hermes_kms_setup_message;
+  }
   // 0 = idle, 1 = running, 2 = succeeded, 3 = failed/cancelled.
   static std::atomic<int> clipboard_install_status {0};
 
@@ -238,7 +267,10 @@ namespace confighttp {
       {"multiOutputCapable", status.multi_output_capable},
       {"experimentalIsolatedSessionsEnabled", status.experimental_isolated_sessions_enabled},
       {"multiDeviceCapable", status.multi_device_capable},
+      {"sessionDevicePoolCapable", status.session_device_pool_capable},
+      {"isolatedRuntimeReady", status.isolated_runtime_ready},
       {"deviceCount", status.device_count},
+      {"sessionDeviceCount", status.session_device_count},
       {"outputCount", status.output_count},
       {"privateSeatBrokerCount", status.private_seat_broker_count},
       {"missingPrivateSeatBrokers", status.missing_private_seat_brokers},
@@ -803,7 +835,10 @@ namespace confighttp {
     }
 
     print_req(request);
-    send_response(response, hestia_runtime_status_json());
+    send_response(
+      response,
+      hestia_runtime_status_json(video::get_pipeline_metrics())
+    );
   }
 
   void getApps(resp_https_t response, req_https_t request) {
@@ -1269,6 +1304,12 @@ namespace confighttp {
   void getHestiaCapabilities(resp_https_t response, req_https_t request) {
     print_req(request);
 
+#ifdef __linux__
+    const bool multi_user_sessions =
+      config::video.virtual_display_backend == "hermes_kms";
+#else
+    const bool multi_user_sessions = false;
+#endif
     const nlohmann::json capabilities {
       {"ok", true},
       {"server_name", "Hermes"},
@@ -1289,6 +1330,10 @@ namespace confighttp {
       {"features", {
         {"virtual_display", true},
         {"virtual_display_backend", {"evdi", "hermes_kms"}},
+        // Additive protocol-v1 capability. Older Hestia builds ignore it;
+        // aware clients require a successful reservation instead of silently
+        // falling back to the legacy single-user stream.
+        {"multi_user_sessions", multi_user_sessions},
         {"hermes_kms_multi_output", {
           {"supported", true},
           {"experimental", true},
@@ -1386,8 +1431,11 @@ namespace confighttp {
   }
 
   bool validate_hestia_session_prepare(const nlohmann::json &request, std::string &error) {
-    static const std::set<std::string> request_keys {
+    static const std::set<std::string> legacy_request_keys {
       "client", "stream", "virtual_display", "app",
+    };
+    static const std::set<std::string> isolated_request_keys {
+      "client", "stream", "virtual_display", "app", "session",
     };
     static const std::set<std::string> client_keys {
       "name", "version", "platform", "display_width", "display_height", "refresh_rate", "hdr",
@@ -1401,9 +1449,13 @@ namespace confighttp {
     static const std::set<std::string> app_keys {
       "id", "launch_mode",
     };
+    static const std::set<std::string> session_keys {
+      "isolation",
+    };
 
-    if (!hestia_has_exact_keys(request, request_keys)) {
-      error = "Request must contain only client, stream, virtual_display, and app";
+    if (!hestia_has_exact_keys(request, legacy_request_keys) &&
+        !hestia_has_exact_keys(request, isolated_request_keys)) {
+      error = "Request must contain client, stream, virtual_display, app, and optionally session";
       return false;
     }
 
@@ -1451,7 +1503,69 @@ namespace confighttp {
       return false;
     }
 
+    if (request.contains("session")) {
+      const auto &session = request["session"];
+      if (!hestia_has_exact_keys(session, session_keys) ||
+          !hestia_is_one_of(session["isolation"], {"required", "shared"})) {
+        error = "Invalid session object";
+        return false;
+      }
+      if (session["isolation"] == "required" && !virtual_display["enabled"].get<bool>()) {
+        error = "Independent sessions require a virtual display";
+        return false;
+      }
+    }
+
     return true;
+  }
+
+  /**
+   * Enable the isolated Hermes-KMS execution path for an API-aware client.
+   *
+   * This is intentionally a runtime opt-in: it removes the old requirement to
+   * edit hermes.conf before Hestia can reserve an independent display, while
+   * refusing to switch modes underneath a legacy global session.
+   */
+  bool enable_hestia_isolated_sessions(
+    std::string &error_code,
+    std::string &error_message
+  ) {
+#ifdef __linux__
+    static std::mutex activation_mutex;
+    std::lock_guard lock(activation_mutex);
+
+    if (config::video.virtual_display_backend != "hermes_kms") {
+      error_code = "hermes_kms_required";
+      error_message = "Independent Hestia sessions require the Hermes-KMS virtual display backend";
+      return false;
+    }
+    const bool already_enabled = config::video.hermes_kms_isolated_sessions;
+    if (!already_enabled &&
+        (rtsp_stream::session_count() > 0 || proc::proc.running() > 0)) {
+      error_code = "legacy_session_active";
+      error_message = "Stop the existing shared session before enabling independent Hestia sessions";
+      return false;
+    }
+
+    const auto status = VDISPLAY::getHermesKmsStatus();
+    if (!status.isolated_runtime_ready) {
+      error_code = "isolated_runtime_unavailable";
+      error_message = status.session_device_count == 0 ?
+        "Hermes-KMS has no private session devices; reinstall the multi-session driver setup" :
+        "Hermes-KMS private seat brokers are not ready; run the isolated-session setup";
+      return false;
+    }
+
+    if (!already_enabled) {
+      config::video.hermes_kms_isolated_sessions = true;
+      BOOST_LOG(info) << "[HestiaAPI] Enabled experimental independent-session mode at runtime";
+    }
+    return true;
+#else
+    error_code = "unsupported_platform";
+    error_message = "Independent Hestia sessions currently require a Linux Hermes-KMS host";
+    return false;
+#endif
   }
 
   /**
@@ -1482,6 +1596,9 @@ namespace confighttp {
       const auto &stream = input["stream"];
       const auto &virtual_display = input["virtual_display"];
       const auto &app = input["app"];
+      const bool isolated =
+        input.contains("session") &&
+        input["session"]["isolation"] == "required";
 #ifdef _WIN32
       if (app["launch_mode"] == "gamescope") {
         send_hestia_error(response, SimpleWeb::StatusCode::client_error_bad_request, "unsupported_feature", "Gamescope is only available on Linux hosts");
@@ -1493,9 +1610,27 @@ namespace confighttp {
         return;
       }
 #endif
+      if (isolated) {
+        std::string error_code;
+        std::string error_message;
+        if (!enable_hestia_isolated_sessions(error_code, error_message)) {
+          send_hestia_error(
+            response,
+            error_code == "legacy_session_active" ?
+              SimpleWeb::StatusCode::client_error_conflict :
+              SimpleWeb::StatusCode::server_error_service_unavailable,
+            error_code.c_str(),
+            error_message.c_str()
+          );
+          return;
+        }
+      }
       const auto client = std::static_pointer_cast<crypto::named_cert_t>(request->userp);
+      const std::string session_id = "hestia-" + crypto::rand_alphabet(24);
       nvhttp::store_hestia_session_prepare(client->uuid, {
+        .session_id = session_id,
         .virtual_display = virtual_display["enabled"].get<bool>(),
+        .isolated = isolated,
         .width = stream["requested_width"].get<int>(),
         .height = stream["requested_height"].get<int>(),
         .fps = stream["requested_fps"].get<int>(),
@@ -1510,7 +1645,8 @@ namespace confighttp {
 
       const nlohmann::json output {
         {"ok", true},
-        {"session_id", "hestia-" + crypto::rand_alphabet(12)},
+        {"session_id", session_id},
+        {"isolation", isolated ? "independent" : "shared"},
         {"virtual_display", {
           {"created", false},
           {"name", ""},
@@ -1538,30 +1674,93 @@ namespace confighttp {
     }
 
     const auto client = std::static_pointer_cast<crypto::named_cert_t>(request->userp);
-    nvhttp::clear_hestia_session_prepare(client->uuid);
-    const bool stopped = nvhttp::find_and_stop_session(client->uuid, true);
+    std::string session_id;
+    if (!request->content.string().empty()) {
+      try {
+        const auto input = nlohmann::json::parse(request->content.string());
+        if (!hestia_has_exact_keys(input, {}) &&
+            (!hestia_has_exact_keys(input, {"session_id"}) ||
+             !input["session_id"].is_string() ||
+             input["session_id"].get<std::string>().empty())) {
+          send_hestia_error(response, SimpleWeb::StatusCode::client_error_bad_request, "invalid_request", "Request must be empty or contain only session_id");
+          return;
+        }
+        session_id = input.value("session_id", "");
+      } catch (const nlohmann::json::exception &) {
+        send_hestia_error(response, SimpleWeb::StatusCode::client_error_bad_request, "invalid_request", "Request body must be valid JSON");
+        return;
+      }
+    }
+
+    const bool pending_cleared =
+      nvhttp::clear_hestia_session_prepare(client->uuid, session_id);
+    const bool stopped =
+      nvhttp::find_and_stop_hestia_session(client->uuid, session_id, true);
     BOOST_LOG(debug) << "[HestiaAPI] session stop requested by client=" << client->uuid
+                     << " session=" << (session_id.empty() ? "<legacy>" : session_id)
+                     << " pending_cleared=" << pending_cleared
                      << " stopped=" << stopped;
-    send_response(response, {{"ok", true}, {"stopped", stopped}});
+    send_response(response, {
+      {"ok", true},
+      {"session_id", session_id},
+      {"pending_cleared", pending_cleared},
+      {"stopped", stopped},
+    });
   }
 
-  nlohmann::json hestia_display_status_json() {
+  nlohmann::json hestia_display_status_json(const std::string_view &client_uuid) {
 #ifdef __linux__
+    const auto session = rtsp_stream::session_display_snapshot(client_uuid);
     const auto evdi_status = VDISPLAY::getEvdiStatus();
-    const bool virtual_display_active = !evdi_status.active_displays.empty();
-    const auto *display = virtual_display_active ? &evdi_status.active_displays.front() : nullptr;
-    const bool exclusive_virtual_display = virtual_display_active && config::video.isolated_virtual_display_option;
+    const bool session_scoped_display =
+      session && (session->isolated || session->virtual_display);
+    const bool legacy_virtual_display =
+      session &&
+      !session_scoped_display &&
+      !evdi_status.active_displays.empty();
+    const auto *legacy_display =
+      legacy_virtual_display ? &evdi_status.active_displays.front() : nullptr;
+    const bool virtual_display_active =
+      session_scoped_display || legacy_virtual_display;
+    const bool isolated = session && session->isolated;
+    const bool exclusive_virtual_display =
+      legacy_virtual_display && config::video.isolated_virtual_display_option;
+    const std::string display_name =
+      session_scoped_display ? session->display_name :
+      legacy_display ? legacy_display->name :
+      "";
+    const std::string backend =
+      !virtual_display_active ? "none" :
+      session_scoped_display ? "hermes_kms" :
+      "evdi";
+    const int width =
+      session_scoped_display ? session->width :
+      legacy_display ? legacy_display->width :
+      0;
+    const int height =
+      session_scoped_display ? session->height :
+      legacy_display ? legacy_display->height :
+      0;
+    const int fps =
+      session_scoped_display ? session->fps :
+      legacy_display ? legacy_display->fps :
+      0;
 
     return {
       {"ok", true},
       {"active", virtual_display_active},
+      {"session", {
+        {"active", session.has_value()},
+        {"session_id", session ? session->hestia_session_id : ""},
+        {"isolation", isolated ? "independent" : "shared"},
+      }},
       {"virtual_display", {
         {"enabled", virtual_display_active},
-        {"name", display ? display->name : ""},
-        {"backend", virtual_display_active ? "evdi" : "none"},
-        {"width", display ? display->width : 0},
-        {"height", display ? display->height : 0},
-        {"fps", display ? display->fps : 0},
+        {"name", display_name},
+        {"backend", backend},
+        {"width", width},
+        {"height", height},
+        {"fps", fps},
         {"hdr", false},
       }},
       {"physical_display", {
@@ -1572,13 +1771,15 @@ namespace confighttp {
       {"desktop", {
         {"environment", evdi_status.session_type},
         {"kscreen_available", evdi_status.output_layout_backend == "kscreen"},
-        {"kscreen_output", display ? display->name : ""},
+        {"kscreen_output", isolated ? "" : display_name},
       }},
     };
 #else
+    (void) client_uuid;
     return {
       {"ok", true},
       {"active", false},
+      {"session", {{"active", false}, {"session_id", ""}, {"isolation", "shared"}}},
       {"virtual_display", {{"enabled", false}, {"name", ""}, {"backend", "none"}, {"width", 0}, {"height", 0}, {"fps", 0}, {"hdr", false}}},
       {"physical_display", {{"disabled_during_stream", false}, {"saved_primary", ""}, {"recovery_state_exists", false}}},
       {"desktop", {{"environment", "unknown"}, {"kscreen_available", false}, {"kscreen_output", ""}}},
@@ -1591,7 +1792,8 @@ namespace confighttp {
       return;
     }
 
-    send_response(response, hestia_display_status_json());
+    const auto client = std::static_pointer_cast<crypto::named_cert_t>(request->userp);
+    send_response(response, hestia_display_status_json(client->uuid));
   }
 
   void recover_hestia_display(resp_https_t response, req_https_t request) {
@@ -1695,8 +1897,26 @@ namespace confighttp {
   // Build the live encoder/session view shared by the diagnostics endpoint, so
   // users can see the real encoder (hardware vs software) and who is connected
   // instead of guessing from logs.
-  nlohmann::json hestia_runtime_status_json() {
+  nlohmann::json hestia_runtime_status_json(
+    const std::optional<video::pipeline_metrics_t> &pipeline_metrics
+  ) {
     nlohmann::json runtime;
+
+    const auto queue_json = [](const video::pipeline_queue_metrics_t::queue_t &queue) {
+      return nlohmann::json {
+        {"active_instances", queue.active_instances},
+        {"depth", queue.depth},
+        {"capacity", queue.capacity},
+        {"high_watermark", queue.high_watermark},
+        {"overflow_events", queue.overflow_events},
+        {"dropped_elements", queue.dropped_elements},
+      };
+    };
+    const auto queues = video::get_pipeline_queue_metrics();
+    runtime["video_queues"] = {
+      {"capture_contexts", queue_json(queues.capture_contexts)},
+      {"encode_session_contexts", queue_json(queues.encode_session_contexts)},
+    };
 
     const auto enc = video::get_encoder_status();
     if (enc.probed) {
@@ -1752,18 +1972,67 @@ namespace confighttp {
     };
 
     // Live per-frame pipeline metrics (only meaningful while streaming).
-    const auto pm = video::get_pipeline_metrics();
-    if (pm.valid) {
+    if (pipeline_metrics && pipeline_metrics->valid) {
+      const auto &pm = *pipeline_metrics;
       runtime["pipeline"] = {
         {"fps", pm.fps},
         {"bitrate_kbps", pm.bitrate_kbps},
         {"encode_ms", pm.encode_ms},
+        {"encode_p50_ms", pm.encode_p50_ms},
+        {"encode_p95_ms", pm.encode_p95_ms},
+        {"encode_p99_ms", pm.encode_p99_ms},
         {"capture_to_encode_ms", pm.capture_to_encode_ms},
+        {"capture_to_encode_p50_ms", pm.capture_to_encode_p50_ms},
+        {"capture_to_encode_p95_ms", pm.capture_to_encode_p95_ms},
+        {"capture_to_encode_p99_ms", pm.capture_to_encode_p99_ms},
+        {"window_sequence", pm.window_sequence},
+        {"window_duration_ms", pm.window_duration_ms},
+        {"window_frames", pm.window_frames},
+        {"sampled_frames", pm.sampled_frames},
         {"frames_encoded", pm.frames_encoded},
         {"frames_dropped", pm.frames_dropped},
+        {"frames_replaced_before_encode", pm.frames_replaced_before_encode},
+        {"frames_dropped_encode", pm.frames_dropped_encode},
+        {"frames_dropped_encoded_queue", pm.frames_dropped_encoded_queue},
+        {"frames_dropped_send_deadline", pm.frames_dropped_send_deadline},
+        {"frames_dropped_packet_deadline", pm.frames_dropped_packet_deadline},
+        {"frames_dropped_recovery_wait", pm.frames_dropped_recovery_wait},
+        {"frames_dropped_reference_superseded", pm.frames_dropped_reference_superseded},
+        {"idr_requests_accepted", pm.idr_requests_accepted},
+        {"idr_requests_rate_limited", pm.idr_requests_rate_limited},
         {"width", pm.width},
         {"height", pm.height},
       };
+
+      if (pm.network.valid) {
+        auto latency_json = [](const video::pipeline_latency_metrics_t &latency) {
+          return nlohmann::json {
+            {"mean_ms", latency.mean_ms},
+            {"p50_ms", latency.p50_ms},
+            {"p95_ms", latency.p95_ms},
+            {"p99_ms", latency.p99_ms},
+          };
+        };
+
+        runtime["pipeline"]["network"] = {
+          {"send_queue", latency_json(pm.network.send_queue)},
+          {"packetization", latency_json(pm.network.packetization)},
+          {"fec", latency_json(pm.network.fec)},
+          {"pacer", latency_json(pm.network.pacer)},
+          {"send", latency_json(pm.network.send)},
+          {"capture_to_last_send", latency_json(pm.network.capture_to_last_send)},
+          {"wire_bitrate_kbps", pm.network.wire_bitrate_kbps},
+          {"fec_overhead_percent", pm.network.fec_overhead_percent},
+          {"window_sequence", pm.network.window_sequence},
+          {"window_duration_ms", pm.network.window_duration_ms},
+          {"window_frames", pm.network.window_frames},
+          {"sampled_frames", pm.network.sampled_frames},
+          {"data_shards", pm.network.data_shards},
+          {"fec_shards", pm.network.fec_shards},
+        };
+      } else {
+        runtime["pipeline"]["network"] = nullptr;
+      }
     } else {
       runtime["pipeline"] = nullptr;
     }
@@ -1901,10 +2170,17 @@ namespace confighttp {
       return;
     }
 
+    const auto client = std::static_pointer_cast<crypto::named_cert_t>(request->userp);
+    const auto session = rtsp_stream::find_session(client->uuid);
+    const auto pipeline_metrics =
+      session ?
+        video::get_pipeline_metrics(session.get()) :
+        std::optional<video::pipeline_metrics_t> {};
+
 #ifdef __linux__
-    send_response(response, {{"ok", true}, {"runtime", hestia_runtime_status_json()}, {"preflight", hestia_preflight_json()}, {"dependencies", {{"clipboard", clipboard_status_json()}}}});
+    send_response(response, {{"ok", true}, {"runtime", hestia_runtime_status_json(pipeline_metrics)}, {"preflight", hestia_preflight_json()}, {"dependencies", {{"clipboard", clipboard_status_json()}}}});
 #else
-    send_response(response, {{"ok", true}, {"runtime", hestia_runtime_status_json()}, {"preflight", hestia_preflight_json()}, {"dependencies", {{"clipboard", {{"available", platf::clipboard_available()}, {"diagnostic", platf::clipboard_available() ? "ready" : "clipboard_unavailable"}, {"manualInstall", "Use the native clipboard service for this platform."}}}}}});
+    send_response(response, {{"ok", true}, {"runtime", hestia_runtime_status_json(pipeline_metrics)}, {"preflight", hestia_preflight_json()}, {"dependencies", {{"clipboard", {{"available", platf::clipboard_available()}, {"diagnostic", platf::clipboard_available() ? "ready" : "clipboard_unavailable"}, {"manualInstall", "Use the native clipboard service for this platform."}}}}}});
 #endif
   }
 
@@ -2181,6 +2457,151 @@ printf "evdi\\n" > /etc/modules-load.d/evdi.conf')EVDI";
     nlohmann::json output_tree;
 #ifdef __linux__
     output_tree["status"] = true;
+    output_tree["hermesKmsInfo"] = hermes_kms_status_json();
+#else
+    output_tree["status"] = false;
+    output_tree["error"] = "Hermes-KMS is only available on Linux.";
+#endif
+    send_response(response, output_tree);
+  }
+
+  /**
+   * Configure the packaged Hermes-KMS private-session pool for this service
+   * user. The helper owns all root-side policy; the request contributes only
+   * explicit confirmation, never command text or a device count.
+   */
+  void configureHermesKms(resp_https_t response, req_https_t request) {
+    if (!validateContentType(response, request, "application/json") || !authenticate(response, request)) {
+      return;
+    }
+
+    nlohmann::json output_tree;
+#ifdef __linux__
+    bool setup_claimed = false;
+    try {
+      std::stringstream ss;
+      ss << request->content.rdbuf();
+      if (!nlohmann::json::parse(ss).value("confirm", false)) {
+        bad_request(response, request, "Hermes-KMS setup requires explicit confirmation");
+        return;
+      }
+
+      constexpr std::string_view helper {"/usr/lib/hermes-kms/hermes-kms-setup"};
+      if (::access(helper.data(), X_OK) != 0) {
+        output_tree["status"] = false;
+        output_tree["error"] =
+          "The installed Hermes-KMS package does not include automatic session setup. Update the driver package.";
+        send_response(response, output_tree);
+        return;
+      }
+      if (boost::process::v1::search_path("pkexec").empty()) {
+        output_tree["status"] = false;
+        output_tree["error"] = "pkexec is required for one-click Hermes-KMS setup.";
+        send_response(response, output_tree);
+        return;
+      }
+      // Atomically claim the setup slot so concurrent authenticated requests
+      // cannot start two privileged helpers.
+      if (hermes_kms_setup_status.exchange(1) == 1) {
+        output_tree["status"] = true;
+        output_tree["setupStatus"] = 1;
+        send_response(response, output_tree);
+        return;
+      }
+      setup_claimed = true;
+
+      // The uid is process-owned numeric state, not request data. The helper
+      // validates it again before writing any privileged configuration.
+      const std::string setup_command =
+        "pkexec /usr/lib/hermes-kms/hermes-kms-setup configure --user " +
+        std::to_string(::geteuid());
+      std::thread([setup_command] {
+        auto working_dir = boost::filesystem::path(std::getenv("HOME") ?: "/tmp");
+        auto env = boost::this_process::environment();
+        std::error_code ec;
+        auto child = platf::run_command(
+          false,
+          true,
+          setup_command,
+          working_dir,
+          env,
+          nullptr,
+          ec,
+          nullptr
+        );
+        if (ec) {
+          BOOST_LOG(warning) << "Unable to launch Hermes-KMS setup: " << ec.message();
+          set_hermes_kms_setup_result(
+            3,
+            "Could not start the setup helper: " + ec.message()
+          );
+          return;
+        }
+
+        child.wait();
+        if (child.exit_code() == 10) {
+          set_hermes_kms_setup_result(
+            4,
+            "Setup finished, but the new session devices need a reboot before they can be used."
+          );
+          return;
+        }
+        if (child.exit_code() != 0) {
+          BOOST_LOG(warning) << "Hermes-KMS setup exited with code " << child.exit_code();
+          set_hermes_kms_setup_result(
+            3,
+            "The setup helper failed (exit code " +
+              std::to_string(child.exit_code()) +
+              "). It may have been cancelled at the authorization prompt."
+          );
+          return;
+        }
+
+        proc::initVDisplayDriver();
+        const auto status = VDISPLAY::getHermesKmsStatus();
+        if (status.isolated_runtime_ready) {
+          set_hermes_kms_setup_result(2, "");
+        } else {
+          set_hermes_kms_setup_result(
+            3,
+            status.session_device_count == 0 ?
+              "Setup completed but no private session devices appeared. A reboot may be required." :
+              "Setup completed but the private seat brokers are not running yet."
+          );
+        }
+      }).detach();
+
+      output_tree["status"] = true;
+      output_tree["setupStatus"] = 1;
+    } catch (const std::exception &e) {
+      if (setup_claimed) {
+        set_hermes_kms_setup_result(3, e.what());
+      }
+      BOOST_LOG(warning) << "ConfigureHermesKms: " << e.what();
+      bad_request(response, request, e.what());
+      return;
+    }
+#else
+    output_tree["status"] = false;
+    output_tree["error"] = "Hermes-KMS is only available on Linux.";
+#endif
+    send_response(response, output_tree);
+  }
+
+  void getHermesKmsSetupStatus(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    nlohmann::json output_tree;
+#ifdef __linux__
+    const auto setup_status = hermes_kms_setup_status.load();
+    output_tree["status"] = true;
+    output_tree["setupStatus"] = setup_status;
+    // Both 3 (failed) and 4 (reboot required) allow a retry, so the message is
+    // what tells the user which action to take.
+    output_tree["setupMessage"] = get_hermes_kms_setup_message();
+    output_tree["setupRetryable"] = setup_status != 1;
     output_tree["hermesKmsInfo"] = hermes_kms_status_json();
 #else
     output_tree["status"] = false;
@@ -2757,6 +3178,8 @@ fi')CLIP";
     server.resource["^/api/evdi/install/status$"]["GET"] = getEvdiInstallStatus;
     server.resource["^/api/evdi/status$"]["GET"] = getEvdiStatus;
     server.resource["^/api/hermes-kms/status$"]["GET"] = getHermesKmsStatus;
+    server.resource["^/api/hermes-kms/setup$"]["POST"] = configureHermesKms;
+    server.resource["^/api/hermes-kms/setup/status$"]["GET"] = getHermesKmsSetupStatus;
     server.resource["^/api/clipboard/status$"]["GET"] = getClipboardStatus;
     server.resource["^/api/clipboard/install$"]["POST"] = installClipboard;
     server.resource["^/api/hestia/v1/?$"]["GET"] = getHestiaCapabilities;

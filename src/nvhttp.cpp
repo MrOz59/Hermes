@@ -1300,8 +1300,11 @@ namespace nvhttp {
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     auto launch_session = make_launch_session(host_audio, is_input_only, args, named_cert_p);
+    launch_session->expected_remote_address =
+      net::addr_to_normalized_string(request->remote_endpoint().address());
     if (!is_input_only) {
       if (const auto hestia_prepare = take_hestia_session_prepare(named_cert_p->uuid)) {
+        launch_session->hestia_session_id = hestia_prepare->session_id;
         launch_session->width = hestia_prepare->width;
         launch_session->height = hestia_prepare->height;
         launch_session->fps = hestia_prepare->fps * 1000;
@@ -1458,9 +1461,15 @@ namespace nvhttp {
     }
 #endif
 
-    if (!rtsp_stream::launch_session_raise(launch_session)) {
+    if (const auto raised = rtsp_stream::launch_session_raise_ex(launch_session);
+        raised != rtsp_stream::launch_raise_result_e::accepted) {
       tree.put("root.<xmlattr>.status_code", 503);
-      tree.put("root.<xmlattr>.status_message", "Another client is still completing its RTSP handshake. Please retry.");
+      tree.put(
+        "root.<xmlattr>.status_message",
+        raised == rtsp_stream::launch_raise_result_e::address_conflict ?
+          "Another device at this network address is still completing its RTSP handshake. Devices sharing one address must start streaming one at a time. Please retry." :
+          "Another client is still completing its RTSP handshake. Please retry."
+      );
       tree.put("root.gamesession", 0);
       return;
     }
@@ -1539,6 +1548,8 @@ namespace nvhttp {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }
     auto launch_session = make_launch_session(host_audio, false, args, named_cert_p);
+    launch_session->expected_remote_address =
+      net::addr_to_normalized_string(request->remote_endpoint().address());
 
     if ((!isolated_sessions && !proc::proc.allow_client_commands) ||
         !named_cert_p->allow_client_commands) {
@@ -1601,10 +1612,16 @@ namespace nvhttp {
     }
 #endif
 
-    if (!rtsp_stream::launch_session_raise(launch_session)) {
+    if (const auto raised = rtsp_stream::launch_session_raise_ex(launch_session);
+        raised != rtsp_stream::launch_raise_result_e::accepted) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 503);
-      tree.put("root.<xmlattr>.status_message", "Another client is still completing its RTSP handshake. Please retry.");
+      tree.put(
+        "root.<xmlattr>.status_message",
+        raised == rtsp_stream::launch_raise_result_e::address_conflict ?
+          "Another device at this network address is still completing its RTSP handshake. Devices sharing one address must start streaming one at a time. Please retry." :
+          "Another client is still completing its RTSP handshake. Please retry."
+      );
       return;
     }
 
@@ -1835,9 +1852,18 @@ namespace nvhttp {
     return prepare;
   }
 
-  void clear_hestia_session_prepare(const std::string &client_uuid) {
+  bool clear_hestia_session_prepare(
+    const std::string &client_uuid,
+    const std::string_view &session_id
+  ) {
     std::lock_guard lock(pending_hestia_session_prepares_mutex);
-    pending_hestia_session_prepares.erase(client_uuid);
+    const auto it = pending_hestia_session_prepares.find(client_uuid);
+    if (it == pending_hestia_session_prepares.end() ||
+        (!session_id.empty() && it->second.prepare.session_id != session_id)) {
+      return false;
+    }
+    pending_hestia_session_prepares.erase(it);
+    return true;
   }
 
   void start() {
@@ -2014,6 +2040,19 @@ namespace nvhttp {
       return true;
     }
     return false;
+  }
+
+  bool find_and_stop_hestia_session(
+    const std::string &uuid,
+    const std::string_view &session_id,
+    bool graceful
+  ) {
+    auto session = rtsp_stream::find_hestia_session(uuid, session_id);
+    if (!session) {
+      return false;
+    }
+    stop_session(*session, graceful);
+    return true;
   }
 
   void update_session_info(stream::session_t& session, const std::string& name, const crypto::PERM newPerm) {

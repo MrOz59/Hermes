@@ -240,6 +240,7 @@ namespace VDISPLAY {
     constexpr uint32_t base_uapi_version = 7;
     constexpr uint32_t multi_output_uapi_version = 8;
     constexpr uint32_t multi_device_uapi_version = 9;
+    constexpr uint32_t session_pool_uapi_version = 10;
     constexpr size_t name_len = 32;
 
     constexpr uint64_t cap_virtual_output = 1ULL << 0;
@@ -252,6 +253,7 @@ namespace VDISPLAY {
     constexpr uint64_t cap_metrics = 1ULL << 10;
     constexpr uint64_t cap_multi_output = 1ULL << 11;
     constexpr uint64_t cap_multi_device = 1ULL << 12;
+    constexpr uint64_t cap_session_device_pool = 1ULL << 13;
     constexpr uint64_t cap_zero_copy_target = 1ULL << 33;
     constexpr uint64_t cap_sync_file = 1ULL << 35;
 
@@ -260,6 +262,9 @@ namespace VDISPLAY {
 
     constexpr uint32_t set_output_connected = 1U << 0;
     constexpr uint32_t set_output_owner_assigned = 1U << 1;
+    constexpr uint32_t device_role_general = 0;
+    constexpr uint32_t device_role_host = 1;
+    constexpr uint32_t device_role_session = 2;
 
     struct version_t {
       uint32_t uapi_version;
@@ -323,7 +328,10 @@ namespace VDISPLAY {
       uint32_t output_count;
       uint32_t device_index;
       uint32_t device_count;
-      uint32_t reserved[4];
+      uint32_t device_role;
+      uint32_t session_index;
+      uint32_t session_device_count;
+      uint32_t reserved[1];
     };
 
     struct select_output_t {
@@ -631,6 +639,8 @@ namespace VDISPLAY {
       uint32_t device_count {0};
       bool multi_output_capable {false};
       bool multi_device_capable {false};
+      bool session_device_pool_capable {false};
+      uint32_t session_device_count {0};
       std::string driver_version;
     };
 
@@ -678,11 +688,19 @@ namespace VDISPLAY {
           out.multi_device_capable =
             candidate.version.uapi_version >= multi_device_uapi_version &&
             (candidate.caps.flags & cap_multi_device);
+          out.session_device_pool_capable =
+            candidate.version.uapi_version >= session_pool_uapi_version &&
+            (candidate.caps.flags & cap_session_device_pool);
           out.device_count =
             candidate.version.uapi_version >= multi_device_uapi_version &&
               candidate.identity.device_count ?
               candidate.identity.device_count :
               1U;
+          out.session_device_count =
+            out.session_device_pool_capable &&
+              candidate.identity.session_device_count ?
+              candidate.identity.session_device_count :
+              out.device_count;
           out.result = has_required_caps(candidate.caps.flags) ?
                          probe_result::ok :
                          probe_result::missing_caps;
@@ -793,6 +811,15 @@ namespace VDISPLAY {
     ) {
       auto devices = open_devices(true);
       for (auto &device : devices) {
+        if (device.version.uapi_version >= session_pool_uapi_version &&
+            (device.caps.flags & cap_session_device_pool) &&
+            device.identity.device_role != device_role_session) {
+          // The packaged pool reserves its first card for the existing host
+          // desktop. Independent compositors consume only private cards.
+          close_device(device);
+          continue;
+        }
+
         if (const int render_fd = open_render_node(device.fd); render_fd >= 0) {
           ::close(device.fd);
           device.fd = render_fd;
@@ -886,6 +913,7 @@ namespace VDISPLAY {
     uint32_t height;
     uint32_t fps;
     int device_index;      // EVDI device index
+    int session_index;     // 1-based private seat index, or 0 for host/legacy
     int output_index;      // 0-based Hermes-KMS output index
     int drm_card_index;    // DRM card index assigned by the kernel
     evdi_handle handle;    // EVDI handle
@@ -1897,7 +1925,10 @@ namespace VDISPLAY {
       .multi_output_capable = probe.multi_output_capable,
       .experimental_isolated_sessions_enabled = config::video.hermes_kms_isolated_sessions,
       .multi_device_capable = probe.multi_device_capable,
+      .session_device_pool_capable = probe.session_device_pool_capable,
+      .isolated_runtime_ready = false,
       .device_count = probe.device_count,
+      .session_device_count = probe.session_device_count,
       .output_count = probe.output_count,
       .private_seat_broker_count = 0,
       .missing_private_seat_brokers = {},
@@ -1907,7 +1938,7 @@ namespace VDISPLAY {
       .active_displays = {},
     };
 
-    for (uint32_t instance = 1; instance <= status.device_count; ++instance) {
+    for (uint32_t instance = 1; instance <= status.session_device_count; ++instance) {
       const auto socket =
         fs::path {"/run/hermes-kms-seatd"} /
         std::to_string(instance) /
@@ -1920,6 +1951,11 @@ namespace VDISPLAY {
         status.missing_private_seat_brokers.push_back(instance);
       }
     }
+    status.isolated_runtime_ready =
+      status.device_present &&
+      status.multi_device_capable &&
+      status.session_device_count > 0 &&
+      status.private_seat_broker_count == status.session_device_count;
 
     std::lock_guard<std::mutex> lock(vdisplay_mutex);
     for (const auto &[guid, display] : virtual_displays) {
@@ -2572,6 +2608,7 @@ namespace VDISPLAY {
     vdinfo.height = height;
     vdinfo.fps = fps;
     vdinfo.device_index = -1;
+    vdinfo.session_index = 0;
     vdinfo.output_index = -1;
     vdinfo.drm_card_index = -1;
     vdinfo.handle = nullptr;
@@ -2634,6 +2671,11 @@ namespace VDISPLAY {
         vdinfo.device_index = device.version.uapi_version >= hermes_kms::multi_device_uapi_version ?
                                 static_cast<int>(device.identity.device_index) :
                                 0;
+        vdinfo.session_index =
+          device.version.uapi_version >= hermes_kms::session_pool_uapi_version &&
+              (device.caps.flags & hermes_kms::cap_session_device_pool) ?
+            static_cast<int>(device.identity.session_index) :
+            vdinfo.device_index + 1;
         vdinfo.output_index = static_cast<int>(device.selected_output_index);
         vdinfo.drm_card_index = device.card_index;
         vdinfo.session_id = session_id;
@@ -3189,9 +3231,9 @@ namespace VDISPLAY {
     for (const auto &[guid, vdinfo] : virtual_displays) {
       if (vdinfo.name == displayName &&
           vdinfo.using_hermes_kms &&
-          vdinfo.device_index >= 0) {
+          vdinfo.session_index > 0) {
         // Must match Hermes-KMS' 70-hermes-kms-session-seats.rules.
-        return "hermes-kms-" + std::to_string(vdinfo.device_index + 1);
+        return "hermes-kms-" + std::to_string(vdinfo.session_index);
       }
     }
     return {};

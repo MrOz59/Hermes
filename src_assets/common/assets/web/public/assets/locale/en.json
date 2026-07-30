@@ -379,6 +379,8 @@
     "hermes_kms_device_missing_desc": "The hermes_kms module is loaded but no HERMES-KMS DRM card node appeared. Reload the module (and confirm its udev rules are installed).",
     "hermes_kms_reload_step": "Reload the module to recreate the device node.",
     "hermes_kms_restart_step": "Restart Hermes after the driver is ready.",
+    "adaptive_fec": "Adaptive FEC (experimental)",
+    "adaptive_fec_desc": "Raise error correction above the configured FEC percentage when the client reports packet loss it could not repair, then release it again once the connection recovers. Protection is never lowered below the configured percentage. Disabled by default; when off, the fixed percentage is used.",
     "fec_percentage": "FEC Percentage",
     "fec_percentage_desc": "Percentage of error correcting packets per data packet in each video frame. Higher values can correct for more network packet loss, but at the cost of increasing bandwidth usage.",
     "ffmpeg_auto": "auto -- let ffmpeg decide (default)",

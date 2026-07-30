@@ -1602,7 +1602,15 @@ namespace stream {
         frame_header.frame_processing_latency = 0;
       }
 
-      auto fecPercentage = config::stream.fec_percentage;
+      // The congestion controller owns this: the fixed controller returns the
+      // configured percentage unchanged, while the adaptive one may have raised
+      // it after the client reported loss it could not repair. Clamped to the
+      // same range the configuration accepts.
+      auto fecPercentage = static_cast<int>(std::clamp<std::uint32_t>(
+        congestion_target.fec_ratio_ppm / 10'000,
+        1,
+        255
+      ));
 
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
@@ -2911,26 +2919,42 @@ namespace stream {
         static_cast<std::uint64_t>(
           std::max(session->config.monitor.bitrate, 0)
         ) * 1000;
+      // The configured percentage may exceed 100 (the option accepts 1..255),
+      // and it now round-trips back into the broadcaster through the target, so
+      // it must be carried at full fidelity. Pacing keeps its own bounded view:
+      // gamestream_fixed_pacing_bitrate_bps caps the ratio internally, which
+      // preserves the previous pacing behaviour for high-FEC configurations.
       const auto fec_ratio_ppm =
         static_cast<std::uint32_t>(
-          std::clamp(config::stream.fec_percentage, 0, 100)
+          std::max(config::stream.fec_percentage, 0)
         ) * 10'000;
-      session->congestion_controller =
-        std::make_unique<
-          congestion::legacy_fixed_congestion_controller_t
-        >(congestion::congestion_target_t {
-          .encoder_bitrate_bps = encoder_bitrate_bps,
-          .pacing_bitrate_bps =
-            congestion::gamestream_fixed_pacing_bitrate_bps(
-              encoder_bitrate_bps,
-              fec_ratio_ppm
-            ),
-          .fec_ratio_ppm = fec_ratio_ppm,
-          .max_frame_queue_us =
-            congestion::gamestream_fixed_frame_queue_us(
-              session->config.monitor.framerate
-            ),
-        });
+      const congestion::congestion_target_t congestion_baseline {
+        .encoder_bitrate_bps = encoder_bitrate_bps,
+        .pacing_bitrate_bps =
+          congestion::gamestream_fixed_pacing_bitrate_bps(
+            encoder_bitrate_bps,
+            fec_ratio_ppm
+          ),
+        .fec_ratio_ppm = fec_ratio_ppm,
+        .max_frame_queue_us =
+          congestion::gamestream_fixed_frame_queue_us(
+            session->config.monitor.framerate
+          ),
+      };
+      if (config::stream.adaptive_fec) {
+        session->congestion_controller =
+          std::make_unique<congestion::adaptive_congestion_controller_t>(
+            congestion_baseline
+          );
+        BOOST_LOG(info)
+          << "Adaptive FEC enabled; protection may rise above "sv
+          << config::stream.fec_percentage << "% under unrecoverable loss"sv;
+      } else {
+        session->congestion_controller =
+          std::make_unique<
+            congestion::legacy_fixed_congestion_controller_t
+          >(congestion_baseline);
+      }
       // Preserve the session-scoped marker for process-level cleanup decisions,
       // but move responsibility for releasing the output into session_t.
       launch_session.session_virtual_display_cleanup_pending = false;

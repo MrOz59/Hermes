@@ -2290,6 +2290,34 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### adaptive_fec
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Raise error correction above `fec_percentage` when the client reports packet
+            loss it could not repair, then release it again once the connection recovers.
+            Protection is never lowered below `fec_percentage`.
+            @note{Experimental. When disabled, the fixed `fec_percentage` is used exactly
+            as before. Loss that the client's FEC already repaired is not treated as
+            degradation, so a healthy stream does not accumulate protection.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            adaptive_fec = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### qp
 
 <table>

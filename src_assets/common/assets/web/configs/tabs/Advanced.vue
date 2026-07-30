@@ -20,6 +20,14 @@ const config = ref(props.config)
       <div class="form-text">{{ $t('config.fec_percentage_desc') }}</div>
     </div>
 
+    <!-- Adaptive FEC -->
+    <Checkbox class="mb-3"
+              id="adaptive_fec"
+              locale-prefix="config"
+              v-model="config.adaptive_fec"
+              default="false"
+    ></Checkbox>
+
     <!-- Quantization Parameter -->
     <div class="mb-3">
       <label for="qp" class="form-label">{{ $t('config.qp') }}</label>

@@ -183,6 +183,14 @@ namespace config {
 
     int fec_percentage;
 
+    /**
+     * Raise FEC above `fec_percentage` when the client reports loss it could
+     * not repair, and release it again once the path recovers. Experimental
+     * and disabled by default; when off, the fixed percentage is used exactly
+     * as before. Never lowers protection below `fec_percentage`.
+     */
+    bool adaptive_fec;
+
     // Video encryption settings for LAN and WAN streams
     int lan_encryption_mode;
     int wan_encryption_mode;

@@ -139,6 +139,17 @@ namespace stream::congestion {
     std::uint32_t fec_ratio_ppm
   ) noexcept;
   /**
+   * @brief Raise per-frame pacing only enough to fit a bounded send window.
+   *
+   * The usable window reserves 15% for FEC, encryption, socket submission,
+   * and timer overshoot. The result never exceeds the legacy 800 Mbps ceiling.
+   */
+  [[nodiscard]] std::uint64_t gamestream_deadline_pacing_bitrate_bps(
+    std::uint64_t base_pacing_bitrate_bps,
+    std::size_t estimated_wire_bytes,
+    std::chrono::microseconds remaining_window
+  ) noexcept;
+  /**
    * @brief Fixed H2 encoded-frame queue budget: two frame intervals.
    */
   [[nodiscard]] std::uint32_t gamestream_fixed_frame_queue_us(

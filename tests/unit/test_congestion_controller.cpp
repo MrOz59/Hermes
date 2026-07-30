@@ -312,6 +312,52 @@ TEST(CongestionControllerTest, FixedPacingIncludesFecAndHeadroom) {
   );
 }
 
+TEST(CongestionControllerTest, DeadlinePacingFitsBoundedWindow) {
+  EXPECT_EQ(
+    stream::congestion::gamestream_deadline_pacing_bitrate_bps(
+      8'000'000,
+      100'000,
+      40ms
+    ),
+    23'529'412
+  );
+  EXPECT_EQ(
+    stream::congestion::gamestream_deadline_pacing_bitrate_bps(
+      25'000'000,
+      100'000,
+      40ms
+    ),
+    25'000'000
+  );
+}
+
+TEST(CongestionControllerTest, DeadlinePacingPreservesBounds) {
+  EXPECT_EQ(
+    stream::congestion::gamestream_deadline_pacing_bitrate_bps(
+      12'000'000,
+      0,
+      40ms
+    ),
+    12'000'000
+  );
+  EXPECT_EQ(
+    stream::congestion::gamestream_deadline_pacing_bitrate_bps(
+      12'000'000,
+      100'000,
+      0us
+    ),
+    12'000'000
+  );
+  EXPECT_EQ(
+    stream::congestion::gamestream_deadline_pacing_bitrate_bps(
+      12'000'000,
+      100'000'000,
+      1ms
+    ),
+    stream::congestion::gamestream_pacing_ceiling_bps
+  );
+}
+
 TEST(CongestionControllerTest, FixedQueueBudgetUsesTwoFrameIntervals) {
   EXPECT_EQ(
     stream::congestion::gamestream_fixed_frame_queue_us(60),

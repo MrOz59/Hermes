@@ -32,6 +32,46 @@ unchanged.
 - Keep Gamescope optional. Gamescope is useful for a SteamOS-like session, but
   Hermes should only use it when enabled by app configuration, settings, or an
   explicit Hestia request.
+- Finish real paired-client validation of the bounded GameStream queues,
+  deadline-aware pacing, and recovery behavior already implemented in the H2
+  migration phase, then move to conservative adaptive bitrate work.
+
+## Transition plan: GameStream today, HDT later
+
+Hermes and Hestia are evolving incrementally rather than being rewritten. The
+production media path today is still the GameStream-compatible stack. The
+Hestia protocol v1 API described below is an additive control and diagnostics
+layer around that stack; it is not a replacement media transport.
+
+The transition is intentionally staged:
+
+1. Telemetry and modular boundaries (H0/C0 and H1/C1) were added without
+   changing the wire protocol.
+2. Hermes H2 improves pacing, queue bounds, packet deadlines, and recovery on
+   the compatible GameStream path. Its implementation is present, but the full
+   reference/candidate matrix with a real paired Hestia remains an acceptance
+   requirement.
+3. The next stages cover conservative bitrate adaptation, richer
+   Hermes↔Hestia feedback, deadline-aware recovery, automatic connectivity, and
+   native identity/pairing while preserving fallback.
+4. Only after those foundations are measured and stable do the H7/C7 phases
+   introduce an experimental native transport.
+
+That planned transport is provisionally named **HDT — Hermes Datagram
+Transport**. The intended design is UDP-based and aware of frames, priorities,
+and presentation deadlines, with authenticated encryption, explicit pacing,
+frequent feedback, adaptive recovery, and multiplexed video, audio, input,
+control, and FEC. The specification, test vectors, security model, and
+cross-platform benchmarks must be established before its wire format is
+treated as stable.
+
+**HDT is a long-term direction, not an upcoming release feature.** It has no
+delivery date, is several prerequisite phases away, and will begin as an
+opt-in experiment disabled by default. GameStream compatibility remains the
+working and supported path throughout a long validation period; an HDT
+negotiation failure must cleanly return to that path rather than leave a
+partially initialized session. QUIC Datagrams may be evaluated even later as a
+comparative backend, not assumed to replace HDT.
 
 ## Hestia protocol support
 
@@ -47,9 +87,13 @@ Important endpoints include:
 - `POST /api/hestia/v1/session/prepare`
 - `POST /api/hestia/v1/session/stop`
 - `GET /api/hestia/v1/display/status`
+- `POST /api/hestia/v1/display/recover`
+- `GET /api/hestia/v1/client/permissions`
 - `GET /api/hestia/v1/diagnostics`
 - `GET /api/hestia/v1/clipboard`
 - `POST /api/hestia/v1/clipboard`
+- `GET /api/hestia/v1/commands`
+- `POST /api/hestia/v1/commands/run`
 
 Clients should gate enhanced behavior on the capabilities response. If the
 Hestia API is unavailable, clients should continue through the normal
@@ -66,10 +110,12 @@ only its own active session and Hermes-KMS output.
 
 ## Clients
 
-- **Android:** Artemis (ClassicOldSong's Moonlight fork) — the reference client.
-- **Desktop:** Hestia — <https://github.com/MrOz59/Hestia>. No binary release
-  yet; build from source. Hestia is the client tuned to Hermes' protocol
-  extensions; generic Moonlight clients also work through the standard flow.
+- **Android:** Artemis (ClassicOldSong's Moonlight fork) — a supported
+  Apollo-compatible client.
+- **Desktop:** Hestia — <https://github.com/MrOz59/Hestia>. Hestia is the
+  companion desktop client and the reference client for the staged
+  Hermes-native evolution described above. It is not required to use Hermes;
+  generic Moonlight clients work through the standard flow.
 
 The web UI (`https://<host>:47990`) is branded Hermes. Set the displayed server
 name under *Configuration → General → Server Name*; it defaults to the PC's
@@ -251,12 +297,14 @@ to an unrelated PAM authentication project in the AUR. Upgrading from an older
 Hermes package replaces only the old `hermes` package versions below `0.5.0`.
 The application paths remain `/usr/bin/hermes`, `/usr/share/hermes`, and the
 `hermes.service` systemd user unit, so it can still be installed **side by side
-with the `apollo` (AUR) and `sunshine` packages**. Start it with:
+with the `apollo` (AUR) and `sunshine` packages**.
 
 When migrating from an older package named `hermes`, pacman will ask to remove
 that conflicting package as part of the transaction; accept the removal. User
 configuration is not package-owned and remains in place. Do not install the
 unrelated `hermes` package offered by AUR helpers.
+
+Start Hermes with:
 
 ```bash
 systemctl --user enable --now hermes

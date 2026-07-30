@@ -8,6 +8,7 @@
 #include "utility.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace stream::congestion {
@@ -79,6 +80,45 @@ namespace stream::congestion {
       minimum_pacing_bitrate_bps,
       gamestream_pacing_ceiling_bps
     ));
+  }
+
+  std::uint64_t gamestream_deadline_pacing_bitrate_bps(
+    std::uint64_t base_pacing_bitrate_bps,
+    std::size_t estimated_wire_bytes,
+    std::chrono::microseconds remaining_window
+  ) noexcept {
+    const auto bounded_base = std::min(
+      base_pacing_bitrate_bps,
+      gamestream_pacing_ceiling_bps
+    );
+    if (
+      estimated_wire_bytes == 0 ||
+      remaining_window <= std::chrono::microseconds::zero()
+    ) {
+      return bounded_base;
+    }
+
+    constexpr long double bits_per_byte = 8.0L;
+    constexpr long double microseconds_per_second = 1'000'000.0L;
+    constexpr long double usable_window_fraction = 0.85L;
+    const auto required_bitrate =
+      std::ceil(
+        static_cast<long double>(estimated_wire_bytes) *
+        bits_per_byte *
+        microseconds_per_second /
+        (
+          static_cast<long double>(remaining_window.count()) *
+          usable_window_fraction
+        )
+      );
+
+    return static_cast<std::uint64_t>(
+      std::clamp<long double>(
+        required_bitrate,
+        static_cast<long double>(bounded_base),
+        static_cast<long double>(gamestream_pacing_ceiling_bps)
+      )
+    );
   }
 
   std::uint32_t gamestream_fixed_frame_queue_us(

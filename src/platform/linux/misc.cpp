@@ -33,6 +33,7 @@
 #include <boost/process/v1/group.hpp>
 #include <boost/process/v1/handles.hpp>
 #include <boost/process/v1/io.hpp>
+#include <boost/process/v1/pipe.hpp>
 #include <boost/process/v1/search_path.hpp>
 #include <boost/process/v1/start_dir.hpp>
 #include <fcntl.h>
@@ -1098,11 +1099,33 @@ std::string get_local_ip_for_gateway() {
       return "";
     }
 
-    const char *command = window_system == window_system_e::WAYLAND ?
-                            "wl-paste --no-newline --type text/plain" :
-                            "xclip -selection clipboard -out";
-    FILE *pipe = popen(command, "r");
-    if (pipe == nullptr) {
+    bp::ipstream output;
+    std::error_code ec;
+    bp::child child =
+      window_system == window_system_e::WAYLAND ?
+        bp::child(
+          bp::search_path("wl-paste"),
+          "--no-newline",
+          "--type",
+          "text/plain",
+          bp::std_in < bp::null,
+          bp::std_out > output,
+          bp::std_err > bp::null,
+          bp::limit_handles,
+          ec
+        ) :
+        bp::child(
+          bp::search_path("xclip"),
+          "-selection",
+          "clipboard",
+          "-out",
+          bp::std_in < bp::null,
+          bp::std_out > output,
+          bp::std_err > bp::null,
+          bp::limit_handles,
+          ec
+        );
+    if (ec || !child.valid()) {
       BOOST_LOG(warning) << "Unable to read the clipboard";
       return "";
     }
@@ -1110,16 +1133,22 @@ std::string get_local_ip_for_gateway() {
     constexpr size_t max_clipboard_bytes = 64 * 1024;
     std::string content;
     char buffer[4096];
-    while (const size_t bytes_read = fread(buffer, 1, sizeof(buffer), pipe)) {
+    while (output.read(buffer, sizeof(buffer)) || output.gcount() > 0) {
+      const auto bytes_read =
+        static_cast<std::size_t>(output.gcount());
       if (content.size() + bytes_read > max_clipboard_bytes) {
         BOOST_LOG(warning) << "Clipboard exceeds the 64 KiB Hestia limit";
-        pclose(pipe);
+        output.close();
+        child.terminate(ec);
+        child.wait(ec);
         return "";
       }
       content.append(buffer, bytes_read);
     }
 
-    if (pclose(pipe) != 0) {
+    output.close();
+    child.wait(ec);
+    if (ec || child.exit_code() != 0) {
       BOOST_LOG(warning) << "Unable to read the clipboard";
       return "";
     }
@@ -1134,66 +1163,69 @@ std::string get_local_ip_for_gateway() {
     }
 
     if (window_system == window_system_e::WAYLAND) {
-      FILE *pipe = popen("wl-copy --type text/plain", "w");
-      if (pipe == nullptr) {
+      bp::opstream input;
+      std::error_code ec;
+      bp::child child(
+        bp::search_path("wl-copy"),
+        "--type",
+        "text/plain",
+        bp::std_in < input,
+        bp::std_out > bp::null,
+        bp::std_err > bp::null,
+        bp::limit_handles,
+        ec
+      );
+      if (ec || !child.valid()) {
         BOOST_LOG(warning) << "Unable to write the Wayland clipboard";
         return false;
       }
 
-      const bool wrote_all = fwrite(content.data(), 1, content.size(), pipe) == content.size();
-      const int close_status = pclose(pipe);
-      const bool success = wrote_all && close_status == 0;
+      input.write(
+        content.data(),
+        static_cast<std::streamsize>(content.size())
+      );
+      input.flush();
+      const bool wrote_all = static_cast<bool>(input);
+      input.close();
+      child.wait(ec);
+      const bool success =
+        wrote_all &&
+        !ec &&
+        child.exit_code() == 0;
       if (!success) {
         BOOST_LOG(warning) << "Unable to write the Wayland clipboard";
       }
       return success;
     }
 
-    int input_pipe[2];
-    if (pipe(input_pipe) != 0) {
-      BOOST_LOG(warning) << "Unable to create X11 clipboard pipe";
+    bp::opstream input;
+    std::error_code ec;
+    bp::child child(
+      bp::search_path("xclip"),
+      "-selection",
+      "clipboard",
+      "-in",
+      bp::std_in < input,
+      bp::std_out > bp::null,
+      bp::std_err > bp::null,
+      bp::limit_handles,
+      ec
+    );
+    if (ec || !child.valid()) {
+      BOOST_LOG(warning) << "Unable to launch X11 clipboard owner";
       return false;
     }
 
-    const pid_t child = fork();
-    if (child == 0) {
-      const pid_t owner = fork();
-      if (owner == 0) {
-        dup2(input_pipe[0], STDIN_FILENO);
-        close(input_pipe[0]);
-        close(input_pipe[1]);
-        execlp("xclip", "xclip", "-selection", "clipboard", "-in", nullptr);
-        _exit(127);
-      }
-      _exit(owner < 0 ? 1 : 0);
-    }
-
-    close(input_pipe[0]);
-    sigset_t sigpipe_mask;
-    sigemptyset(&sigpipe_mask);
-    sigaddset(&sigpipe_mask, SIGPIPE);
-    sigset_t previous_mask;
-    pthread_sigmask(SIG_BLOCK, &sigpipe_mask, &previous_mask);
-    size_t written = 0;
-    bool broken_pipe = false;
-    while (child > 0 && written < content.size()) {
-      const ssize_t result = write(input_pipe[1], content.data() + written, content.size() - written);
-      if (result <= 0) {
-        broken_pipe = result < 0 && errno == EPIPE;
-        break;
-      }
-      written += static_cast<size_t>(result);
-    }
-    if (broken_pipe) {
-      siginfo_t signal_info {};
-      sigwaitinfo(&sigpipe_mask, &signal_info);
-    }
-    pthread_sigmask(SIG_SETMASK, &previous_mask, nullptr);
-    const bool wrote_all = written == content.size();
-    close(input_pipe[1]);
-    if (child > 0) {
-      waitpid(child, nullptr, 0);
-    }
+    input.write(
+      content.data(),
+      static_cast<std::streamsize>(content.size())
+    );
+    input.flush();
+    const bool wrote_all = static_cast<bool>(input);
+    input.close();
+    // xclip remains alive while it owns the X11 selection. limit_handles
+    // ensures that its detached lifetime cannot retain Hermes sockets.
+    child.detach();
     if (!wrote_all) {
       BOOST_LOG(warning) << "Unable to write the X11 clipboard";
     }

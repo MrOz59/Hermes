@@ -1676,6 +1676,57 @@ namespace stream {
           pacing_bitrate =
             congestion::gamestream_pacing_ceiling_bps;
         }
+        if (frame_packet_deadline) {
+          std::size_t estimated_shards = 0;
+          for (
+            auto block = fec_blocks_begin;
+            block != fec_blocks_end;
+            ++block
+          ) {
+            const auto data_shards =
+              (block->size() + blocksize - 1) / blocksize;
+            auto parity_shards =
+              (data_shards * fecPercentage + 99) / 100;
+            if (
+              fecPercentage != 0 &&
+              parity_shards <
+                static_cast<std::size_t>(
+                  session->config.minRequiredFecPackets
+                )
+            ) {
+              parity_shards =
+                static_cast<std::size_t>(
+                  session->config.minRequiredFecPackets
+                );
+            }
+            estimated_shards += data_shards + parity_shards;
+          }
+
+          const auto now = std::chrono::steady_clock::now();
+          if (now < *frame_packet_deadline) {
+            const auto deadline_pacing_bitrate =
+              congestion::gamestream_deadline_pacing_bitrate_bps(
+                pacing_bitrate,
+                estimated_shards * wire_bytes_per_shard,
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                  *frame_packet_deadline - now
+                )
+              );
+            if (deadline_pacing_bitrate > pacing_bitrate) {
+              if (packet->is_idr()) {
+                BOOST_LOG(info)
+                  << "Raising IDR pacing from "
+                  << pacing_bitrate
+                  << " to "
+                  << deadline_pacing_bitrate
+                  << " bps to fit "
+                  << estimated_shards
+                  << " shards inside the remaining packet deadline";
+              }
+              pacing_bitrate = deadline_pacing_bitrate;
+            }
+          }
+        }
         packet_pacer.begin_frame({
           .packet_size_bytes = wire_bytes_per_shard,
           .bitrate_bps = pacing_bitrate,

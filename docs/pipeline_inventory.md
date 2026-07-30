@@ -120,6 +120,21 @@ Because this extraction adds no capability or wire change, Hestia's existing
 change. Future HDT or QUIC implementations can replace the host transport
 behind the same boundary in their planned roadmap phases.
 
+### Hermes listener lifetime hardening
+
+Linux clipboard helpers are intentionally longer-lived than the request that
+starts them: `wl-copy` and `xclip` may remain alive while they own a desktop
+selection. Hermes launches those helpers with an explicit handle limit, so
+they inherit only redirected standard streams and cannot retain HTTP, RTSP,
+ENet, video, or audio sockets after a stream ends. Clipboard reads use the
+same isolation.
+
+ENet host creation also treats a bind/allocation failure as a normal empty
+result before applying socket options. The broadcast startup path can
+therefore report an occupied control port and reject the session without
+dereferencing a null host or terminating Hermes. A socket-collision unit test
+guards this failure path.
+
 ## Hermes H1 FEC boundary
 
 The video and audio broadcasters now depend on the typed `IFecController`
@@ -178,7 +193,12 @@ adds a tighter limit: one batch can represent at most 1 ms at the current
 target and actual synthesized wire packet size. Consecutive batches are
 scheduled with the high-resolution monotonic timer. Idle time and scheduler
 oversleep reset the next departure to the actual current time, so late wakeups
-cannot accumulate credit and trigger catch-up microbursts. Existing
+cannot accumulate credit and trigger catch-up microbursts. When an access
+unit's estimated wire size cannot fit the remaining packet deadline at the
+average target, Hermes raises only that frame's pacing rate enough to use at
+most 85% of the remaining window, capped at the legacy 800 Mbps ceiling. This
+handles normal encoder size variation and prevents an unrecoverable
+IDR/deadline loop without restoring the old unbounded burst. Existing
 `pacer_ms` session telemetry records the effective wait.
 
 The audio broadcaster now owns the same kind of per-session state. Ordinary

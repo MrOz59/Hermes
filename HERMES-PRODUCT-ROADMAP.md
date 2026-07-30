@@ -1,9 +1,13 @@
 # Hermes — Product Roadmap
 
+Status: **active** · Last updated: 2026-07-30
+
 A prioritized task list for turning the technical fork into a product. The unique
 advantage is the Hermes-KMS zero-copy pipeline: it is the only backend that can
 report real capture timing because it owns the capture path. Priority goes to
-high-leverage work where the infrastructure already exists.
+high-leverage work where the infrastructure already exists. This product list
+complements the staged transport migration summarized in the main README; it
+does not imply that HDT is a near-term deliverable.
 
 Legend: `[x]` done · `[~]` partially done · `[ ]` not started.
 
@@ -12,15 +16,36 @@ Legend: `[x]` done · `[~]` partially done · `[ ]` not started.
 - [x] Track active sessions and log client connect/disconnect (`rtsp.cpp::session_count()`).
 - [x] Diagnostics endpoint exists at `/api/hestia/v1/diagnostics`.
 - [x] Encoder probe tests nvenc → vaapi → software in order and logs each failure.
-- [~] Pipeline metrics instrumented (`capture-metric`: zero-copy ~8us vs EVDI ~180us).
+- [x] Pipeline metrics instrumented: capture, encode, queue, packetization, FEC,
+  pacing, socket-send, wire-byte, and deadline/recovery counters are available
+  through bounded per-session telemetry (`capture-metric` also distinguishes
+  the Hermes-KMS and EVDI capture paths).
 - [x] Hermes-KMS exposes `GET_METRICS` ioctl (frames, waits, exports, hotplugs).
 - [x] Record why a session ended; distinguish client drop from clean stop.
+
+## Compatible transport migration
+
+- [x] H0/H1: freeze the baseline and introduce typed capture, encoder,
+  transport, congestion, pacing, FEC, and telemetry boundaries without changing
+  GameStream behavior.
+- [~] H2: bounded, deadline-aware GameStream pacing and recovery are
+  implemented. The remaining gate is the paired Hestia reference/candidate
+  matrix on LAN and constrained network profiles.
+- [ ] H3: conservative adaptive bitrate using feedback already available in the
+  compatible ecosystem.
+- [ ] H4–H6: optional Hermes feedback extensions, ICE/connectivity, and native
+  identity/pairing, each with explicit capability negotiation and fallback.
+- [ ] H7: first experimental HDT implementation.
+
+HDT remains several prerequisite phases away, has no delivery date, and must
+start opt-in and disabled by default. The existing GameStream path remains the
+production compatibility baseline through an extended validation period.
 
 ## Tier 1 — high value, low friction, differentiating
 
 ### A. Real-time metrics + actionable diagnostics
 
-- [~] Expand `/api/hestia/v1/diagnostics` (or add `/metrics`) to return live:
+- [x] Expand `/api/hestia/v1/diagnostics` and the web `/api/metrics` view to return live:
   - [x] real encoder in use (codec + hw/sw)
   - [x] connected client(s) / active session count
   - [x] real FPS (`pipeline.fps`)
@@ -66,13 +91,18 @@ Legend: `[x]` done · `[~]` partially done · `[ ]` not started.
 ## Tier 3 — important, higher effort / lower differentiation
 
 - [ ] Simplify setup flow.
-- [ ] Pairing flow.
+- [~] Pairing flow. Standard PIN pairing plus the Hermes/Apollo
+  OTP/passphrase path, Hestia host-code UI, per-client permissions, and
+  revocation exist; consolidated first-run onboarding and the later native
+  identity flow remain open.
 - [~] Appliance mode. Dormant backend groundwork landed: an `appliance_mode`
   config flag (off) and a read-only `platf::appliance_readiness()` that reports
   Gamescope/virtual-display/autologin/session readiness under `appliance` in the
   diagnostics runtime view. No boot/login orchestration yet; the activation path
   (autologin → Gamescope → virtual display → hermes) is the remaining work.
-- [ ] Resolution / bitrate configuration.
+- [~] Resolution / bitrate configuration. Hestia protocol v1 negotiates and
+  validates requested resolution/FPS/codec/bitrate before launch, while
+  simplified host-side UX and H3 runtime bitrate adaptation remain open.
 - [ ] Web UI redesign (beyond the metrics work).
 
 ## Tier 4 — out of immediate server-side scope / depends on user network

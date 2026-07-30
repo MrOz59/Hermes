@@ -197,17 +197,12 @@ namespace stream::congestion {
       is_key_frame ?
         key_frame_burst_multiplier :
         normal_frame_burst_multiplier;
-    const auto scaled_burst_ceiling =
-      bounded_base >
-          gamestream_frame_burst_ceiling_bps / burst_multiplier ?
-        gamestream_frame_burst_ceiling_bps :
-        bounded_base * burst_multiplier;
+    // Scales with the base rate, so catch-up keeps working above the absolute
+    // burst ceiling instead of collapsing to the base rate and disabling
+    // itself for high-bitrate sessions.
     const auto burst_ceiling = std::max(
       bounded_base,
-      std::min(
-        scaled_burst_ceiling,
-        gamestream_frame_burst_ceiling_bps
-      )
+      gamestream_frame_burst_ceiling(bounded_base, burst_multiplier)
     );
     const auto required_bitrate =
       gamestream_deadline_pacing_bitrate_bps(

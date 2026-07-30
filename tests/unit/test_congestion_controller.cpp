@@ -7,6 +7,7 @@
 
 #include <array>
 #include <chrono>
+#include <limits>
 #include <src/congestion_controller.h>
 #include <string_view>
 
@@ -509,5 +510,63 @@ TEST(CongestionControllerTest, QueueDelayRaisesRateWithoutCollapsingDeadline) {
 
   EXPECT_GT(plan.pacing_bitrate_bps, 8'000'000);
   EXPECT_EQ(plan.send_window, 33'334us);
+  EXPECT_TRUE(plan.catch_up);
+}
+
+// The absolute burst ceiling is a floor on available headroom, not a cap on
+// the mechanism. A base rate above it must still scale, otherwise catch-up
+// silently stops existing for every high-bitrate session.
+TEST(CongestionControllerTest, BurstCeilingScalesWithBaseRate) {
+  using stream::congestion::gamestream_frame_burst_ceiling;
+  using stream::congestion::gamestream_frame_burst_ceiling_bps;
+  using stream::congestion::gamestream_pacing_ceiling_bps;
+
+  // Below the nominal ceiling, the scaled allowance is capped by it, so a
+  // single frame cannot monopolize the link.
+  EXPECT_EQ(
+    gamestream_frame_burst_ceiling(10'000'000, 4),
+    40'000'000u
+  );
+  EXPECT_EQ(
+    gamestream_frame_burst_ceiling(50'000'000, 4),
+    gamestream_frame_burst_ceiling_bps
+  );
+  // At or above it, the multiplier takes over: capping here would put the
+  // ceiling at or below the base and disable catch-up outright.
+  EXPECT_EQ(gamestream_frame_burst_ceiling(100'000'000, 4), 400'000'000u);
+  EXPECT_EQ(gamestream_frame_burst_ceiling(150'000'000, 4), 600'000'000u);
+  // Never above the legacy pacing ceiling, and never wrapping on a huge base.
+  EXPECT_EQ(
+    gamestream_frame_burst_ceiling(300'000'000, 8),
+    gamestream_pacing_ceiling_bps
+  );
+  EXPECT_EQ(
+    gamestream_frame_burst_ceiling(
+      std::numeric_limits<std::uint64_t>::max(),
+      8
+    ),
+    gamestream_pacing_ceiling_bps
+  );
+  // A zero multiplier must not divide by zero.
+  EXPECT_EQ(
+    gamestream_frame_burst_ceiling(50'000'000, 0),
+    50'000'000u
+  );
+}
+
+// Regression: at 150 Mbps the old flat ceiling collapsed the burst allowance
+// back to the base rate, so a backlogged frame never caught up.
+TEST(CongestionControllerTest, HighBitrateSessionStillCatchesUp) {
+  constexpr std::uint64_t base_pacing_bitrate = 150'000'000;
+  const auto plan =
+    stream::congestion::gamestream_frame_pacing_plan(
+      base_pacing_bitrate,
+      400'000,
+      16'667us,
+      20ms,
+      false
+    );
+
+  EXPECT_GT(plan.pacing_bitrate_bps, base_pacing_bitrate);
   EXPECT_TRUE(plan.catch_up);
 }

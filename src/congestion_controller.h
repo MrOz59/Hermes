@@ -135,8 +135,48 @@ namespace stream::congestion {
   inline constexpr std::size_t gamestream_frame_fec_feedback_size = 21;
   inline constexpr std::uint64_t gamestream_pacing_ceiling_bps =
     800'000'000;
+  /**
+   * @brief Nominal ceiling on a single frame's catch-up burst.
+   *
+   * Applies while the base pacing rate is below it. A base rate at or above
+   * this value would otherwise have no burst headroom at all -- see
+   * gamestream_frame_burst_ceiling().
+   */
   inline constexpr std::uint64_t gamestream_frame_burst_ceiling_bps =
     100'000'000;
+
+  /**
+   * @brief Burst ceiling for one frame at a given base pacing rate.
+   *
+   * Normally the nominal ceiling applies, which keeps a single frame from
+   * monopolizing the link. Once the base rate reaches that ceiling the cap
+   * would sit at or below the base and silently disable catch-up entirely, so
+   * the multiplier-scaled allowance takes over instead. Saturating arithmetic
+   * throughout, and never above the legacy pacing ceiling.
+   */
+  [[nodiscard]] constexpr std::uint64_t gamestream_frame_burst_ceiling(
+    std::uint64_t base_pacing_bitrate_bps,
+    std::uint64_t burst_multiplier
+  ) noexcept {
+    const auto bounded_base =
+      base_pacing_bitrate_bps > gamestream_pacing_ceiling_bps ?
+        gamestream_pacing_ceiling_bps :
+        base_pacing_bitrate_bps;
+    const auto multiplier = burst_multiplier == 0 ? 1 : burst_multiplier;
+    const auto scaled =
+      bounded_base > gamestream_pacing_ceiling_bps / multiplier ?
+        gamestream_pacing_ceiling_bps :
+        bounded_base * multiplier;
+    const auto allowance =
+      bounded_base < gamestream_frame_burst_ceiling_bps ?
+        (scaled > gamestream_frame_burst_ceiling_bps ?
+           gamestream_frame_burst_ceiling_bps :
+           scaled) :
+        scaled;
+    return allowance > gamestream_pacing_ceiling_bps ?
+             gamestream_pacing_ceiling_bps :
+             allowance;
+  }
 
   /**
    * @brief Derive the fixed H2 pacing rate from the configured encoder rate.

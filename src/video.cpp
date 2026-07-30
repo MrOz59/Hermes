@@ -1782,6 +1782,14 @@ namespace video {
     if (packet && incoming_session && !packet->channel_ref) {
       packet->channel_ref =
         stream::lifetime::retain_channel(incoming_session);
+      if (!packet->channel_ref) {
+        // The session ended between encode and enqueue, so nothing keeps it
+        // alive for the broadcaster, which dereferences channel_data. Dropping
+        // here is the only safe option: queueing would be a use-after-free.
+        BOOST_LOG(debug)
+          << "Discarding encoded frame for a session that already ended"sv;
+        return;
+      }
     }
     const auto incoming_priority =
       stream::priority::video_frame_priority(

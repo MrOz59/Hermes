@@ -4,6 +4,8 @@
  */
 #include "../tests_common.h"
 
+#include <src/media_session_lifetime.h>
+
 #include <src/frame_queue_policy.h>
 #include <src/pipeline_metrics.h>
 #include <src/video.h>
@@ -640,10 +642,19 @@ TEST(EncodedVideoQueueTest, OverflowMarksEveryAffectedSessionForRecovery) {
   auto mail = std::make_shared<safe::mail_raw_t>();
   auto packets =
     mail->queue<video::packet_t>("encoded-video-overflow-test");
-  int first_opaque_session;
-  int second_opaque_session;
-  auto *first_session = &first_opaque_session;
-  auto *second_session = &second_opaque_session;
+  // Register real owners: enqueue_video_packet retains the channel and drops
+  // packets whose session has already ended, so an unregistered key would be
+  // discarded before reaching the queue.
+  auto first_owner = std::make_shared<int>(0);
+  auto second_owner = std::make_shared<int>(0);
+  auto *first_session = first_owner.get();
+  auto *second_session = second_owner.get();
+  stream::lifetime::register_channel(first_session, first_owner);
+  stream::lifetime::register_channel(second_session, second_owner);
+  const auto lifetime_guard = std::shared_ptr<void>(nullptr, [&](void *) {
+    stream::lifetime::unregister_channel(first_session);
+    stream::lifetime::unregister_channel(second_session);
+  });
   auto &policy =
     stream::queueing::encoded_frame_queue_policy();
   policy.erase(first_session);
@@ -705,10 +716,19 @@ TEST(EncodedVideoQueueTest, IdrSupersedesItsSessionAndMovesAhead) {
   auto mail = std::make_shared<safe::mail_raw_t>();
   auto packets =
     mail->queue<video::packet_t>("encoded-video-priority-test");
-  int first_opaque_session;
-  int second_opaque_session;
-  auto *first_session = &first_opaque_session;
-  auto *second_session = &second_opaque_session;
+  // Register real owners: enqueue_video_packet retains the channel and drops
+  // packets whose session has already ended, so an unregistered key would be
+  // discarded before reaching the queue.
+  auto first_owner = std::make_shared<int>(0);
+  auto second_owner = std::make_shared<int>(0);
+  auto *first_session = first_owner.get();
+  auto *second_session = second_owner.get();
+  stream::lifetime::register_channel(first_session, first_owner);
+  stream::lifetime::register_channel(second_session, second_owner);
+  const auto lifetime_guard = std::shared_ptr<void>(nullptr, [&](void *) {
+    stream::lifetime::unregister_channel(first_session);
+    stream::lifetime::unregister_channel(second_session);
+  });
   ASSERT_TRUE(video::metrics_register_session(first_session));
 
   const auto make_packet = [](

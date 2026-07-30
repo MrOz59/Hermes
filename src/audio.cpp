@@ -36,11 +36,20 @@ namespace audio {
     void *channel_data,
     buffer_t packet
   ) {
+    auto channel_ref = stream::lifetime::retain_channel(channel_data);
+    if (channel_data && !channel_ref) {
+      // The session ended between capture and enqueue. The broadcaster
+      // dereferences this channel, so queueing without a strong reference
+      // would be a use-after-free.
+      BOOST_LOG(debug)
+        << "Discarding audio packet for a session that already ended"sv;
+      return;
+    }
+
     packets->raise(packet_t {
       .first = channel_data,
       .second = std::move(packet),
-      .channel_ref =
-        stream::lifetime::retain_channel(channel_data),
+      .channel_ref = std::move(channel_ref),
     });
   }
 

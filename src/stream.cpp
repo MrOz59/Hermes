@@ -1458,6 +1458,16 @@ namespace stream {
       uint64_t frame_data_shards = 0;
       uint64_t frame_fec_shards = 0;
 
+      // The producer retains the channel before queueing, so a queued packet
+      // always keeps its session alive. Verify rather than assume: this pointer
+      // is dereferenced immediately below, and a missing reference would make
+      // that a use-after-free.
+      if (!packet->channel_data || !packet->channel_ref) {
+        BOOST_LOG(warning)
+          << "Dropping encoded frame with no retained session reference"sv;
+        continue;
+      }
+
       auto session = (session_t *) packet->channel_data;
       const auto congestion_target =
         session->congestion_controller->target();
@@ -2175,6 +2185,14 @@ namespace stream {
     while (auto packet = packets->pop()) {
       if (shutdown_event->peek()) {
         break;
+      }
+
+      // See videoBroadcastThread: the retained reference is what makes this
+      // dereference safe, so a packet without one must not be sent.
+      if (!packet->first || !packet->channel_ref) {
+        BOOST_LOG(warning)
+          << "Dropping audio packet with no retained session reference"sv;
+        continue;
       }
 
       auto session = (session_t *) packet->first;

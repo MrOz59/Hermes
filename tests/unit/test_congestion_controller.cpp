@@ -570,3 +570,237 @@ TEST(CongestionControllerTest, HighBitrateSessionStillCatchesUp) {
   EXPECT_GT(plan.pacing_bitrate_bps, base_pacing_bitrate);
   EXPECT_TRUE(plan.catch_up);
 }
+
+namespace {
+
+  stream::congestion::congestion_target_t adaptive_baseline() {
+    return {
+      .encoder_bitrate_bps = 20'000'000,
+      .pacing_bitrate_bps =
+        stream::congestion::gamestream_fixed_pacing_bitrate_bps(
+          20'000'000,
+          100'000
+        ),
+      .fec_ratio_ppm = 100'000,  // 10%
+      .max_frame_queue_us = 33'334,
+    };
+  }
+
+  /** @brief Deliver `frames` identical FEC reports at `now`. */
+  void feed_frames(
+    stream::congestion::adaptive_congestion_controller_t &controller,
+    int frames,
+    std::uint16_t data,
+    std::uint16_t repair,
+    std::uint16_t received_data,
+    std::uint16_t received_repair,
+    stream::congestion::congestion_time_point_t now
+  ) {
+    for (int i = 0; i < frames; ++i) {
+      const std::array reports {
+        stream::congestion::frame_fec_feedback_t {
+          .total_data_packets = data,
+          .total_repair_packets = repair,
+          .received_data_packets = received_data,
+          .received_repair_packets = received_repair,
+        }
+      };
+      controller.on_feedback({
+        .frame_reports = reports,
+        .legacy_loss = std::nullopt,
+        .received_at = now,
+      });
+    }
+  }
+
+}  // namespace
+
+TEST(AdaptiveCongestionTest, HoldsBaselineWhileTheStreamIsClean) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  feed_frames(controller, 30, 10, 2, 10, 2, now);
+
+  const auto target = controller.target();
+  EXPECT_EQ(target.fec_ratio_ppm, adaptive_baseline().fec_ratio_ppm);
+  EXPECT_EQ(target.pacing_bitrate_bps, adaptive_baseline().pacing_bitrate_bps);
+}
+
+// Loss the client repaired is invisible, so protection must not climb: this is
+// the case that would otherwise cause constant oscillation.
+TEST(AdaptiveCongestionTest, RecoveredLossDoesNotRaiseProtection) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  feed_frames(controller, 30, 10, 4, 7, 4, now);
+
+  EXPECT_GT(controller.estimate().loss_ratio, 0.0);
+  EXPECT_EQ(
+    controller.target().fec_ratio_ppm,
+    adaptive_baseline().fec_ratio_ppm
+  );
+}
+
+TEST(AdaptiveCongestionTest, RaisesProtectionOnUnrecoverableLoss) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  feed_frames(controller, 30, 10, 2, 5, 2, now);
+
+  const auto target = controller.target();
+  EXPECT_GT(target.fec_ratio_ppm, adaptive_baseline().fec_ratio_ppm);
+  // Pacing rises to carry the extra repair shards.
+  EXPECT_GT(target.pacing_bitrate_bps, adaptive_baseline().pacing_bitrate_bps);
+}
+
+// The encoder rate is fixed once configured, so lowering pacing would queue
+// frames into their deadline instead of relieving congestion.
+TEST(AdaptiveCongestionTest, NeverPacesBelowTheConfiguredBaseline) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  auto now = stream::congestion::congestion_time_point_t {};
+
+  for (int round = 0; round < 10; ++round) {
+    feed_frames(controller, 20, 10, 2, 5, 2, now);
+    now += 500ms;
+    feed_frames(controller, 20, 10, 2, 10, 2, now);
+    now += 500ms;
+    EXPECT_GE(
+      controller.target().pacing_bitrate_bps,
+      adaptive_baseline().pacing_bitrate_bps
+    );
+    EXPECT_GE(
+      controller.target().fec_ratio_ppm,
+      adaptive_baseline().fec_ratio_ppm
+    );
+  }
+}
+
+TEST(AdaptiveCongestionTest, BoundsProtectionUnderSustainedLoss) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  auto now = stream::congestion::congestion_time_point_t {};
+
+  for (int round = 0; round < 40; ++round) {
+    feed_frames(controller, 20, 10, 2, 1, 0, now);
+    now += 100ms;
+  }
+
+  EXPECT_LE(
+    controller.target().fec_ratio_ppm,
+    stream::congestion::adaptive_congestion_controller_t::
+      maximum_fec_ratio_ppm
+  );
+}
+
+// H3 requires releasing protection without flapping: the hold-down keeps a
+// single clean window from immediately undoing a raise.
+TEST(AdaptiveCongestionTest, ReleasesProtectionOnlyAfterHoldDown) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  auto now = stream::congestion::congestion_time_point_t {};
+
+  feed_frames(controller, 20, 10, 2, 5, 2, now);
+  const auto raised = controller.target().fec_ratio_ppm;
+  ASSERT_GT(raised, adaptive_baseline().fec_ratio_ppm);
+
+  // Clean feedback arrives immediately: too soon to release.
+  now += 100ms;
+  feed_frames(controller, 20, 10, 2, 10, 2, now);
+  EXPECT_EQ(controller.target().fec_ratio_ppm, raised);
+
+  // After the hold-down, protection steps back down.
+  now += stream::congestion::adaptive_congestion_controller_t::
+           release_hold_down +
+         100ms;
+  feed_frames(controller, 20, 10, 2, 10, 2, now);
+  EXPECT_LT(controller.target().fec_ratio_ppm, raised);
+}
+
+TEST(AdaptiveCongestionTest, ReleaseStopsAtTheConfiguredBaseline) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  auto now = stream::congestion::congestion_time_point_t {};
+
+  feed_frames(controller, 20, 10, 2, 5, 2, now);
+  for (int round = 0; round < 20; ++round) {
+    now += stream::congestion::adaptive_congestion_controller_t::
+             release_hold_down +
+           100ms;
+    feed_frames(controller, 20, 10, 2, 10, 2, now);
+  }
+
+  EXPECT_EQ(
+    controller.target().fec_ratio_ppm,
+    adaptive_baseline().fec_ratio_ppm
+  );
+}
+
+// A path change invalidates everything measured about the old link.
+TEST(AdaptiveCongestionTest, PathChangeReturnsToBaseline) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  feed_frames(controller, 20, 10, 2, 5, 2, now);
+  ASSERT_GT(controller.target().fec_ratio_ppm, adaptive_baseline().fec_ratio_ppm);
+
+  controller.on_path_changed({.observed_at = now + 1s});
+
+  EXPECT_EQ(
+    controller.target().fec_ratio_ppm,
+    adaptive_baseline().fec_ratio_ppm
+  );
+  EXPECT_FALSE(controller.estimate().valid);
+}
+
+// fec_percentage accepts 1..255 and now round-trips through the target back
+// into the broadcaster, so a high configuration must survive intact.
+TEST(AdaptiveCongestionTest, HighConfiguredProtectionIsNeverLowered) {
+  auto baseline = adaptive_baseline();
+  baseline.fec_ratio_ppm = 2'550'000;  // 255%, above the adaptive ceiling
+  stream::congestion::adaptive_congestion_controller_t controller {baseline};
+  auto now = stream::congestion::congestion_time_point_t {};
+
+  // Sustained unrecoverable loss: raising must not clamp down to the ceiling.
+  for (int round = 0; round < 5; ++round) {
+    feed_frames(controller, 20, 10, 2, 1, 0, now);
+    now += 100ms;
+  }
+  EXPECT_GE(controller.target().fec_ratio_ppm, baseline.fec_ratio_ppm);
+
+  // Releasing must also stop at the configured level, not the ceiling.
+  for (int round = 0; round < 20; ++round) {
+    now += stream::congestion::adaptive_congestion_controller_t::
+             release_hold_down +
+           100ms;
+    feed_frames(controller, 20, 10, 2, 10, 2, now);
+  }
+  EXPECT_EQ(controller.target().fec_ratio_ppm, baseline.fec_ratio_ppm);
+}
+
+// With adaptive FEC off the broadcaster must see exactly the configured
+// percentage, since it now derives it from the target rather than the config.
+TEST(CongestionControllerTest, FixedControllerRoundTripsFecPercentage) {
+  for (const int percentage : {1, 10, 20, 100, 155, 255}) {
+    const auto ppm = static_cast<std::uint32_t>(percentage) * 10'000;
+    stream::congestion::legacy_fixed_congestion_controller_t controller {
+      {.fec_ratio_ppm = ppm}
+    };
+    EXPECT_EQ(
+      static_cast<int>(controller.target().fec_ratio_ppm / 10'000),
+      percentage
+    );
+  }
+}

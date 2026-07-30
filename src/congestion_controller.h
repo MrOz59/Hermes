@@ -4,9 +4,12 @@
  */
 #pragma once
 
+#include "bandwidth_estimator.h"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -127,6 +130,59 @@ namespace stream::congestion {
 
   private:
     congestion_target_t target_;
+  };
+
+  /**
+   * @brief H3 controller that adapts protection using existing client feedback.
+   *
+   * Deliberately narrow about what it moves. The encoder bitrate is fixed when
+   * the encoder is configured and cannot be changed mid-stream, so lowering the
+   * pacing rate would not slow frame production -- it would only queue frames
+   * until they miss their deadline, which costs an IDR and looks far worse than
+   * the original congestion. This controller therefore never lowers pacing
+   * below the configured baseline and never claims to adapt encoder bitrate.
+   *
+   * What it does adapt is FEC: under loss the client cannot repair, more repair
+   * shards directly reduce what the user sees, and pacing rises just enough to
+   * carry them. Protection is raised quickly and released slowly, with a
+   * deadband between the two thresholds, so a fluctuating link cannot drive
+   * continuous oscillation.
+   */
+  class adaptive_congestion_controller_t final: public ICongestionController {
+  public:
+    /// Unrecovered-frame ratio above which protection is raised.
+    static constexpr double raise_threshold = 0.02;
+    /// Unrecovered-frame ratio below which protection may be released.
+    static constexpr double release_threshold = 0.005;
+    /// Minimum time at a given level before protection is released again.
+    static constexpr auto release_hold_down = std::chrono::seconds {3};
+    static constexpr std::uint32_t fec_step_up_ppm = 100'000;
+    static constexpr std::uint32_t fec_step_down_ppm = 50'000;
+    static constexpr std::uint32_t maximum_fec_ratio_ppm = 500'000;
+
+    explicit adaptive_congestion_controller_t(
+      congestion_target_t baseline
+    ) noexcept;
+
+    void on_packets_sent(const sent_packet_batch_t &batch) override;
+    void on_feedback(const feedback_batch_t &feedback) override;
+    void on_path_changed(const path_info_t &path) override;
+    [[nodiscard]] congestion_target_t target() const override;
+
+    /** @brief Current estimate, for diagnostics and tests. */
+    [[nodiscard]] network_estimate_t estimate() const;
+
+  private:
+    void reevaluate(estimator_time_point_t now);
+
+    mutable std::mutex mutex_;
+    congestion_target_t baseline_;
+    congestion_target_t current_;
+    bandwidth_estimator_t estimator_;
+    network_estimate_t last_estimate_ {};
+    estimator_time_point_t last_raise_ {};
+    std::uint64_t packets_sent_since_report_ = 0;
+    bool started_ = false;
   };
 
   inline constexpr std::uint16_t gamestream_frame_fec_feedback_type =

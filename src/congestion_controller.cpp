@@ -58,6 +58,133 @@ namespace stream::congestion {
     return target_;
   }
 
+  adaptive_congestion_controller_t::adaptive_congestion_controller_t(
+    congestion_target_t baseline
+  ) noexcept:
+      baseline_ {baseline},
+      current_ {baseline} {
+  }
+
+  void adaptive_congestion_controller_t::on_packets_sent(
+    const sent_packet_batch_t &batch
+  ) {
+    std::lock_guard lock {mutex_};
+    // Legacy loss reports carry a count, not a ratio. Tracking what was sent
+    // between reports is the only way to turn one into the other.
+    packets_sent_since_report_ += batch.packet_count;
+  }
+
+  void adaptive_congestion_controller_t::on_feedback(
+    const feedback_batch_t &feedback
+  ) {
+    std::lock_guard lock {mutex_};
+    const auto now = feedback.received_at;
+    if (!started_) {
+      estimator_.reset(now);
+      last_raise_ = now;
+      started_ = true;
+    }
+
+    for (const auto &report : feedback.frame_reports) {
+      estimator_.observe_frame_feedback(
+        report.total_data_packets,
+        report.total_repair_packets,
+        report.received_data_packets,
+        report.received_repair_packets,
+        now
+      );
+    }
+
+    if (feedback.legacy_loss) {
+      estimator_.observe_legacy_loss(
+        feedback.legacy_loss->lost_packets,
+        packets_sent_since_report_,
+        now
+      );
+      packets_sent_since_report_ = 0;
+    }
+
+    reevaluate(now);
+  }
+
+  void adaptive_congestion_controller_t::on_path_changed(
+    const path_info_t &path
+  ) {
+    std::lock_guard lock {mutex_};
+    // A new path invalidates everything measured about the old one. Returning
+    // to baseline is safer than carrying protection tuned for a link that no
+    // longer exists.
+    current_ = baseline_;
+    estimator_.reset(path.observed_at);
+    last_estimate_ = {};
+    last_raise_ = path.observed_at;
+    packets_sent_since_report_ = 0;
+    started_ = true;
+  }
+
+  congestion_target_t adaptive_congestion_controller_t::target() const {
+    std::lock_guard lock {mutex_};
+    return current_;
+  }
+
+  network_estimate_t adaptive_congestion_controller_t::estimate() const {
+    std::lock_guard lock {mutex_};
+    return last_estimate_;
+  }
+
+  void adaptive_congestion_controller_t::reevaluate(
+    estimator_time_point_t now
+  ) {
+    const auto estimate = estimator_.estimate(now);
+    last_estimate_ = estimate;
+
+    // Publish what was measured even before there is enough signal to act, so
+    // diagnostics can distinguish "healthy" from "not yet known".
+    current_.estimated_available_bitrate_bps =
+      baseline_.encoder_bitrate_bps;
+    if (!estimate.valid) {
+      return;
+    }
+
+    // A host may configure protection above the adaptive ceiling. The ceiling
+    // must then yield: raising must never end up lowering what was configured.
+    const auto ceiling_ppm =
+      std::max(maximum_fec_ratio_ppm, baseline_.fec_ratio_ppm);
+
+    auto fec_ratio_ppm = current_.fec_ratio_ppm;
+    if (estimate.unrecovered_loss_ratio > raise_threshold) {
+      fec_ratio_ppm = std::min(
+        fec_ratio_ppm + fec_step_up_ppm,
+        ceiling_ppm
+      );
+      last_raise_ = now;
+    } else if (
+      estimate.unrecovered_loss_ratio < release_threshold &&
+      now - last_raise_ >= release_hold_down
+    ) {
+      // Release one step at a time, never below what the host configured.
+      fec_ratio_ppm =
+        fec_ratio_ppm > baseline_.fec_ratio_ppm + fec_step_down_ppm ?
+          fec_ratio_ppm - fec_step_down_ppm :
+          baseline_.fec_ratio_ppm;
+      last_raise_ = now;
+    }
+    // Between the thresholds the level is held: that deadband is what keeps a
+    // link hovering near one threshold from oscillating every window.
+
+    current_.fec_ratio_ppm = fec_ratio_ppm;
+    // Pacing must carry the extra repair shards, and never drops below the
+    // configured baseline: the encoder keeps producing at its fixed rate, so a
+    // lower pacing rate would build queue instead of relieving congestion.
+    current_.pacing_bitrate_bps = std::max(
+      baseline_.pacing_bitrate_bps,
+      gamestream_fixed_pacing_bitrate_bps(
+        baseline_.encoder_bitrate_bps,
+        fec_ratio_ppm
+      )
+    );
+  }
+
   std::uint64_t gamestream_fixed_pacing_bitrate_bps(
     std::uint64_t encoder_bitrate_bps,
     std::uint32_t fec_ratio_ppm

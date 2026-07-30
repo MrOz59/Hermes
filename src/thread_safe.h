@@ -5,9 +5,11 @@
 #pragma once
 
 // standard includes
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -17,18 +19,33 @@
 #include "utility.h"
 
 namespace safe {
+  struct queue_stats_t {
+    bool running = false;
+    std::size_t depth = 0;
+    std::size_t capacity = 0;
+    std::size_t high_watermark = 0;
+    uint64_t overflow_events = 0;
+    uint64_t dropped_elements = 0;
+  };
+
   template<class T>
   class event_t {
   public:
     using status_t = util::optional_t<T>;
 
+    struct raise_result_t {
+      bool accepted = false;
+      bool replaced = false;
+    };
+
     template<class... Args>
-    void raise(Args &&...args) {
+    raise_result_t raise(Args &&...args) {
       std::lock_guard lg {_lock};
       if (!_continue) {
-        return;
+        return {};
       }
 
+      const bool replaced = static_cast<bool>(_status);
       if constexpr (std::is_same_v<std::optional<T>, status_t>) {
         _status = std::make_optional<T>(std::forward<Args>(args)...);
       } else {
@@ -36,6 +53,10 @@ namespace safe {
       }
 
       _cv.notify_all();
+      return {
+        .accepted = true,
+        .replaced = replaced,
+      };
     }
 
     // pop and view should not be used interchangeably
@@ -254,25 +275,143 @@ namespace safe {
   public:
     using status_t = util::optional_t<T>;
 
+    struct raise_result_t {
+      bool accepted = false;
+      std::size_t dropped = 0;
+    };
+
+    struct prioritized_raise_result_t {
+      bool accepted = false;
+      std::size_t superseded = 0;
+      std::size_t overflow_dropped = 0;
+    };
+
+    struct overflow_stats_t {
+      uint64_t events = 0;
+      uint64_t dropped_elements = 0;
+    };
+
     queue_t(std::uint32_t max_elements = 32):
         _max_elements {max_elements} {
     }
 
     template<class... Args>
-    void raise(Args &&...args) {
+    raise_result_t raise(Args &&...args) {
+      return raise_with_overflow_handler(
+        [](T &) {},
+        std::forward<Args>(args)...
+      );
+    }
+
+    /**
+     * @brief Enqueue one element and inspect anything discarded on overflow.
+     *
+     * The handler runs under the queue lock immediately before the bounded
+     * queue is cleared. Keep it non-blocking and do not call back into this
+     * queue. Expensive accounting should be deferred until this call returns.
+     */
+    template<class OverflowHandler, class... Args>
+    raise_result_t raise_with_overflow_handler(OverflowHandler &&handler, Args &&...args) {
       std::lock_guard ul {_lock};
 
       if (!_continue) {
-        return;
+        return {};
       }
 
+      std::size_t dropped = 0;
       if (_queue.size() == _max_elements) {
+        dropped = _queue.size();
+        for (auto &element : _queue) {
+          std::invoke(handler, element);
+        }
         _queue.clear();
+        ++_overflow_stats.events;
+        _overflow_stats.dropped_elements += dropped;
       }
 
       _queue.emplace_back(std::forward<Args>(args)...);
+      _high_watermark = std::max(_high_watermark, _queue.size());
 
       _cv.notify_all();
+      return {
+        .accepted = true,
+        .dropped = dropped,
+      };
+    }
+
+    /**
+     * @brief Atomically supersede selected entries and enqueue at the front.
+     *
+     * This preserves FIFO order for entries that do not match the predicate.
+     * If the queue remains full after cleanup, the normal bounded overflow
+     * behavior still clears it before the priority element is inserted.
+     */
+    template<
+      class SupersedePredicate,
+      class SupersedeHandler,
+      class OverflowHandler,
+      class... Args
+    >
+    prioritized_raise_result_t raise_prioritized_with_cleanup(
+      SupersedePredicate &&predicate,
+      SupersedeHandler &&supersede_handler,
+      OverflowHandler &&overflow_handler,
+      Args &&...args
+    ) {
+      std::lock_guard ul {_lock};
+
+      if (!_continue) {
+        return {};
+      }
+
+      std::size_t superseded = 0;
+      for (auto it = _queue.begin(); it != _queue.end();) {
+        if (std::invoke(predicate, *it)) {
+          std::invoke(supersede_handler, *it);
+          it = _queue.erase(it);
+          ++superseded;
+        } else {
+          ++it;
+        }
+      }
+
+      std::size_t overflow_dropped = 0;
+      if (_queue.size() == _max_elements) {
+        overflow_dropped = _queue.size();
+        for (auto &element : _queue) {
+          std::invoke(overflow_handler, element);
+        }
+        _queue.clear();
+        ++_overflow_stats.events;
+        _overflow_stats.dropped_elements += overflow_dropped;
+      }
+
+      _queue.emplace(_queue.begin(), std::forward<Args>(args)...);
+      _high_watermark = std::max(_high_watermark, _queue.size());
+
+      _cv.notify_all();
+      return {
+        .accepted = true,
+        .superseded = superseded,
+        .overflow_dropped = overflow_dropped,
+      };
+    }
+
+    [[nodiscard]] overflow_stats_t overflow_stats() const {
+      std::lock_guard lg {_lock};
+      return _overflow_stats;
+    }
+
+    [[nodiscard]] queue_stats_t stats() const {
+      std::lock_guard lg {_lock};
+      return {
+        .running = _continue,
+        .depth = _queue.size(),
+        .capacity = _max_elements,
+        .high_watermark = _high_watermark,
+        .overflow_events = _overflow_stats.events,
+        .dropped_elements = _overflow_stats.dropped_elements,
+      };
     }
 
     bool peek() {
@@ -339,8 +478,10 @@ namespace safe {
   private:
     bool _continue {true};
     std::uint32_t _max_elements;
+    std::size_t _high_watermark = 0;
+    overflow_stats_t _overflow_stats;
 
-    std::mutex _lock;
+    mutable std::mutex _lock;
     std::condition_variable _cv;
 
     std::vector<T> _queue;

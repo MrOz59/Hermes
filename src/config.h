@@ -185,9 +185,11 @@ namespace config {
 
     /**
      * Raise FEC above `fec_percentage` when the client reports loss it could
-     * not repair, and release it again once the path recovers. Experimental
-     * and disabled by default; when off, the fixed percentage is used exactly
-     * as before. Never lowers protection below `fec_percentage`.
+     * not repair, and release it again once the path recovers. Also protects
+     * key frames above whatever level normal frames are using, from the first
+     * frame of the session. Experimental and disabled by default; when off,
+     * the fixed percentage is used for every frame exactly as before. Never
+     * lowers protection below `fec_percentage`.
      */
     bool adaptive_fec;
 

@@ -1604,13 +1604,18 @@ namespace stream {
 
       // The congestion controller owns this: the fixed controller returns the
       // configured percentage unchanged, while the adaptive one may have raised
-      // it after the client reported loss it could not repair. Clamped to the
+      // it after the client reported loss it could not repair, and protects key
+      // frames above whatever level normal frames are using. Clamped to the
       // same range the configuration accepts.
-      auto fecPercentage = static_cast<int>(std::clamp<std::uint32_t>(
-        congestion_target.fec_ratio_ppm / 10'000,
-        1,
-        255
-      ));
+      const auto requested_fec_percentage =
+        static_cast<std::size_t>(std::clamp<std::uint32_t>(
+          congestion::frame_fec_ratio_ppm(
+            congestion_target,
+            packet->is_idr()
+          ) / 10'000,
+          1,
+          255
+        ));
 
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
@@ -1619,34 +1624,36 @@ namespace stream {
 
       payload = std::string_view {(char *) payload_new.data(), payload_new.size()};
 
-      // There are 2 bits for FEC block count for a maximum of 4 FEC blocks
-      constexpr auto MAX_FEC_BLOCKS = 4;
-
-      // The max number of data shards per block is found by solving this system of equations for D:
-      // D = 255 - P
-      // P = D * F
-      // which results in the solution:
-      // D = 255 / (1 + F)
-      // multiplied by 100 since F is the percentage as an integer:
-      // D = (255 * 100) / (100 + F)
-      auto max_data_shards_per_fec_block = (DATA_SHARDS_MAX * 100) / (100 + fecPercentage);
-
-      // Compute the number of FEC blocks needed for this frame using the block size and max shards
-      auto max_data_per_fec_block = max_data_shards_per_fec_block * blocksize;
-      auto fec_blocks_needed = (payload.size() + (max_data_per_fec_block - 1)) / max_data_per_fec_block;
-
-      // If the number of FEC blocks needed exceeds the protocol limit, turn off FEC for this frame.
-      // For normal FEC percentages, this should only happen for enormous frames (over 800 packets at 20%).
-      if (fec_blocks_needed > MAX_FEC_BLOCKS) {
-        BOOST_LOG(warning) << "Skipping FEC for abnormally large encoded frame (needed "sv << fec_blocks_needed << " FEC blocks)"sv;
-        fecPercentage = 0;
-        fec_blocks_needed = MAX_FEC_BLOCKS;
+      // A frame only fits the two-bit block count while its data shards fit
+      // alongside the parity shards its percentage implies. When it does not,
+      // protection is lowered rather than dropped, so an enormous key frame
+      // still goes out with whatever repair the block limit allows.
+      const auto fec_plan = fec::plan_frame_fec(
+        payload.size(),
+        static_cast<std::size_t>(blocksize),
+        requested_fec_percentage
+      );
+      const auto fecPercentage = static_cast<int>(fec_plan.fec_percentage);
+      const auto fec_blocks_needed = fec_plan.block_count;
+      if (fec_plan.unprotected) {
+        BOOST_LOG(warning)
+          << "Skipping FEC for abnormally large encoded frame ("sv
+          << (payload.size() + blocksize - 1) / blocksize
+          << " packets)"sv;
+      } else if (fec_plan.reduced_to_fit) {
+        BOOST_LOG(debug)
+          << "Lowered FEC from "sv << requested_fec_percentage << "% to "sv
+          << fec_plan.fec_percentage << "% to fit "sv
+          << (payload.size() + blocksize - 1) / blocksize
+          << " packets in "sv << fec_plan.block_count << " FEC blocks"sv;
       }
 
-      std::array<std::string_view, MAX_FEC_BLOCKS> fec_blocks;
+      std::array<std::string_view, fec::maximum_fec_blocks> fec_blocks;
       decltype(fec_blocks)::iterator
         fec_blocks_begin = std::begin(fec_blocks),
-        fec_blocks_end = std::begin(fec_blocks) + fec_blocks_needed;
+        fec_blocks_end =
+          std::begin(fec_blocks) +
+          static_cast<std::ptrdiff_t>(fec_blocks_needed);
 
       BOOST_LOG(verbose) << "Generating "sv << fec_blocks_needed << " FEC blocks"sv;
 
@@ -1661,7 +1668,7 @@ namespace stream {
       }
 
       // Split the data into aligned FEC blocks
-      for (int x = 0; x < fec_blocks_needed; ++x) {
+      for (std::size_t x = 0; x < fec_blocks_needed; ++x) {
         if (x == fec_blocks_needed - 1) {
           // The last block must extend to the end of the payload
           fec_blocks[x] = payload.substr(x * aligned_size);
@@ -1822,7 +1829,7 @@ namespace stream {
 
             // Match multiFecFlags with Moonlight
             inspect->packet.multiFecFlags = 0x10;
-            inspect->packet.multiFecBlocks = (blockIndex << 4) | ((fec_blocks_needed - 1) << 6);
+            inspect->packet.multiFecBlocks = static_cast<uint8_t>((blockIndex << 4) | ((fec_blocks_needed - 1) << 6));
 
             inspect->packet.flags = FLAG_CONTAINS_PIC_DATA;
             if (x == 0) {
@@ -1896,7 +1903,7 @@ namespace stream {
             inspect->rtp.sequenceNumber = util::endian::big<uint16_t>(lowseq + x);
             inspect->rtp.timestamp = util::endian::big<uint32_t>(timestamp);
 
-            inspect->packet.multiFecBlocks = (blockIndex << 4) | ((fec_blocks_needed - 1) << 6);
+            inspect->packet.multiFecBlocks = static_cast<uint8_t>((blockIndex << 4) | ((fec_blocks_needed - 1) << 6));
             inspect->packet.frameIndex = packet->frame_index();
 
             // Encrypt this shard if video encryption is enabled

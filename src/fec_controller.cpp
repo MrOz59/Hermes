@@ -73,7 +73,74 @@ namespace stream::fec {
       rs_t encoder_;
     };
 
+    /**
+     * @brief Data shards one block can hold at a given protection level.
+     *
+     * Solves D = 255 - P with P = D * F / 100.
+     */
+    std::size_t data_shards_per_block(
+      std::size_t fec_percentage
+    ) noexcept {
+      return (maximum_shards_per_block * 100) / (100 + fec_percentage);
+    }
+
+    std::size_t blocks_needed(
+      std::size_t data_shards,
+      std::size_t fec_percentage
+    ) noexcept {
+      const auto per_block = data_shards_per_block(fec_percentage);
+      return (data_shards + per_block - 1) / per_block;
+    }
+
   }  // namespace
+
+  frame_fec_plan_t plan_frame_fec(
+    std::size_t payload_bytes,
+    std::size_t block_size_bytes,
+    std::size_t requested_fec_percentage
+  ) noexcept {
+    if (payload_bytes == 0 || block_size_bytes == 0) {
+      return {
+        .fec_percentage = requested_fec_percentage,
+        .block_count = 1,
+      };
+    }
+
+    const auto data_shards =
+      (payload_bytes + block_size_bytes - 1) / block_size_bytes;
+    const auto requested_blocks =
+      blocks_needed(data_shards, requested_fec_percentage);
+    if (requested_blocks <= maximum_fec_blocks) {
+      return {
+        .fec_percentage = requested_fec_percentage,
+        .block_count = requested_blocks,
+      };
+    }
+
+    // Spreading the frame over every available block leaves the most room per
+    // block, so this is the smallest per-block shard count achievable.
+    const auto shards_per_block =
+      (data_shards + maximum_fec_blocks - 1) / maximum_fec_blocks;
+    const auto fitted_percentage =
+      shards_per_block > maximum_shards_per_block ?
+        0 :
+        (maximum_shards_per_block * 100) / shards_per_block - 100;
+    if (fitted_percentage == 0) {
+      // Not even the data shards fit: the frame goes out unprotected, and the
+      // block count matches the pre-existing behaviour for this case.
+      return {
+        .fec_percentage = 0,
+        .block_count = maximum_fec_blocks,
+        .unprotected = true,
+      };
+    }
+
+    return {
+      .fec_percentage = fitted_percentage,
+      .block_count = blocks_needed(data_shards, fitted_percentage),
+      .reduced_to_fit = true,
+    };
+  }
 
   encoded_block_t::encoded_block_t(
     std::size_t data_shards,

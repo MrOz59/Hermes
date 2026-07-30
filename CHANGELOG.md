@@ -11,8 +11,6 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-07-29
-
 ### Added
 - The Web UI updater can now opt in to the rolling Hermes nightly channel with
   `notify_pre_releases` (disabled by default). Nightly checks compare both the
@@ -37,6 +35,15 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 - A disposable VM input-isolation test creates real uinput devices for two
   sessions and verifies that udev assigns both the input parent and event nodes
   to distinct `hermes-kms-1`/`hermes-kms-2` seats.
+- Experimental adaptive FEC behind `adaptive_fec` (off by default). Protection
+  rises above `fec_percentage` when the client reports loss its own FEC could
+  not repair, and is released again once the path recovers; loss the client
+  already repaired is not treated as degradation. Key frames additionally carry
+  protection above the level normal frames are using, from the first frame of
+  the session, because losing one stalls the picture until a replacement key
+  frame is requested, encoded and delivered. Protection is never lowered below
+  the configured percentage, and the estimate uses only feedback the existing
+  GameStream client already sends.
 
 ### Changed
 - Hermes-KMS diagnostics now report UAPI compatibility, driver device/output
@@ -51,6 +58,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   target seat.
 
 ### Fixed
+- Frames too large for the four-block FEC limit no longer go out completely
+  unprotected. Protection is lowered to the highest percentage that still fits
+  the protocol limit instead of being switched off for that frame, which
+  mattered most for the key frames large enough to hit the limit in the first
+  place.
 - Cancelling an isolated launch now signals its in-progress preparation and
   compositor wait, including the atomic handoff into the active-runtime
   registry, so a late runtime cannot appear after `/cancel` returned.

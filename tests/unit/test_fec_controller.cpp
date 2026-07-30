@@ -318,3 +318,111 @@ TEST(FecControllerTest, RejectsInvalidInPlaceGeneratorMatrix) {
     nullptr
   );
 }
+
+// The block plan reproduces the historical shard math for every frame that
+// already fit: D = 25500 / (100 + F) data shards per block, at most four
+// blocks.
+TEST(FrameFecPlanTest, KeepsRequestedProtectionWhenTheFrameFits) {
+  constexpr std::size_t block_size = 1024;
+
+  for (const std::size_t percentage : {1u, 10u, 20u, 50u, 255u}) {
+    const auto shards_per_block = (255 * 100) / (100 + percentage);
+    const auto payload = shards_per_block * block_size * 4;
+
+    const auto plan = stream::fec::plan_frame_fec(
+      payload,
+      block_size,
+      percentage
+    );
+
+    EXPECT_EQ(plan.fec_percentage, percentage);
+    EXPECT_EQ(plan.block_count, 4u);
+    EXPECT_FALSE(plan.reduced_to_fit);
+    EXPECT_FALSE(plan.unprotected);
+  }
+}
+
+TEST(FrameFecPlanTest, UsesTheFewestBlocksThatFit) {
+  constexpr std::size_t block_size = 1024;
+
+  const auto plan = stream::fec::plan_frame_fec(
+    10 * block_size,
+    block_size,
+    20
+  );
+
+  EXPECT_EQ(plan.block_count, 1u);
+  EXPECT_EQ(plan.fec_percentage, 20u);
+}
+
+// The frames large enough to reach this path are keyframes. Dropping them to
+// zero protection left the one frame the stream cannot lose completely bare.
+TEST(FrameFecPlanTest, LowersProtectionInsteadOfDroppingItForLargeFrames) {
+  constexpr std::size_t block_size = 1024;
+  // 900 packets does not fit at 20% (212 data shards per block, 848 total).
+  constexpr std::size_t packets = 900;
+
+  const auto plan = stream::fec::plan_frame_fec(
+    packets * block_size,
+    block_size,
+    20
+  );
+
+  EXPECT_TRUE(plan.reduced_to_fit);
+  EXPECT_FALSE(plan.unprotected);
+  EXPECT_GT(plan.fec_percentage, 0u);
+  EXPECT_LT(plan.fec_percentage, 20u);
+  EXPECT_LE(plan.block_count, stream::fec::maximum_fec_blocks);
+  // Every data shard still has a home inside the block limit.
+  const auto shards_per_block =
+    (255 * 100) / (100 + plan.fec_percentage);
+  EXPECT_LE(packets, shards_per_block * plan.block_count);
+}
+
+TEST(FrameFecPlanTest, ReportsFramesTooLargeForAnyProtection) {
+  constexpr std::size_t block_size = 1024;
+  // Above 4 * 255 packets not even the data shards fit.
+  constexpr std::size_t packets = 4 * 255 + 1;
+
+  const auto plan = stream::fec::plan_frame_fec(
+    packets * block_size,
+    block_size,
+    20
+  );
+
+  EXPECT_TRUE(plan.unprotected);
+  EXPECT_FALSE(plan.reduced_to_fit);
+  EXPECT_EQ(plan.fec_percentage, 0u);
+  EXPECT_EQ(plan.block_count, stream::fec::maximum_fec_blocks);
+}
+
+// The plan must never hand the broadcaster a block count it cannot encode,
+// whatever the frame size and protection level.
+TEST(FrameFecPlanTest, NeverExceedsTheProtocolBlockLimit) {
+  constexpr std::size_t block_size = 1024;
+
+  for (std::size_t packets = 1; packets <= 1200; packets += 7) {
+    for (const std::size_t percentage : {1u, 20u, 60u, 255u}) {
+      const auto plan = stream::fec::plan_frame_fec(
+        packets * block_size,
+        block_size,
+        percentage
+      );
+
+      EXPECT_GE(plan.block_count, 1u);
+      EXPECT_LE(plan.block_count, stream::fec::maximum_fec_blocks);
+      EXPECT_LE(plan.fec_percentage, percentage);
+      if (!plan.unprotected) {
+        const auto shards_per_block =
+          (255 * 100) / (100 + plan.fec_percentage);
+        EXPECT_LE(packets, shards_per_block * plan.block_count);
+      }
+    }
+  }
+}
+
+TEST(FrameFecPlanTest, HandlesEmptyAndDegenerateInput) {
+  EXPECT_EQ(stream::fec::plan_frame_fec(0, 1024, 20).block_count, 1u);
+  EXPECT_EQ(stream::fec::plan_frame_fec(1024, 0, 20).block_count, 1u);
+  EXPECT_EQ(stream::fec::plan_frame_fec(0, 1024, 20).fec_percentage, 20u);
+}

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -80,11 +81,38 @@ namespace stream::congestion {
     std::uint64_t encoder_bitrate_bps = 0;
     std::uint64_t pacing_bitrate_bps = 0;
     std::uint32_t fec_ratio_ppm = 0;
+    /**
+     * @brief Protection for frames the rest of the stream references.
+     *
+     * Zero means "same as fec_ratio_ppm", which is what a controller with no
+     * frame-type policy publishes.
+     */
+    std::uint32_t key_frame_fec_ratio_ppm = 0;
     std::uint32_t max_frame_queue_us = 0;
     std::uint32_t estimated_rtt_us = 0;
     std::uint32_t estimated_queue_delay_us = 0;
     std::uint32_t estimated_available_bitrate_bps = 0;
   };
+
+  /**
+   * @brief Protection level to request for one frame.
+   *
+   * Losing a key frame costs a black screen plus an IDR round trip, while
+   * losing a normal frame costs one glitch, so the two are not worth the same
+   * number of repair shards. A key-frame level below the normal one is treated
+   * as unset rather than as an instruction to protect the frame less.
+   */
+  [[nodiscard]] constexpr std::uint32_t frame_fec_ratio_ppm(
+    const congestion_target_t &target,
+    bool is_key_frame
+  ) noexcept {
+    if (!is_key_frame) {
+      return target.fec_ratio_ppm;
+    }
+    return target.key_frame_fec_ratio_ppm > target.fec_ratio_ppm ?
+             target.key_frame_fec_ratio_ppm :
+             target.fec_ratio_ppm;
+  }
 
   struct frame_pacing_plan_t {
     std::uint64_t pacing_bitrate_bps = 0;
@@ -147,6 +175,13 @@ namespace stream::congestion {
    * carry them. Protection is raised quickly and released slowly, with a
    * deadband between the two thresholds, so a fluctuating link cannot drive
    * continuous oscillation.
+   *
+   * Key frames carry more protection than the level in force for normal
+   * frames, from the first frame of the session rather than only after loss
+   * has already been observed. That asymmetry is deliberate: a lost key frame
+   * stalls the picture until a replacement is requested, encoded and delivered,
+   * so it is worth spending repair shards on a frame type that is rare enough
+   * for the extra bytes not to move the average bitrate.
    */
   class adaptive_congestion_controller_t final: public ICongestionController {
   public:
@@ -159,6 +194,33 @@ namespace stream::congestion {
     static constexpr std::uint32_t fec_step_up_ppm = 100'000;
     static constexpr std::uint32_t fec_step_down_ppm = 50'000;
     static constexpr std::uint32_t maximum_fec_ratio_ppm = 500'000;
+    /// Protection key frames carry above the level for normal frames.
+    static constexpr std::uint32_t key_frame_fec_bonus_ppm = 100'000;
+    /// Ceiling for key frames, above the one that bounds normal frames.
+    static constexpr std::uint32_t maximum_key_frame_fec_ratio_ppm = 600'000;
+
+    /**
+     * @brief Key-frame protection for a given normal-frame level.
+     *
+     * Never below the normal level: a host that configures protection above
+     * the adaptive ceiling must not end up protecting its key frames less than
+     * everything else.
+     */
+    [[nodiscard]] static constexpr std::uint32_t key_frame_protection_ppm(
+      std::uint32_t fec_ratio_ppm
+    ) noexcept {
+      const auto ceiling =
+        maximum_key_frame_fec_ratio_ppm > fec_ratio_ppm ?
+          maximum_key_frame_fec_ratio_ppm :
+          fec_ratio_ppm;
+      const auto boosted =
+        fec_ratio_ppm >
+            std::numeric_limits<std::uint32_t>::max() -
+              key_frame_fec_bonus_ppm ?
+          std::numeric_limits<std::uint32_t>::max() :
+          fec_ratio_ppm + key_frame_fec_bonus_ppm;
+      return boosted > ceiling ? ceiling : boosted;
+    }
 
     explicit adaptive_congestion_controller_t(
       congestion_target_t baseline

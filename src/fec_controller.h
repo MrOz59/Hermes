@@ -16,6 +16,42 @@
 
 namespace stream::fec {
 
+  /// Protocol limit: the multi-FEC header carries a two-bit block count.
+  inline constexpr std::size_t maximum_fec_blocks = 4;
+  /// Reed-Solomon limit, shared by the data and parity shards of one block.
+  inline constexpr std::size_t maximum_shards_per_block = 255;
+
+  /**
+   * @brief Protection actually applied to one encoded frame.
+   *
+   * `fec_percentage` may be below what the caller asked for: a frame only fits
+   * in `maximum_fec_blocks` blocks while its data shards fit alongside the
+   * parity shards the percentage implies.
+   */
+  struct frame_fec_plan_t {
+    std::size_t fec_percentage = 0;
+    std::size_t block_count = 1;
+    /// Protection was lowered so the frame still fits the block limit.
+    bool reduced_to_fit = false;
+    /// The frame is too large for any protection at all.
+    bool unprotected = false;
+  };
+
+  /**
+   * @brief Choose the protection one frame can actually carry.
+   *
+   * Frames large enough to exhaust the block limit are almost always
+   * keyframes, which are exactly the frames a loss burst must not take out --
+   * losing one costs a black screen and another IDR round trip. Falling back
+   * to the highest percentage that still fits keeps them protected instead of
+   * leaving the most expensive frame in the stream completely bare.
+   */
+  [[nodiscard]] frame_fec_plan_t plan_frame_fec(
+    std::size_t payload_bytes,
+    std::size_t block_size_bytes,
+    std::size_t requested_fec_percentage
+  ) noexcept;
+
   struct encode_request_t {
     std::string_view payload;
     std::size_t block_size = 0;

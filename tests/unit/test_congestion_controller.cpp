@@ -804,3 +804,113 @@ TEST(CongestionControllerTest, FixedControllerRoundTripsFecPercentage) {
     );
   }
 }
+
+// A lost key frame stalls the picture until a replacement is requested,
+// encoded and delivered, so it is protected above normal frames from the first
+// frame of the session rather than only after loss has been measured.
+TEST(AdaptiveCongestionTest, ProtectsKeyFramesAboveNormalFramesFromTheStart) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+
+  const auto target = controller.target();
+  EXPECT_EQ(target.fec_ratio_ppm, adaptive_baseline().fec_ratio_ppm);
+  EXPECT_GT(
+    stream::congestion::frame_fec_ratio_ppm(target, true),
+    stream::congestion::frame_fec_ratio_ppm(target, false)
+  );
+}
+
+TEST(AdaptiveCongestionTest, KeyFrameProtectionFollowsTheAdaptiveLevel) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+  const auto before =
+    controller.target().key_frame_fec_ratio_ppm;
+
+  feed_frames(controller, 30, 10, 2, 5, 2, now);
+
+  const auto target = controller.target();
+  EXPECT_GT(target.key_frame_fec_ratio_ppm, before);
+  EXPECT_GT(target.key_frame_fec_ratio_ppm, target.fec_ratio_ppm);
+}
+
+TEST(AdaptiveCongestionTest, BoundsKeyFrameProtectionUnderSustainedLoss) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  auto now = stream::congestion::congestion_time_point_t {};
+
+  for (int round = 0; round < 40; ++round) {
+    feed_frames(controller, 20, 10, 2, 1, 0, now);
+    now += 100ms;
+  }
+
+  EXPECT_LE(
+    controller.target().key_frame_fec_ratio_ppm,
+    stream::congestion::adaptive_congestion_controller_t::
+      maximum_key_frame_fec_ratio_ppm
+  );
+}
+
+// A host configuring protection above the adaptive ceiling must not end up
+// protecting its key frames less than everything else.
+TEST(AdaptiveCongestionTest, KeyFrameProtectionNeverFallsBelowNormalFrames) {
+  auto baseline = adaptive_baseline();
+  baseline.fec_ratio_ppm = 2'550'000;  // 255%, above every adaptive ceiling
+  stream::congestion::adaptive_congestion_controller_t controller {baseline};
+  auto now = stream::congestion::congestion_time_point_t {};
+
+  for (int round = 0; round < 5; ++round) {
+    feed_frames(controller, 20, 10, 2, 1, 0, now);
+    now += 100ms;
+  }
+
+  const auto target = controller.target();
+  EXPECT_GE(target.key_frame_fec_ratio_ppm, target.fec_ratio_ppm);
+  EXPECT_EQ(
+    stream::congestion::frame_fec_ratio_ppm(target, true),
+    target.fec_ratio_ppm
+  );
+}
+
+TEST(AdaptiveCongestionTest, PathChangeReturnsKeyFrameProtectionToBaseline) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+  const auto baseline_key_frame_ppm =
+    controller.target().key_frame_fec_ratio_ppm;
+
+  feed_frames(controller, 20, 10, 2, 5, 2, now);
+  ASSERT_GT(
+    controller.target().key_frame_fec_ratio_ppm,
+    baseline_key_frame_ppm
+  );
+
+  controller.on_path_changed({.observed_at = now + 1s});
+
+  EXPECT_EQ(
+    controller.target().key_frame_fec_ratio_ppm,
+    baseline_key_frame_ppm
+  );
+}
+
+// With adaptive FEC off, key frames must use exactly the configured
+// percentage: the frame-type policy ships with the experimental flag.
+TEST(CongestionControllerTest, FixedControllerTreatsEveryFrameTypeAlike) {
+  stream::congestion::legacy_fixed_congestion_controller_t controller {
+    {.fec_ratio_ppm = 200'000}
+  };
+
+  const auto target = controller.target();
+  EXPECT_EQ(
+    stream::congestion::frame_fec_ratio_ppm(target, true),
+    target.fec_ratio_ppm
+  );
+  EXPECT_EQ(
+    stream::congestion::frame_fec_ratio_ppm(target, false),
+    target.fec_ratio_ppm
+  );
+}

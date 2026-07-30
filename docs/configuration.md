@@ -2298,10 +2298,13 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td colspan="2">
             Raise error correction above `fec_percentage` when the client reports packet
             loss it could not repair, then release it again once the connection recovers.
+            Key frames are additionally protected above the level normal frames are using,
+            starting with the first frame of the session, because losing one stalls the
+            picture until a replacement key frame is requested, encoded and delivered.
             Protection is never lowered below `fec_percentage`.
-            @note{Experimental. When disabled, the fixed `fec_percentage` is used exactly
-            as before. Loss that the client's FEC already repaired is not treated as
-            degradation, so a healthy stream does not accumulate protection.}
+            @note{Experimental. When disabled, the fixed `fec_percentage` is used for every
+            frame exactly as before. Loss that the client's FEC already repaired is not
+            treated as degradation, so a healthy stream does not accumulate protection.}
         </td>
     </tr>
     <tr>

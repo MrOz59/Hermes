@@ -63,6 +63,12 @@ namespace stream::congestion {
   ) noexcept:
       baseline_ {baseline},
       current_ {baseline} {
+    // Key frames are protected from the first frame of the session, before any
+    // feedback exists. The very first IDR is the one frame whose loss the user
+    // always notices, and by the time loss has been measured it is long gone.
+    baseline_.key_frame_fec_ratio_ppm =
+      key_frame_protection_ppm(baseline_.fec_ratio_ppm);
+    current_.key_frame_fec_ratio_ppm = baseline_.key_frame_fec_ratio_ppm;
   }
 
   void adaptive_congestion_controller_t::on_packets_sent(
@@ -173,6 +179,8 @@ namespace stream::congestion {
     // link hovering near one threshold from oscillating every window.
 
     current_.fec_ratio_ppm = fec_ratio_ppm;
+    current_.key_frame_fec_ratio_ppm =
+      key_frame_protection_ppm(fec_ratio_ppm);
     // Pacing must carry the extra repair shards, and never drops below the
     // configured baseline: the encoder keeps producing at its fixed rate, so a
     // lower pacing rate would build queue instead of relieving congestion.

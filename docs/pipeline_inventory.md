@@ -208,11 +208,14 @@ variation without either restoring the old 800 Mbps microburst or turning one
 large IDR into an impossible deadline/recovery loop. Existing `pacer_ms`
 session telemetry records the effective wait.
 
-For normal frames, time already spent in the encoded queue consumes the
-nominal two-frame departure window. Hermes raises only the affected frame's
-rate, up to the 4×/100 Mbps bounds above, so the few dependent frames produced
-while a large IDR is leaving the host can catch up instead of remaining
-permanently one IDR-window behind.
+For normal frames, time already spent in the encoded queue drives the catch-up
+rate calculation. Hermes raises only the affected frame's rate, up to the
+4×/100 Mbps bounds above, so the few dependent frames produced while a large
+IDR is leaving the host can catch up instead of remaining permanently one
+IDR-window behind. The packet deadline keeps the nominal two-frame floor:
+shrinking it to the raw serialization estimate would leave no bounded headroom
+for FEC, encryption, timer overshoot, and socket submission, and could abort
+the first dependent frame even though catch-up pacing was working.
 
 The audio broadcaster now owns the same kind of per-session state. Ordinary
 Opus packets retain their natural capture cadence. At the end of each 4+2 FEC

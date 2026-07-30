@@ -492,13 +492,12 @@ TEST(CongestionControllerTest, QueuedNormalFrameUsesBoundedCatchUp) {
     plan.pacing_bitrate_bps,
     base_pacing_bitrate * 4
   );
-  EXPECT_GT(plan.send_window, 0us);
-  EXPECT_LT(plan.send_window, 10ms);
+  EXPECT_EQ(plan.send_window, 33'334us);
   EXPECT_TRUE(plan.catch_up);
   EXPECT_FALSE(plan.window_capped);
 }
 
-TEST(CongestionControllerTest, QueueDelayConsumesNormalFrameWindow) {
+TEST(CongestionControllerTest, QueueDelayRaisesRateWithoutCollapsingDeadline) {
   const auto plan =
     stream::congestion::gamestream_frame_pacing_plan(
       8'000'000,
@@ -509,6 +508,6 @@ TEST(CongestionControllerTest, QueueDelayConsumesNormalFrameWindow) {
     );
 
   EXPECT_GT(plan.pacing_bitrate_bps, 8'000'000);
-  EXPECT_LE(plan.send_window, 13'334us);
+  EXPECT_EQ(plan.send_window, 33'334us);
   EXPECT_TRUE(plan.catch_up);
 }

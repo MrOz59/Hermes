@@ -255,10 +255,12 @@ namespace stream::congestion {
         );
     const auto bounded_maximum_window =
       std::max(nominal_send_window, maximum_send_window);
-    const auto minimum_send_window =
-      is_key_frame ?
-        nominal_send_window :
-        target_send_window;
+    // Queue age makes a late normal frame use a higher pacing rate, but it
+    // must not also collapse the packet deadline to the raw serialization
+    // estimate. FEC generation, encryption, timer overshoot, and socket
+    // submission still need bounded headroom. The higher rate drains the
+    // backlog; the nominal window remains the minimum departure deadline.
+    const auto minimum_send_window = nominal_send_window;
     const auto send_window = std::max(
       minimum_send_window,
       std::min(serialization_window, bounded_maximum_window)

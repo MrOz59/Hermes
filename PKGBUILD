@@ -48,6 +48,7 @@ optdepends=(
   'hermes-kms: zero-copy Hermes virtual displays and independent DRM devices'
   'kscreen: KDE Plasma Wayland virtual-display activation'
   'libva-mesa-driver: AMD GPU encoding support'
+  'polkit: one-click Hermes-KMS isolated-session setup'
   'seatd: private seat brokers for experimental independent client sessions'
   'weston: experimental independent desktop client sessions'
   'wl-clipboard: Hermes text clipboard synchronization on Wayland'

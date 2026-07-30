@@ -46,6 +46,7 @@ Important endpoints include:
 - `GET /api/hestia/v1/capabilities`
 - `POST /api/hestia/v1/session/prepare`
 - `POST /api/hestia/v1/session/stop`
+- `GET /api/hestia/v1/display/status`
 - `GET /api/hestia/v1/diagnostics`
 - `GET /api/hestia/v1/clipboard`
 - `POST /api/hestia/v1/clipboard`
@@ -53,6 +54,15 @@ Important endpoints include:
 Clients should gate enhanced behavior on the capabilities response. If the
 Hestia API is unavailable, clients should continue through the normal
 Moonlight/Sunshine flow.
+
+When `features.multi_user_sessions` is true, an updated Hestia client can add
+`"session": {"isolation": "required"}` to `session/prepare`. Hermes then
+reserves a private Hermes-KMS card, compositor, process tree, capture pipeline,
+and input seat for that paired client. The returned `session_id` must be sent
+back to `session/stop`; it is a lifecycle token, while the paired TLS
+certificate remains the authorization boundary.
+Display status is resolved through that same certificate, so each Hestia sees
+only its own active session and Hermes-KMS output.
 
 ## Clients
 
@@ -85,7 +95,7 @@ imports and encodes. On Linux/KDE Wayland this depends on:
 - a real GPU render node (e.g. amdgpu) for VAAPI encoding;
 - a session where the Hermes process can access the user compositor environment.
 
-The unreleased branch has two distinct opt-in experiments:
+Hermes has two distinct opt-in experiments:
 
 - `hermes_kms_multi_output = true` gives simultaneous clients separate outputs
   and capture pipelines, but those outputs still belong to the same host
@@ -101,23 +111,24 @@ sudo modprobe hermes_kms initial_enabled=0 outputs=2
   process tree, capture path, and tagged virtual input set for each client.
   Application profiles run directly in a DRM Gamescope session; desktop
   profiles run Weston with its desktop shell and panel. It requires the
-  development Hermes-KMS UAPI 9 driver with one independent DRM card per
-  client:
+  Hermes-KMS UAPI 9 or newer with one independent DRM card per client. With
+  the UAPI 10 driver package, the recommended layout is an automatic pool that
+  keeps a separate host card on seat0:
 
 ```bash
-sudo modprobe hermes_kms initial_enabled=0 devices=2 outputs=1
+sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto
 ```
 
-The isolated prototype also requires the driver's session-seat udev rule,
-`gamescope`, `weston`, and one private seat broker per device. For the
-two-device example, install `seatd`, add the Hermes user to the `seat` group,
-and start:
+The packaged helper selects a four-session pool, writes the persistent module
+configuration, reloads the role-aware udev rules, and starts the matching
+private brokers. The Audio/Video page runs the same helper through `pkexec`
+after one explicit confirmation. Users no longer choose a card count, enable
+N services, install seat rules separately, or join the `seat` group. If an old
+topology is still loaded, the configuration is saved and the UI requests one
+reboot rather than forcibly unloading an in-use DRM device.
 
-```bash
-sudo systemctl enable --now hermes-kms-seatd@1.service hermes-kms-seatd@2.service
-```
-
-Hermes selects `/run/hermes-kms-seatd/N/seatd.sock` for device `N`; it will
+Hermes selects `/run/hermes-kms-seatd/N/seatd.sock` from the private session
+index; it will
 reject an isolated launch with an actionable log message if that broker is not
 available. The brokers are experimental process/session plumbing, not a
 security boundary for mutually untrusted local users. Per-session audio, a
@@ -148,17 +159,12 @@ source lives at <https://github.com/MrOz59/Hermes-KMS>.
 git clone https://github.com/MrOz59/Hermes-KMS.git
 cd Hermes-KMS
 sudo make dkms-install        # registers + builds + installs via DKMS
-sudo modprobe hermes_kms initial_enabled=0
+sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto
 ```
 
 The build auto-detects whether your kernel was built with clang (e.g. CachyOS)
-or gcc, so no extra flags are needed. To load it automatically on every boot,
-install the module-load drop-in and keep the connector initially disconnected:
-
-```bash
-sudo install -Dm644 packaging/modules-load.d/hermes-kms.conf /etc/modules-load.d/hermes-kms.conf
-printf '%s\n' 'options hermes_kms initial_enabled=0' | sudo tee /etc/modprobe.d/hermes-kms.conf
-```
+or gcc, so no extra flags are needed. `dkms-install` now installs the module
+load, modprobe, udev, helper, and broker files together.
 
 To remove it:
 
@@ -167,7 +173,7 @@ sudo make dkms-uninstall
 ```
 
 **Option B — Arch/CachyOS package** (builds and installs via DKMS, with boot
-auto-load drop-ins included):
+auto-load, `seatd`, role-aware seat rules, and broker units included):
 
 ```bash
 git clone https://github.com/MrOz59/Hermes-KMS.git

@@ -11,6 +11,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+### Fixed
+- KDE exclusive mode now blanks every physical monitor instead of only the
+  primary one. On a multi-monitor desktop the secondary screens stayed lit and
+  kept showing the local session while streaming. Crash-recovery state records
+  all disabled outputs with their priorities, and ending the session restores
+  each of them to the priority it had before the stream.
+
 ## [0.5.0] - 2026-07-29
 
 ### Added

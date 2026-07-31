@@ -5,6 +5,7 @@
 #pragma once
 
 #include "bandwidth_estimator.h"
+#include "packet_feedback.h"
 
 #include <chrono>
 #include <cstddef>
@@ -164,6 +165,19 @@ namespace stream::congestion {
     ) {
     }
 
+    /**
+     * @brief Offer a per-packet feedback report.
+     *
+     * Only delivered by clients that negotiated the `packet_feedback`
+     * extension. Controllers that cannot use it ignore it, which is what keeps
+     * the compatible path identical for everyone else.
+     */
+    virtual void on_packet_feedback(
+      const packet_feedback_report_t &,
+      congestion_time_point_t
+    ) {
+    }
+
     [[nodiscard]] virtual congestion_target_t target() const = 0;
 
     /**
@@ -292,6 +306,27 @@ namespace stream::congestion {
     static constexpr std::uint32_t queue_delay_congested_us = 30'000;
     /// Queue delay at which the path counts as drained again.
     static constexpr std::uint32_t queue_delay_drained_us = 10'000;
+    /**
+     * @brief Share of a measured delivery rate the host is willing to claim.
+     *
+     * A path that just carried a rate is not a path with that much room: the
+     * measurement is what it delivered under the load it was given, and using
+     * all of it leaves nothing for the burstiness of real video. The roadmap
+     * calls for 10-20% of headroom between wire bitrate and estimated
+     * capacity; this is the conservative end of it.
+     */
+    static constexpr std::uint64_t measured_capacity_permille = 850;
+    /**
+     * @brief Delay growth within one report that counts as a filling queue.
+     *
+     * Per-packet arrival times see a queue forming long before the round trip
+     * moves, so this is far tighter than the round-trip threshold, and it is
+     * compared against a report rather than against the whole session.
+     */
+    static constexpr std::int64_t delay_gradient_congested_us = 5'000;
+    /// A measured rate older than this stops being used.
+    static constexpr auto measured_capacity_lifetime =
+      std::chrono::seconds {3};
 
     /**
      * @brief Key-frame protection for a given normal-frame level.
@@ -327,6 +362,10 @@ namespace stream::congestion {
       std::chrono::microseconds rtt,
       congestion_time_point_t now
     ) override;
+    void on_packet_feedback(
+      const packet_feedback_report_t &report,
+      congestion_time_point_t now
+    ) override;
     [[nodiscard]] congestion_target_t target() const override;
 
     /** @brief Current estimate, for diagnostics and tests. */
@@ -348,6 +387,9 @@ namespace stream::congestion {
     std::chrono::microseconds minimum_rtt_ {0};
     estimator_time_point_t minimum_rtt_observed_at_ {};
     bool queue_congested_ = false;
+    packet_send_history_t send_history_;
+    std::uint64_t measured_capacity_bps_ = 0;
+    estimator_time_point_t measured_capacity_at_ {};
     std::uint64_t packets_sent_since_report_ = 0;
     bool started_ = false;
   };

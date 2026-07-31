@@ -35,6 +35,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 - A disposable VM input-isolation test creates real uinput devices for two
   sessions and verifies that udev assigns both the input parent and event nodes
   to distinct `hermes-kms-1`/`hermes-kms-2` seats.
+- `packet_feedback` v1, the first Hermes wire extension: an RFC 8888-shaped
+  per-packet report of what arrived, what was lost, and when each packet
+  arrived. It gives the host two things the compatible feedback cannot — the
+  rate the path actually delivered, and a delay gradient that shows a queue
+  forming before any loss occurs. The congestion controller prefers a measured
+  rate over its loss-derived estimate and claims 85% of it. Host-side only so
+  far: the message is specified, parsed and wired into the controller, but not
+  yet dispatched from the control stream.
 - Hermes protocol extensions can now be negotiated over the existing session.
   `GET /api/hestia/v1/capabilities` advertises an `extensions` array with a
   version per extension, a client announces the subset it speaks in

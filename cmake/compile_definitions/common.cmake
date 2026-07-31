@@ -104,6 +104,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/crypto.h"
         "${CMAKE_SOURCE_DIR}/src/nvhttp.cpp"
         "${CMAKE_SOURCE_DIR}/src/nvhttp.h"
+        "${CMAKE_SOURCE_DIR}/src/packet_feedback.cpp"
+        "${CMAKE_SOURCE_DIR}/src/packet_feedback.h"
         "${CMAKE_SOURCE_DIR}/src/packet_pacer.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_pacer.h"
         "${CMAKE_SOURCE_DIR}/src/protocol_extensions.cpp"

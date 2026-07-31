@@ -51,10 +51,17 @@ Legend: `[x]` done · `[~]` partially done · `[ ]` not started.
   and answered with the set actually in force. Negotiation is permissive about
   the announcement and strict about the result, so unknown names and
   unimplemented versions are dropped rather than failing a session, and a
-  client that announces nothing (Moonlight included) is unaffected. The wire
-  extensions themselves — per-packet feedback, frame received/decoded/presented
-  reports, NACK bitmaps, deadlines and priorities — build on this and still
-  need the matching Hestia side before they can be exercised.
+  client that announces nothing (Moonlight included) is unaffected.
+  `packet_feedback` v1 is specified and implemented host-side: an RFC
+  8888-shaped report of received/lost packets with arrival times, a bounded
+  send history to match it against, a measured delivery rate, and a delay
+  gradient that sees a queue forming before the round trip moves. The
+  controller prefers the measured rate over the loss-derived estimate and
+  claims 85% of it, per the headroom this roadmap asks for. Still to come:
+  dispatching the message on the control stream gated by the negotiated set,
+  frame received/decoded/presented reports, NACK bitmaps, deadlines and
+  priorities — and each needs the matching Hestia side before it can be
+  exercised end to end.
 - [ ] H5–H6: ICE/connectivity and native identity/pairing, each with explicit
   capability negotiation and fallback.
 - [ ] H7: first experimental HDT implementation.

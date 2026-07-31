@@ -84,6 +84,15 @@ namespace stream::congestion {
     // Legacy loss reports carry a count, not a ratio. Tracking what was sent
     // between reports is the only way to turn one into the other.
     packets_sent_since_report_ += batch.packet_count;
+    // Per-packet feedback is only interpretable against what was sent: a
+    // report says a sequence number arrived, and the size and departure of
+    // that packet are what turn it into a rate.
+    send_history_.record(
+      batch.first_sequence_number,
+      batch.packet_count,
+      batch.wire_bytes_per_packet,
+      batch.sent_at
+    );
   }
 
   void adaptive_congestion_controller_t::on_feedback(
@@ -134,6 +143,12 @@ namespace stream::congestion {
     last_bitrate_change_ = path.observed_at;
     minimum_rtt_ = std::chrono::microseconds {0};
     minimum_rtt_observed_at_ = path.observed_at;
+    queue_congested_ = false;
+    // Sequence numbers and timings from the old path describe a path that no
+    // longer exists, and a stale record matched by sequence number would be
+    // read as if it did.
+    send_history_.reset();
+    measured_capacity_bps_ = 0;
     packets_sent_since_report_ = 0;
     started_ = true;
   }
@@ -173,6 +188,31 @@ namespace stream::congestion {
     // Delay is measured independently of client feedback, so it can move the
     // capacity estimate on its own -- that is the whole point of watching it:
     // a queue builds before it overflows into loss.
+    reevaluate_available_bitrate(now);
+  }
+
+  void adaptive_congestion_controller_t::on_packet_feedback(
+    const packet_feedback_report_t &report,
+    congestion_time_point_t now
+  ) {
+    std::lock_guard lock {mutex_};
+    const auto delivery = analyze_packet_feedback(report, send_history_);
+    if (!delivery.valid) {
+      return;
+    }
+
+    measured_capacity_bps_ = delivery.delivery_rate_bps;
+    measured_capacity_at_ = now;
+
+    // Per-packet arrival times see a queue forming well before the round trip
+    // moves, which is the entire reason to carry them. The same hysteresis
+    // applies: a report has to say the queue drained before the state clears.
+    if (delivery.delay_gradient_us > delay_gradient_congested_us) {
+      queue_congested_ = true;
+    } else if (delivery.delay_gradient_us <= 0) {
+      queue_congested_ = false;
+    }
+
     reevaluate_available_bitrate(now);
   }
 
@@ -276,18 +316,39 @@ namespace stream::congestion {
       available = configured;
     }
 
-    // One move per hold-down window at most. The estimate is already smoothed
-    // over the sample window; reacting again before the previous move could
-    // show up in the feedback would compound decreases on stale evidence.
-    if (now - last_bitrate_change_ < bitrate_hold_down) {
-      current_.estimated_available_bitrate_bps = available;
-      return;
-    }
-
     const auto floor_bps = std::max<std::uint64_t>(
       configured * minimum_bitrate_permille / 1000,
       1
     );
+
+    // A measured delivery rate beats anything inferred from loss: it is what
+    // the path actually carried, rather than a guess about why frames broke.
+    // It is also not subject to the hold-down below, which exists to stop the
+    // estimate from compounding guesses -- a measurement can be believed as
+    // often as one arrives. Only part of it is claimed: the measurement came
+    // from the load the path was given, and real video is burstier than that
+    // average.
+    if (measured_capacity_bps_ > 0 &&
+        now - measured_capacity_at_ <= measured_capacity_lifetime) {
+      const auto claimable =
+        measured_capacity_bps_ * measured_capacity_permille / 1000;
+      // No floor here, deliberately. The floor keeps the inferred estimate
+      // from spiralling down on guesses; applying it to a measurement would
+      // report capacity the path has demonstrably failed to deliver, which is
+      // the one thing this number exists not to do.
+      current_.estimated_available_bitrate_bps =
+        std::min(std::max<std::uint64_t>(claimable, 1), configured);
+      last_bitrate_change_ = now;
+      return;
+    }
+
+    // One move per hold-down window at most. The inferred estimate is already
+    // smoothed over the sample window; reacting again before the previous move
+    // could show up in the feedback would compound decreases on stale evidence.
+    if (now - last_bitrate_change_ < bitrate_hold_down) {
+      current_.estimated_available_bitrate_bps = available;
+      return;
+    }
 
     // Loss and delay are separate evidence and arrive at different times. A
     // queue that is filling says the path is past its capacity before the

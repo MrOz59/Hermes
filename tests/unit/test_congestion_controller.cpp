@@ -1289,3 +1289,204 @@ TEST(AdaptiveCongestionTest, DoesNotRecoverBitrateWhileTheQueueIsDeep) {
     lowered
   );
 }
+
+namespace {
+
+  /**
+   * @brief Send `count` packets of `bytes` each, one per millisecond.
+   *
+   * Returns the report payload metrics the caller can hand back as arrivals.
+   */
+  void send_packets(
+    stream::congestion::adaptive_congestion_controller_t &controller,
+    std::uint16_t base_sequence,
+    std::uint16_t count,
+    std::uint32_t bytes,
+    stream::congestion::congestion_time_point_t start
+  ) {
+    for (std::uint16_t index = 0; index < count; ++index) {
+      controller.on_packets_sent({
+        .first_sequence_number =
+          static_cast<std::uint16_t>(base_sequence + index),
+        .packet_count = 1,
+        .wire_bytes_per_packet = bytes,
+        .sent_at = start + std::chrono::milliseconds {index},
+      });
+    }
+  }
+
+  /** @brief Build a report where every packet arrived `spacing_us` apart. */
+  std::vector<stream::congestion::packet_metric_t> arrivals(
+    std::uint16_t base_sequence,
+    std::uint16_t count,
+    std::uint32_t spacing_us
+  ) {
+    std::vector<stream::congestion::packet_metric_t> metrics;
+    for (std::uint16_t index = 0; index < count; ++index) {
+      metrics.push_back({
+        .sequence_number =
+          static_cast<std::uint16_t>(base_sequence + index),
+        .received = true,
+        .arrival_offset = std::chrono::microseconds {spacing_us * index},
+      });
+    }
+    return metrics;
+  }
+
+}  // namespace
+
+// A measured rate is evidence the inferred estimate can never be: it is what
+// the path carried, not a guess about why frames broke.
+TEST(AdaptiveCongestionTest, PrefersAMeasuredDeliveryRate) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+  const auto configured = adaptive_baseline().encoder_bitrate_bps;
+
+  send_packets(controller, 1, 20, 1200, now);
+  // 19 further packets of 1200 bytes across 19 ms is about 9.6 Mbps, well
+  // under the 20 Mbps the encoder was configured for.
+  const auto metrics = arrivals(1, 20, 1000);
+  controller.on_packet_feedback(
+    {
+      .report_sequence = 1,
+      .base_sequence = 1,
+      .metrics = metrics,
+    },
+    now + 20ms
+  );
+
+  const auto available =
+    controller.target().estimated_available_bitrate_bps;
+  EXPECT_GT(available, 0u);
+  EXPECT_LT(available, configured);
+  // The claim keeps the headroom the roadmap asks for.
+  EXPECT_LT(
+    available,
+    9'600'000ULL *
+      stream::congestion::adaptive_congestion_controller_t::
+        measured_capacity_permille /
+      1000 * 11 / 10
+  );
+}
+
+// The measurement is of the load the path was given, so a path that kept up
+// with the configured bitrate must not be reported as having more room.
+TEST(AdaptiveCongestionTest, NeverClaimsMoreThanTheConfiguredBitrate) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  send_packets(controller, 1, 20, 60'000, now);
+  const auto metrics = arrivals(1, 20, 1000);
+  controller.on_packet_feedback(
+    {.report_sequence = 1, .base_sequence = 1, .metrics = metrics},
+    now + 20ms
+  );
+
+  EXPECT_EQ(
+    controller.target().estimated_available_bitrate_bps,
+    adaptive_baseline().encoder_bitrate_bps
+  );
+}
+
+// Arrival times see a queue forming long before the round trip moves, which is
+// the reason to carry them at all.
+TEST(AdaptiveCongestionTest, PacketArrivalsDetectQueueingBeforeRttMoves) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  send_packets(controller, 1, 10, 1200, now);
+  ASSERT_FALSE(controller.queue_congested());
+
+  // Sent 1 ms apart, arriving 3 ms apart: the path is stretching them out.
+  const auto metrics = arrivals(1, 10, 3000);
+  controller.on_packet_feedback(
+    {.report_sequence = 1, .base_sequence = 1, .metrics = metrics},
+    now + 30ms
+  );
+
+  EXPECT_TRUE(controller.queue_congested());
+}
+
+TEST(AdaptiveCongestionTest, DrainingArrivalsClearTheQueueState) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  send_packets(controller, 1, 10, 1200, now);
+  controller.on_packet_feedback(
+    {
+      .report_sequence = 1,
+      .base_sequence = 1,
+      .metrics = arrivals(1, 10, 3000),
+    },
+    now + 30ms
+  );
+  ASSERT_TRUE(controller.queue_congested());
+
+  send_packets(controller, 100, 10, 1200, now + 100ms);
+  controller.on_packet_feedback(
+    {
+      .report_sequence = 2,
+      .base_sequence = 100,
+      .metrics = arrivals(100, 10, 500),
+    },
+    now + 130ms
+  );
+
+  EXPECT_FALSE(controller.queue_congested());
+}
+
+// Records from the old path would be matched by sequence number and read as if
+// they described the new one.
+TEST(AdaptiveCongestionTest, PathChangeDropsTheSendHistory) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  send_packets(controller, 1, 20, 1200, now);
+  controller.on_path_changed({.observed_at = now + 10ms});
+
+  controller.on_packet_feedback(
+    {
+      .report_sequence = 1,
+      .base_sequence = 1,
+      .metrics = arrivals(1, 20, 1000),
+    },
+    now + 20ms
+  );
+
+  // Nothing is known about those sequence numbers any more, so the estimate
+  // stays at the configured bitrate rather than inventing a measurement.
+  EXPECT_EQ(
+    controller.target().estimated_available_bitrate_bps,
+    adaptive_baseline().encoder_bitrate_bps
+  );
+}
+
+// With adaptive FEC off nothing may change, whatever a client sends.
+TEST(CongestionControllerTest, FixedControllerIgnoresPacketFeedback) {
+  stream::congestion::legacy_fixed_congestion_controller_t controller {
+    {.encoder_bitrate_bps = 20'000'000, .fec_ratio_ppm = 100'000}
+  };
+  stream::congestion::ICongestionController &boundary = controller;
+  const std::array<stream::congestion::packet_metric_t, 2> metrics {
+    stream::congestion::packet_metric_t {.sequence_number = 1, .received = true},
+    stream::congestion::packet_metric_t {.sequence_number = 2, .received = true},
+  };
+
+  boundary.on_packet_feedback(
+    {.report_sequence = 1, .base_sequence = 1, .metrics = metrics},
+    stream::congestion::congestion_time_point_t {}
+  );
+
+  EXPECT_EQ(controller.target().estimated_available_bitrate_bps, 0u);
+  EXPECT_FALSE(boundary.queue_congested());
+}

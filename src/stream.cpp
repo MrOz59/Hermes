@@ -543,6 +543,8 @@ namespace stream {
     std::atomic<session::state_e> state;
     std::atomic<session::termination_reason_e> termination_reason {session::termination_reason_e::UNKNOWN};
     std::unique_ptr<congestion::ICongestionController> congestion_controller;
+    /// Control thread only: rate-limits the congestion diagnostics publish.
+    std::chrono::steady_clock::time_point last_congestion_publish {};
   };
 
   /**
@@ -953,24 +955,45 @@ namespace stream {
   /**
    * @brief Mirror the controller's view of the path into diagnostics.
    *
-   * Runs on the control thread each time feedback arrives, which is where the
-   * state actually changes. Nothing here feeds back into the pipeline: the
-   * bitrate is what the controller would ask for, not what the encoder was
-   * told, and the fixed controller reports an invalid estimate so diagnostics
-   * can say "not adapting" instead of implying a healthy link.
+   * Nothing here feeds back into the pipeline: the bitrate is what the
+   * controller would ask for, not what the encoder was told, and the fixed
+   * controller reports an invalid estimate so diagnostics can say "not
+   * adapting" instead of implying a healthy link.
+   *
+   * Driven by the control thread's housekeeping pass rather than by feedback:
+   * round trip is sampled there, frame FEC feedback arrives once per frame, and
+   * publishing per report would take the controller and telemetry locks at
+   * frame rate to republish a value that is smoothed over seconds. One publish
+   * per metrics window is all diagnostics can display anyway.
    */
-  void publish_congestion_telemetry(session_t *session) {
+  void publish_congestion_telemetry(
+    session_t *session,
+    std::chrono::steady_clock::time_point now
+  ) {
+    if (now - session->last_congestion_publish <
+        video::pipeline_metrics_collector_t::publish_interval) {
+      return;
+    }
+
     const auto target = session->congestion_controller->target();
     const auto estimate = session->congestion_controller->estimate();
     const auto configured_bitrate_kbps = static_cast<double>(
       std::max(session->config.monitor.bitrate, 0)
     );
 
+    // Nothing measured yet: leave the previous publication alone rather than
+    // replacing it with zeros that would read as a perfect path.
+    if (!estimate.valid && target.estimated_rtt_us == 0) {
+      return;
+    }
+    session->last_congestion_publish = now;
+
     video::metrics_record_congestion(
       session,
       {
-        .valid = estimate.valid,
+        .valid = true,
         .adaptive = config::stream.adaptive_fec,
+        .loss_estimate_valid = estimate.valid,
         .loss_percent = estimate.loss_ratio * 100.0,
         .unrecovered_loss_percent = estimate.unrecovered_loss_ratio * 100.0,
         .clean_frame_percent = estimate.clean_frame_ratio * 100.0,
@@ -984,6 +1007,8 @@ namespace stream {
         .available_bitrate_kbps =
           static_cast<double>(target.estimated_available_bitrate_bps) / 1000.0,
         .configured_bitrate_kbps = configured_bitrate_kbps,
+        .rtt_ms = target.estimated_rtt_us / 1000.0,
+        .queue_delay_ms = target.estimated_queue_delay_us / 1000.0,
       }
     );
   }
@@ -1017,7 +1042,6 @@ namespace stream {
         .legacy_loss = *report,
         .received_at = congestion::congestion_clock_t::now(),
       });
-      publish_congestion_telemetry(session);
 
       BOOST_LOG(verbose)
         << "type [IDX_LOSS_STATS]"sv << std::endl
@@ -1042,7 +1066,6 @@ namespace stream {
         .legacy_loss = std::nullopt,
         .received_at = congestion::congestion_clock_t::now(),
       });
-      publish_congestion_telemetry(session);
 
       BOOST_LOG(verbose)
         << "type [SS_FRAME_FEC_PTYPE]"sv << std::endl
@@ -1285,6 +1308,16 @@ namespace stream {
           if (!session->control.peer) {
             has_session_awaiting_peer = true;
           } else {
+            // ENet already measures the control connection's round trip. It is
+            // the only delay signal available without new wire messages, and
+            // the control stream shares the path with the video stream, so a
+            // queue building on that path shows up here.
+            session->congestion_controller->on_rtt_sample(
+              std::chrono::milliseconds {session->control.peer->roundTripTime},
+              now
+            );
+            publish_congestion_telemetry(session, now);
+
             auto &feedback_queue = session->control.feedback_queue;
             while (feedback_queue->peek()) {
               auto feedback_msg = feedback_queue->pop();

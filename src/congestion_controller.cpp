@@ -132,8 +132,35 @@ namespace stream::congestion {
     last_estimate_ = {};
     last_raise_ = path.observed_at;
     last_bitrate_change_ = path.observed_at;
+    minimum_rtt_ = std::chrono::microseconds {0};
+    minimum_rtt_observed_at_ = path.observed_at;
     packets_sent_since_report_ = 0;
     started_ = true;
+  }
+
+  void adaptive_congestion_controller_t::on_rtt_sample(
+    std::chrono::microseconds rtt,
+    congestion_time_point_t now
+  ) {
+    if (rtt <= std::chrono::microseconds {0}) {
+      // The transport has not measured anything yet.
+      return;
+    }
+
+    std::lock_guard lock {mutex_};
+    // Re-baseline when this sample is lower than the current minimum, and also
+    // when the minimum has simply grown old: an expired baseline is what keeps
+    // a path whose propagation delay changed from reporting permanent queueing.
+    if (minimum_rtt_ <= std::chrono::microseconds {0} ||
+        rtt < minimum_rtt_ ||
+        now - minimum_rtt_observed_at_ > minimum_rtt_window) {
+      minimum_rtt_ = rtt;
+      minimum_rtt_observed_at_ = now;
+    }
+
+    current_.estimated_rtt_us = static_cast<std::uint32_t>(rtt.count());
+    current_.estimated_queue_delay_us =
+      static_cast<std::uint32_t>((rtt - minimum_rtt_).count());
   }
 
   congestion_target_t adaptive_congestion_controller_t::target() const {

@@ -1073,3 +1073,94 @@ TEST(CongestionControllerTest, FixedControllerReportsNoEstimate) {
 
   EXPECT_FALSE(boundary.estimate().valid);
 }
+
+TEST(AdaptiveCongestionTest, DerivesQueueDelayFromTheSmallestRoundTrip) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  controller.on_rtt_sample(20ms, now);
+  EXPECT_EQ(controller.target().estimated_rtt_us, 20'000u);
+  // The first sample is its own baseline, so nothing is queued yet.
+  EXPECT_EQ(controller.target().estimated_queue_delay_us, 0u);
+
+  controller.on_rtt_sample(35ms, now + 1s);
+  EXPECT_EQ(controller.target().estimated_rtt_us, 35'000u);
+  EXPECT_EQ(controller.target().estimated_queue_delay_us, 15'000u);
+
+  // A lower round trip is a better view of the path itself, so it replaces the
+  // baseline immediately rather than waiting for it to expire.
+  controller.on_rtt_sample(12ms, now + 2s);
+  EXPECT_EQ(controller.target().estimated_queue_delay_us, 0u);
+  controller.on_rtt_sample(20ms, now + 3s);
+  EXPECT_EQ(controller.target().estimated_queue_delay_us, 8'000u);
+}
+
+// A path whose propagation delay grew must not be measured forever against a
+// minimum it can no longer reach, or every sample reads as queueing.
+TEST(AdaptiveCongestionTest, ExpiresTheRoundTripBaseline) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+  const auto window =
+    stream::congestion::adaptive_congestion_controller_t::minimum_rtt_window;
+
+  controller.on_rtt_sample(10ms, now);
+  controller.on_rtt_sample(60ms, now + 1s);
+  ASSERT_EQ(controller.target().estimated_queue_delay_us, 50'000u);
+
+  controller.on_rtt_sample(60ms, now + window + 2s);
+
+  EXPECT_EQ(controller.target().estimated_rtt_us, 60'000u);
+  EXPECT_EQ(controller.target().estimated_queue_delay_us, 0u);
+}
+
+TEST(AdaptiveCongestionTest, IgnoresRoundTripSamplesTheTransportHasNotMeasured) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  controller.on_rtt_sample(std::chrono::microseconds {0}, now);
+
+  EXPECT_EQ(controller.target().estimated_rtt_us, 0u);
+  EXPECT_EQ(controller.target().estimated_queue_delay_us, 0u);
+}
+
+TEST(AdaptiveCongestionTest, PathChangeRebaselinesTheRoundTrip) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  controller.on_rtt_sample(10ms, now);
+  controller.on_rtt_sample(40ms, now + 1s);
+  ASSERT_GT(controller.target().estimated_queue_delay_us, 0u);
+
+  controller.on_path_changed({.observed_at = now + 2s});
+  EXPECT_EQ(controller.target().estimated_rtt_us, 0u);
+
+  // The first sample on the new path is the new baseline, not queueing
+  // inherited from the old one.
+  controller.on_rtt_sample(40ms, now + 3s);
+  EXPECT_EQ(controller.target().estimated_queue_delay_us, 0u);
+}
+
+// The fixed controller models no delay, so the boundary's default must be a
+// no-op rather than something that publishes a target it does not maintain.
+TEST(CongestionControllerTest, FixedControllerIgnoresRoundTripSamples) {
+  stream::congestion::legacy_fixed_congestion_controller_t controller {
+    {.fec_ratio_ppm = 100'000}
+  };
+  stream::congestion::ICongestionController &boundary = controller;
+
+  boundary.on_rtt_sample(
+    25ms,
+    stream::congestion::congestion_time_point_t {}
+  );
+
+  EXPECT_EQ(controller.target().estimated_rtt_us, 0u);
+  EXPECT_EQ(controller.target().estimated_queue_delay_us, 0u);
+}

@@ -136,13 +136,24 @@ was added to capture callbacks or encoder frame processing.
 
 The `congestion` block describes the client's path as the congestion controller
 sees it. Unlike the frame metrics it is not windowed here: the controller
-already smooths its own estimate, and it is republished whenever feedback
-arrives rather than on a one-second boundary. The block is `null` until enough
-feedback has accumulated for the estimate to be conclusive, which is what
-distinguishes a healthy link from one nothing is known about yet.
+already smooths its own estimate. It is republished from the control thread's
+housekeeping pass, at most once per metrics window.
+
+Its two signals arrive independently. Round trip is available as soon as the
+transport has timed one, while the loss view needs enough client feedback to be
+conclusive. The block is therefore `null` only until *something* has been
+measured, and `congestion.loss_estimate_valid` is what says the loss and
+capacity numbers can be believed rather than being the zeros of a path nothing
+is known about yet.
 
 - `congestion.adaptive`: whether an adapting controller is driving the session.
   With `adaptive_fec` off the fixed controller reports no estimate at all.
+- `congestion.rtt_ms`: round trip measured by the control connection, which
+  shares its path with the video stream. It costs no new wire messages.
+- `congestion.queue_delay_ms`: how far the current round trip sits above the
+  smallest one seen recently, which is the part of the delay attributable to
+  queueing rather than to distance. The baseline expires after 30 s so a path
+  whose propagation delay changed cannot report permanent queueing.
 - `congestion.loss_percent`: every packet the client did not receive.
 - `congestion.unrecovered_loss_percent`: only the frames the client's FEC could
   not repair. This is the signal the controller acts on; loss that FEC already

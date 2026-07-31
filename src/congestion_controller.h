@@ -150,6 +150,20 @@ namespace stream::congestion {
     virtual void on_packets_sent(const sent_packet_batch_t &batch) = 0;
     virtual void on_feedback(const feedback_batch_t &feedback) = 0;
     virtual void on_path_changed(const path_info_t &path) = 0;
+
+    /**
+     * @brief Offer a round-trip time measured by the transport.
+     *
+     * Separate from feedback because it comes from the control connection's own
+     * timing rather than from anything the client reports about the video
+     * stream. Controllers that do not model delay ignore it.
+     */
+    virtual void on_rtt_sample(
+      std::chrono::microseconds,
+      congestion_time_point_t
+    ) {
+    }
+
     [[nodiscard]] virtual congestion_target_t target() const = 0;
 
     /**
@@ -246,6 +260,17 @@ namespace stream::congestion {
      * report a link far worse than the one the user is on.
      */
     static constexpr auto bitrate_hold_down = std::chrono::seconds {5};
+    /**
+     * @brief How long a minimum-RTT baseline is trusted.
+     *
+     * Queue delay is the current round trip above the path's own propagation
+     * delay, and the smallest round trip seen recently is the best available
+     * stand-in for that. The baseline has to expire: a route change or a queue
+     * that never fully drains would otherwise be measured against a minimum
+     * the path can no longer reach, and every later sample would be reported as
+     * queueing that is not there.
+     */
+    static constexpr auto minimum_rtt_window = std::chrono::seconds {30};
 
     /**
      * @brief Key-frame protection for a given normal-frame level.
@@ -277,6 +302,10 @@ namespace stream::congestion {
     void on_packets_sent(const sent_packet_batch_t &batch) override;
     void on_feedback(const feedback_batch_t &feedback) override;
     void on_path_changed(const path_info_t &path) override;
+    void on_rtt_sample(
+      std::chrono::microseconds rtt,
+      congestion_time_point_t now
+    ) override;
     [[nodiscard]] congestion_target_t target() const override;
 
     /** @brief Current estimate, for diagnostics and tests. */
@@ -296,6 +325,8 @@ namespace stream::congestion {
     network_estimate_t last_estimate_ {};
     estimator_time_point_t last_raise_ {};
     estimator_time_point_t last_bitrate_change_ {};
+    std::chrono::microseconds minimum_rtt_ {0};
+    estimator_time_point_t minimum_rtt_observed_at_ {};
     std::uint64_t packets_sent_since_report_ = 0;
     bool started_ = false;
   };

@@ -2051,6 +2051,9 @@ namespace confighttp {
       if (pm.congestion.valid) {
         runtime["pipeline"]["congestion"] = {
           {"adaptive", pm.congestion.adaptive},
+          {"loss_estimate_valid", pm.congestion.loss_estimate_valid},
+          {"rtt_ms", pm.congestion.rtt_ms},
+          {"queue_delay_ms", pm.congestion.queue_delay_ms},
           {"loss_percent", pm.congestion.loss_percent},
           {"unrecovered_loss_percent", pm.congestion.unrecovered_loss_percent},
           {"clean_frame_percent", pm.congestion.clean_frame_percent},

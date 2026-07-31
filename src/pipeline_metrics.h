@@ -69,14 +69,21 @@ namespace video {
    *
    * Unlike the frame metrics this is not windowed here: the controller already
    * smooths its own estimate over a sample window, so re-averaging it would
-   * only add lag. `valid` is false until the controller has seen enough
-   * feedback to have an opinion, which is what distinguishes a healthy link
-   * from one nothing is known about yet.
+   * only add lag.
+   *
+   * The two signals become available independently. Round trip comes from the
+   * transport as soon as the control connection has timed one, while the loss
+   * view needs enough client feedback to be conclusive -- so `valid` means the
+   * block has something measured in it, and `loss_estimate_valid` is what says
+   * the loss and capacity numbers can be believed rather than being the zeros
+   * of a session nothing is known about yet.
    */
   struct congestion_pipeline_metrics_t {
     bool valid = false;
     /// True when an adapting controller is driving the session.
     bool adaptive = false;
+    /// The loss ratios and the capacity estimate are conclusive.
+    bool loss_estimate_valid = false;
     double loss_percent = 0.0;
     double unrecovered_loss_percent = 0.0;
     double clean_frame_percent = 0.0;
@@ -89,6 +96,10 @@ namespace video {
     double available_bitrate_kbps = 0.0;
     /// What the encoder was actually configured with.
     double configured_bitrate_kbps = 0.0;
+    /// Transport round trip, and how much of it is queueing above the
+    /// smallest round trip seen recently. Zero when nothing measured one.
+    double rtt_ms = 0.0;
+    double queue_delay_ms = 0.0;
   };
 
   /**

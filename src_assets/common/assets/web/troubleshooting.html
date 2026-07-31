@@ -97,6 +97,48 @@
                 {{ metrics.pipeline.frames_dropped }}
               </div>
             </div>
+            <!-- Network path, as the congestion controller sees it. Only
+                 unrecovered loss is highlighted: loss the client's FEC repaired
+                 is invisible to the player. -->
+            <template v-if="metrics.pipeline.congestion">
+              <div class="col-6 col-md-3 mb-2" v-if="metrics.pipeline.congestion.rtt_ms > 0">
+                <div class="text-muted small">Round trip</div>
+                <div class="fs-5">{{ metrics.pipeline.congestion.rtt_ms.toFixed(1) }} ms</div>
+                <div class="text-muted small"
+                     :class="metrics.pipeline.congestion.queue_delay_ms > 0 ? 'text-warning' : ''">
+                  {{ metrics.pipeline.congestion.queue_delay_ms.toFixed(1) }} ms queued
+                </div>
+              </div>
+            </template>
+            <template v-if="metrics.pipeline.congestion && metrics.pipeline.congestion.loss_estimate_valid">
+              <div class="col-6 col-md-3 mb-2">
+                <div class="text-muted small">Packet loss</div>
+                <div class="fs-5"
+                     :class="metrics.pipeline.congestion.unrecovered_loss_percent > 0 ? 'text-danger' : ''">
+                  {{ metrics.pipeline.congestion.loss_percent.toFixed(2) }}%
+                </div>
+                <div class="text-muted small">
+                  {{ metrics.pipeline.congestion.unrecovered_loss_percent.toFixed(2) }}% unrepaired
+                </div>
+              </div>
+              <div class="col-6 col-md-3 mb-2">
+                <div class="text-muted small">Error correction</div>
+                <div class="fs-5">{{ metrics.pipeline.congestion.fec_percent.toFixed(0) }}%</div>
+                <div class="text-muted small">
+                  {{ metrics.pipeline.congestion.key_frame_fec_percent.toFixed(0) }}% on key frames
+                </div>
+              </div>
+              <div class="col-6 col-md-3 mb-2">
+                <div class="text-muted small">Path capacity</div>
+                <div class="fs-5"
+                     :class="metrics.pipeline.congestion.available_bitrate_kbps < metrics.pipeline.congestion.configured_bitrate_kbps ? 'text-warning' : ''">
+                  {{ (metrics.pipeline.congestion.available_bitrate_kbps / 1000).toFixed(1) }} Mbps
+                </div>
+                <div class="text-muted small">
+                  estimate, of {{ (metrics.pipeline.congestion.configured_bitrate_kbps / 1000).toFixed(1) }} Mbps configured
+                </div>
+              </div>
+            </template>
           </template>
           <div v-else class="col-12 text-muted">
             No active stream — pipeline metrics appear while streaming.

@@ -106,6 +106,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/nvhttp.h"
         "${CMAKE_SOURCE_DIR}/src/packet_pacer.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_pacer.h"
+        "${CMAKE_SOURCE_DIR}/src/protocol_extensions.cpp"
+        "${CMAKE_SOURCE_DIR}/src/protocol_extensions.h"
         "${CMAKE_SOURCE_DIR}/src/httpcommon.cpp"
         "${CMAKE_SOURCE_DIR}/src/httpcommon.h"
         "${CMAKE_SOURCE_DIR}/src/confighttp.cpp"

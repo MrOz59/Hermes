@@ -35,6 +35,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 - A disposable VM input-isolation test creates real uinput devices for two
   sessions and verifies that udev assigns both the input parent and event nodes
   to distinct `hermes-kms-1`/`hermes-kms-2` seats.
+- Hermes protocol extensions can now be negotiated over the existing session.
+  `GET /api/hestia/v1/capabilities` advertises an `extensions` array with a
+  version per extension, a client announces the subset it speaks in
+  `session/prepare`, and the response reports what is in force. Extensions are
+  versioned independently of the Hestia protocol so either side can be upgraded
+  first; unknown names and unimplemented versions are dropped instead of
+  failing the session, and clients that announce nothing — including
+  unmodified Moonlight — are unaffected.
 - Diagnostics, `/api/metrics` and the web UI report the congestion controller's
   view of each client's path under `pipeline.congestion`: round trip and the
   part of it that is queueing, measured loss, the share of it the client's FEC

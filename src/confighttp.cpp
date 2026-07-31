@@ -45,6 +45,7 @@
 #include "nvhttp.h"
 #include "platform/common.h"
 #include "process.h"
+#include "protocol_extensions.h"
 #include "rtsp.h"
 #include "stream.h"
 #include "utility.h"
@@ -1326,7 +1327,7 @@ namespace confighttp {
     const bool multi_user_sessions = false;
     const bool isolated_sessions_ready = false;
 #endif
-    const nlohmann::json capabilities {
+    nlohmann::json capabilities {
       {"ok", true},
       {"server_name", "Hermes"},
       // "base" is a protocol-compatibility identifier the Hestia client checks
@@ -1385,6 +1386,20 @@ namespace confighttp {
       }},
     };
 
+    // Extensions are versioned independently of the Hestia protocol so either
+    // side can be upgraded first. A client announces the subset it speaks at
+    // session prepare; announcing none is a normal, fully supported session.
+    auto extensions = nlohmann::json::array();
+    for (const auto &extension : protocol::ext::supported()) {
+      extensions.push_back({
+        {"name", extension.name},
+        {"version", extension.version},
+        {"experimental", extension.experimental},
+        {"summary", extension.summary},
+      });
+    }
+    capabilities["extensions"] = std::move(extensions);
+
     send_response(response, capabilities);
   }
 
@@ -1428,6 +1443,33 @@ namespace confighttp {
     return client;
   }
 
+  /**
+   * @brief Accept an object carrying every required key and nothing unknown.
+   *
+   * Optional keys are listed separately rather than by enumerating every
+   * combination of them, which is what an exact-key check degenerates into as
+   * soon as a second optional member exists.
+   */
+  bool hestia_has_expected_keys(
+    const nlohmann::json &object,
+    const std::set<std::string> &required,
+    const std::set<std::string> &optional
+  ) {
+    if (!object.is_object()) {
+      return false;
+    }
+
+    for (auto it = object.begin(); it != object.end(); ++it) {
+      if (!required.contains(it.key()) && !optional.contains(it.key())) {
+        return false;
+      }
+    }
+
+    return std::all_of(required.begin(), required.end(), [&](const auto &key) {
+      return object.contains(key);
+    });
+  }
+
   bool hestia_has_exact_keys(const nlohmann::json &object, const std::set<std::string> &keys) {
     if (!object.is_object() || object.size() != keys.size()) {
       return false;
@@ -1450,12 +1492,54 @@ namespace confighttp {
     return value.is_string() && values.contains(value.get<std::string>());
   }
 
+  /**
+   * @brief Read a client's extension announcement, if it made one.
+   *
+   * Absent is the normal case and must stay cheap and silent: every client
+   * built before extensions existed omits this. The shape is validated because
+   * a malformed announcement is a client bug worth reporting, while unknown
+   * names and versions are left to negotiation, which drops them.
+   */
+  bool parse_hestia_extension_announcement(
+    const nlohmann::json &request,
+    std::vector<protocol::ext::announcement_t> &announced,
+    std::string &error
+  ) {
+    if (!request.contains("extensions")) {
+      return true;
+    }
+
+    const auto &extensions = request["extensions"];
+    if (!extensions.is_array() || extensions.size() > 32) {
+      error = "Invalid extensions array";
+      return false;
+    }
+
+    for (const auto &entry : extensions) {
+      if (!entry.is_object() || !hestia_has_exact_keys(entry, {"name", "version"}) ||
+          !entry["name"].is_string() || !hestia_is_positive_integer(entry["version"])) {
+        error = "Invalid extensions entry";
+        return false;
+      }
+      const auto name = entry["name"].get<std::string>();
+      if (name.empty() || name.size() > 64) {
+        error = "Invalid extension name";
+        return false;
+      }
+      announced.push_back({
+        .name = name,
+        .version = entry["version"].get<std::uint32_t>(),
+      });
+    }
+    return true;
+  }
+
   bool validate_hestia_session_prepare(const nlohmann::json &request, std::string &error) {
-    static const std::set<std::string> legacy_request_keys {
+    static const std::set<std::string> required_request_keys {
       "client", "stream", "virtual_display", "app",
     };
-    static const std::set<std::string> isolated_request_keys {
-      "client", "stream", "virtual_display", "app", "session",
+    static const std::set<std::string> optional_request_keys {
+      "session", "extensions",
     };
     static const std::set<std::string> client_keys {
       "name", "version", "platform", "display_width", "display_height", "refresh_rate", "hdr",
@@ -1473,9 +1557,15 @@ namespace confighttp {
       "isolation",
     };
 
-    if (!hestia_has_exact_keys(request, legacy_request_keys) &&
-        !hestia_has_exact_keys(request, isolated_request_keys)) {
-      error = "Request must contain client, stream, virtual_display, app, and optionally session";
+    if (!hestia_has_expected_keys(request, required_request_keys, optional_request_keys)) {
+      error =
+        "Request must contain client, stream, virtual_display, app, and "
+        "optionally session and extensions";
+      return false;
+    }
+
+    std::vector<protocol::ext::announcement_t> announced;
+    if (!parse_hestia_extension_announcement(request, announced, error)) {
       return false;
     }
 
@@ -1636,6 +1726,14 @@ namespace confighttp {
           return;
         }
       }
+      // Re-parse rather than thread the announcement out of validation: the
+      // shape is already known good here, and negotiation is what decides
+      // which of the announced names this build can honour.
+      std::vector<protocol::ext::announcement_t> announced;
+      std::string announcement_error;
+      parse_hestia_extension_announcement(input, announced, announcement_error);
+      const auto negotiated = protocol::ext::negotiate(announced);
+
       const auto client = std::static_pointer_cast<crypto::named_cert_t>(request->userp);
       const std::string session_id = "hestia-" + crypto::rand_alphabet(24);
       nvhttp::store_hestia_session_prepare(client->uuid, {
@@ -1654,7 +1752,7 @@ namespace confighttp {
                        << " virtual_display=" << virtual_display["enabled"]
                        << " launch_mode=" << app["launch_mode"];
 
-      const nlohmann::json output {
+      nlohmann::json output {
         {"ok", true},
         {"session_id", session_id},
         {"isolation", isolated ? "independent" : "shared"},
@@ -1670,6 +1768,22 @@ namespace confighttp {
         }},
         {"warnings", {"Prepared settings will be applied when the normal stream launches."}},
       };
+
+      // Always answer with the negotiated set, empty included. A client must
+      // learn what is actually in force from the host rather than assume its
+      // announcement was accepted whole: names this build does not know, and
+      // versions it does not implement, are dropped here rather than failing
+      // the request.
+      auto extensions = nlohmann::json::array();
+      for (const auto &[name, version] : negotiated.entries()) {
+        extensions.push_back({{"name", name}, {"version", version}});
+      }
+      output["extensions"] = std::move(extensions);
+      if (!announced.empty()) {
+        BOOST_LOG(debug) << "[HestiaAPI] client announced " << announced.size()
+                         << " extension(s), " << negotiated.entries().size()
+                         << " negotiated";
+      }
       send_response(response, output);
     } catch (const nlohmann::json::exception &) {
       send_hestia_error(response, SimpleWeb::StatusCode::client_error_bad_request, "invalid_request", "Request body must be valid JSON");

@@ -45,8 +45,18 @@ Legend: `[x]` done · `[~]` partially done · `[ ]` not started.
   (visible hitch plus an IDR) that has not been built. Publishing the estimate
   first is what makes the adaptation reviewable against real sessions before
   anything acts on it.
-- [ ] H4–H6: optional Hermes feedback extensions, ICE/connectivity, and native
-  identity/pairing, each with explicit capability negotiation and fallback.
+- [~] H4: optional Hermes feedback extensions. The negotiation core is in
+  place — an independently versioned extension registry, advertised in
+  `/api/hestia/v1/capabilities`, announced by the client at `session/prepare`,
+  and answered with the set actually in force. Negotiation is permissive about
+  the announcement and strict about the result, so unknown names and
+  unimplemented versions are dropped rather than failing a session, and a
+  client that announces nothing (Moonlight included) is unaffected. The wire
+  extensions themselves — per-packet feedback, frame received/decoded/presented
+  reports, NACK bitmaps, deadlines and priorities — build on this and still
+  need the matching Hestia side before they can be exercised.
+- [ ] H5–H6: ICE/connectivity and native identity/pairing, each with explicit
+  capability negotiation and fallback.
 - [ ] H7: first experimental HDT implementation.
 
 HDT remains several prerequisite phases away, has no delivery date, and must

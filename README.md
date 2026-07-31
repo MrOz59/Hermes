@@ -104,6 +104,35 @@ Clients should gate enhanced behavior on the capabilities response. If the
 Hestia API is unavailable, clients should continue through the normal
 Moonlight/Sunshine flow.
 
+### Protocol extensions
+
+The capabilities response carries an `extensions` array describing what this
+host can speak beyond the GameStream baseline:
+
+```json
+"extensions": [
+  {"name": "congestion_report", "version": 1, "experimental": true, "summary": "..."}
+]
+```
+
+Extensions are versioned **independently** of each other and of
+`hestia_protocol`, so either end can be upgraded first. A client announces the
+subset it speaks when preparing a session:
+
+```json
+"extensions": [{"name": "congestion_report", "version": 1}]
+```
+
+The response reports what is actually in force. Negotiation is permissive about
+the announcement and strict about the result: a name this host does not know,
+or a version it does not implement, is dropped rather than failing the request,
+so a client may safely announce things a future host will understand. Clients
+must therefore read the negotiated set back rather than assume their
+announcement was accepted whole.
+
+Announcing nothing — which is what every existing client does, Moonlight
+included — is a normal, fully supported session.
+
 When `features.multi_user_sessions` is true, the host administrator has
 explicitly enabled independent sessions and an updated Hestia client can add
 `"session": {"isolation": "required"}` to `session/prepare`. Hermes then

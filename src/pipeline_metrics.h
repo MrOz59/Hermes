@@ -84,6 +84,8 @@ namespace video {
     bool adaptive = false;
     /// The loss ratios and the capacity estimate are conclusive.
     bool loss_estimate_valid = false;
+    /// The path is queueing, so protection is held rather than raised.
+    bool queue_congested = false;
     double loss_percent = 0.0;
     double unrecovered_loss_percent = 0.0;
     double clean_frame_percent = 0.0;

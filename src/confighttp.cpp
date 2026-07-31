@@ -2052,6 +2052,7 @@ namespace confighttp {
         runtime["pipeline"]["congestion"] = {
           {"adaptive", pm.congestion.adaptive},
           {"loss_estimate_valid", pm.congestion.loss_estimate_valid},
+          {"queue_congested", pm.congestion.queue_congested},
           {"rtt_ms", pm.congestion.rtt_ms},
           {"queue_delay_ms", pm.congestion.queue_delay_ms},
           {"loss_percent", pm.congestion.loss_percent},

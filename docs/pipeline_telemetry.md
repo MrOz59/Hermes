@@ -154,6 +154,15 @@ is known about yet.
   smallest one seen recently, which is the part of the delay attributable to
   queueing rather than to distance. The baseline expires after 30 s so a path
   whose propagation delay changed cannot report permanent queueing.
+- `congestion.queue_congested`: the queue is deep enough (30 ms, clearing at
+  10 ms) that the controller treats the path as past its capacity. This lowers
+  the capacity estimate on its own, before the buffer overflows into loss the
+  client can report. It also **holds** error correction instead of raising it:
+  loss on a queueing path came from a full buffer, and repair shards are the
+  bytes that filled it, so adding more would deepen the queue and drop the data
+  shards the repair was meant to protect. Loss with a drained queue is link
+  loss, where repair is exactly the right answer, and protection climbs
+  normally.
 - `congestion.loss_percent`: every packet the client did not receive.
 - `congestion.unrecovered_loss_percent`: only the frames the client's FEC could
   not repair. This is the signal the controller acts on; loss that FEC already

@@ -994,6 +994,7 @@ namespace stream {
         .valid = true,
         .adaptive = config::stream.adaptive_fec,
         .loss_estimate_valid = estimate.valid,
+        .queue_congested = session->congestion_controller->queue_congested(),
         .loss_percent = estimate.loss_ratio * 100.0,
         .unrecovered_loss_percent = estimate.unrecovered_loss_ratio * 100.0,
         .clean_frame_percent = estimate.clean_frame_ratio * 100.0,

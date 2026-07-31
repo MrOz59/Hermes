@@ -1164,3 +1164,128 @@ TEST(CongestionControllerTest, FixedControllerIgnoresRoundTripSamples) {
   EXPECT_EQ(controller.target().estimated_rtt_us, 0u);
   EXPECT_EQ(controller.target().estimated_queue_delay_us, 0u);
 }
+
+namespace {
+
+  /** @brief Drive the round trip to a queue-congested state and back. */
+  void feed_rtt(
+    stream::congestion::adaptive_congestion_controller_t &controller,
+    std::chrono::milliseconds baseline_rtt,
+    std::chrono::milliseconds current_rtt,
+    stream::congestion::congestion_time_point_t now
+  ) {
+    controller.on_rtt_sample(baseline_rtt, now);
+    controller.on_rtt_sample(current_rtt, now);
+  }
+
+}  // namespace
+
+// A filling queue says the path is past its capacity before the buffer
+// overflows into loss the client can report, which is the whole reason to
+// watch delay at all.
+TEST(AdaptiveCongestionTest, QueueDelayAloneLowersTheBitrateEstimate) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+  const auto configured = adaptive_baseline().encoder_bitrate_bps;
+  const auto hold_down =
+    stream::congestion::adaptive_congestion_controller_t::bitrate_hold_down;
+
+  feed_rtt(controller, 10ms, 80ms, now);
+  ASSERT_TRUE(controller.queue_congested());
+  // No client feedback at all: delay is measured independently of it.
+  ASSERT_FALSE(controller.estimate().valid);
+
+  controller.on_rtt_sample(80ms, now + hold_down);
+
+  EXPECT_LT(
+    controller.target().estimated_available_bitrate_bps,
+    configured
+  );
+}
+
+// Repair shards are bytes, and bytes are what fill a queue. Adding them to a
+// path that is already queueing would deepen it and drop the data shards the
+// repair was meant to protect.
+TEST(AdaptiveCongestionTest, HoldsProtectionWhileTheQueueIsDeep) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  feed_rtt(controller, 10ms, 90ms, now);
+  ASSERT_TRUE(controller.queue_congested());
+
+  feed_frames(controller, 30, 10, 2, 5, 2, now);
+
+  EXPECT_EQ(
+    controller.target().fec_ratio_ppm,
+    adaptive_baseline().fec_ratio_ppm
+  );
+}
+
+// The same loss with a drained queue is link loss, and repair is exactly the
+// right answer for it.
+TEST(AdaptiveCongestionTest, RaisesProtectionForLossOnADrainedPath) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  feed_rtt(controller, 10ms, 12ms, now);
+  ASSERT_FALSE(controller.queue_congested());
+
+  feed_frames(controller, 30, 10, 2, 5, 2, now);
+
+  EXPECT_GT(
+    controller.target().fec_ratio_ppm,
+    adaptive_baseline().fec_ratio_ppm
+  );
+}
+
+TEST(AdaptiveCongestionTest, QueueStateUsesHysteresis) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  const auto now = stream::congestion::congestion_time_point_t {};
+
+  controller.on_rtt_sample(10ms, now);
+  controller.on_rtt_sample(50ms, now);
+  ASSERT_TRUE(controller.queue_congested());
+
+  // Between the two thresholds the previous conclusion stands, so a path
+  // hovering near one of them cannot flip state on every sample.
+  controller.on_rtt_sample(30ms, now + 1s);
+  EXPECT_TRUE(controller.queue_congested());
+
+  controller.on_rtt_sample(15ms, now + 2s);
+  EXPECT_FALSE(controller.queue_congested());
+}
+
+// Recovery needs positive evidence from both signals: a drained queue while
+// the client still reports unrepaired loss is not a recovered path.
+TEST(AdaptiveCongestionTest, DoesNotRecoverBitrateWhileTheQueueIsDeep) {
+  stream::congestion::adaptive_congestion_controller_t controller {
+    adaptive_baseline()
+  };
+  auto now = stream::congestion::congestion_time_point_t {};
+  const auto hold_down =
+    stream::congestion::adaptive_congestion_controller_t::bitrate_hold_down;
+
+  feed_rtt(controller, 10ms, 90ms, now);
+  now += hold_down;
+  controller.on_rtt_sample(90ms, now);
+  const auto lowered =
+    controller.target().estimated_available_bitrate_bps;
+  ASSERT_LT(lowered, adaptive_baseline().encoder_bitrate_bps);
+
+  // Clean frames, but the queue is still deep.
+  now += hold_down;
+  feed_frames(controller, 20, 10, 2, 10, 2, now);
+
+  EXPECT_LE(
+    controller.target().estimated_available_bitrate_bps,
+    lowered
+  );
+}

@@ -48,7 +48,10 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 - Experimental adaptive FEC behind `adaptive_fec` (off by default). Protection
   rises above `fec_percentage` when the client reports loss its own FEC could
   not repair, and is released again once the path recovers; loss the client
-  already repaired is not treated as degradation. Key frames additionally carry
+  already repaired is not treated as degradation. Queue delay is a second
+  signal: a path that is queueing is treated as past its capacity before the
+  buffer overflows into visible loss, and protection is held rather than raised
+  while it is, because repair shards are the bytes that fill the queue. Key frames additionally carry
   protection above the level normal frames are using, from the first frame of
   the session, because losing one stalls the picture until a replacement key
   frame is requested, encoded and delivered. Protection is never lowered below

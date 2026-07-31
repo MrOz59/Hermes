@@ -175,6 +175,17 @@ namespace stream::congestion {
     [[nodiscard]] virtual network_estimate_t estimate() const {
       return {};
     }
+
+    /**
+     * @brief Whether the controller judges the path to be queueing.
+     *
+     * Reported separately from the estimate because it is derived from
+     * transport timing rather than from client feedback, and because it
+     * explains why protection may be held while loss is visible.
+     */
+    [[nodiscard]] virtual bool queue_congested() const {
+      return false;
+    }
   };
 
   /**
@@ -271,6 +282,16 @@ namespace stream::congestion {
      * queueing that is not there.
      */
     static constexpr auto minimum_rtt_window = std::chrono::seconds {30};
+    /**
+     * @brief Queue delay at which the path counts as congested.
+     *
+     * Deliberately coarse. The sample is the transport's own smoothed round
+     * trip in whole milliseconds, so a few milliseconds of movement says
+     * nothing; tens of milliseconds above the path's own baseline is a queue.
+     */
+    static constexpr std::uint32_t queue_delay_congested_us = 30'000;
+    /// Queue delay at which the path counts as drained again.
+    static constexpr std::uint32_t queue_delay_drained_us = 10'000;
 
     /**
      * @brief Key-frame protection for a given normal-frame level.
@@ -311,12 +332,11 @@ namespace stream::congestion {
     /** @brief Current estimate, for diagnostics and tests. */
     [[nodiscard]] network_estimate_t estimate() const override;
 
+    [[nodiscard]] bool queue_congested() const override;
+
   private:
     void reevaluate(estimator_time_point_t now);
-    void reevaluate_available_bitrate(
-      const network_estimate_t &estimate,
-      estimator_time_point_t now
-    );
+    void reevaluate_available_bitrate(estimator_time_point_t now);
 
     mutable std::mutex mutex_;
     congestion_target_t baseline_;
@@ -327,6 +347,7 @@ namespace stream::congestion {
     estimator_time_point_t last_bitrate_change_ {};
     std::chrono::microseconds minimum_rtt_ {0};
     estimator_time_point_t minimum_rtt_observed_at_ {};
+    bool queue_congested_ = false;
     std::uint64_t packets_sent_since_report_ = 0;
     bool started_ = false;
   };

@@ -105,8 +105,10 @@
                 <div class="text-muted small">Round trip</div>
                 <div class="fs-5">{{ metrics.pipeline.congestion.rtt_ms.toFixed(1) }} ms</div>
                 <div class="text-muted small"
-                     :class="metrics.pipeline.congestion.queue_delay_ms > 0 ? 'text-warning' : ''">
+                     :class="metrics.pipeline.congestion.queue_congested ? 'text-warning' : ''">
                   {{ metrics.pipeline.congestion.queue_delay_ms.toFixed(1) }} ms queued
+                  <span v-if="metrics.pipeline.congestion.queue_congested"
+                        class="badge bg-warning text-dark">congested</span>
                 </div>
               </div>
             </template>
@@ -124,7 +126,10 @@
               <div class="col-6 col-md-3 mb-2">
                 <div class="text-muted small">Error correction</div>
                 <div class="fs-5">{{ metrics.pipeline.congestion.fec_percent.toFixed(0) }}%</div>
-                <div class="text-muted small">
+                <div class="text-muted small" v-if="metrics.pipeline.congestion.queue_congested">
+                  held — the path is queueing
+                </div>
+                <div class="text-muted small" v-else>
                   {{ metrics.pipeline.congestion.key_frame_fec_percent.toFixed(0) }}% on key frames
                 </div>
               </div>

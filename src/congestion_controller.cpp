@@ -161,6 +161,24 @@ namespace stream::congestion {
     current_.estimated_rtt_us = static_cast<std::uint32_t>(rtt.count());
     current_.estimated_queue_delay_us =
       static_cast<std::uint32_t>((rtt - minimum_rtt_).count());
+
+    // Hysteresis, for the same reason the loss thresholds have it: a path
+    // sitting exactly at the threshold must not flip state on every sample.
+    if (current_.estimated_queue_delay_us > queue_delay_congested_us) {
+      queue_congested_ = true;
+    } else if (current_.estimated_queue_delay_us < queue_delay_drained_us) {
+      queue_congested_ = false;
+    }
+
+    // Delay is measured independently of client feedback, so it can move the
+    // capacity estimate on its own -- that is the whole point of watching it:
+    // a queue builds before it overflows into loss.
+    reevaluate_available_bitrate(now);
+  }
+
+  bool adaptive_congestion_controller_t::queue_congested() const {
+    std::lock_guard lock {mutex_};
+    return queue_congested_;
   }
 
   congestion_target_t adaptive_congestion_controller_t::target() const {
@@ -189,7 +207,7 @@ namespace stream::congestion {
       return;
     }
 
-    reevaluate_available_bitrate(estimate, now);
+    reevaluate_available_bitrate(now);
 
     // A host may configure protection above the adaptive ceiling. The ceiling
     // must then yield: raising must never end up lowering what was configured.
@@ -198,10 +216,22 @@ namespace stream::congestion {
 
     auto fec_ratio_ppm = current_.fec_ratio_ppm;
     if (estimate.unrecovered_loss_ratio > raise_threshold) {
-      fec_ratio_ppm = std::min(
-        fec_ratio_ppm + fec_step_up_ppm,
-        ceiling_ppm
-      );
+      // Loss on a path that is already queueing is loss from a full buffer,
+      // and repair shards are exactly the bytes that filled it. Adding more
+      // would deepen the queue, push the frame deadline further out, and drop
+      // the very data shards the repair was meant to protect. Protection is
+      // held instead -- the honest answer there is to send less, which this
+      // controller cannot do while the encoder's bitrate is fixed. Loss with a
+      // drained queue is the opposite case: it is link loss, and repair shards
+      // are precisely the right answer.
+      if (!queue_congested_) {
+        fec_ratio_ppm = std::min(
+          fec_ratio_ppm + fec_step_up_ppm,
+          ceiling_ppm
+        );
+      }
+      // Either way the path is unhealthy, so the release hold-down restarts:
+      // protection must not begin draining away moments after loss appeared.
       last_raise_ = now;
     } else if (
       estimate.unrecovered_loss_ratio < release_threshold &&
@@ -233,7 +263,6 @@ namespace stream::congestion {
   }
 
   void adaptive_congestion_controller_t::reevaluate_available_bitrate(
-    const network_estimate_t &estimate,
     estimator_time_point_t now
   ) {
     const auto configured = baseline_.encoder_bitrate_bps;
@@ -260,16 +289,29 @@ namespace stream::congestion {
       1
     );
 
-    if (estimate.unrecovered_loss_ratio > raise_threshold) {
-      // Multiplicative decrease: loss the client could not repair means the
-      // path is already past what it can carry, and backing off in proportion
-      // is what converges quickly enough to matter.
+    // Loss and delay are separate evidence and arrive at different times. A
+    // queue that is filling says the path is past its capacity before the
+    // buffer overflows into loss the client can see, so either one is enough to
+    // back off; recovery needs both to be clear, and needs the loss estimate to
+    // actually say so rather than merely to be missing.
+    const bool loss_congested =
+      last_estimate_.valid &&
+      last_estimate_.unrecovered_loss_ratio > raise_threshold;
+    const bool loss_drained =
+      last_estimate_.valid &&
+      last_estimate_.unrecovered_loss_ratio < release_threshold;
+
+    if (loss_congested || queue_congested_) {
+      // Multiplicative decrease: loss the client could not repair, or a queue
+      // that keeps growing, means the path is already past what it can carry,
+      // and backing off in proportion is what converges quickly enough to
+      // matter.
       available = std::max(
         available * bitrate_decrease_permille / 1000,
         floor_bps
       );
       last_bitrate_change_ = now;
-    } else if (estimate.unrecovered_loss_ratio < release_threshold) {
+    } else if (loss_drained) {
       // Additive recovery in fixed steps of the configured bitrate, so a link
       // that just recovered is probed gently instead of being handed back
       // everything it had just failed to carry.

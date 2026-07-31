@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <future>
+#include <map>
 #include <queue>
 #include <string>
 
@@ -545,6 +546,15 @@ namespace stream {
     std::unique_ptr<congestion::ICongestionController> congestion_controller;
     /// Control thread only: rate-limits the congestion diagnostics publish.
     std::chrono::steady_clock::time_point last_congestion_publish {};
+    /**
+     * @brief Hermes extensions negotiated for this session.
+     *
+     * Written once at session creation and read from the control thread. An
+     * extension message that arrives without its name in here is dropped: a
+     * client must not reach an extension path by sending its message, only by
+     * negotiating it.
+     */
+    std::map<std::string, std::uint32_t> negotiated_extensions;
   };
 
   /**
@@ -1051,6 +1061,43 @@ namespace stream {
         << "time in milli since last report [" << report->report_interval.count() << ']' << std::endl
         << "last good frame [" << report->last_good_frame << ']' << std::endl
         << "---end stats---";
+    });
+
+    // Hermes extension: per-packet feedback. Only clients that negotiated
+    // packet_feedback send this, and only those are listened to -- sending the
+    // message must not be a way to reach the path without negotiating it.
+    server->map(congestion::hermes_packet_feedback_type, [&](session_t *session, const std::string_view &payload) {
+      const auto negotiated =
+        session->negotiated_extensions.find("packet_feedback");
+      if (negotiated == session->negotiated_extensions.end() ||
+          negotiated->second != 1) {
+        BOOST_LOG(warning)
+          << "Control: packet feedback from a client that did not negotiate it"sv;
+        return;
+      }
+
+      // Parsed into control-thread storage: the report is consumed before this
+      // callback returns, so it never outlives the frame it borrows.
+      static thread_local std::array<
+        congestion::packet_metric_t,
+        congestion::maximum_packet_feedback_metrics
+      > metrics;
+      const auto report = congestion::parse_packet_feedback(payload, metrics);
+      if (!report) {
+        BOOST_LOG(warning) << "Control: malformed packet feedback report"sv;
+        return;
+      }
+
+      session->congestion_controller->on_packet_feedback(
+        *report,
+        congestion::congestion_clock_t::now()
+      );
+
+      BOOST_LOG(verbose)
+        << "type [HERMES_PACKET_FEEDBACK]"sv
+        << " report [" << report->report_sequence << ']'
+        << " base [" << report->base_sequence << ']'
+        << " packets [" << report->metrics.size() << ']';
     });
 
     server->map(congestion::gamestream_frame_fec_feedback_type, [&](session_t *session, const std::string_view &payload) {
@@ -2982,6 +3029,7 @@ namespace stream {
       session->device_name = launch_session.device_name;
       session->device_uuid = launch_session.unique_id;
       session->hestia_session_id = launch_session.hestia_session_id;
+      session->negotiated_extensions = launch_session.negotiated_extensions;
       session->permission = launch_session.perm;
       session->isolated_session = launch_session.isolated_session;
       session->isolated_runtime_owner_id = launch_session.isolated_runtime_owner_id;

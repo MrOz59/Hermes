@@ -9,6 +9,7 @@
 #include <string>
 #include <chrono>
 #include <list>
+#include <map>
 #include <optional>
 
 // lib includes
@@ -90,6 +91,8 @@ namespace nvhttp {
 
   struct hestia_session_prepare_t {
     std::string session_id;
+    /// Hermes extensions this client negotiated, by name and agreed version.
+    std::map<std::string, std::uint32_t> extensions;
     bool virtual_display = false;
     bool isolated = false;
     int width = 0;

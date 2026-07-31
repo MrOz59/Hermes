@@ -1738,6 +1738,7 @@ namespace confighttp {
       const std::string session_id = "hestia-" + crypto::rand_alphabet(24);
       nvhttp::store_hestia_session_prepare(client->uuid, {
         .session_id = session_id,
+        .extensions = negotiated.entries(),
         .virtual_display = virtual_display["enabled"].get<bool>(),
         .isolated = isolated,
         .width = stream["requested_width"].get<int>(),

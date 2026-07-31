@@ -17,7 +17,7 @@ namespace protocol::ext {
      * make a client enable a path that silently does nothing, which is worse
      * than not offering it at all.
      */
-    constexpr std::array<extension_t, 1> registry {
+    constexpr std::array<extension_t, 2> registry {
       extension_t {
         .name = "congestion_report",
         .version = 1,
@@ -26,6 +26,15 @@ namespace protocol::ext {
           "Host publishes per-session path measurements (loss, round trip, "
           "queue delay, protection in force) through the Hestia diagnostics "
           "runtime view.",
+      },
+      extension_t {
+        .name = "packet_feedback",
+        .version = 1,
+        .experimental = true,
+        .summary =
+          "Client reports which packets arrived and when, in an RFC "
+          "8888-shaped report. Lets the host measure the rate the path "
+          "delivered and see a queue forming before it turns into loss.",
       },
     };
 

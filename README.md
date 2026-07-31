@@ -111,7 +111,8 @@ host can speak beyond the GameStream baseline:
 
 ```json
 "extensions": [
-  {"name": "congestion_report", "version": 1, "experimental": true, "summary": "..."}
+  {"name": "congestion_report", "version": 1, "experimental": true, "summary": "..."},
+  {"name": "packet_feedback", "version": 1, "experimental": true, "summary": "..."}
 ]
 ```
 
@@ -132,6 +133,35 @@ announcement was accepted whole.
 
 Announcing nothing — which is what every existing client does, Moonlight
 included — is a normal, fully supported session.
+
+An extension message sent without negotiating it is dropped. Sending the
+message is never a way to reach an extension path; the negotiated set is.
+
+#### `packet_feedback` v1
+
+Control message type `0x5601`, client to host, big endian:
+
+```text
+offset size field
+0      2    report sequence, increments per report
+2      2    base sequence, first packet covered
+4      2    packet count covered by this report
+6      4    reference time, receiver clock in microseconds
+10     2*n  one metric per covered packet, in sequence order:
+              bit 15    received
+              bits 0-14 arrival offset from the reference time,
+                        in units of 64 us
+```
+
+Sequence numbers are the RTP sequence numbers Hermes already sends, and they
+wrap normally within a report. A report covers at most 512 packets and its
+length must match its declared count exactly.
+
+The receiver clock is never compared against the host clock: only differences
+between arrival times *within* one report are used, so the two clocks need to
+agree on rate, never on offset. From that the host measures the rate the path
+delivered and whether one-way delay is trending up — a queue forming, visible
+before it becomes loss.
 
 When `features.multi_user_sessions` is true, the host administrator has
 explicitly enabled independent sessions and an updated Hestia client can add

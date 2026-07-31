@@ -104,3 +104,43 @@ TEST(ProtocolExtensionsTest, RepeatedAnnouncementOfOneVersionIsStable) {
   EXPECT_EQ(negotiated.entries().size(), 1u);
   EXPECT_EQ(negotiated.version_of(supported.name), supported.version);
 }
+
+// Extensions are independent: a client that speaks one and not the other must
+// get exactly the one it speaks.
+TEST(ProtocolExtensionsTest, ExtensionsAreNegotiatedIndependently) {
+  const std::vector<protocol::ext::announcement_t> announced {
+    {.name = "packet_feedback", .version = 1},
+  };
+
+  const auto negotiated = protocol::ext::negotiate(announced);
+
+  EXPECT_TRUE(negotiated.contains("packet_feedback"));
+  EXPECT_FALSE(negotiated.contains("congestion_report"));
+  EXPECT_EQ(negotiated.entries().size(), 1u);
+}
+
+TEST(ProtocolExtensionsTest, SeveralExtensionsNegotiateTogether) {
+  const std::vector<protocol::ext::announcement_t> announced {
+    {.name = "congestion_report", .version = 1},
+    {.name = "packet_feedback", .version = 1},
+  };
+
+  const auto negotiated = protocol::ext::negotiate(announced);
+
+  EXPECT_EQ(negotiated.entries().size(), 2u);
+  EXPECT_EQ(negotiated.version_of("packet_feedback"), 1u);
+  EXPECT_EQ(negotiated.version_of("congestion_report"), 1u);
+}
+
+// The host only advertises what it can honour, so a duplicated entry would
+// mean two code paths claiming the same name and version.
+TEST(ProtocolExtensionsTest, RegistryEntriesAreUnique) {
+  const auto supported = protocol::ext::supported();
+  for (auto outer = supported.begin(); outer != supported.end(); ++outer) {
+    for (auto inner = std::next(outer); inner != supported.end(); ++inner) {
+      const bool same_entry =
+        outer->name == inner->name && outer->version == inner->version;
+      EXPECT_FALSE(same_entry) << "duplicate registry entry: " << outer->name;
+    }
+  }
+}

@@ -1305,6 +1305,7 @@ namespace nvhttp {
     if (!is_input_only) {
       if (const auto hestia_prepare = take_hestia_session_prepare(named_cert_p->uuid)) {
         launch_session->hestia_session_id = hestia_prepare->session_id;
+        launch_session->negotiated_extensions = hestia_prepare->extensions;
         launch_session->width = hestia_prepare->width;
         launch_session->height = hestia_prepare->height;
         launch_session->fps = hestia_prepare->fps * 1000;

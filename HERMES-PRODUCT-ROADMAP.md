@@ -57,11 +57,13 @@ Legend: `[x]` done · `[~]` partially done · `[ ]` not started.
   send history to match it against, a measured delivery rate, and a delay
   gradient that sees a queue forming before the round trip moves. The
   controller prefers the measured rate over the loss-derived estimate and
-  claims 85% of it, per the headroom this roadmap asks for. Still to come:
-  dispatching the message on the control stream gated by the negotiated set,
-  frame received/decoded/presented reports, NACK bitmaps, deadlines and
-  priorities — and each needs the matching Hestia side before it can be
-  exercised end to end.
+  claims 85% of it, per the headroom this roadmap asks for. The message is
+  dispatched on the control stream gated by the negotiated set, which now
+  travels from `session/prepare` through the launch into the streaming
+  session. Still to come: frame received/decoded/presented reports, NACK
+  bitmaps, deadlines and priorities — and every one of them, including
+  `packet_feedback` itself, needs the matching Hestia client side before it can
+  be exercised end to end.
 - [ ] H5–H6: ICE/connectivity and native identity/pairing, each with explicit
   capability negotiation and fallback.
 - [ ] H7: first experimental HDT implementation.

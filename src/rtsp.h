@@ -9,6 +9,7 @@
 #include <chrono>
 #include <deque>
 #include <list>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -50,6 +51,10 @@ namespace rtsp_stream {
     // Opaque Hestia API reservation token. It never replaces certificate
     // authentication; it narrows lifecycle operations to this launch.
     std::string hestia_session_id;
+    // Hermes extensions negotiated for this launch, by name and version.
+    // Empty for every client that did not negotiate any, which includes all
+    // GameStream clients.
+    std::map<std::string, std::uint32_t> negotiated_extensions;
     // Address of the HTTPS peer that created this launch. Concurrent pending
     // RTSP handshakes are associated with their originating client by address.
     std::string expected_remote_address;

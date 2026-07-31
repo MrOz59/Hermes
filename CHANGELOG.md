@@ -40,9 +40,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   arrived. It gives the host two things the compatible feedback cannot — the
   rate the path actually delivered, and a delay gradient that shows a queue
   forming before any loss occurs. The congestion controller prefers a measured
-  rate over its loss-derived estimate and claims 85% of it. Host-side only so
-  far: the message is specified, parsed and wired into the controller, but not
-  yet dispatched from the control stream.
+  rate over its loss-derived estimate and claims 85% of it. The message is
+  accepted on the control stream (type `0x5601`) only from clients that
+  negotiated the extension — sending it is never a way to reach the path
+  without negotiating it — and the negotiated set now travels from
+  `session/prepare` through the launch into the streaming session. Exercising
+  it end to end still needs the matching Hestia client side.
 - Hermes protocol extensions can now be negotiated over the existing session.
   `GET /api/hestia/v1/capabilities` advertises an `extensions` array with a
   version per extension, a client announces the subset it speaks in

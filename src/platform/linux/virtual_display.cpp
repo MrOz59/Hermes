@@ -25,6 +25,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -945,7 +946,11 @@ namespace VDISPLAY {
     };
 
     struct layout_t {
-      std::string original_primary;
+      // Every physical output that was enabled before the virtual connector
+      // appeared, mapped to its KScreen priority. Exclusive mode disables all
+      // of them, not just the primary one, and restore() brings them all back
+      // with the priorities they had.
+      std::map<std::string, int> original_outputs;
       std::string virtual_output;
       bool physical_output_disabled {false};
     };
@@ -1028,15 +1033,6 @@ namespace VDISPLAY {
       return result;
     }
 
-    static std::string primary_output(const std::vector<output_t> &current) {
-      for (const auto &output : current) {
-        if (output.connected && output.enabled && output.priority == 1) {
-          return output.name;
-        }
-      }
-      return {};
-    }
-
     static std::map<std::string, int> enabled_output_priorities(const std::vector<output_t> &current) {
       std::map<std::string, int> result;
       for (const auto &output : current) {
@@ -1072,8 +1068,37 @@ namespace VDISPLAY {
       return base + "/saved-primary";
     }
 
-    static bool write_recovery_state(const std::string &output) {
-      if (!safe_output_name(output)) {
+    /**
+     * Build a single kscreen-doctor invocation that re-enables every given
+     * output with the priority it had before Hermes touched the layout.
+     * Outputs whose priority was not recorded are appended after the known
+     * ones so the session never ends up without a primary.
+     */
+    static std::string enable_outputs_command(const std::map<std::string, int> &outputs) {
+      std::string command = "kscreen-doctor";
+      int next_priority = 1;
+      for (const auto &[output, priority] : outputs) {
+        const int effective = priority > 0 ? priority : next_priority;
+        command += " output." + output + ".enable";
+        command += " output." + output + ".priority." + std::to_string(effective);
+        next_priority = std::max(next_priority, effective + 1);
+      }
+      return command;
+    }
+
+    /**
+     * Persist every physical output exclusive mode is about to disable, one
+     * `name priority` pair per line, so a crash mid-session cannot leave a
+     * multi-monitor desktop with all of its screens dark.
+     */
+    static bool write_recovery_state(const std::map<std::string, int> &outputs) {
+      std::map<std::string, int> valid;
+      for (const auto &[output, priority] : outputs) {
+        if (safe_output_name(output)) {
+          valid.emplace(output, priority);
+        }
+      }
+      if (valid.empty()) {
         return false;
       }
 
@@ -1088,7 +1113,9 @@ namespace VDISPLAY {
         if (!file) {
           return false;
         }
-        file << output << '\n';
+        for (const auto &[output, priority] : valid) {
+          file << output << ' ' << priority << '\n';
+        }
       }
 
       std::error_code ec;
@@ -1100,19 +1127,30 @@ namespace VDISPLAY {
       return true;
     }
 
-    static std::string read_recovery_state() {
+    static std::map<std::string, int> read_recovery_state() {
+      std::map<std::string, int> outputs;
       const auto path = recovery_state_file();
       if (path.empty()) {
-        return {};
+        return outputs;
       }
 
       std::ifstream file {path};
-      std::string output;
-      std::getline(file, output);
-      while (!output.empty() && std::isspace(static_cast<unsigned char>(output.back()))) {
-        output.pop_back();
+      std::string line;
+      while (std::getline(file, line)) {
+        std::istringstream stream {line};
+        std::string output;
+        int priority = 0;
+        // A file written by an older Hermes holds a bare output name with no
+        // priority; leave it at 0 so it is assigned the first free priority.
+        if (!(stream >> output) || !safe_output_name(output)) {
+          continue;
+        }
+        if (!(stream >> priority) || priority < 0) {
+          priority = 0;
+        }
+        outputs.emplace(output, priority);
       }
-      return safe_output_name(output) ? output : std::string {};
+      return outputs;
     }
 
     static void clear_recovery_state() {
@@ -1125,13 +1163,17 @@ namespace VDISPLAY {
     }
 
     static void recover_on_startup() {
-      const auto output = read_recovery_state();
-      if (output.empty()) {
+      const auto saved_outputs = read_recovery_state();
+      if (saved_outputs.empty()) {
         return;
       }
 
-      BOOST_LOG(info) << "[VDISPLAY/KScreen] Recovering physical output left disabled by a previous session: " << output;
-      if (run_layout_command("kscreen-doctor output." + output + ".enable output." + output + ".priority.1")) {
+      std::string names;
+      for (const auto &[output, priority] : saved_outputs) {
+        names += names.empty() ? output : ", " + output;
+      }
+      BOOST_LOG(info) << "[VDISPLAY/KScreen] Recovering physical outputs left disabled by a previous session: " << names;
+      if (run_layout_command(enable_outputs_command(saved_outputs))) {
         clear_recovery_state();
       } else {
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] Startup recovery failed; retaining recovery state for the next attempt.";
@@ -1247,7 +1289,6 @@ namespace VDISPLAY {
     static bool activate_evdi_output(
       const std::string &display_name,
       const std::set<std::string> &outputs_before,
-      const std::string &original_primary,
       const std::map<std::string, int> &enabled_before,
       const std::string &connector_name,
       const char *backend_label
@@ -1283,19 +1324,25 @@ namespace VDISPLAY {
 
       // At display-CREATION time we only *enable* the virtual output so the
       // compositor starts composing on it and capture can read its framebuffer.
-      // We deliberately do NOT touch the physical output's priority or disable
-      // it here: that is a SESSION-level action and must only happen once the
-      // stream actually starts (see make_exclusive), and only in isolated mode.
-      // Otherwise creating the display would steal the user's primary monitor
-      // before any session is live, blanking the physical screen prematurely.
-      const bool can_manage_original = safe_output_name(original_primary) && original_primary != virtual_output;
+      // We deliberately do NOT touch the physical outputs' priorities or
+      // disable them here: that is a SESSION-level action and must only happen
+      // once the stream actually starts (see make_exclusive), and only in
+      // isolated mode. Otherwise creating the display would steal the user's
+      // monitors before any session is live, blanking the local screens
+      // prematurely.
+      std::map<std::string, int> original_outputs;
+      for (const auto &[output, priority] : enabled_before) {
+        if (output != virtual_output && safe_output_name(output)) {
+          original_outputs.emplace(output, priority);
+        }
+      }
       if (!apply_pre_session_layout(virtual_output, enabled_before)) {
         return false;
       }
 
       std::lock_guard<std::mutex> lock(layouts_mutex);
       layouts[display_name] = {
-        .original_primary = can_manage_original ? original_primary : std::string {},
+        .original_outputs = std::move(original_outputs),
         .virtual_output = virtual_output,
         .physical_output_disabled = false,
       };
@@ -1350,20 +1397,51 @@ namespace VDISPLAY {
 
     // Called at SESSION START (only when isolated mode is on) to hand the
     // desktop over to the virtual output: make it primary and disable the
-    // physical monitor. This is the moment the physical screen is allowed to go
+    // physical monitors. This is the moment the local screens are allowed to go
     // dark — never before. restore() reverses it when the session ends.
     static bool make_exclusive(const std::string &display_name) {
       std::lock_guard<std::mutex> lock(layouts_mutex);
       const auto it = layouts.find(display_name);
-      if (it == layouts.end() || it->second.physical_output_disabled || it->second.original_primary.empty()) {
+      if (it == layouts.end() || it->second.physical_output_disabled) {
         return it != layouts.end();
       }
-      // Promote the virtual output to primary and disable the physical one in a
-      // single atomic kscreen-doctor call so the session never lands on a
+
+      // Every lit physical output has to go dark, not just the one that
+      // happened to be primary: on a multi-monitor desktop the secondary
+      // screens otherwise stay on and keep showing the local session.
+      // Read the live layout so monitors that were enabled after the virtual
+      // display was created are covered as well, and fall back to the
+      // pre-session snapshot when KScreen cannot be queried. Priorities come
+      // from the snapshot where known so restore() reinstates the layout the
+      // user actually had.
+      std::map<std::string, int> targets;
+      for (const auto &output : outputs()) {
+        if (!output.connected || !output.enabled ||
+            output.name == it->second.virtual_output ||
+            !safe_output_name(output.name)) {
+          continue;
+        }
+        const auto known = it->second.original_outputs.find(output.name);
+        targets.emplace(
+          output.name,
+          known != it->second.original_outputs.end() ? known->second : output.priority
+        );
+      }
+      if (targets.empty()) {
+        targets = it->second.original_outputs;
+      }
+      if (targets.empty()) {
+        return true;
+      }
+
+      // Promote the virtual output to primary and disable the physical ones in
+      // a single atomic kscreen-doctor call so the session never lands on a
       // transient no-primary layout.
-      std::string command = "kscreen-doctor output." + it->second.virtual_output + ".priority.1"
-        " output." + it->second.original_primary + ".disable";
-      if (!write_recovery_state(it->second.original_primary)) {
+      std::string command = "kscreen-doctor output." + it->second.virtual_output + ".priority.1";
+      for (const auto &[output, priority] : targets) {
+        command += " output." + output + ".disable";
+      }
+      if (!write_recovery_state(targets)) {
         BOOST_LOG(error) << "[VDISPLAY/KScreen] Refusing exclusive mode because monitor recovery state could not be written.";
         return false;
       }
@@ -1371,6 +1449,9 @@ namespace VDISPLAY {
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] Exclusive layout command failed; retaining recovery state in case it was partially applied.";
         return false;
       }
+      BOOST_LOG(info) << "[VDISPLAY/KScreen] Exclusive mode disabled " << targets.size()
+                      << " physical output(s) in favour of " << it->second.virtual_output;
+      it->second.original_outputs = std::move(targets);
       it->second.physical_output_disabled = true;
       return true;
     }
@@ -1381,17 +1462,14 @@ namespace VDISPLAY {
       if (it == layouts.end()) {
         return;
       }
-      // Re-enable the physical output as primary. Do this in the same command
-      // that drops the virtual output's priority so the desktop never sits with
-      // two primaries or none. The virtual connector itself disappears when the
-      // display is torn down, so we don't need to .disable it explicitly, but
-      // restoring the physical priority is what brings the screen back.
+      // Re-enable every physical output with the priority it had before the
+      // session, in one command, so the desktop never sits with two primaries
+      // or none. The virtual connector itself disappears when the display is
+      // torn down, so we don't need to .disable it explicitly, but restoring
+      // the physical priorities is what brings the screens back.
       bool restored = true;
-      if (!it->second.original_primary.empty()) {
-        std::string command = "kscreen-doctor"
-          " output." + it->second.original_primary + ".enable"
-          " output." + it->second.original_primary + ".priority.1";
-        restored = run_layout_command(command);
+      if (!it->second.original_outputs.empty()) {
+        restored = run_layout_command(enable_outputs_command(it->second.original_outputs));
       }
       if (restored) {
         clear_recovery_state();
@@ -2622,7 +2700,6 @@ namespace VDISPLAY {
     const auto backend = selected_backend();
     const auto kscreen_before = kscreen::outputs();
     const auto outputs_before = kscreen::connected_output_names(kscreen_before);
-    const auto original_primary = kscreen::primary_output(kscreen_before);
     const auto enabled_before = kscreen::enabled_output_priorities(kscreen_before);
 
     if (backend == VirtualDisplayBackend::HERMES_KMS) {
@@ -2700,7 +2777,6 @@ namespace VDISPLAY {
           kscreen::activate_evdi_output(
             vdinfo.name,
             outputs_before,
-            original_primary,
             enabled_before,
             vdinfo.connector_name,
             "Hermes-KMS"
@@ -2763,7 +2839,6 @@ namespace VDISPLAY {
             kscreen::activate_evdi_output(
               vdinfo.name,
               outputs_before,
-              original_primary,
               enabled_before,
               evdi_connector_name(vdinfo.drm_card_index),
               "EVDI"

@@ -70,6 +70,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   the protocol limit instead of being switched off for that frame, which
   mattered most for the key frames large enough to hit the limit in the first
   place.
+- KDE exclusive mode now blanks every physical monitor instead of only the
+  primary one. On a multi-monitor desktop the secondary screens stayed lit and
+  kept showing the local session while streaming. Crash-recovery state records
+  all disabled outputs with their priorities, and ending the session restores
+  each of them to the priority it had before the stream ([#12]).
 - Cancelling an isolated launch now signals its in-progress preparation and
   compositor wait, including the atomic handoff into the active-runtime
   registry, so a late runtime cannot appear after `/cancel` returned.
@@ -118,6 +123,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#8]: https://github.com/MrOz59/Hermes/issues/8
 [#9]: https://github.com/MrOz59/Hermes/issues/9
 [#10]: https://github.com/MrOz59/Hermes/issues/10
+[#12]: https://github.com/MrOz59/Hermes/issues/12
 
 ## [0.4.0] - 2026-07-02
 

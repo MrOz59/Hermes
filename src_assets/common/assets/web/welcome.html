@@ -100,8 +100,15 @@
               }
             });
           } else {
-            this.error = "Internal Server Error";
+            this.error = `Server returned ${r.status}`;
           }
+        }).catch((e) => {
+          // Without this the button stays disabled forever and nothing is shown.
+          // loading was only cleared on the reply path, so a request that never
+          // reaches the server left the page looking frozen, with no explanation
+          // anywhere and nothing in the host log either.
+          this.loading = false;
+          this.error = `Could not reach Hermes: ${e.message}`;
         });
       },
     },

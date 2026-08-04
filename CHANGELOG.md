@@ -74,6 +74,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   so only one of them can run at a time ([#14]).
 
 ### Fixed
+- The create-password and change-password forms no longer freeze silently when a
+  request cannot reach the host. Neither had a `catch` on its `fetch`, and the
+  welcome form cleared its loading flag only on the reply path, so a request that
+  never arrived left the button disabled for good with nothing shown on the page
+  and nothing in the host log — the failure was invisible from both ends. Both
+  now report the reason, and a non-200 reply names its status instead of always
+  claiming "Internal Server Error" ([#14]).
 - The `.deb` and `.rpm` packages now declare every library the executable links
   against. `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is off, so nothing derives these
   from the binary and the hand-written lists had drifted: both were missing

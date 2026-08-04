@@ -521,8 +521,47 @@ namespace confighttp {
       return false;
     }
     return true;
+  }
 
-    return true;
+  /**
+   * @brief Serve a page from the packaged web assets.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @param page The file name under the web asset directory.
+   * @param extra_headers Response headers to add on top of the common set.
+   *
+   * A missing asset used to be served as an empty 200: read_file() returns an
+   * empty string and only says so at debug level, so the browser rendered a
+   * blank page and the log held nothing to explain it. That is what a build or
+   * package with the wrong SUNSHINE_ASSETS_DIR looks like from the outside, and
+   * it is indistinguishable from the UI itself being broken. Fail loudly with
+   * the path we actually looked at instead.
+   */
+  void send_web_page(
+    resp_https_t response,
+    req_https_t request,
+    const std::string &page,
+    const SimpleWeb::CaseInsensitiveMultimap &extra_headers = {}
+  ) {
+    const std::string path = WEB_DIR + page;
+    const std::string content = file_handler::read_file(path.c_str());
+    if (content.empty()) {
+      BOOST_LOG(error) << "Web UI asset missing or empty: ["sv << path << ']';
+      BOOST_LOG(error) << "Hermes was built with assets in ["sv << SUNSHINE_ASSETS_DIR
+                       << "]; reinstall the package or rebuild with a matching SUNSHINE_ASSETS_DIR."sv;
+      response->write(
+        SimpleWeb::StatusCode::server_error_internal_server_error,
+        "Web UI assets are missing on the server. See the Hermes log for the expected path."
+      );
+      return;
+    }
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    headers.insert(extra_headers.begin(), extra_headers.end());
+    response->write(content, headers);
   }
 
   /**
@@ -537,12 +576,7 @@ namespace confighttp {
 
     print_req(request);
 
-    std::string content = file_handler::read_file(WEB_DIR "index.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
+    send_web_page(response, request, "index.html");
   }
 
   /**
@@ -557,12 +591,7 @@ namespace confighttp {
 
     print_req(request);
 
-    std::string content = file_handler::read_file(WEB_DIR "pin.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
+    send_web_page(response, request, "pin.html");
   }
 
   /**
@@ -577,13 +606,7 @@ namespace confighttp {
 
     print_req(request);
 
-    std::string content = file_handler::read_file(WEB_DIR "apps.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    headers.emplace("Access-Control-Allow-Origin", "https://images.igdb.com/");
-    response->write(content, headers);
+    send_web_page(response, request, "apps.html", {{"Access-Control-Allow-Origin", "https://images.igdb.com/"}});
   }
 
   /**
@@ -598,12 +621,7 @@ namespace confighttp {
 
     print_req(request);
 
-    std::string content = file_handler::read_file(WEB_DIR "clients.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
+    send_web_page(response, request, "clients.html");
   }
 
   /**
@@ -618,12 +636,7 @@ namespace confighttp {
 
     print_req(request);
 
-    std::string content = file_handler::read_file(WEB_DIR "config.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
+    send_web_page(response, request, "config.html");
   }
 
   /**
@@ -638,12 +651,7 @@ namespace confighttp {
 
     print_req(request);
 
-    std::string content = file_handler::read_file(WEB_DIR "password.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
+    send_web_page(response, request, "password.html");
   }
 
   /**
@@ -663,12 +671,7 @@ namespace confighttp {
       return;
     }
 
-    std::string content = file_handler::read_file(WEB_DIR "login.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
+    send_web_page(response, request, "login.html");
   }
 
   /**
@@ -684,12 +687,7 @@ namespace confighttp {
       return;
     }
 
-    std::string content = file_handler::read_file(WEB_DIR "welcome.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
+    send_web_page(response, request, "welcome.html");
   }
 
   /**
@@ -704,12 +702,7 @@ namespace confighttp {
 
     print_req(request);
 
-    std::string content = file_handler::read_file(WEB_DIR "troubleshooting.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
+    send_web_page(response, request, "troubleshooting.html");
   }
 
   /**
@@ -2800,6 +2793,16 @@ fi')CLIP";
     server.config.reuse_address = true;
     server.config.address = net::af_to_any_address_string(address_family);
     server.config.port = port_https;
+
+    // Say this at startup rather than leaving the first visitor to discover a
+    // broken UI. A packaging or build mismatch puts the assets somewhere other
+    // than where this binary was told to look, and the symptom — a blank page —
+    // gives no hint of that.
+    if (!fs::exists(WEB_DIR "index.html")) {
+      BOOST_LOG(error) << "Web UI assets not found in ["sv << WEB_DIR << ']';
+      BOOST_LOG(error) << "The configuration UI will not render. This binary was built with "sv
+                          "SUNSHINE_ASSETS_DIR=["sv << SUNSHINE_ASSETS_DIR << "]."sv;
+    }
 
     auto accept_and_run = [&](auto *server) {
       try {

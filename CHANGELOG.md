@@ -74,6 +74,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   so only one of them can run at a time ([#14]).
 
 ### Fixed
+- A missing Web UI asset is now an error instead of a blank page. The page
+  handlers wrote whatever `read_file()` returned, and that is an empty string
+  when the file is absent — which it reports only at debug level — so a build or
+  package whose assets are not where `SUNSHINE_ASSETS_DIR` says served an empty
+  `200`. The browser showed white, the log said nothing, and there was no way to
+  tell it apart from the UI being broken. Requests now fail with a `500` naming
+  the path in the log, and startup says so outright if the assets are not there,
+  rather than leaving the first visitor to find out.
 - Setting credentials from the command line now works when the state file is
   unreadable. `save_user_creds()` refused to write anything if it could not
   parse the existing file, so `hermes --creds` — the documented way out of a

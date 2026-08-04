@@ -909,8 +909,16 @@ namespace wl {
       }
 
       if (!control.collect()) {
-        BOOST_LOG(warning) << "Wayland output-management returned no complete output layout."sv;
-        return false;
+        // Not a verdict on the layout, just a layout we have not been told about
+        // yet: collect() only succeeds once the manager has sent its first done
+        // event. A compositor sitting at zero outputs — a headless session, or a
+        // container that has just come up — can still be assembling that state in
+        // the roundtrip we make here. Returning now would abandon the activation
+        // in the same millisecond the connector was created, before the compositor
+        // could possibly have processed the hotplug, so retry on the same footing
+        // as a head that has not appeared yet.
+        std::this_thread::sleep_for(100ms);
+        continue;
       }
 
       auto *virtual_head = control.find_head(output_name);

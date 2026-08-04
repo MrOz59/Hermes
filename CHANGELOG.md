@@ -59,6 +59,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   so only one of them can run at a time ([#14]).
 
 ### Fixed
+- Activating a virtual output no longer gives up on a compositor that has not
+  published its output layout yet. `configure_virtual_output()` retried a head
+  that had not appeared, but treated an output-management manager that had not
+  sent its first `done` event as a hard failure on the very first attempt — so a
+  compositor sitting at zero outputs, such as a headless session or a container
+  that has just started, lost a race against its own hotplug and reported
+  "output-management returned no complete output layout". Both conditions now
+  retry on the same footing. Reported by @SOVLOOKUP, who worked around it
+  downstream by keeping a placeholder output alive so the layout was never empty
+  ([#6]).
 - The config UI no longer makes browsers prompt for a client certificate. Its
   listener also serves the Hestia API, so it requests a client certificate on
   every connection while advertising no acceptable CAs — which a browser reads

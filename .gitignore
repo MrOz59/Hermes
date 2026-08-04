@@ -1,5 +1,8 @@
 # Prerequisites
 *.d
+# ...but not packaged drop-in directories, which end in .d by convention
+# (wireplumber.conf.d, modprobe.d, ...) and are content, not build output.
+!**/*.d/
 
 # Compiled Object files
 *.slo

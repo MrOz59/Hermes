@@ -87,6 +87,15 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   logged instead. A report can now be a copy of the console rather than a guess.
 
 ### Fixed
+- A virtual display created through EVDI now runs at the refresh rate that was
+  asked for. The EDID's detailed timing carried a pixel clock tabulated per
+  resolution, and every entry worked out to 60 Hz, so a request for 1080p120
+  produced an EDID describing a 1080p60 display — the refresh argument was
+  accepted and then ignored for every resolution the table covered. The clock is
+  now derived from the requested rate, which `edid-decode` reads back as the
+  standard 297 MHz / 135 kHz timing for 1080p120. A rate whose clock will not
+  fit the descriptor's 16-bit field (4K above roughly 66 Hz) is clamped and
+  logged rather than silently wrapping to a nonsense mode.
 - Logging in works in Chromium-based browsers again. The config UI listener also
   authenticates Hestia clients by certificate, and OpenSSL requires a session id
   context on any server that does that and also allows resumption — without one,

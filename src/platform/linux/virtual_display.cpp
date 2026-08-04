@@ -2125,61 +2125,48 @@ namespace VDISPLAY {
     // These are approximate values for common resolutions
 
     uint32_t h_blank, v_blank, h_front, h_sync, v_front, v_sync;
-    uint32_t pixel_clock_khz;
 
+    // Blanking only. These are the standard industry timings for each
+    // resolution and do not change with refresh rate — the refresh rate is
+    // carried by the pixel clock, which is derived below.
     if (width == 3840 && height == 2160) {
-      // 4K UHD @ 60Hz
       h_blank = 560;
       v_blank = 90;
       h_front = 176;
       h_sync = 88;
       v_front = 8;
       v_sync = 10;
-      // 4400 * 2250 * 60 = 594 MHz. 533.25 MHz produces ~53.86 Hz,
-      // causing stutter when the stream and display target 60 Hz.
-      pixel_clock_khz = 594000; // 594 MHz
     } else if (width == 2560 && height == 1440) {
-      // 1440p @ 60Hz
       h_blank = 160;
       v_blank = 44;
       h_front = 48;
       h_sync = 32;
       v_front = 3;
       v_sync = 5;
-      pixel_clock_khz = 241500; // 241.5 MHz
     } else if (width == 1920 && height == 1080) {
-      // 1080p @ 60Hz
       h_blank = 280;
       v_blank = 45;
       h_front = 88;
       h_sync = 44;
       v_front = 4;
       v_sync = 5;
-      pixel_clock_khz = 148500; // 148.5 MHz
     } else if (width == 1280 && height == 720) {
-      // 720p @ 60Hz
       h_blank = 370;
       v_blank = 30;
       h_front = 110;
       h_sync = 40;
       v_front = 5;
       v_sync = 5;
-      pixel_clock_khz = 74250; // 74.25 MHz
     } else if (width == 1280 && height == 800) {
-      // Steam Deck native mode, CVT-RB at 60.0003 Hz.
+      // Steam Deck native mode, CVT-RB blanking.
       h_blank = 160;
       v_blank = 23;
       h_front = 48;
       h_sync = 32;
       v_front = 3;
       v_sync = 6;
-      pixel_clock_khz = 71107;
     } else {
-      // Generic calculation for other resolutions
-      // Using simplified CVT formula
-      double h_period = (1000000.0 / refresh_rate - 550) / (height + 3);
-      double h_total = width + (width * 0.15); // ~15% horizontal blanking
-      pixel_clock_khz = static_cast<uint32_t>((h_total / h_period) * 1000);
+      // Approximate CVT blanking for anything else.
       h_blank = static_cast<uint32_t>(width * 0.15);
       v_blank = 45;
       h_front = h_blank / 4;
@@ -2188,11 +2175,34 @@ namespace VDISPLAY {
       v_sync = 5;
     }
 
-    uint32_t h_active = width;
-    uint32_t v_active = height;
+    const uint32_t h_active = width;
+    const uint32_t v_active = height;
+    const uint32_t h_total = h_active + h_blank;
+    const uint32_t v_total = v_active + v_blank;
 
-    // Pixel clock in 10kHz units
-    uint16_t pixel_clock = pixel_clock_khz / 10;
+    // Derive the pixel clock from the requested refresh rate. Every entry above
+    // used to carry its own hardcoded clock, and every one of them worked out to
+    // 60 Hz, so the descriptor advertised a 60 Hz display no matter what the
+    // client asked for — a request for 1080p120 produced a 1080p60 EDID.
+    uint64_t pixel_clock_khz =
+      (static_cast<uint64_t>(h_total) * v_total * std::max<uint32_t>(refresh_rate, 1)) / 1000;
+
+    // The descriptor stores the clock in 16 bits of 10 kHz units, so it cannot
+    // express more than 655.35 MHz — 4K above about 66 Hz does not fit. Clamp to
+    // the highest rate that does, rather than letting the value wrap into a
+    // nonsense mode, and say so: silently getting a different refresh rate than
+    // asked for is exactly the confusion this function used to cause.
+    constexpr uint64_t max_dtd_clock_khz = 655350;
+    if (pixel_clock_khz > max_dtd_clock_khz) {
+      const uint32_t achievable_hz =
+        static_cast<uint32_t>((max_dtd_clock_khz * 1000) / (static_cast<uint64_t>(h_total) * v_total));
+      BOOST_LOG(warning) << "[VDISPLAY] "sv << width << 'x' << height << '@' << refresh_rate
+                         << "Hz needs a pixel clock a detailed timing descriptor cannot hold; "sv
+                         << "advertising "sv << achievable_hz << "Hz instead"sv;
+      pixel_clock_khz = max_dtd_clock_khz;
+    }
+
+    const uint16_t pixel_clock = static_cast<uint16_t>(pixel_clock_khz / 10);
 
     // Detailed Timing Descriptor format (18 bytes)
     dtd[0] = pixel_clock & 0xFF;

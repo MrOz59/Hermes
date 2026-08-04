@@ -55,6 +55,9 @@
   import { createApp } from "vue"
   import ResourceCard from './ResourceCard.vue'
   import { initApp } from './init'
+  import { apiFetch, logPageContext } from './diagnostics'
+
+  logPageContext('welcome')
 
   let app = createApp({
     components: {
@@ -80,13 +83,13 @@
         };
         this.error = null;
         this.loading = true;
-        fetch("./api/password", {
+        apiFetch("./api/password", {
           headers: {
             'Content-Type': 'application/json'
           },
           method: 'POST',
           body: JSON.stringify(this.passwordData),
-        }).then((r) => {
+        }, "create password").then((r) => {
           this.loading = false;
           if (r.status === 200) {
             r.json().then((rj) => {

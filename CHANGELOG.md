@@ -73,6 +73,19 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Apollo and Sunshine. Note that all three still bind ports 47984/47989/47990,
   so only one of them can run at a time ([#14]).
 
+### Added
+- Browser-console diagnostics on the login, create-password and
+  change-password pages. A request that never reaches the host leaves nothing in
+  the Hermes log, because it never arrived, and `fetch` rejects with a bare
+  "Failed to fetch" — so these failures were invisible from every side at once.
+  Each request now logs the URL its relative path resolved to, how long it took
+  before failing (an immediate rejection and a stall have different causes), the
+  page origin and protocol, the browser, and the short list of things the
+  browser refuses to distinguish between: a refused certificate, a reset or
+  refused connection, a dismissed client-certificate prompt, or an extension
+  blocking it. When the host does answer, the status and response body are
+  logged instead. A report can now be a copy of the console rather than a guess.
+
 ### Fixed
 - The create-password and change-password forms no longer freeze silently when a
   request cannot reach the host. Neither had a `catch` on its `fetch`, and the

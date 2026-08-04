@@ -47,6 +47,9 @@
   import { createApp, ref, onMounted } from "vue"
   import { loadAutoTheme } from './theme'
   import { initApp } from './init'
+  import { apiFetch, logPageContext } from './diagnostics'
+
+  logPageContext('login')
 
   let app = createApp({
     setup() {
@@ -91,13 +94,13 @@
         if (!this.savePassword) {
           localStorage.removeItem('login')
         }
-        fetch("./api/login", {
+        apiFetch("./api/login", {
           headers: {
             'Content-Type': 'application/json'
           },
           method: 'POST',
           body: JSON.stringify(this.passwordData),
-        }).then((res) => {
+        }, "login").then((res) => {
           this.loading = false;
           if (res.status === 200) {
             this.success = true;

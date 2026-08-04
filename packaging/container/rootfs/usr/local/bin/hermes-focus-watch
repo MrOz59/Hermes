@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Keep sway's focus on the streamed Virtual-1 output.
+#
+# Hermes unplugs and replugs the per-session "Virtual-1" DRM connector on every
+# app switch. While it is gone sway parks focus on the off-screen HEADLESS-1
+# placeholder; when Virtual-1 comes back sway does NOT move focus back, so the
+# picture streams from Virtual-1 but keyboard/mouse input silently goes to the
+# invisible HEADLESS-1. React to output/workspace events and snap focus back to
+# Virtual-1 whenever it is present and not already focused.
+set -euo pipefail
+
+get_virtual1_focused() {
+    swaymsg -t get_outputs 2>/dev/null | jq -r '.[] | select(.name=="Virtual-1") | .focused' 2>/dev/null || echo "null"
+}
+
+process_event() {
+    local focused
+    focused="$(get_virtual1_focused)"
+    [ "${focused}" = "true" ] && return 0
+    swaymsg 'workspace 1' >/dev/null 2>&1 || true
+}
+
+process_event
+swaymsg -t subscribe -m '["output","workspace"]' 2>/dev/null | while read -r _; do
+    process_event
+done

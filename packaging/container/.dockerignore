@@ -1,0 +1,11 @@
+# Build context hygiene — keep the image build fast and clean.
+.git
+.gitignore
+config/
+*.md
+docker-compose*.yml
+LICENSE
+.dockerignore
+Dockerfile
+*.log
+.tmp*

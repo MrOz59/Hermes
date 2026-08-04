@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Per-session Steam Big Picture launcher, invoked by Hermes as the "cmd" of the
+# "Steam Big Picture" app (see entrypoint.sh / apps.json). Hermes runs this as
+# root when a client starts the app and exports the stream's negotiated geometry
+# in SUNSHINE_CLIENT_WIDTH/HEIGHT/FPS. We size gamescope to exactly that, so the
+# picture is rendered natively (no upscaling) at whatever the Moonlight client
+# asked for. gamescope is a nested Wayland client of the root-owned sway session;
+# it runs as the non-root "steam" user (Steam refuses to run as root). When the
+# client disconnects Hermes terminates this process group, tearing the session
+# down — that's the "relaunch per connection" model (Steam is not kept warm).
+set -euo pipefail
+
+STEAM_LOG=/var/log/steam.log
+if [ -f "${STEAM_LOG}" ]; then
+    log_size="$(wc -c <"${STEAM_LOG}" 2>/dev/null || echo 0)"
+    [ "${log_size}" -gt 5242880 ] && mv -f "${STEAM_LOG}" "${STEAM_LOG}.1" 2>/dev/null || true
+fi
+exec >>"${STEAM_LOG}" 2>&1
+
+log()  { printf '\033[0;36m[hermes-steam]\033[0m %s\n' "$*" >&2; }
+warn() { printf '\033[0;33m[hermes-steam][warn]\033[0m %s\n' "$*" >&2; }
+
+log "=== session start $(date '+%F %T %Z') ==="
+
+command -v steam >/dev/null 2>&1     || { warn "steam not installed"; exit 0; }
+command -v gamescope >/dev/null 2>&1 || { warn "gamescope not installed"; exit 0; }
+id steam >/dev/null 2>&1             || { warn "no 'steam' user"; exit 0; }
+[ "${AUTOSTART_STEAM:-true}" = "true" ] || { log "AUTOSTART_STEAM=false"; exit 0; }
+[ -n "${WAYLAND_DISPLAY:-}" ]        || { warn "no Wayland session"; exit 1; }
+[ -n "${XDG_RUNTIME_DIR:-}" ]        || { warn "XDG_RUNTIME_DIR unset"; exit 1; }
+
+W="${SUNSHINE_CLIENT_WIDTH:-${DISPLAY_WIDTH:-1920}}"
+H="${SUNSHINE_CLIENT_HEIGHT:-${DISPLAY_HEIGHT:-1080}}"
+R="${SUNSHINE_CLIENT_FPS:-${DISPLAY_REFRESH:-60}}"
+log "launching Steam Big Picture at ${W}x${H}@${R}"
+
+runtime="/run/user/$(id -u steam)"
+sockpath="${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}"
+
+install -d -o steam -g steam -m 700 "${runtime}" 2>/dev/null || true
+chmod o+x "${XDG_RUNTIME_DIR}" 2>/dev/null || true
+chmod o+rw "${sockpath}" 2>/dev/null || true
+
+TZ_ENV=()
+[ -n "${TZ:-}" ] && TZ_ENV=(TZ="${TZ}")
+
+exec runuser -u steam -- env \
+    HOME=/config/steam \
+    XDG_RUNTIME_DIR="${runtime}" \
+    WAYLAND_DISPLAY="${sockpath}" \
+    PULSE_SERVER="${PULSE_SERVER:-unix:/run/pipewire/pulse-native}" \
+    XDG_CURRENT_DESKTOP=gamescope \
+    "${TZ_ENV[@]}" \
+    gamescope -W "${W}" -H "${H}" -r "${R}" -f -e -- \
+    bash -c '
+        delay=2; max=60
+        while :; do
+            SECONDS=0
+            steam -gamepadui
+            rc=$?
+            ran=$SECONDS
+            [ "${ran}" -ge 30 ] && delay=2
+            printf "[hermes-steam] Steam exited (rc=%s) after %ss; relaunching in %ss\n" "${rc}" "${ran}" "${delay}"
+            sleep "${delay}"
+            [ "${ran}" -lt 30 ] && { delay=$(( delay * 2 )); [ "${delay}" -gt "${max}" ] && delay="${max}"; }
+        done
+    '

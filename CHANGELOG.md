@@ -36,6 +36,21 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   sessions and verifies that udev assigns both the input parent and event nodes
   to distinct `hermes-kms-1`/`hermes-kms-2` seats.
 
+### Added
+- A runtime container image under `packaging/container`, which runs Hermes on a
+  headless sway session with audio, XWayland and an optional Steam Big Picture
+  session. It is the practical way to run Hermes on an image-based distribution
+  (Bazzite, Silverblue, SteamOS): the userspace lives in the container and only
+  the Hermes-KMS kernel module has to exist on the host. Distinct from the
+  root-level `docker/`, which holds Sunshine's *build* images and produces no
+  runnable host. Adapted from
+  [SOVLOOKUP/hermes-sunshine](https://github.com/SOVLOOKUP/hermes-sunshine),
+  offered for upstreaming by its author in [#6]; the config paths now follow
+  Hermes' own directory (migrating volumes created before that), the Chinese
+  package mirrors default to off, and compose builds locally rather than pulling
+  a published image. It serves one session only, and does not compose with
+  `hermes_kms_multi_output` or `hermes_kms_isolated_sessions` — see its README.
+
 ### Changed
 - Hermes-KMS diagnostics now report UAPI compatibility, driver device/output
   counts, multi-output and multi-device capability, selected output numbers,

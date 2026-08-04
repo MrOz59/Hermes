@@ -1,0 +1,135 @@
+### Hermes streaming Wayland session (sway / wlroots) ###
+#
+# This is a template. The entrypoint substitutes the __PLACEHOLDERS__ (currently
+# only ENABLE_XWAYLAND) and writes the effective config to /run/hermes/sway.config
+# before launching sway.
+#
+# The virtual output is provided by the Hermes-KMS kernel module loaded on the
+# HOST (connector HERMES-1 / Virtual-*). sway drives it via the wlroots DRM
+# backend and Hermes captures the scanout zero-copy from the hermes_kms render
+# node. When the module/device is absent the entrypoint falls back to the
+# wlroots headless backend (software output). The output name therefore varies,
+# so the resolution is applied at runtime by the entrypoint via swaymsg rather
+# than hardcoded here.
+
+# Usable-desktop defaults: thin borders so windows are distinguishable, hide the
+# idle cursor. gamescope/Steam override the border to none and go fullscreen via
+# a for_window rule (see the entrypoint), so the streamed game is unaffected.
+default_border pixel 2
+default_floating_border pixel 2
+seat * hide_cursor 0
+focus_follows_mouse no
+font pango:monospace 10
+
+# --- output layout ----------------------------------------------------------
+# Moonlight captures the Hermes-KMS "Virtual-1" connector, which is hotplugged
+# per stream. In the drm,headless multi-backend the placeholder "HEADLESS-1"
+# comes up first and would otherwise own workspace 1 and the focus, leaving the
+# streamed Virtual-1 on an empty secondary workspace — a black screen. Pin the
+# primary workspace to Virtual-1 (falling back to the placeholder only when it
+# is absent) and park the placeholder as a 1x1 pixel at the bottom-right corner
+# of Virtual-1 so new windows and the cursor land on the output that is actually
+# streamed. The solid background makes an idle desktop show a visible colour
+# instead of pure black.
+#
+# HEADLESS-1 is parked as a 1x1 pixel far from Virtual-1 so it doesn't overlap
+# the streamed output. hermes-focus-watch snaps focus back to Virtual-1 when it
+# reappears after a replug.
+output "Virtual-1" position 0 0
+output "HEADLESS-1" position 999999 0 resolution 1x1
+workspace 1 output "Virtual-1" "HEADLESS-1"
+output * bg #202020 solid_color
+
+# --- absolute input mapping -------------------------------------------------
+# Touch and pen input Moonlight injects carry coordinates normalised to the
+# streamed output. By default sway spreads absolute input across the whole
+# output layout, which here includes the off-screen HEADLESS-1 placeholder
+# far to the right — so taps land in dead space instead of on the picture. Pin the
+# absolute-only devices (touch, tablet/pen) to the captured Virtual-1 output so
+# their coordinates map 1:1 onto what the client sees. Do NOT map type:pointer:
+# that wildcard also catches the relative mouse and breaks cursor rendering. On
+# the headless fallback path Virtual-1 is absent; sway then leaves these on the
+# single real output (which already spans the whole layout), so touch still
+# works there.
+input type:touch map_to_output Virtual-1
+input type:tablet_tool map_to_output Virtual-1
+
+# Hermes replugs Virtual-1 on every app switch; while it is gone sway parks
+# focus on the off-screen HEADLESS-1 placeholder and never moves it back, so the
+# next app streams video from Virtual-1 but keyboard/mouse input goes off-screen.
+# This watcher snaps focus back to Virtual-1 whenever it reappears.
+exec_always /usr/local/bin/hermes-focus-watch
+
+# Export the session environment to the user D-Bus + systemd (best effort).
+exec_always dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE 2>/dev/null || true
+
+# X11 application support. Toggled by ENABLE_XWAYLAND (enable/disable).
+__XWAYLAND__
+
+# --- desktop keybindings ----------------------------------------------------
+# A minimal but usable desktop for when the plain Wayland session (not Steam) is
+# streamed. Super is the modifier; foot is the terminal and wofi the app menu
+# (both installed in the image). These stay out of Steam's way: gamescope runs
+# fullscreen and grabs the input it needs.
+set $mod Mod4
+set $term foot
+set $menu wofi --show drun
+
+floating_modifier $mod normal
+
+bindsym $mod+Return exec $term
+bindsym $mod+d exec $menu
+
+# Super-free fallbacks. Moonlight clients (especially on Windows) usually let
+# the local OS swallow the Super/Meta key, so it never reaches sway and every
+# $mod shortcut above looks dead over the stream. Ctrl+Alt combos always
+# forward, so bind the terminal and launcher to them too, and auto-open a
+# terminal at startup so the streamed desktop is usable even before any
+# shortcut is pressed.
+bindsym Control+Alt+t exec $term
+bindsym Control+Alt+d exec $menu
+exec $term
+
+bindsym $mod+Shift+q kill
+bindsym $mod+Shift+c reload
+bindsym $mod+f fullscreen
+bindsym $mod+Shift+space floating toggle
+bindsym $mod+b splith
+bindsym $mod+v splitv
+
+# focus / move with the arrow keys
+bindsym $mod+Left focus left
+bindsym $mod+Down focus down
+bindsym $mod+Up focus up
+bindsym $mod+Right focus right
+bindsym $mod+Shift+Left move left
+bindsym $mod+Shift+Down move down
+bindsym $mod+Shift+Up move up
+bindsym $mod+Shift+Right move right
+
+# workspaces 1-5
+bindsym $mod+1 workspace number 1
+bindsym $mod+2 workspace number 2
+bindsym $mod+3 workspace number 3
+bindsym $mod+4 workspace number 4
+bindsym $mod+5 workspace number 5
+bindsym $mod+Shift+1 move container to workspace number 1
+bindsym $mod+Shift+2 move container to workspace number 2
+bindsym $mod+Shift+3 move container to workspace number 3
+bindsym $mod+Shift+4 move container to workspace number 4
+bindsym $mod+Shift+5 move container to workspace number 5
+
+# --- status bar -------------------------------------------------------------
+# swaybar (bundled with sway) with a lightweight clock; no extra package needed.
+# Fullscreen windows (gamescope/Steam) hide it automatically.
+bar {
+    position top
+    status_command while date +'%Y-%m-%d  %H:%M:%S'; do sleep 1; done
+    colors {
+        statusline #ffffff
+        background #1a1a1aee
+    }
+}
+
+# User overrides: drop *.conf snippets into ./config/sway.d/ on the host.
+include /config/sway.d/*

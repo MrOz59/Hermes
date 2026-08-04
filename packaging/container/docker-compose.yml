@@ -1,0 +1,122 @@
+services:
+  sunshine:
+    # No image is published for this yet, so build it locally first:
+    #   docker compose -f packaging/container/docker-compose.yml build
+    # It boots straight into Steam Big Picture as a per-session app (see README).
+    image: hermes-container:latest
+    build:
+      context: .
+      dockerfile: Containerfile
+      args:
+        HERMES_REF: latest      # or a specific tag, e.g. v0.5.0
+        USE_CN_MIRROR: "false"  # "true" for the USTC/Tsinghua mirrors
+
+    container_name: sunshine
+    restart: unless-stopped
+
+    # Run tini as PID 1 (docker's built-in init). The entrypoint execs into
+    # hermes, which then inherits every backgrounded daemon (dbus, seatd, udevd,
+    # PipeWire, sway, the watchdogs) plus the many short-lived per-session
+    # Steam/gamescope children that get reparented to PID 1. tini reaps those
+    # zombies and forwards signals so the container stops cleanly.
+    init: true
+
+    # Host networking = the most reliable client auto-discovery. Requires a Linux
+    # Docker engine. On Docker Desktop, comment this out and use "ports:" below.
+    network_mode: host
+
+    # REQUIRED for Steam Big Picture. Steam's pressure-vessel sandbox relies on
+    # the host SysV IPC / shared-memory namespace; without ipc:host the streamed
+    # session never launches Steam (you only get the fallback terminal).
+    ipc: host
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      # Steam's sandbox (pressure-vessel / bubblewrap) creates a nested mount
+      # namespace and does `mount --make-rslave /` inside it. That recursive
+      # remount also touches the read-only / masked system paths runc locks into
+      # a default container (/proc/kcore, /sys/firmware, …), which can't be
+      # re-propagated even with SYS_ADMIN — bwrap dies with "Failed to make /
+      # slave: Permission denied" (rc=71). systempaths=unconfined drops those
+      # locked mounts so the recursive rslave succeeds.
+      - systempaths=unconfined
+      # On hosts where AppArmor is loaded (Ubuntu/Debian), its default docker
+      # profile also denies those same mount() calls. Unconfining is a no-op
+      # where AppArmor isn't loaded (e.g. Arch/CachyOS). (User namespaces must
+      # also be enabled on the host — the norm on modern kernels; see README.)
+      - apparmor=unconfined
+
+    # Narrow device access: grant only the fixed char-device majors this image
+    # actually needs, instead of every char device. This stops a compromised
+    # game/Steam from reaching unrelated host char devices (mem, tty, snd, ...).
+    #   226 = DRM   (GPU render node + the Hermes-KMS virtual card)
+    #    13 = input (evdev for the virtual gamepad Hermes builds via uinput/uhid;
+    #                this major also covers host input devices — unavoidable for
+    #                gamepad passthrough)
+    #    10 = misc  (/dev/uinput + /dev/uhid, used to synthesise the pads)
+    # Trade-off: /dev/hidraw* is intentionally NOT granted — its char major is
+    # allocated dynamically, so it can't be whitelisted here. Basic controllers
+    # (buttons / sticks / gyro / touchpad / basic rumble via uinput+uhid+evdev)
+    # still work; the hidraw-backed extras (DualSense adaptive triggers / LED /
+    # HD rumble, Switch Pro) are given up in exchange for a much smaller surface.
+    #
+    # We deliberately do NOT bind-mount the host's /run/udev: the entrypoint runs
+    # its own udevd (it relays the Hermes-KMS DRM hotplug to sway) which needs a
+    # writable /run/udev, and that same in-container udevd labels the input nodes
+    # as they appear at stream time, so libudev enumeration works without the
+    # host database.
+    device_cgroup_rules:
+      - 'c 226:* rmw' # DRM (GPU + Hermes-KMS card)
+      - 'c 13:* rmw' # input (virtual gamepad evdev)
+      - 'c 10:* rmw' # misc (uinput + uhid)
+
+    # The GPU/KMS card plus the uinput/uhid nodes Hermes writes to.
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/uinput:/dev/uinput
+      - /dev/uhid:/dev/uhid
+
+    volumes:
+      - ./config:/config
+      # Share only the input subtree (not all of /dev) so the evdev nodes Hermes
+      # hotplugs for the virtual gamepad appear live in the container.
+      - /dev/input:/dev/input
+    # ---- Advanced (optional) ------------------------------------------------
+    # Everything below is optional; the image ships sensible defaults.
+
+    # Override any of the defaults here. Uncomment the whole block to use it.
+    # environment:
+    #   TZ: Asia/Shanghai        # set your timezone (required for correct Steam time)
+    #   HERMES_KMS: auto         # virtual display: auto | on | off
+    #   DISPLAY_WIDTH: "1920"
+    #   DISPLAY_HEIGHT: "1080"
+    #   DISPLAY_REFRESH: "60"
+    #   START_COMPOSITOR: "true" # Wayland (sway) session
+    #   START_PIPEWIRE: "true"   # PipeWire audio (+ virtual sink)
+    #   START_AVAHI: "true"
+    #   ENABLE_XWAYLAND: "true"  # X11 app compatibility
+    #   AUTOSTART_STEAM: "true"  # register Steam Big Picture app (false = stream the desktop)
+
+    # Explicit port mappings — use these ONLY when you cannot use host
+    # networking (e.g. Docker Desktop). Comment out "network_mode: host" first.
+    # ports:
+    #   - "47984-47990:47984-47990/tcp"
+    #   - "48010:48010/tcp"
+    #   - "47998-48000:47998-48000/udp"
+
+    # NVIDIA GPUs — install the NVIDIA Container Toolkit on the host, then
+    # uncomment. Merge NVIDIA_* into the "environment:" block above (a service
+    # may only have one "environment:" key).
+    # runtime: nvidia
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    # environment:
+    #   NVIDIA_VISIBLE_DEVICES: all
+    #   NVIDIA_DRIVER_CAPABILITIES: all
+

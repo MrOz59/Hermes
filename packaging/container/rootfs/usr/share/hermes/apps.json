@@ -1,0 +1,18 @@
+{
+  "env": {
+    "PATH": "$(PATH):$(HOME)/.local/bin"
+  },
+  "apps": [
+    {
+      "name": "Desktop",
+      "image-path": "desktop.png",
+      "allow-client-commands": false
+    },
+    {
+      "name": "Steam Big Picture",
+      "image-path": "steam.png",
+      "allow-client-commands": false,
+      "cmd": "/usr/local/bin/hermes-steam-session"
+    }
+  ]
+}

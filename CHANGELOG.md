@@ -35,8 +35,6 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 - A disposable VM input-isolation test creates real uinput devices for two
   sessions and verifies that udev assigns both the input parent and event nodes
   to distinct `hermes-kms-1`/`hermes-kms-2` seats.
-
-### Added
 - A runtime container image under `packaging/container`, which runs Hermes on a
   headless sway session with audio, XWayland and an optional Steam Big Picture
   session. It is the practical way to run Hermes on an image-based distribution
@@ -50,6 +48,17 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   package mirrors default to off, and compose builds locally rather than pulling
   a published image. It serves one session only, and does not compose with
   `hermes_kms_multi_output` or `hermes_kms_isolated_sessions` — see its README.
+- Browser-console diagnostics on the login, create-password and
+  change-password pages. A request that never reaches the host leaves nothing in
+  the Hermes log, because it never arrived, and `fetch` rejects with a bare
+  "Failed to fetch" — so these failures were invisible from every side at once.
+  Each request now logs the URL its relative path resolved to, how long it took
+  before failing (an immediate rejection and a stall have different causes), the
+  page origin and protocol, the browser, and the short list of things the
+  browser refuses to distinguish between: a refused certificate, a reset or
+  refused connection, a dismissed client-certificate prompt, or an extension
+  blocking it. When the host does answer, the status and response body are
+  logged instead. A report can now be a copy of the console rather than a guess.
 
 ### Changed
 - Hermes-KMS diagnostics now report UAPI compatibility, driver device/output
@@ -72,19 +81,6 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   installs carry over untouched; the original directory is left in place for
   Apollo and Sunshine. Note that all three still bind ports 47984/47989/47990,
   so only one of them can run at a time ([#14]).
-
-### Added
-- Browser-console diagnostics on the login, create-password and
-  change-password pages. A request that never reaches the host leaves nothing in
-  the Hermes log, because it never arrived, and `fetch` rejects with a bare
-  "Failed to fetch" — so these failures were invisible from every side at once.
-  Each request now logs the URL its relative path resolved to, how long it took
-  before failing (an immediate rejection and a stall have different causes), the
-  page origin and protocol, the browser, and the short list of things the
-  browser refuses to distinguish between: a refused certificate, a reset or
-  refused connection, a dismissed client-certificate prompt, or an extension
-  blocking it. When the host does answer, the status and response body are
-  logged instead. A report can now be a copy of the console rather than a guess.
 
 ### Fixed
 - A virtual display created through EVDI now runs at the refresh rate that was

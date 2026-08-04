@@ -74,6 +74,12 @@ post_upgrade() {
     echo ""
     echo "==> Hermes atualizado com sucesso!"
     echo ""
+    echo "==> A configuração do Hermes agora fica em ~/.config/hermes"
+    echo "==> (hermes.conf e hermes_state.json), e não mais em ~/.config/sunshine,"
+    echo "==> que era compartilhado com o Apollo e o Sunshine. Na primeira"
+    echo "==> inicialização o Hermes copia a configuração antiga para o novo"
+    echo "==> diretório; o diretório original permanece para os outros hosts."
+    echo ""
 }
 
 pre_remove() {

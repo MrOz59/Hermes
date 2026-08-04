@@ -249,8 +249,14 @@ with the `apollo` (AUR) and `sunshine` packages**. Start it with:
 
 When migrating from an older package named `hermes`, pacman will ask to remove
 that conflicting package as part of the transaction; accept the removal. User
-configuration is not package-owned and remains in place. Do not install the
+configuration is not package-owned and remains in place — which also means
+uninstalling Hermes does not clear your Web UI password. Do not install the
 unrelated `hermes` package offered by AUR helpers.
+
+Installed side by side means installed, not running side by side: Hermes,
+Apollo, and Sunshine all bind ports 47984/47989/47990, so start only one of
+them at a time. Whichever starts second fails to bind and exits, which shows up
+in the browser as `Failed to fetch` on the login page.
 
 ```bash
 systemctl --user enable --now hermes
@@ -261,6 +267,14 @@ protocol extensions, so existing Artemis/Hestia clients keep working.
 
 ## Notes
 
+- **Configuration location.** Hermes stores everything in `~/.config/hermes`
+  (or `$XDG_CONFIG_HOME/hermes`): `hermes.conf`, `hermes_state.json` (Web UI
+  credentials and paired clients), `apps.json`, and `hermes.log`. Releases
+  before this one used `~/.config/sunshine`, shared with Apollo and Sunshine; on
+  first start Hermes copies that directory across and leaves the original in
+  place for them. To reset a forgotten Web UI password, stop the service and run
+  `hermes --creds <username> <password>` — this keeps your paired clients,
+  whereas deleting `hermes_state.json` unpairs them.
 - **Address family / web UI reachability.** The server binds dual-stack by
   default (`address_family = both`). On distros where `localhost` resolves to
   IPv6 (`::1`) first, an IPv4-only bind makes the web UI fail intermittently

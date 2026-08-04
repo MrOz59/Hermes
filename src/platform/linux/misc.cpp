@@ -14,6 +14,8 @@
 #include <cstdio>
 #include <cerrno>
 #include <csignal>
+#include <string_view>
+#include <utility>
 
 // platform includes
 #include <arpa/inet.h>
@@ -116,6 +118,84 @@ namespace platf {
     return ifaddr_t {p};
   }
 
+  namespace {
+    // Hermes used to store its configuration in ~/.config/sunshine, the very directory
+    // Apollo and Sunshine use. All three then shared one credentials file, one apps list
+    // and one paired-client list, so installing Hermes next to either of them silently
+    // took over their setup — and made a reinstall look like it had kept the old
+    // password. Hermes now keeps its own directory.
+    constexpr auto CONFIG_DIR_NAME = "hermes"sv;
+    constexpr auto SHARED_CONFIG_DIR_NAME = "sunshine"sv;
+
+    // Files that are renamed along with the directory. Keep in sync with the defaults in
+    // src/config.cpp.
+    constexpr std::pair<std::string_view, std::string_view> RENAMED_CONFIG_FILES[] {
+      {"sunshine.conf"sv, "hermes.conf"sv},
+      {"sunshine_state.json"sv, "hermes_state.json"sv},
+    };
+
+    /**
+     * @brief Give any Sunshine-named file in the Hermes config directory its Hermes name.
+     * @details Idempotent, so it also fixes up a directory that was copied over by hand.
+     *          This runs before Boost logging exists, so it cannot log through it.
+     * @param config_path The Hermes config directory.
+     */
+    void rename_shared_config_files(const fs::path &config_path) {
+      for (const auto &[shared_name, name] : RENAMED_CONFIG_FILES) {
+        std::error_code ec;
+        const fs::path shared_file = config_path / shared_name;
+        const fs::path file = config_path / name;
+        if (fs::exists(shared_file, ec) && !fs::exists(file, ec)) {
+          fs::rename(shared_file, file, ec);
+          if (ec) {
+            std::cerr << "Failed to rename "sv << shared_file << " to "sv << file << ": "sv << ec.message() << std::endl;
+          }
+        }
+      }
+    }
+
+    /**
+     * @brief Seed a first-run Hermes config directory from the shared Sunshine one.
+     * @details The source is copied, never moved: Apollo or Sunshine may still be running
+     *          from it. Existing Hermes installs therefore carry their apps, paired
+     *          clients and credentials across without disturbing their neighbours.
+     * @param config_path The Hermes config directory.
+     * @param shared_path The Sunshine config directory to seed from.
+     */
+    void seed_from_shared_config(const fs::path &config_path, const fs::path &shared_path) {
+      std::error_code ec;
+      if (!fs::is_directory(shared_path, ec)) {
+        return;
+      }
+      // An empty directory still counts as a first run. The AppImage's AppRun pre-creates
+      // the config directory before launching, and users creating it by hand is common
+      // enough that treating it as "already migrated" would silently skip the seeding.
+      if (fs::is_directory(config_path, ec) && !fs::is_empty(config_path, ec)) {
+        return;
+      }
+
+      std::cout << "Seeding "sv << config_path << " from "sv << shared_path << std::endl;
+      fs::create_directories(config_path, ec);
+      if (!ec) {
+        fs::copy(shared_path, config_path, fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
+      }
+      if (ec) {
+        std::cerr << "Could not seed the Hermes config directory: "sv << ec.message() << std::endl;
+        std::cerr << "Hermes will start with a fresh configuration in "sv << config_path << std::endl;
+        return;
+      }
+
+      // Logs are the one thing not worth inheriting: a log that starts mid-way through
+      // another host's session is actively misleading when diagnosing Hermes.
+      for (const auto &name : {"sunshine.log"sv, "sunshine.log.backup"sv}) {
+        fs::remove(config_path / name, ec);
+      }
+      ec.clear();
+
+      std::cout << shared_path << " was left untouched; Apollo and Sunshine keep using it."sv << std::endl;
+    }
+  }  // namespace
+
   /**
    * @brief Performs migration if necessary, then returns the appdata directory.
    * @details This is used for the log directory, so it cannot invoke Boost logging!
@@ -142,25 +222,25 @@ namespace platf {
       // May be set if running under a systemd service with the ConfigurationDirectory= option set.
       if ((dir = getenv("CONFIGURATION_DIRECTORY")) != nullptr && strlen(dir) > 0) {
         found = true;
-        config_path = fs::path(dir) / "sunshine"sv;
+        config_path = fs::path(dir) / CONFIG_DIR_NAME;
       }
       // Otherwise, follow the XDG base directory specification:
       // https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
       if (!found && (dir = getenv("XDG_CONFIG_HOME")) != nullptr && strlen(dir) > 0) {
         found = true;
-        config_path = fs::path(dir) / "sunshine"sv;
+        config_path = fs::path(dir) / CONFIG_DIR_NAME;
       }
       // As a last resort, use the home directory
       if (!found) {
         migrate_config = false;
-        config_path = fs::path(homedir) / ".config/sunshine"sv;
+        config_path = fs::path(homedir) / ".config" / CONFIG_DIR_NAME;
       }
 
       // migrate from the old config location if necessary
       migrate_envvar = getenv("SUNSHINE_MIGRATE_CONFIG");
       if (migrate_config && found && migrate_envvar && strcmp(migrate_envvar, "1") == 0) {
         std::error_code ec;
-        fs::path old_config_path = fs::path(homedir) / ".config/sunshine"sv;
+        fs::path old_config_path = fs::path(homedir) / ".config" / CONFIG_DIR_NAME;
         if (old_config_path != config_path && fs::exists(old_config_path, ec)) {
           if (!fs::exists(config_path, ec)) {
             std::cout << "Migrating config from "sv << old_config_path << " to "sv << config_path << std::endl;
@@ -194,6 +274,10 @@ namespace platf {
           }
         }
       }
+
+      // Carry an install that predates the rename over from the shared Sunshine directory.
+      seed_from_shared_config(config_path, config_path.parent_path() / SHARED_CONFIG_DIR_NAME);
+      rename_shared_config_files(config_path);
     });
 
     return config_path;

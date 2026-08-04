@@ -551,7 +551,7 @@ namespace config {
     CERTIFICATE_FILE,
 
     platf::get_host_name(),  // sunshine_name,
-    "sunshine_state.json"s,  // file_state
+    "hermes_state.json"s,  // file_state
     {},  // external_ip
   };
 
@@ -597,7 +597,7 @@ namespace config {
     {},  // Username
     {},  // Password
     {},  // Password Salt
-    platf::appdata().string() + "/sunshine.conf",  // config file
+    platf::appdata().string() + "/hermes.conf",  // config file
     {},  // cmd args
     47989,  // Base port number
     // Default to dual-stack. On modern distros `localhost` often resolves to
@@ -606,7 +606,7 @@ namespace config {
     // nothing is listening on, before falling back to 127.0.0.1). "both" binds
     // "::" dual-stack so localhost works regardless of how it resolves.
     "both",  // Address family
-    platf::appdata().string() + "/sunshine.log",  // log file
+    platf::appdata().string() + "/hermes.log",  // log file
     false,  // notify_pre_releases
     false,  // legacy_ordering
     true,  // system_tray

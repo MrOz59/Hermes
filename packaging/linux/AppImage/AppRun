@@ -92,7 +92,7 @@ fi
 
 # create config directory if it doesn't exist
 # https://github.com/LizardByte/Sunshine/issues/324
-mkdir -p ~/.config/sunshine
+mkdir -p ~/.config/hermes
 
 # run sunshine
 "$SUNSHINE_BIN_HERE" $@

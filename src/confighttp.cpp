@@ -80,6 +80,18 @@ namespace confighttp {
       context.set_verify_callback([](int, boost::asio::ssl::verify_context &) {
         return true;
       });
+
+      // This listener serves both the Hestia API, which identifies callers by their paired
+      // certificate, and the config UI, which browsers load. Advertising no acceptable CAs
+      // means "any certificate will do", so a browser holding any client certificate at all
+      // opens a selection dialog on the config UI — and dismissing it aborts the connection,
+      // which surfaces as "Failed to fetch" on the login page. Advertising our own
+      // certificate instead gives browsers something to filter their store against; nothing
+      // matches, so they send an empty certificate without prompting. Paired Hestia clients
+      // present their certificate regardless of what is advertised.
+      if (X509 *certificate = SSL_CTX_get0_certificate(context.native_handle())) {
+        SSL_CTX_add_client_CA(context.native_handle(), certificate);
+      }
     }
 
     void accept() override {
@@ -2799,6 +2811,7 @@ fi')CLIP";
         if (shutdown_event->peek())
           return;
         BOOST_LOG(fatal) << "Couldn't start Configuration HTTPS server on port ["sv << port_https << "]: "sv << err.what();
+        BOOST_LOG(fatal) << "Another host is most likely already bound to it. Hermes, Apollo and Sunshine all use this port, so only one of them can run at a time."sv;
         shutdown_event->raise(true);
         return;
       }

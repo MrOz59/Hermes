@@ -26,8 +26,8 @@ location by modifying the configuration file.
 | OS      | Location                                        |
 |---------|-------------------------------------------------|
 | Docker  | @code{}/config@endcode                          |
-| Linux   | @code{}~/.config/sunshine@endcode               |
-| macOS   | @code{}~/.config/sunshine@endcode               |
+| Linux   | @code{}~/.config/hermes@endcode               |
+| macOS   | @code{}~/.config/hermes@endcode               |
 | Windows | @code{}%ProgramFiles%\\Sunshine\\config@endcode |
 
 Although it is recommended to use the configuration UI, it is possible manually configure Sunshine by
@@ -2147,13 +2147,13 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            sunshine_state.json
+            hermes_state.json
             @endcode</td>
     </tr>
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            credentials_file = sunshine_state.json
+            credentials_file = hermes_state.json
             @endcode</td>
     </tr>
 </table>
@@ -2170,13 +2170,13 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            sunshine.log
+            hermes.log
             @endcode</td>
     </tr>
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            log_path = sunshine.log
+            log_path = hermes.log
             @endcode</td>
     </tr>
 </table>
@@ -2243,13 +2243,13 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            sunshine_state.json
+            hermes_state.json
             @endcode</td>
     </tr>
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            file_state = sunshine_state.json
+            file_state = hermes_state.json
             @endcode</td>
     </tr>
 </table>

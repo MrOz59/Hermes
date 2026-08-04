@@ -92,7 +92,9 @@ namespace platf {
       homedir = getpwuid(geteuid())->pw_dir;
     }
 
-    return fs::path {homedir} / ".config/sunshine"sv;
+    // Kept in step with the Linux path: Hermes owns its config directory rather than
+    // sharing ~/.config/sunshine with Apollo and Sunshine.
+    return fs::path {homedir} / ".config/hermes"sv;
   }
 
   using ifaddr_t = util::safe_ptr<ifaddrs, freeifaddrs>;

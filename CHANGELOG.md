@@ -47,8 +47,30 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 - Remote Input is rejected while independent sessions are enabled instead of
   falling through to the shared host input devices without an unambiguous
   target seat.
+- Hermes keeps its configuration in its own directory. On Linux and macOS it is
+  now `~/.config/hermes` (or `$XDG_CONFIG_HOME/hermes`), holding `hermes.conf`
+  and `hermes_state.json` instead of `sunshine.conf` and `sunshine_state.json`.
+  Hermes previously used `~/.config/sunshine`, the same directory Apollo and
+  Sunshine use, so all three shared one credentials file, one apps list, and one
+  set of paired clients. On first start Hermes copies an existing
+  `~/.config/sunshine` into the new location and renames those two files, so
+  installs carry over untouched; the original directory is left in place for
+  Apollo and Sunshine. Note that all three still bind ports 47984/47989/47990,
+  so only one of them can run at a time ([#14]).
 
 ### Fixed
+- The config UI no longer makes browsers prompt for a client certificate. Its
+  listener also serves the Hestia API, so it requests a client certificate on
+  every connection while advertising no acceptable CAs — which a browser reads
+  as "any certificate will do" and answers with a selection dialog. Dismissing
+  that dialog aborts the connection and the login page reports
+  `Failed to fetch`. Hermes now advertises its own certificate as the only
+  acceptable CA, so browsers find no match and send an empty certificate
+  silently. Paired Hestia clients present their certificate regardless of what
+  is advertised, so API authentication is unchanged ([#14]).
+- A failed port bind now says that another host is probably already using the
+  port, instead of only reporting the error. The nvhttp message also printed the
+  HTTPS port twice rather than the HTTP and HTTPS pair it claimed to list.
 - KDE exclusive mode now blanks every physical monitor instead of only the
   primary one. On a multi-monitor desktop the secondary screens stayed lit and
   kept showing the local session while streaming. Crash-recovery state records
@@ -103,6 +125,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#9]: https://github.com/MrOz59/Hermes/issues/9
 [#10]: https://github.com/MrOz59/Hermes/issues/10
 [#12]: https://github.com/MrOz59/Hermes/issues/12
+[#14]: https://github.com/MrOz59/Hermes/issues/14
 
 ## [0.4.0] - 2026-07-02
 

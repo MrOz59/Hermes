@@ -132,7 +132,7 @@ class @PROJECT_NAME@ < Formula
   end
 
   service do
-    run [opt_bin/"sunshine", "~/.config/sunshine/sunshine.conf"]
+    run [opt_bin/"sunshine", "~/.config/hermes/hermes.conf"]
   end
 
   def post_install

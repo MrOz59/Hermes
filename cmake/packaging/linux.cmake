@@ -49,6 +49,10 @@ set(CPACK_RPM_USER_FILELIST "%caps(cap_sys_admin+p) ${SUNSHINE_EXECUTABLE_PATH}"
 
 # Dependencies
 set(CPACK_DEB_COMPONENT_INSTALL ON)
+# CPACK_DEBIAN_PACKAGE_SHLIBDEPS is off below, so nothing derives these from the
+# binary — every library the executable links has to be listed by hand. Keep this
+# in sync with `objdump -p <binary> | grep NEEDED`, and with the Requires block in
+# packaging/linux/fedora/Sunshine.spec.
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "\
             ${CPACK_DEB_PLATFORM_PACKAGE_DEPENDS} \
             debianutils, \
@@ -57,13 +61,22 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "\
             libdrm2, \
             libgbm1, \
             libevdev2, \
+            libglx0, \
+            libice6, \
             libnuma1, \
+            libopengl0, \
             libopus0, \
             libpulse0, \
+            libsm6, \
             libva2, \
             libva-drm2, \
+            libva-x11-2, \
             libwayland-client0, \
+            libwayland-cursor0, \
+            libwayland-egl1, \
+            libwayland-server0, \
             libx11-6, \
+            libxext6, \
             miniupnpc, \
             openssl | libssl3")
 set(CPACK_RPM_PACKAGE_REQUIRES "\
@@ -72,14 +85,22 @@ set(CPACK_RPM_PACKAGE_REQUIRES "\
             libcurl >= 7.0, \
             libdrm >= 2.4.97, \
             libevdev >= 1.5.6, \
-            libopusenc >= 0.2.1, \
+            libglvnd-glx, \
+            libglvnd-opengl, \
+            libICE, \
+            libSM, \
             libva >= 2.14.0, \
             libwayland-client >= 1.20.0, \
+            libwayland-cursor >= 1.20.0, \
+            libwayland-egl >= 1.20.0, \
+            libwayland-server >= 1.20.0, \
             libX11 >= 1.7.3.1, \
+            libXext, \
             mesa-libgbm >= 25.0.7, \
             miniupnpc >= 2.2.4, \
             numactl-libs >= 2.0.14, \
             openssl >= 3.0.2, \
+            opus >= 1.3, \
             pulseaudio-libs >= 10.0, \
             which >= 2.21")
 

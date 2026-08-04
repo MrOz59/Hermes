@@ -74,6 +74,15 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   so only one of them can run at a time ([#14]).
 
 ### Fixed
+- The `.deb` and `.rpm` packages now declare every library the executable links
+  against. `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is off, so nothing derives these
+  from the binary and the hand-written lists had drifted: both were missing
+  libglvnd (GLX/OpenGL), libICE, libSM, libXext and the wayland cursor, egl and
+  server libraries, and the `.deb` was also missing `libva-x11`. Some were
+  pulled in transitively by Qt, which is why this did not always fail, but on a
+  minimal install it produced a package that could not start. The `.rpm` also
+  required `libopusenc`, which Hermes does not link, while missing `opus`, which
+  it does. Package names were verified against Debian trixie and Fedora 41.
 - A missing Web UI asset is now an error instead of a blank page. The page
   handlers wrote whatever `read_file()` returned, and that is an empty string
   when the file is absent — which it reports only at debug level — so a build or

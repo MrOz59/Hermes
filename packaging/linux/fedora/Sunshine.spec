@@ -72,17 +72,28 @@ BuildRequires: gcc14-c++
 
 %global cuda_dir %{_builddir}/cuda
 
+# One entry per library the executable links against. Keep in sync with
+# `objdump -p <binary> | grep NEEDED` and with cmake/packaging/linux.cmake.
 Requires: libcap >= 2.22
 Requires: libcurl >= 7.0
 Requires: libdrm > 2.4.97
 Requires: libevdev >= 1.5.6
-Requires: libopusenc >= 0.2.1
+Requires: libglvnd-glx
+Requires: libglvnd-opengl
+Requires: libICE
+Requires: libSM
 Requires: libva >= 2.14.0
 Requires: libwayland-client >= 1.20.0
+Requires: libwayland-cursor >= 1.20.0
+Requires: libwayland-egl >= 1.20.0
+Requires: libwayland-server >= 1.20.0
 Requires: libX11 >= 1.7.3.1
+Requires: libXext
+Requires: mesa-libgbm
 Requires: miniupnpc >= 2.2.4
 Requires: numactl-libs >= 2.0.14
 Requires: openssl >= 3.0.2
+Requires: opus >= 1.3
 Requires: pulseaudio-libs >= 10.0
 Requires: qt6-qtbase
 Requires: qt6-qtsvg

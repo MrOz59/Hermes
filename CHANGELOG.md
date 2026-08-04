@@ -87,6 +87,17 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   logged instead. A report can now be a copy of the console rather than a guess.
 
 ### Fixed
+- Logging in works in Chromium-based browsers again. The config UI listener also
+  authenticates Hestia clients by certificate, and OpenSSL requires a session id
+  context on any server that does that and also allows resumption — without one,
+  resuming a session is a fatal error rather than a fallback to a full
+  handshake. The first request of a page load negotiated a fresh session and
+  succeeded, so the page rendered; the next one tried to resume and had its
+  connection killed. Brave and Chrome reported `ERR_SSL_PROTOCOL_ERROR` and
+  `fetch()` a bare "Failed to fetch", while Firefox was unaffected — which made
+  this look like a browser quirk rather than a server bug — and it is why only
+  requests issued after the page had loaded ever broke. This was the root cause
+  behind the login failures in [#14].
 - The create-password and change-password forms no longer freeze silently when a
   request cannot reach the host. Neither had a `catch` on its `fetch`, and the
   welcome form cleared its loading flag only on the reply path, so a request that

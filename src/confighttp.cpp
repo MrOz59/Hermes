@@ -92,6 +92,23 @@ namespace confighttp {
       if (X509 *certificate = SSL_CTX_get0_certificate(context.native_handle())) {
         SSL_CTX_add_client_CA(context.native_handle(), certificate);
       }
+
+      // OpenSSL requires a session id context on any server that authenticates
+      // clients and also allows resumption. Without one, resuming a session is a
+      // fatal error — "session id context uninitialized" — instead of falling
+      // back to a full handshake, and the connection dies mid-request.
+      //
+      // The first request of a page load negotiates a fresh session and works,
+      // so the page renders. The next request tries to resume and is killed,
+      // which Chromium reports as ERR_SSL_PROTOCOL_ERROR and fetch() as a bare
+      // "Failed to fetch". That is why logging in worked in Firefox but not in
+      // Brave, and why only requests made after the page had loaded ever broke.
+      static const unsigned char session_id_context[] = "hermes-confighttp";
+      SSL_CTX_set_session_id_context(
+        context.native_handle(),
+        session_id_context,
+        sizeof(session_id_context) - 1
+      );
     }
 
     void accept() override {

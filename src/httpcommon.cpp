@@ -76,8 +76,24 @@ namespace http {
         std::ifstream in(file);
         in >> outputTree;
       } catch (std::exception &e) {
-        BOOST_LOG(error) << "Couldn't read user credentials: "sv << e.what();
-        return -1;
+        // Setting credentials is the way out of a broken state file, so it must
+        // not be blocked by the state file being broken — that locks the user
+        // out of the exact recovery path they were told to use. Move the
+        // unreadable file aside and start from an empty tree. Paired clients
+        // live in this file too, so it is preserved rather than overwritten:
+        // that copy is the only chance of getting them back.
+        std::error_code ec;
+        const std::string salvaged = file + ".unreadable";
+        fs::rename(file, salvaged, ec);
+        BOOST_LOG(error) << "Couldn't read the state file: "sv << e.what();
+        if (ec) {
+          BOOST_LOG(error) << "Couldn't move it aside either ("sv << ec.message()
+                           << "); the new credentials will overwrite it."sv;
+        } else {
+          BOOST_LOG(warning) << "Moved it to "sv << salvaged
+                             << " and started a fresh one. Paired clients are in that copy."sv;
+        }
+        outputTree = nlohmann::json::object();
       }
     }
 

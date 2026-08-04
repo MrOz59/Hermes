@@ -74,6 +74,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   so only one of them can run at a time ([#14]).
 
 ### Fixed
+- Setting credentials from the command line now works when the state file is
+  unreadable. `save_user_creds()` refused to write anything if it could not
+  parse the existing file, so `hermes --creds` — the documented way out of a
+  lost or broken Web UI password — was disabled by the exact condition that
+  makes you need it, leaving no recovery short of deleting the file and losing
+  every paired client. The unreadable file is now moved to
+  `<state file>.unreadable` and a fresh one written, so the paired clients are
+  still recoverable from the copy ([#14]).
 - Activating a virtual output no longer gives up on a compositor that has not
   published its output layout yet. `configure_virtual_output()` retried a head
   that had not appeared, but treated an output-management manager that had not

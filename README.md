@@ -265,6 +265,36 @@ systemctl --user enable --now hermes
 Protocol and client compatibility is unchanged: Hermes keeps the same Artemis
 protocol extensions, so existing Artemis/Hestia clients keep working.
 
+## Container / image-based distributions (Bazzite, Silverblue, SteamOS)
+
+Image-based distributions keep `/usr` read-only, so there is no point at which
+a package lands on the installed system and the normal install does not apply.
+`packaging/container` holds a runtime image that runs Hermes on a headless sway
+session with audio, XWayland and an optional Steam Big Picture session, so only
+the kernel module has to exist on the host:
+
+```bash
+cd packaging/container
+docker compose build
+docker compose up -d
+```
+
+The virtual display still comes from the
+[Hermes-KMS](https://github.com/MrOz59/Hermes-KMS) module on the host. For an
+image-based host, build it into the image with that repository's
+`packaging/bazzite/Containerfile` — DKMS cannot work there. Without the module
+the container falls back to a software backend and gives up the zero-copy path.
+
+This image serves **one** session, so it does not compose with
+`hermes_kms_multi_output` or `hermes_kms_isolated_sessions`; several clients
+means one container each. See `packaging/container/README.md`.
+
+Adapted from [SOVLOOKUP/hermes-sunshine](https://github.com/SOVLOOKUP/hermes-sunshine),
+contributed upstream by its author.
+
+Note that `docker/` at the repository root is unrelated: those are Sunshine's
+*build* images and produce no runnable host.
+
 ## Notes
 
 - **Configuration location.** Hermes stores everything in `~/.config/hermes`
@@ -300,10 +330,15 @@ Hermes builds on work from:
   - EVDI CPU-buffer capture and event pumping.
   - physical-monitor recovery safety work.
   - optional Gamescope Steam Session integration.
+- SOVLOOKUP's hermes-sunshine, the container image in `packaging/container` that
+  runs Hermes on a headless sway session, contributed upstream by its author.
+  The same work identified a race in Hermes' own virtual-output activation,
+  which is now fixed here.
 
-Reference fork:
+Reference forks:
 
 - <https://github.com/Sgtmetalmex/Apollo-CachyOS>
+- <https://github.com/SOVLOOKUP/hermes-sunshine>
 
 ## Repositories
 

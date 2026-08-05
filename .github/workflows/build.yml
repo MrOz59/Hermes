@@ -332,9 +332,14 @@ jobs:
 
       - name: Configure CMake
         run: |
+          # SUNSHINE_ASSETS_DIR is baked into the binary at compile time and must
+          # match where the package actually puts the assets (/usr/share/hermes).
+          # Without it the default is `assets`, which unix.cmake turns into
+          # /usr/assets, and the Web UI 404s on every page it tries to serve.
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DCMAKE_INSTALL_PREFIX=/usr \
+            -DSUNSHINE_ASSETS_DIR=share/hermes \
             -DSUNSHINE_ENABLE_WAYLAND=ON \
             -DSUNSHINE_ENABLE_X11=ON \
             -DSUNSHINE_ENABLE_DRM=ON \
@@ -360,8 +365,10 @@ jobs:
           cp -L build/sunshine ${PKGDIR}/usr/bin/hermes
           chmod 755 ${PKGDIR}/usr/bin/hermes
 
-          cp -r build/assets/web ${PKGDIR}/usr/share/hermes/
-          cp build/assets/*.png build/assets/*.json ${PKGDIR}/usr/share/hermes/ 2>/dev/null || true
+          # Copy the whole asset tree, not just web/ and the top-level files:
+          # `shaders/` is needed by the Linux GPU capture path, and cmake links
+          # it into the build dir as a symlink, so dereference with -L.
+          cp -rL build/assets/. ${PKGDIR}/usr/share/hermes/
 
           # Copy icons
           cp src_assets/linux/misc/icons/*.svg ${PKGDIR}/usr/share/icons/hicolor/scalable/apps/ 2>/dev/null || true
@@ -518,9 +525,12 @@ jobs:
 
       - name: Configure CMake
         run: |
+          # Must match where the RPM installs the assets (/usr/share/hermes);
+          # see the DEB job for why the default would break the Web UI.
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
+            -DSUNSHINE_ASSETS_DIR=share/hermes \
             -DSUNSHINE_ENABLE_WAYLAND=ON \
             -DSUNSHINE_ENABLE_X11=ON \
             -DSUNSHINE_ENABLE_DRM=ON \
@@ -540,7 +550,9 @@ jobs:
           mkdir -p hermes-${VERSION}/usr/share/hermes
           cp -L build/sunshine hermes-${VERSION}/usr/bin/hermes
           chmod 755 hermes-${VERSION}/usr/bin/hermes
-          cp -r build/assets/* hermes-${VERSION}/usr/share/hermes/
+          # -L: cmake links build/assets/shaders to the source tree, and a bare
+          # symlink would dangle once unpacked on the user's machine.
+          cp -rL build/assets/. hermes-${VERSION}/usr/share/hermes/
           tar -czvf ~/rpmbuild/SOURCES/hermes-${VERSION}.tar.gz hermes-${VERSION}
 
           cat > ~/rpmbuild/SPECS/hermes.spec << EOF

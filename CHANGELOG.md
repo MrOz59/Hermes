@@ -83,6 +83,18 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   so only one of them can run at a time ([#14]).
 
 ### Fixed
+- The Web UI no longer fails to load on the `.deb` and `.rpm` packages. Both
+  packages install the assets to `/usr/share/hermes`, but neither build passed
+  `SUNSHINE_ASSETS_DIR`, so the path compiled into the binary fell back to the
+  default and resolved to `/usr/assets` — every page the Web UI serves, starting
+  with `login.html`, was read from a directory the package never creates. The
+  Arch `PKGBUILD` already set the option, which is why only the `.deb` and
+  `.rpm` were affected ([#15]).
+- The `.deb` and `.rpm` packages now ship the OpenGL shaders the Linux capture
+  path loads. The `.deb` copied only `web/` and the top-level asset files, and
+  the `.rpm` copied `shaders` as the build-tree symlink CMake creates, which
+  dangled once unpacked on the target machine. Both now dereference the full
+  asset tree.
 - A virtual display created through EVDI now runs at the refresh rate that was
   asked for. The EDID's detailed timing carried a pixel clock tabulated per
   resolution, and every entry worked out to 60 Hz, so a request for 1080p120
@@ -212,6 +224,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#10]: https://github.com/MrOz59/Hermes/issues/10
 [#12]: https://github.com/MrOz59/Hermes/issues/12
 [#14]: https://github.com/MrOz59/Hermes/issues/14
+[#15]: https://github.com/MrOz59/Hermes/issues/15
 
 ## [0.4.0] - 2026-07-02
 

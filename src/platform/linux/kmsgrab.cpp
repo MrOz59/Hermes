@@ -2099,6 +2099,16 @@ namespace platf {
 
     kms::card_descriptors = std::move(cds);
 
+    // Active Hermes-KMS virtual displays are capturable through their render
+    // node even when no physical framebuffer handle is readable (no DRM
+    // master, no CAP_SYS_ADMIN), so expose them alongside the physical
+    // outputs. Session display lookups match these by name (e.g. HERMES-1).
+    for (auto &name : VDISPLAY::listHermesKmsDisplayNames()) {
+      if (std::find(display_names.begin(), display_names.end(), name) == display_names.end()) {
+        display_names.emplace_back(std::move(name));
+      }
+    }
+
     return display_names;
   }
 

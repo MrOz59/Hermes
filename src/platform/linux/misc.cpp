@@ -996,7 +996,22 @@ std::string get_local_ip_for_gateway() {
   std::shared_ptr<display_t> kms_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
 
   bool verify_kms() {
-    return !kms_display_names(mem_type_e::unknown).empty();
+    if (!kms_display_names(mem_type_e::unknown).empty()) {
+      return true;
+    }
+
+    // Hermes-KMS virtual displays are captured through the driver's render
+    // node (no DRM master, no CAP_SYS_ADMIN), so a present driver makes the
+    // KMS backend usable even when no physical framebuffer handle is
+    // readable. Without this, running unprivileged with capture=kms would
+    // abort platform init before the virtual-display bootstrap can run.
+    if (config::video.virtual_display_backend == "hermes_kms" &&
+        VDISPLAY::isHermesKmsDriverPresent()) {
+      BOOST_LOG(info) << "KMS capture enabled through Hermes-KMS render-node path (no CAP_SYS_ADMIN)"sv;
+      return true;
+    }
+
+    return false;
   }
 #endif
 

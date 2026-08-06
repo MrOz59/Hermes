@@ -309,6 +309,9 @@ namespace proc {
     ~deinit_t() {
       proc.terminate_all_isolated();
       proc.terminate();
+      // Join the watchdog thread before global destructors run, otherwise a
+      // still-joinable std::thread aborts the process on exit.
+      VDISPLAY::closeVDisplayDevice();
     }
   };
 
@@ -1399,7 +1402,13 @@ namespace proc {
           // empty name when probing graphics cards.
 
           if (virtual_display_ready_for_capture || this->virtual_display) {
-            config::video.output_name = display_device::map_display_name(this->display_name);
+            // map_display_name resolves a device id on Windows but returns an
+            // empty string on platforms without a settings manager (Linux).
+            // Wiping output_name here would make the pre-stream encoder probe
+            // look up an empty display and fail, so keep the virtual display's
+            // own name in that case (e.g. HERMES-1).
+            auto mapped_name = display_device::map_display_name(this->display_name);
+            config::video.output_name = mapped_name.empty() ? this->display_name : std::move(mapped_name);
           }
         } else {
           BOOST_LOG(warning) << "Virtual Display creation failed, or cannot get created display name in time!";

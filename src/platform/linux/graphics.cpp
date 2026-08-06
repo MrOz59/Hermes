@@ -353,6 +353,17 @@ namespace egl {
         return nullptr;
     }
 
+    // Platform init loads EGL after its capture-source checks, but Hermes can
+    // reach this through the virtual-display bootstrap even when those checks
+    // failed (e.g. KMS capture without CAP_SYS_ADMIN). Load lazily instead of
+    // calling a NULL glad pointer.
+    if (!eglGetPlatformDisplay) {
+      if (!gladLoaderLoadEGL(EGL_NO_DISPLAY) || !eglGetPlatformDisplay) {
+        BOOST_LOG(error) << "Couldn't load EGL library"sv;
+        return nullptr;
+      }
+    }
+
     // native_display.left() equals native_display.right()
     display_t display = eglGetPlatformDisplay(egl_platform, native_display_p, nullptr);
 

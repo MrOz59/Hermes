@@ -995,6 +995,81 @@ namespace VDISPLAY {
       return result;
     }
 
+    /**
+     * @brief Switch a KScreen output to the exact mode width x height @ refresh_hz.
+     *
+     * The Hermes-KMS driver re-probes its mode list on SET_OUTPUT, but a
+     * compositor keeps the current mode of an already-connected output, so the
+     * client-requested mode has to be applied explicitly. KWin also needs a
+     * moment to process the hotplug re-probe before the new mode shows up in
+     * its list, hence the retry loop with verification.
+     */
+    static bool apply_output_mode(const std::string &connector, int width, int height, int refresh_hz) {
+      if (!available() || !safe_output_name(connector)) {
+        return false;
+      }
+
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+      bool command_sent = false;
+
+      while (std::chrono::steady_clock::now() < deadline) {
+        const auto json_text = command_output("kscreen-doctor -j");
+        std::string mode_id;
+        std::string current_mode_id;
+
+        if (!json_text.empty()) {
+          try {
+            const auto data = nlohmann::json::parse(json_text);
+            for (const auto &entry : data.value("outputs", nlohmann::json::array())) {
+              if (entry.value("name", std::string {}) != connector) {
+                continue;
+              }
+              current_mode_id = entry.value("currentModeId", std::string {});
+
+              // Pick the listed mode closest in refresh to the request.
+              double best_delta = 1.0;
+              for (const auto &mode : entry.value("modes", nlohmann::json::array())) {
+                const auto size = mode.value("size", nlohmann::json::object());
+                if (size.value("width", 0) != width || size.value("height", 0) != height) {
+                  continue;
+                }
+                const double rate = mode.value("refreshRate", 0.0);
+                const double delta = rate > refresh_hz ? rate - refresh_hz : refresh_hz - rate;
+                if (delta < best_delta) {
+                  best_delta = delta;
+                  mode_id = mode.value("id", std::string {});
+                }
+              }
+              break;
+            }
+          } catch (const std::exception &error) {
+            BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not parse mode list: " << error.what();
+          }
+        }
+
+        if (!mode_id.empty() &&
+            std::all_of(mode_id.begin(), mode_id.end(), [](unsigned char c) {
+              return std::isalnum(c);
+            })) {
+          if (command_sent && current_mode_id == mode_id) {
+            BOOST_LOG(info) << "[VDISPLAY/KScreen] " << connector << " switched to "
+                            << width << 'x' << height << '@' << refresh_hz << "Hz (mode " << mode_id << ')';
+            return true;
+          }
+
+          std::string command = "kscreen-doctor output." + connector + ".mode." + mode_id;
+          command_output(command.c_str());
+          command_sent = true;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds {150});
+      }
+
+      BOOST_LOG(warning) << "[VDISPLAY/KScreen] " << connector << " did not reach "
+                         << width << 'x' << height << '@' << refresh_hz << "Hz in time.";
+      return false;
+    }
+
     static std::set<std::string> connected_output_names(const std::vector<output_t> &current) {
       std::set<std::string> result;
       for (const auto &output : current) {
@@ -2625,7 +2700,12 @@ namespace VDISPLAY {
     uint32_t fps,
     const uuid_util::uuid_t &guid
   ) {
-    std::lock_guard<std::mutex> lock(vdisplay_mutex);
+    std::unique_lock<std::mutex> lock(vdisplay_mutex);
+
+    // Connector whose compositor mode still has to be applied. The KScreen
+    // apply polls kscreen-doctor for seconds, so it runs after the mutex is
+    // released instead of stalling every other virtual-display operation.
+    std::string pending_mode_connector;
 
     if (driver_status != DRIVER_STATUS::OK) {
       BOOST_LOG(error) << "[VDISPLAY] Driver not initialized.";
@@ -2749,6 +2829,11 @@ namespace VDISPLAY {
             vdinfo.connector_name,
             "Hermes-KMS"
           );
+
+          // Enabling an already-connected output keeps whatever mode the
+          // compositor used last. The client's exact mode is applied through
+          // KScreen once the display mutex is released below.
+          pending_mode_connector = vdinfo.connector_name;
         }
       }
       hermes_kms::close_device(device);
@@ -2837,6 +2922,16 @@ namespace VDISPLAY {
     BOOST_LOG(info) << "[VDISPLAY] Virtual display created successfully: " << display_name;
     BOOST_LOG(info) << "[VDISPLAY] Mode: " << backend_name(backend) << " (real virtual display)";
 
+    lock.unlock();
+
+    if (!pending_mode_connector.empty()) {
+      if (!kscreen::apply_output_mode(pending_mode_connector, static_cast<int>(width), static_cast<int>(height), static_cast<int>(fps_hz))) {
+        BOOST_LOG(warning) << "[VDISPLAY] Compositor did not switch " << pending_mode_connector
+                           << " to " << width << 'x' << height << '@' << fps_hz
+                           << "Hz; capture will use the compositor's active mode.";
+      }
+    }
+
     return display_name;
   }
 
@@ -2878,8 +2973,6 @@ namespace VDISPLAY {
   }
 
   int changeDisplaySettings(const char *deviceName, int width, int height, int refresh_rate) {
-    std::lock_guard<std::mutex> lock(vdisplay_mutex);
-
     refresh_rate = normalize_refresh_rate(refresh_rate);
     const int refresh_hz = refresh_rate / 1000;
 
@@ -2892,9 +2985,19 @@ namespace VDISPLAY {
     BOOST_LOG(info) << "[VDISPLAY] Changing display settings for " << deviceName
                     << " to " << width << "x" << height << "@" << refresh_hz << "Hz";
 
-    // Find the virtual display
-    for (auto &[guid, vdinfo] : virtual_displays) {
-      if (vdinfo.name == deviceName) {
+    // Update the driver-side state under the mutex, but remember the KScreen
+    // work for afterwards: apply_output_mode() polls kscreen-doctor for
+    // seconds and must not stall every other virtual-display operation.
+    std::string kscreen_connector;
+    bool found = false;
+    {
+      std::lock_guard<std::mutex> lock(vdisplay_mutex);
+      for (auto &[guid, vdinfo] : virtual_displays) {
+        if (vdinfo.name != deviceName) {
+          continue;
+        }
+        found = true;
+
         // createVirtualDisplay() is normally followed by this call with the
         // same values. Reconnecting EVDI in that case causes an avoidable
         // compositor modeset and a burst of capture reinitializations.
@@ -2920,14 +3023,34 @@ namespace VDISPLAY {
           if (!hermes_kms::set_output(vdinfo.drm_fd, true, width, height, refresh_hz, vdinfo.session_id)) {
             return -1;
           }
-        }
 
-        BOOST_LOG(info) << "[VDISPLAY] Display settings updated successfully.";
-        return 0;
+          // SET_OUTPUT only updates the driver's mode list; an already
+          // connected output keeps its current compositor mode. The client's
+          // exact mode is applied through KScreen below, outside the lock.
+          if (!config::video.hermes_kms_isolated_sessions && !vdinfo.connector_name.empty()) {
+            kscreen_connector = vdinfo.connector_name;
+          }
+        }
+        break;
       }
     }
 
-    BOOST_LOG(debug) << "[VDISPLAY] Display not found: " << deviceName;
+    if (!found) {
+      // Not an error: the active display may be a physical one that simply
+      // has no virtual-display state to update.
+      BOOST_LOG(debug) << "[VDISPLAY] Display not found: " << deviceName;
+      return 0;
+    }
+
+    if (!kscreen_connector.empty() &&
+        !kscreen::apply_output_mode(kscreen_connector, width, height, refresh_hz)) {
+      BOOST_LOG(warning) << "[VDISPLAY] Compositor did not switch " << kscreen_connector
+                         << " to " << width << 'x' << height << '@' << refresh_hz
+                         << "Hz; the previous compositor mode stays active.";
+      return 1;
+    }
+
+    BOOST_LOG(info) << "[VDISPLAY] Display settings updated successfully.";
     return 0;
   }
 

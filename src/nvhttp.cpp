@@ -1575,6 +1575,40 @@ namespace nvhttp {
         return;
       }
     }
+#ifndef _WIN32
+    else if (!isolated_sessions && no_active_sessions && proc::proc.virtual_display && !proc::proc.display_name.empty()) {
+      // A resumed app keeps its virtual display, but every client brings its
+      // own mode: adapt resolution AND refresh to this client's request
+      // before the stream starts, exactly like a fresh launch would.
+      int target_fps = launch_session->fps ? launch_session->fps : 60000;
+      if (target_fps < 1000) {
+        target_fps *= 1000;
+      }
+      if (launch_session->width > 0 && launch_session->height > 0) {
+        const int change_result = VDISPLAY::changeDisplaySettings(
+          proc::proc.display_name.c_str(),
+          launch_session->width,
+          launch_session->height,
+          target_fps
+        );
+        if (change_result != 0) {
+          // Capture re-reads the active scanout geometry on init, so the
+          // encoders below follow the display's real mode, not the request.
+          BOOST_LOG(warning) << "Virtual display did not reach "sv
+                             << launch_session->width << 'x' << launch_session->height
+                             << "; streaming the display's active mode instead."sv;
+        }
+      }
+
+      if (video::probe_encoders()) {
+        tree.put("root.resume", 0);
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
+
+        return;
+      }
+    }
+#endif
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
     if (!launch_session->rtsp_cipher && encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {

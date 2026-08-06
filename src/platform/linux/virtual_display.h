@@ -230,7 +230,8 @@ namespace VDISPLAY {
    * @param width The new width.
    * @param height The new height.
    * @param refresh_rate The new refresh rate (in mHz).
-   * @return 0 on success, non-zero on failure.
+   * @return 0 on success, -1 on failure, 1 when the driver accepted the mode
+   *         but the compositor kept the previously active one.
    */
   int changeDisplaySettings(const char *deviceName, int width, int height, int refresh_rate);
 

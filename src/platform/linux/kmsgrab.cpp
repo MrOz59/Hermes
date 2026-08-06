@@ -1725,6 +1725,13 @@ namespace platf {
         }
 #endif
 
+#ifndef SUNSHINE_BUILD_CUDA
+        if (mem_type == mem_type_e::cuda) {
+          BOOST_LOG(warning) << "Hermes-KMS NVENC path requested but Hermes was built without CUDA support."sv;
+          return -1;
+        }
+#endif
+
         BOOST_LOG(info) << "Hermes-KMS zero-copy capture ready: "sv << w << 'x' << h;
         return 0;
       }
@@ -1771,7 +1778,21 @@ namespace platf {
           return va::make_avcodec_encode_device(width, height, dup(encode_render_fd.el), img_offset_x, img_offset_y, true);
         }
 #endif
-        BOOST_LOG(error) << "Hermes-KMS capture only supports VAAPI encoding."sv;
+#ifdef SUNSHINE_BUILD_CUDA
+        if (mem_type == mem_type_e::cuda) {
+          // Same descriptor flow as display_vram_t: the GL/CUDA device imports
+          // the Hermes DMA-BUFs through EGL on the NVIDIA GPU and encodes with
+          // NVENC. The Hermes render node stays capture-only.
+          //
+          // NOTE: NVENC sessions for Hermes-KMS displays currently capture
+          // through a CPU copy, because NVIDIA's EGL import of these
+          // system-memory DMA-BUFs reads wrong pages past the first ones.
+          // This branch is the intended zero-copy path once that import is
+          // reliable and is kept buildable on purpose.
+          return cuda::make_avcodec_gl_encode_device(width, height, img_offset_x, img_offset_y);
+        }
+#endif
+        BOOST_LOG(error) << "Hermes-KMS capture supports VAAPI and NVENC(CUDA) encoding only."sv;
         return nullptr;
       }
 

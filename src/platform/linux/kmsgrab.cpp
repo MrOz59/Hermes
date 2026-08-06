@@ -1725,6 +1725,13 @@ namespace platf {
         }
 #endif
 
+#ifndef SUNSHINE_BUILD_CUDA
+        if (mem_type == mem_type_e::cuda) {
+          BOOST_LOG(warning) << "Hermes-KMS NVENC path requested but Hermes was built without CUDA support."sv;
+          return -1;
+        }
+#endif
+
         BOOST_LOG(info) << "Hermes-KMS zero-copy capture ready: "sv << w << 'x' << h;
         return 0;
       }
@@ -1771,7 +1778,15 @@ namespace platf {
           return va::make_avcodec_encode_device(width, height, dup(encode_render_fd.el), img_offset_x, img_offset_y, true);
         }
 #endif
-        BOOST_LOG(error) << "Hermes-KMS capture only supports VAAPI encoding."sv;
+#ifdef SUNSHINE_BUILD_CUDA
+        if (mem_type == mem_type_e::cuda) {
+          // Same descriptor flow as display_vram_t: the GL/CUDA device imports
+          // the Hermes DMA-BUFs through EGL on the NVIDIA GPU and encodes with
+          // NVENC. The Hermes render node stays capture-only.
+          return cuda::make_avcodec_gl_encode_device(width, height, img_offset_x, img_offset_y);
+        }
+#endif
+        BOOST_LOG(error) << "Hermes-KMS capture supports VAAPI and NVENC(CUDA) encoding only."sv;
         return nullptr;
       }
 
@@ -1860,6 +1875,163 @@ namespace platf {
       uint64_t last_sequence {0};
     };
 
+    // Hermes-KMS capture through a CPU copy of the scanout DMA-BUF.
+    //
+    // The CPU view of the Hermes framebuffer is always pixel-correct, while
+    // NVIDIA's EGL import of these system-memory DMA-BUFs has been observed to
+    // read the wrong pages beyond the first ones (visible as diagonal
+    // stripes). Until that import path is proven reliable, NVENC sessions map
+    // the buffer, de-pad the rows on the CPU and let the regular RAM->CUDA
+    // upload path feed the encoder. Costs one memcpy per frame (~1-2 ms at
+    // 1440p-class sizes); correctness over the last microseconds.
+    class display_hermes_ram_t: public display_t {
+    public:
+      display_hermes_ram_t(mem_type_e mem_type):
+          display_t(mem_type) {
+      }
+
+      ~display_hermes_ram_t() override {
+        if (hermes_fd >= 0) {
+          ::close(hermes_fd);
+          hermes_fd = -1;
+        }
+      }
+
+      int init(const std::string &display_name, const ::video::config_t &config) {
+        BOOST_LOG(info) << "Hermes-KMS CPU-copy capture path selected for ["sv << display_name << ']';
+        delay = std::chrono::nanoseconds {1s} / config.framerate;
+
+        hermes_fd = VDISPLAY::hermesKmsOpenCapture(display_name);
+        if (hermes_fd < 0) {
+          return -1;
+        }
+
+        int w = 0;
+        int h = 0;
+        if (!VDISPLAY::hermesKmsCaptureSize(hermes_fd, w, h) || w <= 0 || h <= 0) {
+          BOOST_LOG(error) << "Hermes-KMS capture: no active scanout geometry yet."sv;
+          return -1;
+        }
+
+        width = img_width = w;
+        height = img_height = h;
+        img_offset_x = 0;
+        img_offset_y = 0;
+        env_width = w;
+        env_height = h;
+
+        BOOST_LOG(info) << "Hermes-KMS CPU-copy capture ready: "sv << w << 'x' << h;
+        return 0;
+      }
+
+      std::shared_ptr<img_t> alloc_img() override {
+        auto img = std::make_shared<kms_img_t>();
+        img->width = width;
+        img->height = height;
+        img->pixel_pitch = 4;
+        img->row_pitch = img->pixel_pitch * width;
+        img->data = new std::uint8_t[height * img->row_pitch];
+
+        return img;
+      }
+
+      int dummy_img(platf::img_t *img) override {
+        return 0;
+      }
+
+      std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
+#ifdef SUNSHINE_BUILD_CUDA
+        if (mem_type == mem_type_e::cuda) {
+          return cuda::make_avcodec_encode_device(width, height, false);
+        }
+#endif
+#ifdef SUNSHINE_BUILD_VAAPI
+        if (mem_type == mem_type_e::vaapi) {
+          return va::make_avcodec_encode_device(width, height, false);
+        }
+#endif
+        return std::make_unique<avcodec_encode_device_t>();
+      }
+
+      capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool /* cursor */) {
+        VDISPLAY::HermesKmsFrame frame;
+        const auto timeout_ms = static_cast<uint32_t>(std::max<std::chrono::milliseconds::rep>(1, timeout.count()));
+        if (!VDISPLAY::hermesKmsAcquireFrame(hermes_fd, last_sequence, timeout_ms, frame)) {
+          return platf::capture_e::timeout;
+        }
+        accumulate_capture_metric("hermes-kms-cpu", frame.acquire_ns);
+
+        if (frame.width != img_width || frame.height != img_height) {
+          frame.close();
+          return platf::capture_e::reinit;
+        }
+
+        if (!pull_free_image_cb(img_out)) {
+          frame.close();
+          return platf::capture_e::interrupted;
+        }
+
+        // The compositor's commit fence rides on the DMA-BUF; for a CPU read
+        // the copy engine below runs strictly after ACQUIRE returned, and the
+        // CPU view is coherent on x86, so the sync_file is not needed.
+        const size_t map_len = (size_t) frame.pitch[0] * frame.height + frame.offset[0];
+        void *map = mmap(nullptr, map_len, PROT_READ, MAP_SHARED, frame.dma_buf_fd[0], 0);
+        if (map == MAP_FAILED) {
+          BOOST_LOG(error) << "Hermes-KMS CPU capture: mmap failed: "sv << strerror(errno);
+          frame.close();
+          return platf::capture_e::error;
+        }
+
+        const auto *src = static_cast<const std::uint8_t *>(map) + frame.offset[0];
+        auto *dst = img_out->data;
+        const size_t row_bytes = (size_t) img_width * 4;
+        if (frame.pitch[0] == row_bytes) {
+          std::memcpy(dst, src, row_bytes * img_height);
+        } else {
+          for (int y = 0; y < img_height; ++y) {
+            std::memcpy(dst + (size_t) y * row_bytes, src + (size_t) y * frame.pitch[0], row_bytes);
+          }
+        }
+
+        munmap(map, map_len);
+        last_sequence = frame.sequence;
+        frame.close();
+
+        img_out->frame_timestamp = std::chrono::steady_clock::now();
+        return platf::capture_e::ok;
+      }
+
+      capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) {
+        while (true) {
+          std::shared_ptr<platf::img_t> img_out;
+          auto status = snapshot(pull_free_image_cb, img_out, 200ms, *cursor);
+          switch (status) {
+            case platf::capture_e::reinit:
+            case platf::capture_e::error:
+            case platf::capture_e::interrupted:
+              return status;
+            case platf::capture_e::timeout:
+              if (!push_captured_image_cb(std::move(img_out), false)) {
+                return platf::capture_e::ok;
+              }
+              break;
+            case platf::capture_e::ok:
+              if (!push_captured_image_cb(std::move(img_out), true)) {
+                return platf::capture_e::ok;
+              }
+              break;
+            default:
+              BOOST_LOG(error) << "Unrecognized capture status ["sv << (int) status << ']';
+              return status;
+          }
+        }
+        return capture_e::ok;
+      }
+
+      int hermes_fd {-1};
+      uint64_t last_sequence {0};
+    };
+
   }  // namespace kms
 
   std::shared_ptr<display_t> kms_display(mem_type_e hwdevice_type, const std::string &display_name, const ::video::config_t &config) {
@@ -1874,11 +2046,25 @@ namespace platf {
     // desktop. Use the dedicated capture path and never fall back to a KMS
     // card, which would stream a physical monitor.
     if (hermes_kms_display) {
-      if (hwdevice_type != mem_type_e::vaapi) {
-        BOOST_LOG(error) << "Hermes-KMS capture requires VAAPI zero-copy; "sv
+      if (hwdevice_type != mem_type_e::vaapi && hwdevice_type != mem_type_e::cuda) {
+        BOOST_LOG(error) << "Hermes-KMS capture requires VAAPI or NVENC(CUDA); "sv
                          << "the selected encoder is not supported."sv;
         return nullptr;
       }
+
+      // NVENC: NVIDIA's EGL import of these system-memory DMA-BUFs reads the
+      // wrong pages beyond the first ones (diagonal-stripe corruption), so
+      // route CUDA sessions through the always-correct CPU copy. VAAPI keeps
+      // the validated zero-copy import.
+      if (hwdevice_type == mem_type_e::cuda) {
+        auto disp = std::make_shared<kms::display_hermes_ram_t>(hwdevice_type);
+        if (!disp->init(display_name, config)) {
+          return disp;
+        }
+        BOOST_LOG(error) << "Hermes-KMS CPU-copy capture failed; refusing physical-display fallback."sv;
+        return nullptr;
+      }
+
       auto disp = std::make_shared<kms::display_hermes_vram_t>(hwdevice_type);
       if (!disp->init(display_name, config)) {
         return disp;
@@ -2098,6 +2284,16 @@ namespace platf {
     BOOST_LOG(debug) << "Desktop resolution: "sv << kms::env_width << 'x' << kms::env_height;
 
     kms::card_descriptors = std::move(cds);
+
+    // Active Hermes-KMS virtual displays are capturable through their render
+    // node even when no physical framebuffer handle is readable (no DRM
+    // master, no CAP_SYS_ADMIN), so expose them alongside the physical
+    // outputs. Session display lookups match these by name (e.g. HERMES-1).
+    for (auto &name : VDISPLAY::listHermesKmsDisplayNames()) {
+      if (std::find(display_names.begin(), display_names.end(), name) == display_names.end()) {
+        display_names.emplace_back(std::move(name));
+      }
+    }
 
     return display_names;
   }

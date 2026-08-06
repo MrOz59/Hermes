@@ -315,6 +315,12 @@ namespace VDISPLAY {
   /** Get the DRM card index for a Hermes-KMS display. */
   int getHermesKmsCardIndex(const std::string &displayName);
 
+  /** Check whether a usable Hermes-KMS DRM device exists on this host. */
+  bool isHermesKmsDriverPresent();
+
+  /** List the display names of all registered Hermes-KMS virtual displays. */
+  std::vector<std::string> listHermesKmsDisplayNames();
+
   /** Get the primary DRM node path assigned to a Hermes-KMS display. */
   std::string getHermesKmsDevicePath(const std::string &displayName);
 

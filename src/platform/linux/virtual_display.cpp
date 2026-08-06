@@ -995,6 +995,81 @@ namespace VDISPLAY {
       return result;
     }
 
+    /**
+     * @brief Switch a KScreen output to the exact mode width x height @ refresh_hz.
+     *
+     * The Hermes-KMS driver re-probes its mode list on SET_OUTPUT, but a
+     * compositor keeps the current mode of an already-connected output, so the
+     * client-requested mode has to be applied explicitly. KWin also needs a
+     * moment to process the hotplug re-probe before the new mode shows up in
+     * its list, hence the retry loop with verification.
+     */
+    static bool apply_output_mode(const std::string &connector, int width, int height, int refresh_hz) {
+      if (!available() || !safe_output_name(connector)) {
+        return false;
+      }
+
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+      bool command_sent = false;
+
+      while (std::chrono::steady_clock::now() < deadline) {
+        const auto json_text = command_output("kscreen-doctor -j");
+        std::string mode_id;
+        std::string current_mode_id;
+
+        if (!json_text.empty()) {
+          try {
+            const auto data = nlohmann::json::parse(json_text);
+            for (const auto &entry : data.value("outputs", nlohmann::json::array())) {
+              if (entry.value("name", std::string {}) != connector) {
+                continue;
+              }
+              current_mode_id = entry.value("currentModeId", std::string {});
+
+              // Pick the listed mode closest in refresh to the request.
+              double best_delta = 1.0;
+              for (const auto &mode : entry.value("modes", nlohmann::json::array())) {
+                const auto size = mode.value("size", nlohmann::json::object());
+                if (size.value("width", 0) != width || size.value("height", 0) != height) {
+                  continue;
+                }
+                const double rate = mode.value("refreshRate", 0.0);
+                const double delta = rate > refresh_hz ? rate - refresh_hz : refresh_hz - rate;
+                if (delta < best_delta) {
+                  best_delta = delta;
+                  mode_id = mode.value("id", std::string {});
+                }
+              }
+              break;
+            }
+          } catch (const std::exception &error) {
+            BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not parse mode list: " << error.what();
+          }
+        }
+
+        if (!mode_id.empty() &&
+            std::all_of(mode_id.begin(), mode_id.end(), [](unsigned char c) {
+              return std::isalnum(c);
+            })) {
+          if (command_sent && current_mode_id == mode_id) {
+            BOOST_LOG(info) << "[VDISPLAY/KScreen] " << connector << " switched to "
+                            << width << 'x' << height << '@' << refresh_hz << "Hz (mode " << mode_id << ')';
+            return true;
+          }
+
+          std::string command = "kscreen-doctor output." + connector + ".mode." + mode_id;
+          command_output(command.c_str());
+          command_sent = true;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds {150});
+      }
+
+      BOOST_LOG(warning) << "[VDISPLAY/KScreen] " << connector << " did not reach "
+                         << width << 'x' << height << '@' << refresh_hz << "Hz in time.";
+      return false;
+    }
+
     static std::set<std::string> connected_output_names(const std::vector<output_t> &current) {
       std::set<std::string> result;
       for (const auto &output : current) {
@@ -2749,6 +2824,16 @@ namespace VDISPLAY {
             vdinfo.connector_name,
             "Hermes-KMS"
           );
+
+          // Enabling an already-connected output keeps whatever mode the
+          // compositor used last. Explicitly apply the client's requested
+          // mode (resolution AND refresh) so the desktop renders at exactly
+          // what the client asked for.
+          if (!kscreen::apply_output_mode(vdinfo.connector_name, static_cast<int>(width), static_cast<int>(height), fps_hz)) {
+            BOOST_LOG(warning) << "[VDISPLAY] Compositor did not switch " << vdinfo.connector_name
+                               << " to " << width << 'x' << height << '@' << fps_hz
+                               << "Hz; capture may keep the previous mode.";
+          }
         }
       }
       hermes_kms::close_device(device);
@@ -2919,6 +3004,18 @@ namespace VDISPLAY {
         } else if (vdinfo.using_hermes_kms && vdinfo.drm_fd >= 0) {
           if (!hermes_kms::set_output(vdinfo.drm_fd, true, width, height, refresh_hz, vdinfo.session_id)) {
             return -1;
+          }
+
+          // SET_OUTPUT only updates the driver's mode list; an already
+          // connected output keeps its current compositor mode. Apply the
+          // client's exact mode (resolution AND refresh) through KScreen so
+          // the desktop really renders at what the client requested.
+          if (!config::video.hermes_kms_isolated_sessions && !vdinfo.connector_name.empty()) {
+            if (!kscreen::apply_output_mode(vdinfo.connector_name, width, height, refresh_hz)) {
+              BOOST_LOG(warning) << "[VDISPLAY] Compositor did not switch " << vdinfo.connector_name
+                                 << " to " << width << 'x' << height << '@' << refresh_hz
+                                 << "Hz; capture may keep the previous mode.";
+            }
           }
         }
 
@@ -3260,6 +3357,26 @@ namespace VDISPLAY {
       }
     }
     return -1;
+  }
+
+  bool isHermesKmsDriverPresent() {
+    auto devices = hermes_kms::open_devices(false);
+    const bool present = !devices.empty();
+    for (auto &candidate : devices) {
+      hermes_kms::close_device(candidate);
+    }
+    return present;
+  }
+
+  std::vector<std::string> listHermesKmsDisplayNames() {
+    std::lock_guard<std::mutex> lock(vdisplay_mutex);
+    std::vector<std::string> names;
+    for (const auto &[guid, vdinfo] : virtual_displays) {
+      if (vdinfo.using_hermes_kms) {
+        names.emplace_back(vdinfo.name);
+      }
+    }
+    return names;
   }
 
   std::string getHermesKmsDevicePath(const std::string &displayName) {

@@ -309,6 +309,9 @@ namespace proc {
     ~deinit_t() {
       proc.terminate_all_isolated();
       proc.terminate();
+      // Join the watchdog thread before global destructors run, otherwise a
+      // still-joinable std::thread aborts the process on exit.
+      VDISPLAY::closeVDisplayDevice();
     }
   };
 

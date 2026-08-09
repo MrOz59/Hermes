@@ -230,9 +230,13 @@ namespace VDISPLAY {
    * @param width The new width.
    * @param height The new height.
    * @param refresh_rate The new refresh rate (in mHz).
-   * @return 0 on success, non-zero on failure.
+   * @param kscreen_deadline_ms How long the compositor-side mode apply may
+   *        poll before giving up. Hot paths (e.g. /resume) pass a shorter
+   *        deadline than the default.
+   * @return 0 on success, -1 on failure, 1 when the driver accepted the mode
+   *         but the compositor kept the previously active one.
    */
-  int changeDisplaySettings(const char *deviceName, int width, int height, int refresh_rate);
+  int changeDisplaySettings(const char *deviceName, int width, int height, int refresh_rate, int kscreen_deadline_ms = 4000);
 
   /**
    * @brief Change the display settings with isolated display option.

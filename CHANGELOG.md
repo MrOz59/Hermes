@@ -83,6 +83,32 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   so only one of them can run at a time ([#14]).
 
 ### Fixed
+- Virtual-display sessions no longer fail with a 503 on unprivileged Linux
+  hosts. `map_display_name()` has no settings manager to consult on Linux and
+  always returns an empty string, which wiped `output_name` and left the
+  pre-stream encoder probe looking up an empty display. The virtual display's
+  own name (e.g. `HERMES-1`) is now kept instead ([#17]).
+- `verify_kms()` now accepts a present Hermes-KMS driver, so hosts without
+  `CAP_SYS_ADMIN` reach the virtual-display bootstrap instead of aborting
+  platform init: these displays are captured through the driver's render node
+  and never needed a readable physical framebuffer handle ([#17]).
+- Active Hermes-KMS virtual displays are listed in `kms_display_names()`, so
+  session display lookups resolve them by name ([#17]).
+- EGL is now loaded lazily in `egl::make_display()`. Platform init loads it
+  after its capture-source checks, so the virtual-display bootstrap could reach
+  the function with a null glad pointer and crash ([#17]).
+- `EGLImage` binds now fall back to `glEGLImageTargetTexStorageEXT` when the
+  GLES-style OES bind fails, and every capture path checks the result instead of
+  continuing with a silently broken texture. NVIDIA's desktop-GL driver rejects
+  the OES bind for foreign system-memory DMA-BUF imports with
+  `GL_INVALID_OPERATION` ([#20]).
+- Distro-packaged CUDA toolkits build again. Dependency include dirs resolve to
+  `/usr/include`, and the resulting `-isystem /usr/include` broke GCC's
+  `include_next` chain for nvcc; the directory is now marked implicit ([#17]).
+- The virtual display watchdog thread is joined on shutdown instead of aborting
+  the process from a still-joinable `std::thread` during global destruction.
+  Teardown is idempotent, so the watchdog-failure path and the normal shutdown
+  can no longer both release the same DRM fds ([#17]).
 - The Web UI no longer fails to load on the `.deb` and `.rpm` packages. Both
   packages install the assets to `/usr/share/hermes`, but neither build passed
   `SUNSHINE_ASSETS_DIR`, so the path compiled into the binary fell back to the
@@ -225,6 +251,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#12]: https://github.com/MrOz59/Hermes/issues/12
 [#14]: https://github.com/MrOz59/Hermes/issues/14
 [#15]: https://github.com/MrOz59/Hermes/issues/15
+[#17]: https://github.com/MrOz59/Hermes/issues/17
+[#20]: https://github.com/MrOz59/Hermes/issues/20
 
 ## [0.4.0] - 2026-07-02
 

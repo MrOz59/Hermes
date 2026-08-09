@@ -12,6 +12,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- NVENC encoding from Hermes-KMS virtual displays. NVIDIA's EGL import of the
+  driver's system-memory DMA-BUFs reads the wrong pages beyond the first ones,
+  so NVENC sessions capture through a CPU copy of the scanout buffer and feed
+  the regular RAM-to-CUDA upload path, at the cost of one memcpy per frame.
+  The copy waits on the framebuffer's exported write fence and brackets the
+  read with `DMA_BUF_IOCTL_SYNC`, and the frame layout is validated against the
+  real DMA-BUF size before mapping. VAAPI keeps the validated zero-copy import,
+  so nothing changes for AMD and Intel ([#19]).
 - The Web UI updater can now opt in to the rolling Hermes nightly channel with
   `notify_pre_releases` (disabled by default). Nightly checks compare both the
   semantic version and the exact build commit so rolling builds at the same
@@ -252,6 +260,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#14]: https://github.com/MrOz59/Hermes/issues/14
 [#15]: https://github.com/MrOz59/Hermes/issues/15
 [#17]: https://github.com/MrOz59/Hermes/issues/17
+[#19]: https://github.com/MrOz59/Hermes/issues/19
 [#20]: https://github.com/MrOz59/Hermes/issues/20
 
 ## [0.4.0] - 2026-07-02

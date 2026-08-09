@@ -545,6 +545,40 @@ namespace egl {
     return attribs;
   }
 
+  /**
+   * @brief Bind an EGLImage to the currently bound GL_TEXTURE_2D.
+   *
+   * Tries the GLES-style OES bind first, then falls back to
+   * GL_EXT_EGL_image_storage. NVIDIA's desktop-GL driver rejects the OES bind
+   * for foreign (system-memory) DMA-BUF imports such as Hermes-KMS frames with
+   * GL_INVALID_OPERATION, but accepts the immutable-storage bind.
+   */
+  bool bind_egl_image_texture_2d(EGLImage image) {
+    // Drain stale errors so the check below sees only this bind.
+    while (gl::ctx.GetError() != GL_NO_ERROR) {}
+
+    gl::ctx.EGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
+    if (gl::ctx.GetError() == GL_NO_ERROR) {
+      return true;
+    }
+
+    using tex_storage_fn = void(GLAPIENTRY *)(GLenum, void *, const GLint *);
+    static auto tex_storage = (tex_storage_fn) eglGetProcAddress("glEGLImageTargetTexStorageEXT");
+    if (!tex_storage) {
+      BOOST_LOG(error) << "EGLImage bind failed and glEGLImageTargetTexStorageEXT is unavailable"sv;
+      return false;
+    }
+
+    tex_storage(GL_TEXTURE_2D, image, nullptr);
+    if (gl::ctx.GetError() != GL_NO_ERROR) {
+      BOOST_LOG(error) << "EGLImage bind failed through both OES and TexStorageEXT paths"sv;
+      return false;
+    }
+
+    BOOST_LOG(debug) << "EGLImage bound via glEGLImageTargetTexStorageEXT fallback"sv;
+    return true;
+  }
+
   std::optional<rgb_t> import_source(display_t::pointer egl_display, const surface_descriptor_t &xrgb) {
     auto attribs = surface_descriptor_to_egl_attribs(xrgb);
 
@@ -561,7 +595,10 @@ namespace egl {
     }
 
     gl::ctx.BindTexture(GL_TEXTURE_2D, rgb->tex[0]);
-    gl::ctx.EGLImageTargetTexture2DOES(GL_TEXTURE_2D, rgb->xrgb8);
+    if (!bind_egl_image_texture_2d(rgb->xrgb8)) {
+      gl::ctx.BindTexture(GL_TEXTURE_2D, 0);
+      return std::nullopt;
+    }
 
     gl::ctx.BindTexture(GL_TEXTURE_2D, 0);
 
@@ -619,10 +656,14 @@ namespace egl {
     }
 
     gl::ctx.BindTexture(GL_TEXTURE_2D, nv12->tex[0]);
-    gl::ctx.EGLImageTargetTexture2DOES(GL_TEXTURE_2D, nv12->r8);
+    if (!bind_egl_image_texture_2d(nv12->r8)) {
+      return std::nullopt;
+    }
 
     gl::ctx.BindTexture(GL_TEXTURE_2D, nv12->tex[1]);
-    gl::ctx.EGLImageTargetTexture2DOES(GL_TEXTURE_2D, nv12->bg88);
+    if (!bind_egl_image_texture_2d(nv12->bg88)) {
+      return std::nullopt;
+    }
 
     nv12->buf.bind(std::begin(nv12->tex), std::end(nv12->tex));
 

@@ -11,6 +11,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-09
+
 ### Added
 - NVENC encoding from Hermes-KMS virtual displays. NVIDIA's EGL import of the
   driver's system-memory DMA-BUFs reads the wrong pages beyond the first ones,

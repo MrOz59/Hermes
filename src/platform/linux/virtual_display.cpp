@@ -3262,6 +3262,26 @@ namespace VDISPLAY {
     return -1;
   }
 
+  bool isHermesKmsDriverPresent() {
+    auto devices = hermes_kms::open_devices(false);
+    const bool present = !devices.empty();
+    for (auto &candidate : devices) {
+      hermes_kms::close_device(candidate);
+    }
+    return present;
+  }
+
+  std::vector<std::string> listHermesKmsDisplayNames() {
+    std::lock_guard<std::mutex> lock(vdisplay_mutex);
+    std::vector<std::string> names;
+    for (const auto &[guid, vdinfo] : virtual_displays) {
+      if (vdinfo.using_hermes_kms) {
+        names.emplace_back(vdinfo.name);
+      }
+    }
+    return names;
+  }
+
   std::string getHermesKmsDevicePath(const std::string &displayName) {
     const int card_index = getHermesKmsCardIndex(displayName);
     return card_index >= 0 ?

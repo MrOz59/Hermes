@@ -18,6 +18,12 @@ if(${SUNSHINE_ENABLE_CUDA})
         set(CUDA_FOUND ON)
         enable_language(CUDA)
 
+        # Distro-packaged CUDA toolkits live in /usr, so dependency include dirs
+        # resolve to /usr/include and CMake passes `-isystem /usr/include` to
+        # nvcc, breaking GCC's include_next chain (cmath -> math.h not found).
+        # Marking it implicit makes CMake drop it from the command line.
+        list(APPEND CMAKE_CUDA_IMPLICIT_INCLUDE_DIRECTORIES "/usr/include")
+
         message(STATUS "CUDA Compiler Version: ${CMAKE_CUDA_COMPILER_VERSION}")
         set(CMAKE_CUDA_ARCHITECTURES "")
 

@@ -1940,9 +1940,17 @@ namespace platf {
       }
 
       capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool /* cursor */) {
+        // Pull the destination image before acquiring, like
+        // display_hermes_vram_t does: the timeout path below re-emits
+        // img_out, so it must already hold a valid image by then.
+        if (!pull_free_image_cb(img_out)) {
+          return platf::capture_e::interrupted;
+        }
+
         VDISPLAY::HermesKmsFrame frame;
         const auto timeout_ms = static_cast<uint32_t>(std::max<std::chrono::milliseconds::rep>(1, timeout.count()));
         if (!VDISPLAY::hermesKmsAcquireFrame(hermes_fd, last_sequence, timeout_ms, frame)) {
+          // No new frame within the timeout: emit the previous image unchanged.
           return platf::capture_e::timeout;
         }
         accumulate_capture_metric("hermes-kms-cpu", frame.acquire_ns);
@@ -1950,11 +1958,6 @@ namespace platf {
         if (frame.width != img_width || frame.height != img_height) {
           frame.close();
           return platf::capture_e::reinit;
-        }
-
-        if (!pull_free_image_cb(img_out)) {
-          frame.close();
-          return platf::capture_e::interrupted;
         }
 
         // A successful ACQUIRE_FRAME only means the frame was exported, not
@@ -2027,7 +2030,7 @@ namespace platf {
         return platf::capture_e::ok;
       }
 
-      capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) {
+      capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
         while (true) {
           std::shared_ptr<platf::img_t> img_out;
           auto status = snapshot(pull_free_image_cb, img_out, 200ms, *cursor);

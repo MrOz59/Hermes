@@ -1856,8 +1856,13 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Isolates the virtual display.
-            @note{Applies to Windows only.}
+            Isolates the virtual display, so the streamed session is the only
+            active output for its duration.
+            @note{On Linux, this requires a compositor with output management
+            (KScreen/KWin, or a Wayland compositor implementing output
+            management). If it is unavailable, Hermes logs a warning and
+            continues with the virtual display alongside the physical
+            outputs.}
         </td>
     </tr>
     <tr>
@@ -1866,7 +1871,15 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
     <tr>
         <td>enabled</td>
-        <td>Change the position of the virtual display (and other displays if there is a hole)</td>
+        <td>
+            <b>Windows:</b> change the position of the virtual display (and other
+            displays if there is a hole).
+            <br>
+            <b>Linux:</b> disable the physical outputs for the duration of the
+            session and restore the previous layout when it ends. Windows already
+            on the desktop, including a running fullscreen game, move onto the
+            virtual display.
+        </td>
     </tr>
 </table>
 

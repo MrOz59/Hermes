@@ -1585,11 +1585,20 @@ namespace nvhttp {
         target_fps *= 1000;
       }
       if (launch_session->width > 0 && launch_session->height > 0) {
+        // No activateVirtualDisplayOutput() here, unlike the launch path in
+        // process.cpp: reaching this branch requires a running app that still
+        // owns its virtual display (proc.virtual_display), so the output was
+        // activated at launch and is kept alive by the session. Only the mode
+        // may differ for the new client. The deadline is shorter than the
+        // default because this runs synchronously inside the /resume handler
+        // and clients time out on long stalls; on failure the stream simply
+        // keeps the display's active mode.
         const int change_result = VDISPLAY::changeDisplaySettings(
           proc::proc.display_name.c_str(),
           launch_session->width,
           launch_session->height,
-          target_fps
+          target_fps,
+          1500
         );
         if (change_result != 0) {
           // Capture re-reads the active scanout geometry on init, so the

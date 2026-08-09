@@ -1003,13 +1003,17 @@ namespace VDISPLAY {
      * client-requested mode has to be applied explicitly. KWin also needs a
      * moment to process the hotplug re-probe before the new mode shows up in
      * its list, hence the retry loop with verification.
+     *
+     * KDE-only by design: on compositors without kscreen-doctor,
+     * available() is false and this returns without doing anything, so the
+     * output keeps whatever mode the compositor chose.
      */
-    static bool apply_output_mode(const std::string &connector, int width, int height, int refresh_hz) {
+    static bool apply_output_mode(const std::string &connector, int width, int height, int refresh_hz, int deadline_ms = 4000) {
       if (!available() || !safe_output_name(connector)) {
         return false;
       }
 
-      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(deadline_ms);
       bool command_sent = false;
 
       while (std::chrono::steady_clock::now() < deadline) {
@@ -2972,7 +2976,7 @@ namespace VDISPLAY {
     return true;
   }
 
-  int changeDisplaySettings(const char *deviceName, int width, int height, int refresh_rate) {
+  int changeDisplaySettings(const char *deviceName, int width, int height, int refresh_rate, int kscreen_deadline_ms) {
     refresh_rate = normalize_refresh_rate(refresh_rate);
     const int refresh_hz = refresh_rate / 1000;
 
@@ -3043,7 +3047,7 @@ namespace VDISPLAY {
     }
 
     if (!kscreen_connector.empty() &&
-        !kscreen::apply_output_mode(kscreen_connector, width, height, refresh_hz)) {
+        !kscreen::apply_output_mode(kscreen_connector, width, height, refresh_hz, kscreen_deadline_ms)) {
       BOOST_LOG(warning) << "[VDISPLAY] Compositor did not switch " << kscreen_connector
                          << " to " << width << 'x' << height << '@' << refresh_hz
                          << "Hz; the previous compositor mode stays active.";

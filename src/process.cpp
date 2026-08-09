@@ -497,12 +497,14 @@ namespace proc {
       return 503;
     }
 
-    VDISPLAY::changeDisplaySettings(
-      display_name.c_str(),
-      launch_session->width,
-      launch_session->height,
-      target_fps
-    );
+    if (VDISPLAY::changeDisplaySettings(
+          display_name.c_str(),
+          launch_session->width,
+          launch_session->height,
+          target_fps
+        ) != 0) {
+      BOOST_LOG(warning) << "Virtual display did not adopt the requested mode; capture will use the display's active mode.";
+    }
     if (!config::video.hermes_kms_isolated_sessions &&
         !VDISPLAY::activateVirtualDisplayOutput(display_name)) {
       BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] The compositor did not activate session output "
@@ -1340,10 +1342,14 @@ namespace proc {
           if (launch_session->width && launch_session->height && launch_session->fps) {
             // Apply display settings
 #ifdef _WIN32
-            VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
+            const int change_result = VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
 #else
-            VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
+            const int change_result = VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
 #endif
+            if (change_result != 0) {
+              BOOST_LOG(warning) << "Virtual display did not adopt " << render_width << 'x' << render_height
+                                 << "; capture will use the display's active mode.";
+            }
           }
 
 #ifndef _WIN32

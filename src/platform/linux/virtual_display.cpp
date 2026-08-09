@@ -217,6 +217,8 @@ namespace VDISPLAY {
   static std::mutex vdisplay_mutex;
   static DRIVER_STATUS driver_status = DRIVER_STATUS::UNKNOWN;
   static std::atomic<bool> watchdog_running {false};
+  // Guards closeVDisplayDevice() against running its teardown more than once.
+  static std::atomic<bool> device_open {false};
   static std::thread watchdog_thread;
   static bool evdi_available = false;
   static bool exclusive_virtual_display_active = false;
@@ -2468,6 +2470,7 @@ namespace VDISPLAY {
       }
 
       driver_status = DRIVER_STATUS::OK;
+      device_open = true;
       BOOST_LOG(info) << "[VDISPLAY/Hermes-KMS] Hermes-KMS available - experimental zero-copy virtual display supported"
                       << (hermes_kms::multi_output_requested() ? " with session-scoped multi-output enabled." : ".");
       return driver_status;
@@ -2496,12 +2499,20 @@ namespace VDISPLAY {
     }
 
     driver_status = DRIVER_STATUS::OK;
+    device_open = true;
     BOOST_LOG(info) << "[VDISPLAY] Linux virtual display driver initialized successfully.";
 
     return driver_status;
   }
 
   void closeVDisplayDevice() {
+    // Idempotent: the watchdog failure path, an explicit shutdown and proc's
+    // deinit_t can all reach this. Tearing down twice would re-run set_output()
+    // and ::close() on drm_fds that were already released.
+    if (!device_open.exchange(false)) {
+      return;
+    }
+
     BOOST_LOG(info) << "[VDISPLAY] Closing Linux virtual display driver...";
 
     // Stop watchdog thread

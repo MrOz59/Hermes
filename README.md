@@ -19,6 +19,25 @@ them. The product is branded Hermes throughout the UI, but the protocol lineage
 identifier stays `Apollo` so existing Artemis/Hestia clients keep working
 unchanged.
 
+## Compatibility and support
+
+Hermes is developed on **CachyOS with KDE Plasma (Wayland) on AMD**, because
+that is the maintainer's daily system and the only configuration that is
+continuously exercised. Other distributions, compositors and GPUs are supported
+as far as their code paths allow, and are improved as problems get reported —
+keeping several of each verified is not something one person can do alone.
+
+[docs/compatibility.md](docs/compatibility.md) records the current state
+honestly: what has actually been tested and how, what shares a verified code
+path but has never been run, what is known broken, and the limitations worth
+knowing before you file a bug. It covers KDE, COSMIC, GNOME, wlroots and
+gamescope, the AMD/Intel/NVIDIA encoder paths, and the Hermes-KMS and EVDI
+backends.
+
+**Issues and pull requests are very welcome**, including reports that something
+simply works — those are what move an entry from "expected to work" to
+"verified".
+
 ## Current focus
 
 - Create and activate a real virtual display. Hermes-KMS is the default for

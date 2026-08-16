@@ -1514,6 +1514,412 @@ namespace VDISPLAY {
       return state.find("'" + connector_name + "'") != std::string::npos ||
              state.find('"' + connector_name + '"') != std::string::npos;
     }
+
+    // ------------------------------------------------------------------
+    // ApplyMonitorsConfig
+    //
+    // A boot-enabled virtual connector leaves Mutter extending the desktop
+    // onto an output nobody is streaming to. KWin recovers through
+    // kscreen-doctor; Mutter only reconfigures through ApplyMonitorsConfig,
+    // whose reply-vs-request shapes differ:
+    //
+    //   GetCurrentState     -> a(iiduba(ssss)a{sv})   logical monitors
+    //   ApplyMonitorsConfig -> a(iiduba(ssa{sv}))     logical monitors
+    //
+    // so a logical monitor loses its trailing property dict, and each monitor
+    // collapses from (connector, vendor, product, serial) to
+    // (connector, mode_id, properties). The mode id has to be recovered from
+    // the monitor's own mode list - the one carrying 'is-current': <true>.
+    //
+    // ApplyMonitorsConfig is all-or-nothing, so every config is submitted to
+    // Mutter's own VERIFY method first and only applied when that succeeds.
+    // ------------------------------------------------------------------
+
+    enum class apply_method : unsigned {
+      verify = 0,
+      temporary = 1,
+      persistent = 2,
+    };
+
+    struct logical_monitor_t {
+      std::string x;
+      std::string y;
+      std::string scale;
+      std::string transform;
+      std::string primary;
+      std::vector<std::string> connectors;
+    };
+
+    struct state_t {
+      std::string serial;
+      std::map<std::string, std::string> current_mode;  ///< connector -> mode id
+      std::vector<logical_monitor_t> logical_monitors;
+    };
+
+    static const char *get_current_state_command =
+      "gdbus call --session "
+      "--dest org.gnome.Mutter.DisplayConfig "
+      "--object-path /org/gnome/Mutter/DisplayConfig "
+      "--method org.gnome.Mutter.DisplayConfig.GetCurrentState 2>/dev/null";
+
+    // Connector names and mode ids are interpolated into a shell command, so
+    // restrict them to what Mutter actually emits ("DP-2", "4096x2160@100.000+vrr").
+    static bool safe_variant_token(const std::string &value) {
+      return !value.empty() && value.size() <= 128 && std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '@' || c == '+' || c == ':';
+      });
+    }
+
+    static std::string trim_variant(const std::string &value) {
+      const size_t first = value.find_first_not_of(" \t\n\r");
+      if (first == std::string::npos) {
+        return {};
+      }
+      const size_t last = value.find_last_not_of(" \t\n\r");
+      return value.substr(first, last - first + 1);
+    }
+
+    // Split the body of a GVariant container on its top-level commas.
+    static std::vector<std::string> split_variant(const std::string &body) {
+      std::vector<std::string> parts;
+      int depth = 0;
+      bool in_string = false;
+      size_t start = 0;
+
+      for (size_t i = 0; i < body.size(); ++i) {
+        const char c = body[i];
+        if (in_string) {
+          if (c == '\\') {
+            ++i;
+          } else if (c == '\'') {
+            in_string = false;
+          }
+          continue;
+        }
+        switch (c) {
+          case '\'':
+            in_string = true;
+            break;
+          case '(':
+          case '[':
+          case '{':
+          case '<':
+            ++depth;
+            break;
+          case ')':
+          case ']':
+          case '}':
+          case '>':
+            --depth;
+            break;
+          case ',':
+            if (depth == 0) {
+              parts.emplace_back(trim_variant(body.substr(start, i - start)));
+              start = i + 1;
+            }
+            break;
+          default:
+            break;
+        }
+      }
+      parts.emplace_back(trim_variant(body.substr(start)));
+      return parts;
+    }
+
+    static bool strip_variant(std::string &value, char open, char close) {
+      if (value.size() < 2 || value.front() != open || value.back() != close) {
+        return false;
+      }
+      value = trim_variant(value.substr(1, value.size() - 2));
+      return true;
+    }
+
+    static std::string unquote_variant(const std::string &value) {
+      if (value.size() >= 2 && value.front() == '\'' && value.back() == '\'') {
+        return value.substr(1, value.size() - 2);
+      }
+      return value;
+    }
+
+    // GVariant prints a type annotation ("uint32 0") only where the type cannot
+    // be inferred from context; keep the literal and drop any prefix.
+    static std::string numeric_variant(const std::string &value) {
+      const size_t pos = value.find_last_of(' ');
+      return pos == std::string::npos ? value : value.substr(pos + 1);
+    }
+
+    // A scale must stay a double: emitting "1" for 1.0 would type the field as
+    // an integer and the whole config would be rejected.
+    static std::string double_variant(const std::string &value) {
+      std::string literal = numeric_variant(value);
+      if (literal.find('.') == std::string::npos && literal.find('e') == std::string::npos &&
+          literal.find('E') == std::string::npos) {
+        literal += ".0";
+      }
+      return literal;
+    }
+
+    static bool parse_current_state(const std::string &reply, state_t &out) {
+      std::string body = trim_variant(reply);
+      if (!strip_variant(body, '(', ')')) {
+        return false;
+      }
+      const auto top = split_variant(body);
+      if (top.size() != 4) {
+        return false;
+      }
+
+      out.serial = numeric_variant(top[0]);
+      if (out.serial.empty()) {
+        return false;
+      }
+
+      std::string monitors = top[1];
+      if (!strip_variant(monitors, '[', ']')) {
+        return false;
+      }
+      for (const auto &entry : split_variant(monitors)) {
+        std::string monitor = entry;
+        if (!strip_variant(monitor, '(', ')')) {
+          continue;
+        }
+        const auto fields = split_variant(monitor);
+        if (fields.size() < 2) {
+          continue;
+        }
+        std::string spec = fields[0];
+        if (!strip_variant(spec, '(', ')')) {
+          continue;
+        }
+        const auto spec_fields = split_variant(spec);
+        if (spec_fields.empty()) {
+          continue;
+        }
+        const std::string connector = unquote_variant(spec_fields[0]);
+        std::string modes = fields[1];
+        if (connector.empty() || !strip_variant(modes, '[', ']')) {
+          continue;
+        }
+        for (const auto &mode_entry : split_variant(modes)) {
+          std::string mode = mode_entry;
+          if (!strip_variant(mode, '(', ')')) {
+            continue;
+          }
+          const auto mode_fields = split_variant(mode);
+          if (mode_fields.size() < 7) {
+            continue;
+          }
+          if (mode_fields.back().find("'is-current': <true>") == std::string::npos) {
+            continue;
+          }
+          out.current_mode[connector] = unquote_variant(mode_fields[0]);
+          break;
+        }
+      }
+
+      std::string logical = top[2];
+      if (!strip_variant(logical, '[', ']')) {
+        return false;
+      }
+      for (const auto &entry : split_variant(logical)) {
+        std::string lm = entry;
+        if (!strip_variant(lm, '(', ')')) {
+          continue;
+        }
+        const auto fields = split_variant(lm);
+        if (fields.size() < 6) {
+          continue;
+        }
+
+        logical_monitor_t parsed;
+        parsed.x = numeric_variant(fields[0]);
+        parsed.y = numeric_variant(fields[1]);
+        parsed.scale = double_variant(fields[2]);
+        parsed.transform = numeric_variant(fields[3]);
+        parsed.primary = numeric_variant(fields[4]);
+
+        std::string specs = fields[5];
+        if (!strip_variant(specs, '[', ']')) {
+          continue;
+        }
+        for (const auto &spec_entry : split_variant(specs)) {
+          std::string spec = spec_entry;
+          if (!strip_variant(spec, '(', ')')) {
+            continue;
+          }
+          const auto spec_fields = split_variant(spec);
+          if (spec_fields.empty()) {
+            continue;
+          }
+          const std::string connector = unquote_variant(spec_fields[0]);
+          if (!connector.empty()) {
+            parsed.connectors.emplace_back(connector);
+          }
+        }
+
+        if (!parsed.connectors.empty()) {
+          out.logical_monitors.emplace_back(std::move(parsed));
+        }
+      }
+
+      return !out.logical_monitors.empty();
+    }
+
+    // Render the a(iiduba(ssa{sv})) argument ApplyMonitorsConfig expects.
+    static bool build_apply_argument(const state_t &state,
+                                     const std::vector<logical_monitor_t> &layout,
+                                     std::string &argument) {
+      argument = "[";
+      for (size_t i = 0; i < layout.size(); ++i) {
+        const auto &lm = layout[i];
+        if (lm.primary != "true" && lm.primary != "false") {
+          return false;
+        }
+        argument += (i ? ", (" : "(");
+        argument += lm.x + ", " + lm.y + ", " + lm.scale + ", uint32 " + lm.transform + ", " + lm.primary + ", [";
+        for (size_t j = 0; j < lm.connectors.size(); ++j) {
+          const auto &connector = lm.connectors[j];
+          const auto mode = state.current_mode.find(connector);
+          if (mode == state.current_mode.end()) {
+            BOOST_LOG(warning) << "[VDISPLAY/Mutter] No current mode for " << connector << "; skipping layout repair.";
+            return false;
+          }
+          if (!safe_variant_token(connector) || !safe_variant_token(mode->second)) {
+            BOOST_LOG(warning) << "[VDISPLAY/Mutter] Refusing to build a config from an unexpected connector or mode id.";
+            return false;
+          }
+          argument += (j ? ", ('" : "('");
+          argument += connector + "', '" + mode->second + "', @a{sv} {})";
+        }
+        argument += "])";
+      }
+      argument += "]";
+      return true;
+    }
+
+    static bool run_apply(const state_t &state, const std::string &argument, apply_method method) {
+      const std::string command =
+        "gdbus call --session "
+        "--dest org.gnome.Mutter.DisplayConfig "
+        "--object-path /org/gnome/Mutter/DisplayConfig "
+        "--method org.gnome.Mutter.DisplayConfig.ApplyMonitorsConfig " +
+        state.serial + " " + std::to_string(static_cast<unsigned>(method)) + " \"" + argument + "\" \"@a{sv} {}\" 2>&1";
+
+      std::array<char, 4096> buffer {};
+      std::string output;
+      FILE *pipe = ::popen(command.c_str(), "r");
+      if (!pipe) {
+        return false;
+      }
+      while (::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
+        output += buffer.data();
+      }
+      if (::pclose(pipe) != 0) {
+        BOOST_LOG(warning) << "[VDISPLAY/Mutter] ApplyMonitorsConfig ("
+                           << (method == apply_method::verify ? "verify" : "apply")
+                           << ") failed: " << trim_variant(output);
+        return false;
+      }
+      return true;
+    }
+
+    enum class layout_repair {
+      unavailable,  ///< The reply did not parse; worth retrying.
+      not_needed,   ///< The connector is not in Mutter's layout.
+      unsafe,       ///< Dropping it would leave Mutter with nothing to drive.
+      ready,        ///< `argument` holds the config to submit.
+    };
+
+    /**
+     * Build the ApplyMonitorsConfig argument that keeps every logical monitor in
+     * @p reply except @p virtual_connector. A mirrored logical monitor keeps its
+     * physical members; a virtual-only one disappears with the connector, and
+     * the primary flag moves to the first survivor when the dropped one held it.
+     */
+    static layout_repair build_layout_without(const std::string &reply,
+                                              const std::string &virtual_connector,
+                                              state_t &state,
+                                              std::string &argument) {
+      state = {};
+      argument.clear();
+      if (reply.empty() || virtual_connector.empty() || !parse_current_state(reply, state)) {
+        return layout_repair::unavailable;
+      }
+
+      std::vector<logical_monitor_t> kept;
+      bool dropped_primary = false;
+      bool dropped = false;
+      for (auto lm : state.logical_monitors) {
+        const auto before = lm.connectors.size();
+        lm.connectors.erase(
+          std::remove(lm.connectors.begin(), lm.connectors.end(), virtual_connector),
+          lm.connectors.end()
+        );
+        if (lm.connectors.size() == before) {
+          kept.emplace_back(std::move(lm));
+          continue;
+        }
+        dropped = true;
+        if (lm.connectors.empty()) {
+          dropped_primary = dropped_primary || lm.primary == "true";
+        } else {
+          kept.emplace_back(std::move(lm));
+        }
+      }
+
+      if (!dropped) {
+        return layout_repair::not_needed;
+      }
+      if (kept.empty()) {
+        return layout_repair::unsafe;
+      }
+      if (dropped_primary) {
+        kept.front().primary = "true";
+      }
+      return build_apply_argument(state, kept, argument) ? layout_repair::ready : layout_repair::unsafe;
+    }
+
+    /**
+     * Loading Hermes-KMS with initial_enabled=1 - as older packages wrote into
+     * /etc/modprobe.d/hermes-kms.conf - exposes a connected virtual output
+     * before Hermes runs, and Mutter extends the desktop onto it. Once that
+     * unowned connector is disconnected, drop it from Mutter's layout if the
+     * compositor has not done so itself.
+     */
+    static void recover_after_unowned_virtual_disconnect(const std::string &virtual_connector) {
+      if (!available() || virtual_connector.empty()) {
+        return;
+      }
+
+      for (int attempt = 0; attempt < 20; ++attempt) {
+        state_t state;
+        std::string argument;
+        switch (build_layout_without(command_output(get_current_state_command), virtual_connector, state, argument)) {
+          case layout_repair::unavailable:
+            std::this_thread::sleep_for(std::chrono::milliseconds {50});
+            continue;
+          case layout_repair::not_needed:
+            return;  // Mutter already dropped the disconnected output.
+          case layout_repair::unsafe:
+            BOOST_LOG(warning) << "[VDISPLAY/Mutter] Cannot safely drop virtual output " << virtual_connector
+                               << " from Mutter's layout; leaving it to the compositor.";
+            return;
+          case layout_repair::ready:
+            break;
+        }
+
+        // ApplyMonitorsConfig is all-or-nothing, so let Mutter validate the
+        // config before it can black out the physical outputs.
+        if (!run_apply(state, argument, apply_method::verify)) {
+          return;
+        }
+
+        BOOST_LOG(warning) << "[VDISPLAY/Mutter] Dropping boot-enabled virtual output " << virtual_connector
+                           << " from Mutter's layout.";
+        run_apply(state, argument, apply_method::persistent);
+        return;
+      }
+    }
   }  // namespace mutter
 
   EvdiBuffer::EvdiBuffer(uint32_t width, uint32_t height):
@@ -2465,7 +2871,9 @@ namespace VDISPLAY {
       std::vector<std::string> boot_connectors;
       if (hermes_kms::disconnect_unowned_outputs(boot_connectors)) {
         for (const auto &connector : boot_connectors) {
+          // Each helper no-ops when its compositor is not the running one.
           kscreen::recover_after_unowned_virtual_disconnect(connector);
+          mutter::recover_after_unowned_virtual_disconnect(connector);
         }
       }
 
@@ -2981,6 +3389,22 @@ namespace VDISPLAY {
       }
     }
     return {};
+  }
+
+  bool buildMutterLayoutWithoutConnector(
+    const std::string &current_state,
+    const std::string &virtual_connector,
+    std::string &serial,
+    std::string &argument
+  ) {
+    mutter::state_t state;
+    const bool ready =
+      mutter::build_layout_without(current_state, virtual_connector, state, argument) == mutter::layout_repair::ready;
+    serial = ready ? state.serial : std::string {};
+    if (!ready) {
+      argument.clear();
+    }
+    return ready;
   }
 
   void setVirtualDisplayCaptureFallbackActive(bool active) {

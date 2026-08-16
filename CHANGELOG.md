@@ -11,6 +11,18 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+### Fixed
+- GNOME no longer keeps a black phantom monitor when a Hermes-KMS connector
+  comes up enabled at boot. Loading the module with `initial_enabled=1` — which
+  older Hermes-KMS packages wrote into `/etc/modprobe.d/hermes-kms.conf` —
+  exposes a connected virtual output before Hermes starts, so Mutter extends the
+  desktop onto an output nobody is streaming to. Hermes already disconnected
+  that unowned output at startup, but only KWin's layout was repaired
+  afterwards; Mutter now gets the same treatment over
+  `org.gnome.Mutter.DisplayConfig.ApplyMonitorsConfig`. Because that call is
+  all-or-nothing, every config is submitted to Mutter's own VERIFY method first
+  and abandoned when the repair would leave no monitor driven.
+
 ## [0.5.0] - 2026-08-09
 
 ### Added

@@ -251,6 +251,30 @@ namespace VDISPLAY {
   /** Return the compositor-facing connector name for a Hermes-KMS display. */
   std::string getHermesKmsConnectorName(const std::string &displayName);
 
+  /**
+   * @brief Build the Mutter ApplyMonitorsConfig payload that drops a connector.
+   *
+   * Pure text transformation over an org.gnome.Mutter.DisplayConfig
+   * GetCurrentState reply: it keeps every logical monitor except
+   * @p virtual_connector, moving the primary flag to the first survivor when the
+   * dropped monitor held it. Exposed so the payload - which is submitted to a
+   * compositor as an all-or-nothing config - can be validated without GNOME.
+   *
+   * @param current_state The GetCurrentState reply, as printed by `gdbus call`.
+   * @param virtual_connector The connector to remove, e.g. "Virtual-1".
+   * @param serial Receives the config serial the payload must be applied with.
+   * @param argument Receives the a(iiduba(ssa{sv})) argument.
+   * @return true when a repair config was built; false when the connector is
+   *         absent from the layout, the reply is unusable, or dropping it would
+   *         leave Mutter with no monitor.
+   */
+  bool buildMutterLayoutWithoutConnector(
+    const std::string &current_state,
+    const std::string &virtual_connector,
+    std::string &serial,
+    std::string &argument
+  );
+
   /** Record whether capture was routed away from an uncomposited virtual output. */
   void setVirtualDisplayCaptureFallbackActive(bool active);
 

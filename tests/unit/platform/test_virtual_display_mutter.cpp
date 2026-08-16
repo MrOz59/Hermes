@@ -198,7 +198,7 @@ TEST(MutterModePush, SetsTheModeTheClientAskedFor) {
   std::string argument;
 
   ASSERT_TRUE(
-    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-1", 1600, 1068, 90, serial, argument)
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-1", 1600, 1068, 90000, serial, argument)
   );
   EXPECT_EQ(serial, "2");
   // DP-2 keeps its mode and position; Virtual-1 moves off Mutter's preferred
@@ -217,7 +217,7 @@ TEST(MutterModePush, PlacesAnUnplacedOutputAtTheRightEdge) {
   // Mutter rejects layouts with gaps, so the appended monitor must start
   // exactly where the 2560-wide DP-2 ends.
   ASSERT_TRUE(
-    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateNotPlaced, "Virtual-1", 1600, 1068, 90, serial, argument)
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateNotPlaced, "Virtual-1", 1600, 1068, 90000, serial, argument)
   );
   EXPECT_EQ(serial, "9");
   EXPECT_EQ(
@@ -232,17 +232,17 @@ TEST(MutterModePush, PicksTheClosestRefreshRate) {
   std::string argument;
 
   ASSERT_TRUE(
-    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateManyRefresh, "Virtual-1", 1600, 1068, 90, serial, argument)
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateManyRefresh, "Virtual-1", 1600, 1068, 90000, serial, argument)
   );
   EXPECT_NE(argument.find("'1600x1068@89.991'"), std::string::npos);
 
   ASSERT_TRUE(
-    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateManyRefresh, "Virtual-1", 1600, 1068, 120, serial, argument)
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateManyRefresh, "Virtual-1", 1600, 1068, 120000, serial, argument)
   );
   EXPECT_NE(argument.find("'1600x1068@119.982'"), std::string::npos);
 
   ASSERT_TRUE(
-    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateManyRefresh, "Virtual-1", 1600, 1068, 60, serial, argument)
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateManyRefresh, "Virtual-1", 1600, 1068, 60000, serial, argument)
   );
   EXPECT_NE(argument.find("'1600x1068@59.990'"), std::string::npos);
 }
@@ -253,7 +253,7 @@ TEST(MutterModePush, DoesNothingWhenTheModeIsAlreadyCurrent) {
 
   // 1920x1080 is what Mutter already drives - there is nothing to apply.
   EXPECT_FALSE(
-    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-1", 1920, 1080, 60, serial, argument)
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-1", 1920, 1080, 60000, serial, argument)
   );
   EXPECT_TRUE(argument.empty());
 }
@@ -263,7 +263,7 @@ TEST(MutterModePush, RefusesGeometryTheConnectorDoesNotAdvertise) {
   std::string argument;
 
   EXPECT_FALSE(
-    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-1", 3840, 2160, 60, serial, argument)
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-1", 3840, 2160, 60000, serial, argument)
   );
   EXPECT_TRUE(argument.empty());
 }
@@ -274,10 +274,10 @@ TEST(MutterModePush, RejectsUnusableInput) {
 
   // Connector Mutter has not probed yet - the caller retries rather than fails.
   EXPECT_FALSE(
-    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-7", 1600, 1068, 90, serial, argument)
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-7", 1600, 1068, 90000, serial, argument)
   );
-  EXPECT_FALSE(VDISPLAY::buildMutterLayoutWithMode("", "Virtual-1", 1600, 1068, 90, serial, argument));
+  EXPECT_FALSE(VDISPLAY::buildMutterLayoutWithMode("", "Virtual-1", 1600, 1068, 90000, serial, argument));
   EXPECT_FALSE(
-    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-1", 0, 0, 90, serial, argument)
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-1", 0, 0, 90000, serial, argument)
   );
 }

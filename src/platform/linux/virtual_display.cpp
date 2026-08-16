@@ -1979,7 +1979,7 @@ namespace VDISPLAY {
                                             const std::string &connector,
                                             uint32_t width,
                                             uint32_t height,
-                                            uint32_t refresh_hz,
+                                            uint32_t refresh_mhz,
                                             state_t &state,
                                             std::string &argument) {
       state = {};
@@ -1993,8 +1993,10 @@ namespace VDISPLAY {
         return mode_push::unavailable;
       }
 
-      const auto refresh_delta = [refresh_hz](double rate) {
-        const double delta = rate - static_cast<double>(refresh_hz);
+      // Hermes carries refresh rates in mHz, matching wlr-output-management;
+      // Mutter reports them in Hz. Compare in Hz.
+      const auto refresh_delta = [refresh_mhz](double rate) {
+        const double delta = rate - static_cast<double>(refresh_mhz) / 1000.0;
         return delta < 0 ? -delta : delta;
       };
 
@@ -2064,7 +2066,7 @@ namespace VDISPLAY {
     static bool apply_output_mode(const std::string &connector,
                                   uint32_t width,
                                   uint32_t height,
-                                  uint32_t refresh_hz) {
+                                  uint32_t refresh_mhz) {
       if (!available() || connector.empty() || !width || !height) {
         return false;
       }
@@ -2073,7 +2075,7 @@ namespace VDISPLAY {
         state_t state;
         std::string argument;
         switch (build_layout_with_mode(command_output(get_current_state_command),
-                                       connector, width, height, refresh_hz, state, argument)) {
+                                       connector, width, height, refresh_mhz, state, argument)) {
           case mode_push::unavailable:
             // Mutter has not processed the hotplug yet.
             std::this_thread::sleep_for(std::chrono::milliseconds {100});
@@ -2094,7 +2096,7 @@ namespace VDISPLAY {
         }
 
         BOOST_LOG(info) << "[VDISPLAY/Mutter] Driving " << connector << " at " << width << "x" << height << "@"
-                        << refresh_hz << " for this session.";
+                        << (refresh_mhz / 1000) << "Hz for this session.";
         // Temporary rather than persistent: a streaming session must not
         // rewrite the user's saved layout in ~/.config/monitors.xml. Mutter
         // keeps a temporary config until something else replaces it; it does
@@ -3597,13 +3599,13 @@ namespace VDISPLAY {
     const std::string &connector,
     uint32_t width,
     uint32_t height,
-    uint32_t refresh_hz,
+    uint32_t refresh_mhz,
     std::string &serial,
     std::string &argument
   ) {
     mutter::state_t state;
     const bool ready =
-      mutter::build_layout_with_mode(current_state, connector, width, height, refresh_hz, state, argument) ==
+      mutter::build_layout_with_mode(current_state, connector, width, height, refresh_mhz, state, argument) ==
       mutter::mode_push::ready;
     serial = ready ? state.serial : std::string {};
     if (!ready) {

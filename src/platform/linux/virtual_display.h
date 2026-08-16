@@ -283,7 +283,8 @@ namespace VDISPLAY {
    * mode it prefers. If that is not the mode the streaming client asked for,
    * the compositor scans out one resolution while Hermes captures another and
    * the client receives a black image. This selects the advertised mode that
-   * matches @p width x @p height with the closest refresh rate, keeping every
+   * matches @p width x @p height with the closest refresh rate (@p refresh_mhz
+   * is in mHz, as Hermes carries it internally; Mutter reports Hz), keeping every
    * other logical monitor as Mutter has it, and appending a logical monitor at
    * the current right edge when Mutter adopted the connector without placing it
    * (Mutter rejects layouts with gaps between logical monitors).
@@ -299,7 +300,7 @@ namespace VDISPLAY {
     const std::string &connector,
     uint32_t width,
     uint32_t height,
-    uint32_t refresh_hz,
+    uint32_t refresh_mhz,
     std::string &serial,
     std::string &argument
   );

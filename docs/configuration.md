@@ -1858,11 +1858,13 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td colspan="2">
             Isolates the virtual display, so the streamed session is the only
             active output for its duration.
-            @note{On Linux, this requires a compositor with output management
-            (KScreen/KWin, or a Wayland compositor implementing output
-            management). If it is unavailable, Hermes logs a warning and
-            continues with the virtual display alongside the physical
-            outputs.}
+            @note{On Linux, this requires a compositor Hermes can drive:
+            KDE/KWin through KScreen, or a Wayland compositor implementing the
+            wlr-output-management protocol. GNOME is not supported here —
+            Mutter exposes neither, so exclusive mode logs a warning and the
+            physical outputs stay on. Hermes does use Mutter's own
+            DisplayConfig interface to negotiate the virtual display's mode,
+            but that is a separate mechanism and does not enable this option.}
         </td>
     </tr>
     <tr>

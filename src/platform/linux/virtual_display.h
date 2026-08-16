@@ -275,6 +275,35 @@ namespace VDISPLAY {
     std::string &argument
   );
 
+  /**
+   * @brief Build the Mutter ApplyMonitorsConfig payload that drives a connector
+   *        at a requested geometry.
+   *
+   * Mutter adopts a hotplugged virtual connector on its own, but at whichever
+   * mode it prefers. If that is not the mode the streaming client asked for,
+   * the compositor scans out one resolution while Hermes captures another and
+   * the client receives a black image. This selects the advertised mode that
+   * matches @p width x @p height with the closest refresh rate, keeping every
+   * other logical monitor as Mutter has it, and appending a logical monitor at
+   * the current right edge when Mutter adopted the connector without placing it
+   * (Mutter rejects layouts with gaps between logical monitors).
+   *
+   * Exposed so the payload can be validated without a running GNOME session.
+   *
+   * @return true when a config was built; false when the reply is unusable, the
+   *         connector is absent or does not advertise the geometry, or Mutter
+   *         already drives it at that mode (nothing to apply).
+   */
+  bool buildMutterLayoutWithMode(
+    const std::string &current_state,
+    const std::string &connector,
+    uint32_t width,
+    uint32_t height,
+    uint32_t refresh_hz,
+    std::string &serial,
+    std::string &argument
+  );
+
   /** Record whether capture was routed away from an uncomposited virtual output. */
   void setVirtualDisplayCaptureFallbackActive(bool active);
 

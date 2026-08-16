@@ -69,6 +69,48 @@ namespace {
     "[(0, 0, 1.0, uint32 0, true, [('Virtual-1', 'HRM', 'Hermes KMS', '0x00000001')], {})], "
     "{'layout-mode': <uint32 1>})";
 
+  /**
+   * The situation from the bug report: Hermes asked for 1600x1068@90, the
+   * connector advertises it, but Mutter adopted the output at its own preferred
+   * 1920x1080@60. Hermes then captures 1600x1068 while Mutter scans out
+   * 1920x1080 and the client receives a black image.
+   */
+  constexpr const char *kCurrentStateWrongMode =
+    "(uint32 2, "
+    "[(('DP-2', 'VSC', 'VA2932 SERIES', 'WL5242501007'), "
+    "[('2560x1080@59.896', 2560, 1080, 59.896186828613281, 1.0, [1.0], {'is-current': <true>})], {}), "
+    "(('Virtual-1', 'HRM', 'Hermes KMS', '0x00000001'), "
+    "[('1600x1068@89.991', 1600, 1068, 89.990867614746094, 1.0, [1.0, 2.0], {}), "
+    "('1920x1080@60.000', 1920, 1080, 60.0, 1.0, [1.0, 2.0], "
+    "{'is-current': <true>, 'is-preferred': <true>})], {'display-name': <'HRM'>})], "
+    "[(0, 0, 1.0, uint32 0, true, [('DP-2', 'VSC', 'VA2932 SERIES', 'WL5242501007')], @a{sv} {}), "
+    "(2560, 0, 1.0, 0, false, [('Virtual-1', 'HRM', 'Hermes KMS', '0x00000001')], {})], "
+    "{'layout-mode': <uint32 1>})";
+
+  /** Mutter probed the connector but has not placed it in the layout yet. */
+  constexpr const char *kCurrentStateNotPlaced =
+    "(uint32 9, "
+    "[(('DP-2', 'VSC', 'VA2932 SERIES', 'WL5242501007'), "
+    "[('2560x1080@59.896', 2560, 1080, 59.896186828613281, 1.0, [1.0], {'is-current': <true>})], {}), "
+    "(('Virtual-1', 'HRM', 'Hermes KMS', '0x00000001'), "
+    "[('1600x1068@89.991', 1600, 1068, 89.990867614746094, 1.0, [1.0], {})], {})], "
+    "[(0, 0, 1.0, uint32 0, true, [('DP-2', 'VSC', 'VA2932 SERIES', 'WL5242501007')], @a{sv} {})], "
+    "{'layout-mode': <uint32 1>})";
+
+  /** Same geometry offered at several refresh rates. */
+  constexpr const char *kCurrentStateManyRefresh =
+    "(uint32 4, "
+    "[(('DP-2', 'VSC', 'VA2932 SERIES', 'WL5242501007'), "
+    "[('2560x1080@59.896', 2560, 1080, 59.896186828613281, 1.0, [1.0], {'is-current': <true>})], {}), "
+    "(('Virtual-1', 'HRM', 'Hermes KMS', '0x00000001'), "
+    "[('1600x1068@59.990', 1600, 1068, 59.99, 1.0, [1.0], {}), "
+    "('1600x1068@89.991', 1600, 1068, 89.990867614746094, 1.0, [1.0], {}), "
+    "('1600x1068@119.982', 1600, 1068, 119.982, 1.0, [1.0], {}), "
+    "('1920x1080@60.000', 1920, 1080, 60.0, 1.0, [1.0], {'is-current': <true>})], {})], "
+    "[(0, 0, 1.0, uint32 0, true, [('DP-2', 'VSC', 'VA2932 SERIES', 'WL5242501007')], @a{sv} {}), "
+    "(2560, 0, 1.0, 0, false, [('Virtual-1', 'HRM', 'Hermes KMS', '0x00000001')], {})], "
+    "{'layout-mode': <uint32 1>})";
+
 }  // namespace
 
 TEST(MutterLayoutRepair, DropsTheVirtualLogicalMonitor) {
@@ -149,4 +191,93 @@ TEST(MutterLayoutRepair, RefusesConnectorNamesThatCouldEscapeTheShell) {
   std::string argument;
   EXPECT_FALSE(VDISPLAY::buildMutterLayoutWithoutConnector(hostile, "Virtual-1", serial, argument));
   EXPECT_TRUE(argument.empty());
+}
+
+TEST(MutterModePush, SetsTheModeTheClientAskedFor) {
+  std::string serial;
+  std::string argument;
+
+  ASSERT_TRUE(
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-1", 1600, 1068, 90, serial, argument)
+  );
+  EXPECT_EQ(serial, "2");
+  // DP-2 keeps its mode and position; Virtual-1 moves off Mutter's preferred
+  // 1920x1080 onto the geometry Hermes is capturing.
+  EXPECT_EQ(
+    argument,
+    "[(0, 0, 1.0, uint32 0, true, [('DP-2', '2560x1080@59.896', @a{sv} {})]), "
+    "(2560, 0, 1.0, uint32 0, false, [('Virtual-1', '1600x1068@89.991', @a{sv} {})])]"
+  );
+}
+
+TEST(MutterModePush, PlacesAnUnplacedOutputAtTheRightEdge) {
+  std::string serial;
+  std::string argument;
+
+  // Mutter rejects layouts with gaps, so the appended monitor must start
+  // exactly where the 2560-wide DP-2 ends.
+  ASSERT_TRUE(
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateNotPlaced, "Virtual-1", 1600, 1068, 90, serial, argument)
+  );
+  EXPECT_EQ(serial, "9");
+  EXPECT_EQ(
+    argument,
+    "[(0, 0, 1.0, uint32 0, true, [('DP-2', '2560x1080@59.896', @a{sv} {})]), "
+    "(2560, 0, 1.0, uint32 0, false, [('Virtual-1', '1600x1068@89.991', @a{sv} {})])]"
+  );
+}
+
+TEST(MutterModePush, PicksTheClosestRefreshRate) {
+  std::string serial;
+  std::string argument;
+
+  ASSERT_TRUE(
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateManyRefresh, "Virtual-1", 1600, 1068, 90, serial, argument)
+  );
+  EXPECT_NE(argument.find("'1600x1068@89.991'"), std::string::npos);
+
+  ASSERT_TRUE(
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateManyRefresh, "Virtual-1", 1600, 1068, 120, serial, argument)
+  );
+  EXPECT_NE(argument.find("'1600x1068@119.982'"), std::string::npos);
+
+  ASSERT_TRUE(
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateManyRefresh, "Virtual-1", 1600, 1068, 60, serial, argument)
+  );
+  EXPECT_NE(argument.find("'1600x1068@59.990'"), std::string::npos);
+}
+
+TEST(MutterModePush, DoesNothingWhenTheModeIsAlreadyCurrent) {
+  std::string serial;
+  std::string argument;
+
+  // 1920x1080 is what Mutter already drives - there is nothing to apply.
+  EXPECT_FALSE(
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-1", 1920, 1080, 60, serial, argument)
+  );
+  EXPECT_TRUE(argument.empty());
+}
+
+TEST(MutterModePush, RefusesGeometryTheConnectorDoesNotAdvertise) {
+  std::string serial;
+  std::string argument;
+
+  EXPECT_FALSE(
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-1", 3840, 2160, 60, serial, argument)
+  );
+  EXPECT_TRUE(argument.empty());
+}
+
+TEST(MutterModePush, RejectsUnusableInput) {
+  std::string serial;
+  std::string argument;
+
+  // Connector Mutter has not probed yet - the caller retries rather than fails.
+  EXPECT_FALSE(
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-7", 1600, 1068, 90, serial, argument)
+  );
+  EXPECT_FALSE(VDISPLAY::buildMutterLayoutWithMode("", "Virtual-1", 1600, 1068, 90, serial, argument));
+  EXPECT_FALSE(
+    VDISPLAY::buildMutterLayoutWithMode(kCurrentStateWrongMode, "Virtual-1", 0, 0, 90, serial, argument)
+  );
 }

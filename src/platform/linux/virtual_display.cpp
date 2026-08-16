@@ -1493,28 +1493,6 @@ namespace VDISPLAY {
       return output;
     }
 
-    // Returns true if Mutter's current monitor state references the given DRM
-    // connector name (e.g. "HERMES-1"), meaning the compositor has adopted the
-    // virtual output and is driving it.
-    static bool output_present(const std::string &connector_name) {
-      if (!available() || connector_name.empty()) {
-        return false;
-      }
-      const std::string command =
-        "gdbus call --session "
-        "--dest org.gnome.Mutter.DisplayConfig "
-        "--object-path /org/gnome/Mutter/DisplayConfig "
-        "--method org.gnome.Mutter.DisplayConfig.GetCurrentState 2>/dev/null";
-      const auto state = command_output(command.c_str());
-      if (state.empty()) {
-        return false;
-      }
-      // GetCurrentState embeds the connector name as a string in its reply; a
-      // substring match is sufficient to know Mutter is aware of the output.
-      return state.find("'" + connector_name + "'") != std::string::npos ||
-             state.find('"' + connector_name + '"') != std::string::npos;
-    }
-
     // ------------------------------------------------------------------
     // ApplyMonitorsConfig
     //
@@ -1550,10 +1528,51 @@ namespace VDISPLAY {
       std::vector<std::string> connectors;
     };
 
+    struct mode_t {
+      std::string id;
+      int width {0};
+      int height {0};
+      double refresh {0.0};
+      bool current {false};
+    };
+
+    struct monitor_t {
+      std::string connector;
+      std::vector<mode_t> modes;
+    };
+
     struct state_t {
       std::string serial;
       std::map<std::string, std::string> current_mode;  ///< connector -> mode id
+      std::vector<monitor_t> monitors;
       std::vector<logical_monitor_t> logical_monitors;
+
+      const monitor_t *find_monitor(const std::string &connector) const {
+        for (const auto &monitor : monitors) {
+          if (monitor.connector == connector) {
+            return &monitor;
+          }
+        }
+        return nullptr;
+      }
+
+      /** Width of a logical monitor, taken from its first connector's current mode. */
+      int logical_width(const logical_monitor_t &lm) const {
+        if (lm.connectors.empty()) {
+          return 0;
+        }
+        const auto current = current_mode.find(lm.connectors.front());
+        const auto *monitor = find_monitor(lm.connectors.front());
+        if (current == current_mode.end() || !monitor) {
+          return 0;
+        }
+        for (const auto &mode : monitor->modes) {
+          if (mode.id == current->second) {
+            return mode.width;
+          }
+        }
+        return 0;
+      }
     };
 
     static const char *get_current_state_command =
@@ -1700,6 +1719,8 @@ namespace VDISPLAY {
         if (connector.empty() || !strip_variant(modes, '[', ']')) {
           continue;
         }
+        monitor_t parsed_monitor;
+        parsed_monitor.connector = connector;
         for (const auto &mode_entry : split_variant(modes)) {
           std::string mode = mode_entry;
           if (!strip_variant(mode, '(', ')')) {
@@ -1709,12 +1730,22 @@ namespace VDISPLAY {
           if (mode_fields.size() < 7) {
             continue;
           }
-          if (mode_fields.back().find("'is-current': <true>") == std::string::npos) {
+
+          mode_t parsed_mode;
+          parsed_mode.id = unquote_variant(mode_fields[0]);
+          if (parsed_mode.id.empty()) {
             continue;
           }
-          out.current_mode[connector] = unquote_variant(mode_fields[0]);
-          break;
+          parsed_mode.width = std::atoi(numeric_variant(mode_fields[1]).c_str());
+          parsed_mode.height = std::atoi(numeric_variant(mode_fields[2]).c_str());
+          parsed_mode.refresh = std::atof(numeric_variant(mode_fields[3]).c_str());
+          parsed_mode.current = mode_fields.back().find("'is-current': <true>") != std::string::npos;
+          if (parsed_mode.current) {
+            out.current_mode[connector] = parsed_mode.id;
+          }
+          parsed_monitor.modes.emplace_back(std::move(parsed_mode));
         }
+        out.monitors.emplace_back(std::move(parsed_monitor));
       }
 
       std::string logical = top[2];
@@ -1768,7 +1799,8 @@ namespace VDISPLAY {
     // Render the a(iiduba(ssa{sv})) argument ApplyMonitorsConfig expects.
     static bool build_apply_argument(const state_t &state,
                                      const std::vector<logical_monitor_t> &layout,
-                                     std::string &argument) {
+                                     std::string &argument,
+                                     const std::map<std::string, std::string> &mode_override = {}) {
       argument = "[";
       for (size_t i = 0; i < layout.size(); ++i) {
         const auto &lm = layout[i];
@@ -1779,17 +1811,21 @@ namespace VDISPLAY {
         argument += lm.x + ", " + lm.y + ", " + lm.scale + ", uint32 " + lm.transform + ", " + lm.primary + ", [";
         for (size_t j = 0; j < lm.connectors.size(); ++j) {
           const auto &connector = lm.connectors[j];
-          const auto mode = state.current_mode.find(connector);
-          if (mode == state.current_mode.end()) {
-            BOOST_LOG(warning) << "[VDISPLAY/Mutter] No current mode for " << connector << "; skipping layout repair.";
+          std::string mode_id;
+          if (const auto override_it = mode_override.find(connector); override_it != mode_override.end()) {
+            mode_id = override_it->second;
+          } else if (const auto current = state.current_mode.find(connector); current != state.current_mode.end()) {
+            mode_id = current->second;
+          } else {
+            BOOST_LOG(warning) << "[VDISPLAY/Mutter] No mode known for " << connector << "; leaving the layout alone.";
             return false;
           }
-          if (!safe_variant_token(connector) || !safe_variant_token(mode->second)) {
+          if (!safe_variant_token(connector) || !safe_variant_token(mode_id)) {
             BOOST_LOG(warning) << "[VDISPLAY/Mutter] Refusing to build a config from an unexpected connector or mode id.";
             return false;
           }
           argument += (j ? ", ('" : "('");
-          argument += connector + "', '" + mode->second + "', @a{sv} {})";
+          argument += connector + "', '" + mode_id + "', @a{sv} {})";
         }
         argument += "])";
       }
@@ -1916,9 +1952,158 @@ namespace VDISPLAY {
 
         BOOST_LOG(warning) << "[VDISPLAY/Mutter] Dropping boot-enabled virtual output " << virtual_connector
                            << " from Mutter's layout.";
-        run_apply(state, argument, apply_method::persistent);
+        // Temporary, like every other layout change Hermes makes: the user's
+        // saved layout in ~/.config/monitors.xml stays theirs.
+        run_apply(state, argument, apply_method::temporary);
         return;
       }
+    }
+
+    enum class mode_push {
+      unavailable,  ///< Reply unusable, or Mutter has not probed the connector yet.
+      unsupported,  ///< The connector does not advertise the requested geometry.
+      already_set,  ///< Mutter already drives the connector at that mode.
+      ready,        ///< `argument` holds the config to submit.
+    };
+
+    /**
+     * Build the ApplyMonitorsConfig argument that drives @p connector at the
+     * requested geometry, keeping every other logical monitor as Mutter has it.
+     *
+     * When Mutter has adopted the connector without placing it in the layout,
+     * a logical monitor is appended immediately right of the existing ones.
+     * Mutter rejects a layout with gaps ("Logical monitors not adjacent"), so
+     * the new monitor starts exactly at the current right edge.
+     */
+    static mode_push build_layout_with_mode(const std::string &reply,
+                                            const std::string &connector,
+                                            uint32_t width,
+                                            uint32_t height,
+                                            uint32_t refresh_hz,
+                                            state_t &state,
+                                            std::string &argument) {
+      state = {};
+      argument.clear();
+      if (reply.empty() || connector.empty() || !width || !height || !parse_current_state(reply, state)) {
+        return mode_push::unavailable;
+      }
+
+      const monitor_t *monitor = state.find_monitor(connector);
+      if (!monitor) {
+        return mode_push::unavailable;
+      }
+
+      const auto refresh_delta = [refresh_hz](double rate) {
+        const double delta = rate - static_cast<double>(refresh_hz);
+        return delta < 0 ? -delta : delta;
+      };
+
+      const mode_t *chosen = nullptr;
+      for (const auto &mode : monitor->modes) {
+        if (mode.width != static_cast<int>(width) || mode.height != static_cast<int>(height)) {
+          continue;
+        }
+        if (!chosen || refresh_delta(mode.refresh) < refresh_delta(chosen->refresh)) {
+          chosen = &mode;
+        }
+      }
+      if (!chosen) {
+        return mode_push::unsupported;
+      }
+      if (chosen->current) {
+        return mode_push::already_set;
+      }
+
+      std::vector<logical_monitor_t> layout = state.logical_monitors;
+      const auto owner = std::find_if(layout.begin(), layout.end(), [&connector](const logical_monitor_t &lm) {
+        return std::find(lm.connectors.begin(), lm.connectors.end(), connector) != lm.connectors.end();
+      });
+      if (owner == layout.end()) {
+        int right_edge = 0;
+        for (const auto &lm : layout) {
+          const int lm_width = state.logical_width(lm);
+          if (lm_width <= 0) {
+            // Without a width the placement cannot be made adjacent, and Mutter
+            // would reject the whole config.
+            return mode_push::unavailable;
+          }
+          right_edge = std::max(right_edge, std::atoi(lm.x.c_str()) + lm_width);
+        }
+        logical_monitor_t added;
+        added.x = std::to_string(right_edge);
+        added.y = "0";
+        added.scale = "1.0";
+        added.transform = "0";
+        added.primary = layout.empty() ? "true" : "false";
+        added.connectors.emplace_back(connector);
+        layout.emplace_back(std::move(added));
+      }
+
+      return build_apply_argument(state, layout, argument, {{connector, chosen->id}}) ? mode_push::ready :
+                                                                                        mode_push::unavailable;
+    }
+
+    /**
+     * Make Mutter drive @p connector at the geometry the streaming client asked
+     * for.
+     *
+     * Mutter adopts a hotplugged connector on its own, but asynchronously and at
+     * whichever mode it prefers — not necessarily the one Hermes requested. Two
+     * things go wrong if we only look once and only look for presence:
+     *
+     *   - checked immediately after SET_OUTPUT, the connector is not in Mutter's
+     *     state yet, and Hermes concludes the compositor refused it;
+     *   - once it does appear, Mutter may be scanning out its own preferred mode
+     *     while Hermes captures at the requested size, so the encoder publishes
+     *     frames the compositor never rendered and the client sees black.
+     *
+     * So wait for the connector, then push the exact mode instead of hoping.
+     *
+     * @return true when Mutter drives the connector at the requested geometry.
+     */
+    static bool apply_output_mode(const std::string &connector,
+                                  uint32_t width,
+                                  uint32_t height,
+                                  uint32_t refresh_hz) {
+      if (!available() || connector.empty() || !width || !height) {
+        return false;
+      }
+
+      for (int attempt = 0; attempt < 40; ++attempt) {  // ~4s
+        state_t state;
+        std::string argument;
+        switch (build_layout_with_mode(command_output(get_current_state_command),
+                                       connector, width, height, refresh_hz, state, argument)) {
+          case mode_push::unavailable:
+            // Mutter has not processed the hotplug yet.
+            std::this_thread::sleep_for(std::chrono::milliseconds {100});
+            continue;
+          case mode_push::unsupported:
+            BOOST_LOG(warning) << "[VDISPLAY/Mutter] " << connector << " does not advertise " << width << "x" << height
+                               << "; leaving Mutter's own choice in place.";
+            return false;
+          case mode_push::already_set:
+            BOOST_LOG(info) << "[VDISPLAY/Mutter] " << connector << " is already driven at the requested mode.";
+            return true;
+          case mode_push::ready:
+            break;
+        }
+
+        if (!run_apply(state, argument, apply_method::verify)) {
+          return false;
+        }
+
+        BOOST_LOG(info) << "[VDISPLAY/Mutter] Driving " << connector << " at " << width << "x" << height << "@"
+                        << refresh_hz << " for this session.";
+        // Temporary rather than persistent: a streaming session must not
+        // rewrite the user's saved layout in ~/.config/monitors.xml. Mutter
+        // keeps a temporary config until something else replaces it; it does
+        // not revert on its own.
+        return run_apply(state, argument, apply_method::temporary);
+      }
+
+      BOOST_LOG(warning) << "[VDISPLAY/Mutter] " << connector << " never appeared in Mutter's monitor state.";
+      return false;
     }
   }  // namespace mutter
 
@@ -3407,6 +3592,26 @@ namespace VDISPLAY {
     return ready;
   }
 
+  bool buildMutterLayoutWithMode(
+    const std::string &current_state,
+    const std::string &connector,
+    uint32_t width,
+    uint32_t height,
+    uint32_t refresh_hz,
+    std::string &serial,
+    std::string &argument
+  ) {
+    mutter::state_t state;
+    const bool ready =
+      mutter::build_layout_with_mode(current_state, connector, width, height, refresh_hz, state, argument) ==
+      mutter::mode_push::ready;
+    serial = ready ? state.serial : std::string {};
+    if (!ready) {
+      argument.clear();
+    }
+    return ready;
+  }
+
   void setVirtualDisplayCaptureFallbackActive(bool active) {
     virtual_display_capture_fallback_active = active;
   }
@@ -3444,28 +3649,29 @@ namespace VDISPLAY {
 
 #ifdef SUNSHINE_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND) {
-      // GNOME/Mutter exposes neither kscreen-doctor nor wlr-output-management.
-      // It typically adopts the hotplugged HERMES-1 connector on its own, so
-      // confirm Mutter is driving the virtual output via its D-Bus
-      // DisplayConfig before deciding capture is safe. We do not push a layout
-      // to Mutter here.
-      if (mutter::available()) {
-        if (mutter::output_present(connector)) {
-          BOOST_LOG(info) << "[VDISPLAY] Mutter has adopted virtual output " << connector
-                          << "; capturing it directly.";
-          return true;
-        }
-        BOOST_LOG(warning) << "[VDISPLAY] GNOME/Mutter session detected but it has not adopted "
-                           << connector << ". Hermes cannot push a display layout to Mutter; "
-                           << "the virtual display may need to be enabled in GNOME Settings, "
-                           << "or use a KDE/wlroots session for automatic activation.";
-        return false;
-      }
-
       int width = 0;
       int height = 0;
       int refresh_rate = 0;
       if (!virtual_display_mode(displayName, width, height, refresh_rate)) {
+        return false;
+      }
+
+      // GNOME/Mutter exposes neither kscreen-doctor nor wlr-output-management,
+      // only org.gnome.Mutter.DisplayConfig. Mutter does adopt the hotplugged
+      // connector on its own, but asynchronously and at its own preferred mode,
+      // so waiting for it to appear is not enough: capture would run at the
+      // requested geometry while the compositor scans out another one, and the
+      // client would receive a black image. Push the mode instead.
+      if (mutter::available()) {
+        if (mutter::apply_output_mode(connector, width, height, refresh_rate)) {
+          BOOST_LOG(info) << "[VDISPLAY] Mutter is driving virtual output " << connector << " at " << width << "x"
+                          << height << "@" << refresh_rate << "; capturing it directly.";
+          return true;
+        }
+        BOOST_LOG(warning) << "[VDISPLAY] GNOME/Mutter did not end up driving " << connector << " at " << width << "x"
+                           << height << "@" << refresh_rate
+                           << ". The virtual display may need to be enabled manually in GNOME Settings, "
+                           << "or use a KDE/wlroots session for automatic activation.";
         return false;
       }
       const bool activated = wl::configure_virtual_output(connector, width, height, refresh_rate, false);

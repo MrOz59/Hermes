@@ -12,6 +12,20 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Fixed
+- Streaming a Hermes-KMS virtual display on GNOME no longer sends the client a
+  black image. Hermes checked whether Mutter had adopted the virtual connector
+  with a single D-Bus call issued immediately after connecting it — 6 ms in the
+  reported case — so the connector was reliably still absent and the session was
+  declared failed. Mutter does adopt it, but asynchronously, and at whichever
+  mode it prefers rather than the one the client asked for: it drove the output
+  at 1920x1080@60 while Hermes captured and encoded the requested 1600x1068@90,
+  so the encoder published frames the compositor never rendered. Hermes now
+  waits for Mutter to probe the connector and pushes the requested mode through
+  `ApplyMonitorsConfig` instead of hoping the compositor picked it, appending a
+  logical monitor at the layout's right edge when Mutter adopted the connector
+  without placing it. The config is verified before it is applied and is applied
+  as temporary, so the user's saved layout in `~/.config/monitors.xml` is never
+  rewritten ([#22]).
 - GNOME no longer keeps a black phantom monitor when a Hermes-KMS connector
   comes up enabled at boot. Loading the module with `initial_enabled=1` — which
   older Hermes-KMS packages wrote into `/etc/modprobe.d/hermes-kms.conf` —
@@ -276,6 +290,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#17]: https://github.com/MrOz59/Hermes/issues/17
 [#19]: https://github.com/MrOz59/Hermes/issues/19
 [#20]: https://github.com/MrOz59/Hermes/issues/20
+[#22]: https://github.com/MrOz59/Hermes/issues/22
 
 ## [0.4.0] - 2026-07-02
 

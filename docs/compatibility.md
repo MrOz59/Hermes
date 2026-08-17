@@ -153,13 +153,44 @@ headless sway session with audio and XWayland.
 
 | Vendor | Encoder | Capture path | Status |
 | --- | --- | --- | --- |
-| AMD | VAAPI | Zero-copy DMA-BUF import | Verified |
+| AMD RDNA2 (Navi 2x) | VAAPI | Zero-copy DMA-BUF import | Verified |
+| AMD RDNA3 (Navi 3x) | VAAPI | Zero-copy DMA-BUF import | One unexplained report, see below |
 | Intel | VAAPI | Zero-copy DMA-BUF import | Expected to work |
 | NVIDIA | NVENC | CPU copy | Contributed, see below |
 | any | software | either | Fallback |
 
 The zero-copy path is validated with `XRGB8888`, linear. NV12/P010 and HDR are
 not validated.
+
+### An unexplained DMA-BUF import failure on RDNA3
+
+One report ([#22](https://github.com/MrOz59/Hermes/issues/22)) has
+`eglCreateImage(EGL_LINUX_DMA_BUF_EXT)` refusing the Hermes-KMS scanout buffer
+with `EGL_BAD_ALLOC` on an RX 7800 XT (Navi 32, RDNA3), leaving the client with
+a black image while input and audio work. The same import succeeds on an
+RX 6700 XT (Navi 22, RDNA2).
+
+**This is a single report and RDNA3 is not established as the cause.** It is
+recorded here because everything else that could plausibly differ has been
+tested and ruled out, not because the GPU generation has been proven guilty:
+
+- the buffer is byte-for-byte identical on both machines — `1600x1068`,
+  `XR24`, modifier `0x0` (linear), pitch 6400, DMA-BUF 6836224 bytes;
+- Hermes-KMS 0.3.0 and 0.3.1 produce the same buffer, down to the same CRC;
+- kernels 7.0.9 and 7.1.8 produce the same buffer and the same successful CPU
+  mapping of it;
+- Mesa 26.1.0 and 26.1.6 both import it successfully on RDNA2;
+- `EGL_EXT_image_dma_buf_import_modifiers` is present on both, so both sides
+  pass the same attributes.
+
+Two things are still uncontrolled. The reporter runs CachyOS's Mesa build
+(`3:26.1.6-1`), while the comparison used Arch's (`1:26.1.6-1`) — same upstream
+version, different packaging. And the isolated import checker has not yet been
+run to completion on the affected machine, so the failure is currently only
+observed through Hermes, not reproduced standalone.
+
+If you have an RDNA3 card, a data point either way is genuinely useful — see
+[Reporting problems and contributing](#reporting-problems-and-contributing).
 
 **NVIDIA needs a CPU copy.** NVIDIA's EGL import of the driver's system-memory
 DMA-BUFs reads the wrong pages beyond the first ones, so NVENC sessions capture

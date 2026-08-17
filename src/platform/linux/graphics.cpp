@@ -533,6 +533,12 @@ namespace egl {
       attribs.emplace_back(plane_attr.pitch);
       attribs.emplace_back(surface.pitches[x]);
 
+      // No need to check for EGL_EXT_image_dma_buf_import_modifiers here:
+      // make_display() refuses to return a display without it, and every
+      // import_source() caller gets its display from there. The standalone
+      // hermes-egl-import-check tool does guard this, because it builds its
+      // own display and cannot make the same assumption - the difference is
+      // deliberate, not an oversight here.
       if (surface.modifier != DRM_FORMAT_MOD_INVALID) {
         attribs.emplace_back(plane_attr.lo);
         attribs.emplace_back(surface.modifier & 0xFFFFFFFF);

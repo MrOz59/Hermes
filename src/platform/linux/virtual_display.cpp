@@ -2634,10 +2634,16 @@ namespace VDISPLAY {
 
     // evdi_add_device() reports a successful sysfs write, not the EVDI device
     // index. Rescan check_device() to find the index assigned by the kernel.
+    //
+    // libevdi's write_add_device() returns fwrite()'s result for a 1-byte
+    // buffer: exactly 1 on a successful sysfs write, 0 on any failure
+    // (fopen("/sys/devices/evdi/add", "w") failing, or the write itself
+    // failing). It never returns a negative value, so the previous
+    // `result < 0` check could never fire and silently swallowed every
+    // real failure, leaving the caller to poll for a device that was
+    // never created.
     const int result = evdi.add_device();
-    // libevdi returns 0 when the sysfs request succeeds. It does not return
-    // the device index, so only negative values are failures.
-    if (result < 0) {
+    if (result != 1) {
       BOOST_LOG(warning) << "[VDISPLAY] evdi_add_device() failed (returned " << result << ").";
       return -1;
     }

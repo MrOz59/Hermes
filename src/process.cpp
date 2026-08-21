@@ -1239,6 +1239,28 @@ namespace proc {
        || !video::allow_encoder_probing() // No active display presents
       );
 
+    // Two independent reports arrived from users whose Hermes-KMS status panel
+    // read "ready", who then found their physical monitor being streamed and no
+    // explanation anywhere. Nothing was wrong with the driver in either case:
+    // selecting a backend is not the same as asking for a virtual display, and
+    // when nothing asks, this block is skipped without a word. Say so.
+    if (!needs_virtual_display) {
+      if (gamescope_session) {
+        BOOST_LOG(info) << "Virtual display skipped: this is a standalone Gamescope session, "
+                           "which provides its own display.";
+      } else {
+        BOOST_LOG(info) << "Virtual display not requested for this session; capturing the existing "
+                           "display instead. Enabling a backend only makes virtual displays "
+                           "available - something still has to ask for one. Turn on 'virtual "
+                           "display' for the app being launched (Desktop, Steam Big Picture and so "
+                           "on) to have every session on it use one; the alternatives are the "
+                           "client sending virtualDisplay=1, the client's certificate set to always "
+                           "use one, or headless mode. 'virtual_display_backend' and "
+                           "'hermes_kms_multi_output' pick which backend serves the request, never "
+                           "whether one is made.";
+      }
+    }
+
     bool session_scoped_display_prepared = false;
 #ifndef _WIN32
     if (needs_virtual_display &&

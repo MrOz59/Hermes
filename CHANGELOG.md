@@ -12,6 +12,15 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Fixed
+- A session that falls back to the physical display now says why. Selecting a
+  virtual-display backend is not the same as asking for a virtual display:
+  `virtual_display_backend` and `hermes_kms_multi_output` choose which backend
+  serves a request, while the request itself comes from the client
+  (`virtualDisplay=1`), the client's certificate, the app's own setting, or
+  headless mode. When none of those apply the virtual-display path was skipped
+  silently, so a host whose Hermes-KMS panel read "ready" would stream the
+  physical monitor at the wrong resolution with nothing in the log to explain
+  it — reported independently twice ([#25]).
 - Streaming a Hermes-KMS virtual display on GNOME no longer sends the client a
   black image. Hermes checked whether Mutter had adopted the virtual connector
   with a single D-Bus call issued immediately after connecting it — 6 ms in the
@@ -291,6 +300,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#19]: https://github.com/MrOz59/Hermes/issues/19
 [#20]: https://github.com/MrOz59/Hermes/issues/20
 [#22]: https://github.com/MrOz59/Hermes/issues/22
+[#25]: https://github.com/MrOz59/Hermes/issues/25
 
 ## [0.4.0] - 2026-07-02
 

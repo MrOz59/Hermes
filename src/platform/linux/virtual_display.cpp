@@ -16,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <cctype>
+#include <cstddef>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -23,6 +24,7 @@
 #include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <set>
@@ -241,9 +243,10 @@ namespace VDISPLAY {
   }
 
   namespace hermes_kms {
-    constexpr uint32_t base_uapi_version = 7;
     constexpr uint32_t multi_output_uapi_version = 8;
     constexpr uint32_t multi_device_uapi_version = 9;
+    constexpr uint32_t session_device_uapi_version = 10;
+    constexpr uint32_t session_access_uapi_version = 11;
     constexpr size_t name_len = 32;
 
     constexpr uint64_t cap_virtual_output = 1ULL << 0;
@@ -256,6 +259,8 @@ namespace VDISPLAY {
     constexpr uint64_t cap_metrics = 1ULL << 10;
     constexpr uint64_t cap_multi_output = 1ULL << 11;
     constexpr uint64_t cap_multi_device = 1ULL << 12;
+    constexpr uint64_t cap_session_token = 1ULL << 14;
+    constexpr uint64_t cap_cursor_capture = 1ULL << 15;
     constexpr uint64_t cap_zero_copy_target = 1ULL << 33;
     constexpr uint64_t cap_sync_file = 1ULL << 35;
 
@@ -264,6 +269,7 @@ namespace VDISPLAY {
 
     constexpr uint32_t set_output_connected = 1U << 0;
     constexpr uint32_t set_output_owner_assigned = 1U << 1;
+    constexpr uint32_t device_role_session = 2U;
 
     struct version_t {
       uint32_t uapi_version;
@@ -308,6 +314,7 @@ namespace VDISPLAY {
       uint32_t framebuffer_plane_count;
       uint32_t framebuffer_pitch[4];
       uint32_t framebuffer_offset[4];
+      uint32_t reserved_alignment;
       uint64_t framebuffer_modifier;
       uint64_t session_id;
       int32_t owner_pid;
@@ -327,7 +334,10 @@ namespace VDISPLAY {
       uint32_t output_count;
       uint32_t device_index;
       uint32_t device_count;
-      uint32_t reserved[4];
+      uint32_t device_role;
+      uint32_t session_index;
+      uint32_t session_device_count;
+      uint32_t cursor_plane_id;
     };
 
     struct select_output_t {
@@ -382,10 +392,64 @@ namespace VDISPLAY {
       uint64_t reserved[6];
     };
 
+    struct wait_update_t {
+      uint64_t flags;
+      uint64_t after_frame_sequence;
+      uint64_t after_cursor_sequence;
+      uint64_t frame_sequence;
+      uint64_t cursor_sequence;
+      uint64_t frame_timestamp_ns;
+      uint64_t cursor_timestamp_ns;
+      uint64_t status_flags;
+      uint32_t timeout_ms;
+      uint32_t reserved0;
+      uint64_t reserved[5];
+    };
+
+    struct acquire_cursor_t {
+      uint64_t flags;
+      uint64_t sequence;
+      uint64_t image_sequence;
+      uint64_t timestamp_ns;
+      uint64_t modifier;
+      uint64_t session_id;
+      int32_t position_x;
+      int32_t position_y;
+      int32_t crtc_x;
+      int32_t crtc_y;
+      uint32_t crtc_w;
+      uint32_t crtc_h;
+      uint32_t src_x;
+      uint32_t src_y;
+      uint32_t src_w;
+      uint32_t src_h;
+      int32_t hotspot_x;
+      int32_t hotspot_y;
+      uint32_t framebuffer_id;
+      uint32_t width;
+      uint32_t height;
+      uint32_t format;
+      uint32_t plane_count;
+      uint32_t pitch[4];
+      uint32_t offset[4];
+      int32_t dma_buf_fd[4];
+      int32_t sync_file_fd;
+      uint32_t reserved0;
+      uint32_t reserved_alignment;
+      uint64_t reserved[6];
+    };
+
     static_assert(sizeof(caps_t) == 40);
     static_assert(sizeof(identity_t) == 144);
     static_assert(sizeof(select_output_t) == 80);
     static_assert(sizeof(acquire_frame_t) == 176);
+    static_assert(sizeof(wait_frame_t) == 96);
+    static_assert(sizeof(wait_update_t) == 112);
+    static_assert(sizeof(acquire_cursor_t) == 224);
+    static_assert(offsetof(identity_t, cursor_plane_id) == 140);
+    static_assert(offsetof(wait_update_t, timeout_ms) == 64);
+    static_assert(offsetof(acquire_cursor_t, dma_buf_fd) == 148);
+    static_assert(offsetof(acquire_cursor_t, reserved) == 176);
 
     // Mirrors `struct drm_hermes_kms_metrics` in the driver UAPI header
     // (include/uapi/drm/hermes_kms_drm.h). Field order and size must match
@@ -415,14 +479,43 @@ namespace VDISPLAY {
       uint64_t last_wait_duration_ns;
       uint64_t last_dmabuf_export_ns;
       uint64_t last_sync_file_export_ns;
-      uint64_t reserved[16];
+      uint64_t vblank_count;
+      uint64_t vblank_overrun_count;
+      uint64_t reserved[14];
+    };
+
+    struct session_access_t {
+      uint64_t token[2];
+      uint64_t session_id;
+      uint32_t operation;
+      uint32_t output_index;
+      uint32_t flags;
+      uint32_t result_flags;
+      uint64_t reserved[4];
     };
 
     // Frame request/result flags (must match the UAPI header).
     constexpr uint64_t frame_request_dmabuf = 1ULL << 0;
     constexpr uint64_t frame_dmabuf_valid = 1ULL << 2;
+    constexpr uint64_t frame_sync_file_valid = 1ULL << 3;
     constexpr uint64_t frame_request_sync_file = 1ULL << 5;
     constexpr uint64_t wait_frame_ready = 1ULL << 0;
+    constexpr uint64_t wait_update_frame_ready = 1ULL << 0;
+    constexpr uint64_t wait_update_cursor_ready = 1ULL << 1;
+    constexpr uint64_t cursor_request_dmabuf = 1ULL << 0;
+    constexpr uint64_t cursor_request_sync_file = 1ULL << 1;
+    constexpr uint64_t cursor_metadata_valid = 1ULL << 2;
+    constexpr uint64_t cursor_visible = 1ULL << 3;
+    constexpr uint64_t cursor_position_valid = 1ULL << 4;
+    constexpr uint64_t cursor_buffer_valid = 1ULL << 6;
+    constexpr uint64_t cursor_dmabuf_valid = 1ULL << 7;
+    constexpr uint64_t cursor_sync_file_valid = 1ULL << 8;
+    constexpr uint64_t cursor_geometry_valid = 1ULL << 9;
+
+    constexpr uint32_t session_access_get_token = 1U;
+    constexpr uint32_t session_access_bind = 2U;
+    constexpr uint32_t session_access_result_bound = 1U << 0;
+    constexpr uint32_t session_access_result_token_valid = 1U << 1;
 
     constexpr unsigned long ioctl_get_version = DRM_IOR(DRM_COMMAND_BASE + 0x00, version_t);
     constexpr unsigned long ioctl_get_caps = DRM_IOR(DRM_COMMAND_BASE + 0x01, caps_t);
@@ -433,6 +526,14 @@ namespace VDISPLAY {
     constexpr unsigned long ioctl_wait_frame = DRM_IOWR(DRM_COMMAND_BASE + 0x06, wait_frame_t);
     constexpr unsigned long ioctl_get_metrics = DRM_IOR(DRM_COMMAND_BASE + 0x07, metrics_t);
     constexpr unsigned long ioctl_select_output = DRM_IOWR(DRM_COMMAND_BASE + 0x08, select_output_t);
+    constexpr unsigned long ioctl_session_access = DRM_IOWR(DRM_COMMAND_BASE + 0x09, session_access_t);
+    constexpr unsigned long ioctl_acquire_cursor = DRM_IOWR(DRM_COMMAND_BASE + 0x0a, acquire_cursor_t);
+    constexpr unsigned long ioctl_wait_update = DRM_IOWR(DRM_COMMAND_BASE + 0x0b, wait_update_t);
+
+    static_assert(sizeof(status_t) == 208);
+    static_assert(offsetof(status_t, framebuffer_modifier) == 136);
+    static_assert(sizeof(metrics_t) == 312);
+    static_assert(sizeof(session_access_t) == 72);
 
     struct device_t {
       int fd {-1};
@@ -447,17 +548,72 @@ namespace VDISPLAY {
       return value && value[0] ? std::string {value, strnlen(value, name_len)} : std::string {};
     }
 
-    static bool is_card_node(const fs::path &path) {
+    static void forget_secret(void *data, size_t size) {
+      auto *byte = static_cast<volatile unsigned char *>(data);
+      while (size--) {
+        *byte++ = 0;
+      }
+    }
+
+    static int numbered_node_index(const fs::path &path, std::string_view prefix) {
       const auto name = path.filename().string();
-      return name.rfind("card", 0) == 0 && name.find('-') == std::string::npos;
+      if (!name.starts_with(prefix) || name.size() == prefix.size()) {
+        return -1;
+      }
+
+      int index = 0;
+      for (const unsigned char ch : std::string_view {name}.substr(prefix.size())) {
+        const int digit = ch - static_cast<unsigned char>('0');
+        if (!std::isdigit(ch) || index > (std::numeric_limits<int>::max() - digit) / 10) {
+          return -1;
+        }
+        index = index * 10 + digit;
+      }
+      return index;
     }
 
     static int card_index_from_path(const fs::path &path) {
-      const auto name = path.filename().string();
-      if (name.size() <= 4 || name.substr(4).find_first_not_of("0123456789") != std::string::npos) {
+      return numbered_node_index(path, "card");
+    }
+
+    static bool is_render_node(const fs::path &path) {
+      return numbered_node_index(path, "renderD") >= 0;
+    }
+
+    static bool is_hermes_device(int fd) {
+      if (fd < 0) {
+        return false;
+      }
+
+      drmVersionPtr version = drmGetVersion(fd);
+      if (!version) {
+        return false;
+      }
+      const bool matches = version->name && version->name_len > 0 &&
+                           std::string_view {
+                             version->name,
+                             static_cast<size_t>(version->name_len),
+                           } == "hermes-kms";
+      drmFreeVersion(version);
+      return matches;
+    }
+
+    static int primary_card_index(int fd) {
+      if (fd < 0) {
         return -1;
       }
-      return std::stoi(name.substr(4));
+
+      drmDevicePtr dev = nullptr;
+      if (drmGetDevice2(fd, 0, &dev) != 0 || !dev) {
+        return -1;
+      }
+
+      int index = -1;
+      if ((dev->available_nodes & (1 << DRM_NODE_PRIMARY)) && dev->nodes[DRM_NODE_PRIMARY]) {
+        index = card_index_from_path(dev->nodes[DRM_NODE_PRIMARY]);
+      }
+      drmFreeDevice(&dev);
+      return index;
     }
 
     static void close_device(device_t &device) {
@@ -467,28 +623,30 @@ namespace VDISPLAY {
       }
     }
 
-    // Open the render node that belongs to the same DRM device as @card_fd.
-    // The Hermes consumer must use the render node (not the primary card node)
-    // so it never becomes DRM master: the compositor (KWin/GNOME) owns the
-    // primary node and drives the modeset, while we pull frames through the
-    // render node. All Hermes ioctls are DRM_RENDER_ALLOW, so they work here.
-    // Returns a fd >= 0 on success, or -1 (caller may fall back to the card fd).
-    static int open_render_node(int card_fd) {
-      if (card_fd < 0) {
+    static int open_render_node_for_card_index(int card_index) {
+      if (card_index < 0) {
         return -1;
       }
 
-      drmDevicePtr dev = nullptr;
-      if (drmGetDevice2(card_fd, 0, &dev) != 0 || !dev) {
+      std::error_code ec;
+      fs::directory_iterator dir("/dev/dri", ec);
+      if (ec) {
         return -1;
       }
-
-      int fd = -1;
-      if ((dev->available_nodes & (1 << DRM_NODE_RENDER)) && dev->nodes[DRM_NODE_RENDER]) {
-        fd = ::open(dev->nodes[DRM_NODE_RENDER], O_RDWR | O_CLOEXEC);
+      for (const auto &entry : dir) {
+        if (!is_render_node(entry.path())) {
+          continue;
+        }
+        const int fd = ::open(entry.path().c_str(), O_RDWR | O_CLOEXEC);
+        if (fd < 0) {
+          continue;
+        }
+        if (is_hermes_device(fd) && primary_card_index(fd) == card_index) {
+          return fd;
+        }
+        ::close(fd);
       }
-      drmFreeDevice(&dev);
-      return fd;
+      return -1;
     }
 
     static bool multi_output_requested() {
@@ -501,10 +659,8 @@ namespace VDISPLAY {
     }
 
     static uint32_t required_uapi_version() {
-      if (isolated_sessions_requested()) {
-        return multi_device_uapi_version;
-      }
-      return multi_output_requested() ? multi_output_uapi_version : base_uapi_version;
+      // Secure capture always uses the generic session-capability handoff.
+      return session_access_uapi_version;
     }
 
     static uint32_t output_count(const caps_t &caps) {
@@ -518,7 +674,8 @@ namespace VDISPLAY {
     ) {
       constexpr uint64_t required = cap_virtual_output | cap_output_control | cap_frame_acquire |
                                     cap_dmabuf_export | cap_output_identity | cap_session_owner |
-                                    cap_frame_wait | cap_zero_copy_target | cap_sync_file;
+                                    cap_frame_wait | cap_session_token | cap_cursor_capture |
+                                    cap_zero_copy_target | cap_sync_file;
       return (flags & required) == required &&
              (!require_multi_output || (flags & cap_multi_output)) &&
              (!require_multi_device || (flags & cap_multi_device));
@@ -528,13 +685,24 @@ namespace VDISPLAY {
       std::vector<device_t> devices;
       try {
         for (const auto &entry : fs::directory_iterator("/dev/dri")) {
-          if (!is_card_node(entry.path())) {
+          // All Hermes control/capture ioctls are DRM_RENDER_ALLOW. The broker
+          // deliberately does not need access to private-seat primary cards;
+          // those are opened later by the compositor through seatd.
+          if (!is_render_node(entry.path())) {
             continue;
           }
 
           device_t candidate {};
           candidate.fd = ::open(entry.path().c_str(), O_RDWR | O_CLOEXEC);
           if (candidate.fd < 0) {
+            continue;
+          }
+
+          // Identify the driver through the DRM core before issuing any
+          // driver-private ioctl. Private command numbers are not globally
+          // unique across unrelated DRM drivers.
+          if (!is_hermes_device(candidate.fd)) {
+            close_device(candidate);
             continue;
           }
 
@@ -548,7 +716,15 @@ namespace VDISPLAY {
             continue;
           }
 
-          candidate.card_index = card_index_from_path(entry.path());
+          candidate.card_index = primary_card_index(candidate.fd);
+          if (candidate.card_index < 0) {
+            if (log_failures) {
+              BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Could not resolve the primary card for "
+                               << entry.path();
+            }
+            close_device(candidate);
+            continue;
+          }
           const auto required_version = required_uapi_version();
           if (candidate.version.uapi_version < required_version) {
             if (log_failures) {
@@ -569,8 +745,12 @@ namespace VDISPLAY {
           }
 
           if (::ioctl(candidate.fd, ioctl_get_identity, &candidate.identity) != 0) {
-            std::strncpy(candidate.identity.driver_name, "hermes-kms", name_len - 1);
-            std::strncpy(candidate.identity.output_name, "HERMES-1", name_len - 1);
+            if (log_failures) {
+              BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] GET_IDENTITY failed for "
+                               << entry.path() << ": " << std::strerror(errno);
+            }
+            close_device(candidate);
+            continue;
           }
 
           devices.emplace_back(candidate);
@@ -591,7 +771,8 @@ namespace VDISPLAY {
       });
 
       if (devices.empty() && log_failures) {
-        BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] No Hermes-KMS DRM card found. Load hermes_kms and install its udev rules.";
+        BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] No accessible Hermes-KMS render node found. "
+                            "Load hermes_kms and run hermes-kms-setup for this user.";
       }
       return devices;
     }
@@ -633,6 +814,7 @@ namespace VDISPLAY {
       uint32_t uapi_version {0};
       uint32_t output_count {0};
       uint32_t device_count {0};
+      uint32_t session_device_count {0};
       bool multi_output_capable {false};
       bool multi_device_capable {false};
       std::string driver_version;
@@ -646,7 +828,7 @@ namespace VDISPLAY {
         return out;
       }
       for (const auto &entry : dir) {
-        if (!is_card_node(entry.path())) {
+        if (!is_render_node(entry.path())) {
           continue;
         }
 
@@ -656,14 +838,15 @@ namespace VDISPLAY {
           continue;
         }
 
-        if (::ioctl(candidate.fd, ioctl_get_version, &candidate.version) != 0 ||
+        if (!is_hermes_device(candidate.fd) ||
+            ::ioctl(candidate.fd, ioctl_get_version, &candidate.version) != 0 ||
             cstr(candidate.version.driver_name) != "hermes-kms") {
           close_device(candidate);
           continue;
         }
 
         // Found the Hermes-KMS device; from here the outcome is definitive.
-        out.card_index = card_index_from_path(entry.path());
+        out.card_index = primary_card_index(candidate.fd);
         out.uapi_version = candidate.version.uapi_version;
         out.driver_version = std::to_string(candidate.version.driver_major) + "." +
                              std::to_string(candidate.version.driver_minor) + "." +
@@ -673,8 +856,9 @@ namespace VDISPLAY {
           out.result = probe_result::uapi_too_old;
         } else if (::ioctl(candidate.fd, ioctl_get_caps, &candidate.caps) != 0) {
           out.result = probe_result::missing_caps;
+        } else if (::ioctl(candidate.fd, ioctl_get_identity, &candidate.identity) != 0) {
+          out.result = probe_result::missing_caps;
         } else {
-          ::ioctl(candidate.fd, ioctl_get_identity, &candidate.identity);
           out.output_count = output_count(candidate.caps);
           out.multi_output_capable =
             candidate.version.uapi_version >= multi_output_uapi_version &&
@@ -687,6 +871,11 @@ namespace VDISPLAY {
               candidate.identity.device_count ?
               candidate.identity.device_count :
               1U;
+          out.session_device_count =
+            candidate.version.uapi_version >= session_device_uapi_version &&
+              candidate.identity.session_device_count ?
+              candidate.identity.session_device_count :
+              (out.multi_device_capable ? out.device_count : 0U);
           out.result = has_required_caps(candidate.caps.flags) ?
                          probe_result::ok :
                          probe_result::missing_caps;
@@ -748,6 +937,53 @@ namespace VDISPLAY {
       return ::ioctl(fd, ioctl_get_status, &status) == 0;
     }
 
+    static bool get_session_token(int fd, uint32_t output_index, uint64_t session_id,
+                                  std::array<uint64_t, 2> &token) {
+      session_access_t request {};
+      request.operation = session_access_get_token;
+      if (::ioctl(fd, ioctl_session_access, &request) != 0) {
+        BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Could not obtain the generic session capability: "
+                         << std::strerror(errno);
+        forget_secret(&request, sizeof(request));
+        token.fill(0);
+        return false;
+      }
+
+      token = {request.token[0], request.token[1]};
+      const bool valid = (request.result_flags & session_access_result_token_valid) &&
+                         request.session_id == session_id && request.output_index == output_index &&
+                         (token[0] || token[1]);
+      forget_secret(&request, sizeof(request));
+      if (!valid) {
+        token.fill(0);
+      }
+      return valid;
+    }
+
+    static bool bind_session(int fd, uint32_t output_index, uint64_t session_id,
+                             const std::array<uint64_t, 2> &token) {
+      session_access_t request {};
+      request.token[0] = token[0];
+      request.token[1] = token[1];
+      request.session_id = session_id;
+      request.operation = session_access_bind;
+      request.output_index = output_index;
+      if (::ioctl(fd, ioctl_session_access, &request) != 0) {
+        BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Could not bind capture to the requested session: "
+                         << std::strerror(errno);
+        forget_secret(&request, sizeof(request));
+        return false;
+      }
+
+      const bool bound = (request.result_flags & session_access_result_bound) &&
+                         request.session_id == session_id && request.output_index == output_index;
+      forget_secret(&request, sizeof(request));
+      if (!bound) {
+        BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Driver accepted SESSION_ACCESS without confirming the binding.";
+      }
+      return bound;
+    }
+
     static bool claim_available_output(device_t &device, uint32_t width, uint32_t height,
                                        uint32_t refresh_hz, uint64_t &session_id,
                                        bool log_failure = true) {
@@ -765,7 +1001,18 @@ namespace VDISPLAY {
         }
 
         uint64_t candidate_session = 0;
-        if (!set_output(device.fd, true, width, height, refresh_hz, candidate_session, false)) {
+        bool enabled = false;
+        for (unsigned int attempt = 0; attempt < 6; ++attempt) {
+          if (set_output(device.fd, true, width, height, refresh_hz, candidate_session, false)) {
+            enabled = true;
+            break;
+          }
+          if (errno != EAGAIN || attempt == 5) {
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds {200});
+        }
+        if (!enabled) {
           // Another session may have won the ownership race after GET_STATUS.
           if (errno == EBUSY) {
             continue;
@@ -797,12 +1044,12 @@ namespace VDISPLAY {
     ) {
       auto devices = open_devices(true);
       for (auto &device : devices) {
-        if (const int render_fd = open_render_node(device.fd); render_fd >= 0) {
-          ::close(device.fd);
-          device.fd = render_fd;
-        } else {
-          BOOST_LOG(warning) << "[VDISPLAY/Hermes-KMS] No render node for card"
-                             << device.card_index << "; skipping it for an isolated session.";
+        // session_devices=N adds a seat0 HOST card. Per-client compositors may
+        // claim only stable SESSION-role cards and use their session_index for
+        // the matching private seat/broker.
+        if (device.version.uapi_version < session_device_uapi_version ||
+            device.identity.device_role != device_role_session ||
+            device.identity.session_index == 0) {
           close_device(device);
           continue;
         }
@@ -838,11 +1085,6 @@ namespace VDISPLAY {
 
       bool disconnected = false;
       for (auto &device : devices) {
-        if (const int render_fd = open_render_node(device.fd); render_fd >= 0) {
-          ::close(device.fd);
-          device.fd = render_fd;
-        }
-
         const uint32_t count = output_count(device.caps);
         for (uint32_t index = 0; index < count; ++index) {
           if (device.version.uapi_version >= multi_output_uapi_version &&
@@ -851,24 +1093,25 @@ namespace VDISPLAY {
           }
           refresh_identity(device);
           const auto connector_name = cstr(device.identity.connector_name);
-          if (!connector_name.empty()) {
-            connector_names.emplace_back(connector_name);
-          }
 
           status_t status {};
-          const bool unowned_output_enabled =
-            get_status(device.fd, status) &&
-            (status.flags & status_output_enabled) &&
-            status.owner_pid <= 0 &&
-            status.session_id == 0;
-          if (!unowned_output_enabled) {
+          if (get_status(device.fd, status) &&
+              !(status.flags & status_output_enabled)) {
             continue;
           }
 
-          BOOST_LOG(warning) << "[VDISPLAY/Hermes-KMS] Disconnecting unowned virtual output "
-                             << cstr(device.identity.output_name) << " left enabled at module load.";
+          // Active state is private under UAPI v11. Disabling is nevertheless
+          // safe: the driver accepts this only for an unowned legacy output and
+          // rejects a live foreign session.
           uint64_t session_id = 0;
-          disconnected = set_output(device.fd, false, 0, 0, 0, session_id) || disconnected;
+          if (set_output(device.fd, false, 0, 0, 0, session_id, false)) {
+            BOOST_LOG(warning) << "[VDISPLAY/Hermes-KMS] Disconnected unowned virtual output "
+                               << cstr(device.identity.output_name) << " left enabled at module load.";
+            if (!connector_name.empty()) {
+              connector_names.emplace_back(connector_name);
+            }
+            disconnected = true;
+          }
         }
         close_device(device);
       }
@@ -889,7 +1132,8 @@ namespace VDISPLAY {
     uint32_t width;
     uint32_t height;
     uint32_t fps;
-    int device_index;      // EVDI device index
+    int device_index;      // EVDI index or 0-based Hermes-KMS device index
+    int session_index;     // 1-based Hermes-KMS private-seat index, or -1
     int output_index;      // 0-based Hermes-KMS output index
     int drm_card_index;    // DRM card index assigned by the kernel
     evdi_handle handle;    // EVDI handle
@@ -899,6 +1143,7 @@ namespace VDISPLAY {
     bool using_hermes_kms; // true while a Hermes-KMS output owner fd is held
     std::string connector_name;
     uint64_t session_id;
+    std::array<uint64_t, 2> session_token;
     std::shared_ptr<EvdiBuffer> evdi_buffer;
     int evdi_buffer_id;
   };
@@ -3255,7 +3500,9 @@ namespace VDISPLAY {
       .active_displays = {},
     };
 
-    for (uint32_t instance = 1; instance <= status.device_count; ++instance) {
+    // device_count includes the seat0 HOST card; only session_device_count has
+    // a matching private seatd instance.
+    for (uint32_t instance = 1; instance <= probe.session_device_count; ++instance) {
       const auto socket =
         fs::path {"/run/hermes-kms-seatd"} /
         std::to_string(instance) /
@@ -3825,6 +4072,7 @@ namespace VDISPLAY {
         }
         kscreen::restore(vdinfo.name);
       }
+      hermes_kms::forget_secret(vdinfo.session_token.data(), sizeof(vdinfo.session_token));
     }
     virtual_displays.clear();
 
@@ -3947,6 +4195,7 @@ namespace VDISPLAY {
     vdinfo.height = height;
     vdinfo.fps = fps;
     vdinfo.device_index = -1;
+    vdinfo.session_index = -1;
     vdinfo.output_index = -1;
     vdinfo.drm_card_index = -1;
     vdinfo.handle = nullptr;
@@ -3955,6 +4204,7 @@ namespace VDISPLAY {
     vdinfo.using_evdi = false;
     vdinfo.using_hermes_kms = false;
     vdinfo.session_id = 0;
+    vdinfo.session_token = {};
     vdinfo.evdi_buffer_id = 0;
 
     const auto backend = selected_backend();
@@ -3975,22 +4225,6 @@ namespace VDISPLAY {
           session_id
         );
       } else if (hermes_kms::open_device(device, true)) {
-        // Switch to the render node before owning the output. Holding the
-        // primary card node would make this process the DRM master and block
-        // the compositor (KWin/GNOME) from driving the modeset (EBUSY), so the
-        // virtual output would never be scanned out. The render node carries
-        // all Hermes ioctls (DRM_RENDER_ALLOW) without taking master, letting
-        // the compositor own the card and us pull frames. Fall back to the card
-        // node only if the render node cannot be opened.
-        int render_fd = hermes_kms::open_render_node(device.fd);
-        if (render_fd >= 0) {
-          hermes_kms::close_device(device);
-          device.fd = render_fd;
-        } else {
-          BOOST_LOG(warning) << "[VDISPLAY/Hermes-KMS] No render node available; using the card node "
-                                "(the compositor may fail to take DRM master).";
-        }
-
         claimed = hermes_kms::claim_available_output(
           device,
           width,
@@ -3998,6 +4232,17 @@ namespace VDISPLAY {
           fps_hz,
           session_id
         );
+      }
+
+      std::array<uint64_t, 2> session_token {};
+      if (claimed && !hermes_kms::get_session_token(
+                       device.fd,
+                       device.selected_output_index,
+                       session_id,
+                       session_token
+                     )) {
+        hermes_kms::set_output(device.fd, false, 0, 0, 0, session_id, false);
+        claimed = false;
       }
 
       if (claimed) {
@@ -4008,9 +4253,15 @@ namespace VDISPLAY {
         vdinfo.device_index = device.version.uapi_version >= hermes_kms::multi_device_uapi_version ?
                                 static_cast<int>(device.identity.device_index) :
                                 0;
+        vdinfo.session_index =
+          device.version.uapi_version >= hermes_kms::session_device_uapi_version &&
+              device.identity.device_role == hermes_kms::device_role_session ?
+            static_cast<int>(device.identity.session_index) :
+            -1;
         vdinfo.output_index = static_cast<int>(device.selected_output_index);
         vdinfo.drm_card_index = device.card_index;
         vdinfo.session_id = session_id;
+        vdinfo.session_token = session_token;
         vdinfo.using_hermes_kms = true;
         vdinfo.connector_name = hermes_kms::cstr(device.identity.connector_name);
         display_name = hermes_kms::cstr(device.identity.output_name);
@@ -4020,6 +4271,7 @@ namespace VDISPLAY {
         vdinfo.name = display_name;
         BOOST_LOG(info) << "[VDISPLAY/Hermes-KMS] Connected " << display_name
                         << " device=" << (vdinfo.device_index + 1)
+                        << " session_device=" << vdinfo.session_index
                         << " output=" << (vdinfo.output_index + 1)
                         << " connector=" << vdinfo.connector_name
                         << " card=" << vdinfo.drm_card_index
@@ -4041,6 +4293,7 @@ namespace VDISPLAY {
           );
         }
       }
+      hermes_kms::forget_secret(session_token.data(), sizeof(session_token));
       hermes_kms::close_device(device);
     } else if (evdi_available) {
       // Create real virtual display using EVDI
@@ -4122,8 +4375,10 @@ namespace VDISPLAY {
       return "";
     }
 
-    virtual_displays[guid_str] = vdinfo;
-    if (vdinfo.using_evdi) {
+    const bool using_evdi = vdinfo.using_evdi;
+    virtual_displays.emplace(guid_str, std::move(vdinfo));
+    hermes_kms::forget_secret(vdinfo.session_token.data(), sizeof(vdinfo.session_token));
+    if (using_evdi) {
       start_evdi_events_thread();
     }
 
@@ -4157,6 +4412,7 @@ namespace VDISPLAY {
     if (vdinfo.using_hermes_kms && vdinfo.drm_fd >= 0) {
       hermes_kms::set_output(vdinfo.drm_fd, false, 0, 0, 0, vdinfo.session_id);
     }
+    hermes_kms::forget_secret(vdinfo.session_token.data(), sizeof(vdinfo.session_token));
     kscreen::restore(vdinfo.name);
 
     if (vdinfo.drm_fd >= 0) {
@@ -4741,9 +4997,9 @@ namespace VDISPLAY {
     for (const auto &[guid, vdinfo] : virtual_displays) {
       if (vdinfo.name == displayName &&
           vdinfo.using_hermes_kms &&
-          vdinfo.device_index >= 0) {
+          vdinfo.session_index > 0) {
         // Must match Hermes-KMS' 70-hermes-kms-session-seats.rules.
-        return "hermes-kms-" + std::to_string(vdinfo.device_index + 1);
+        return "hermes-kms-" + std::to_string(vdinfo.session_index);
       }
     }
     return {};
@@ -4752,6 +5008,11 @@ namespace VDISPLAY {
   HermesKmsMetrics getHermesKmsMetrics() {
     HermesKmsMetrics out {};
     int target_card_index = -1;
+    uint64_t session_id = 0;
+    std::array<uint64_t, 2> session_token {};
+    auto token_guard = util::fail_guard([&session_token]() {
+      hermes_kms::forget_secret(session_token.data(), sizeof(session_token));
+    });
     {
       std::lock_guard<std::mutex> lock(vdisplay_mutex);
       for (const auto &[guid, display] : virtual_displays) {
@@ -4759,6 +5020,8 @@ namespace VDISPLAY {
           out.output_index = display.output_index;
           out.output_name = display.name;
           target_card_index = display.drm_card_index;
+          session_id = display.session_id;
+          session_token = display.session_token;
           break;
         }
       }
@@ -4791,8 +5054,13 @@ namespace VDISPLAY {
     if (!(device.caps.flags & hermes_kms::cap_metrics)) {
       return out;
     }
-    if (out.output_index > 0 &&
-        !hermes_kms::select_output(device.fd, static_cast<uint32_t>(out.output_index), nullptr, false)) {
+    if (out.output_index < 0 ||
+        !hermes_kms::bind_session(
+          device.fd,
+          static_cast<uint32_t>(out.output_index),
+          session_id,
+          session_token
+        )) {
       return out;
     }
 
@@ -4843,15 +5111,35 @@ namespace VDISPLAY {
     }
   }
 
+  void HermesKmsCursor::close() {
+    for (auto &fd : dma_buf_fd) {
+      if (fd >= 0) {
+        ::close(fd);
+        fd = -1;
+      }
+    }
+    if (sync_file_fd >= 0) {
+      ::close(sync_file_fd);
+      sync_file_fd = -1;
+    }
+  }
+
   int hermesKmsOpenCapture(const std::string &display_name) {
     int card_index = -1;
     int output_index = -1;
+    uint64_t session_id = 0;
+    std::array<uint64_t, 2> session_token {};
+    auto token_guard = util::fail_guard([&session_token]() {
+      hermes_kms::forget_secret(session_token.data(), sizeof(session_token));
+    });
     {
       std::lock_guard<std::mutex> lock(vdisplay_mutex);
       for (const auto &[guid, display] : virtual_displays) {
         if (display.name == display_name && display.using_hermes_kms) {
           card_index = display.drm_card_index;
           output_index = display.output_index;
+          session_id = display.session_id;
+          session_token = display.session_token;
           break;
         }
       }
@@ -4861,23 +5149,23 @@ namespace VDISPLAY {
       return -1;
     }
 
-    const std::string card_path = "/dev/dri/card" + std::to_string(card_index);
-    const int card_fd = ::open(card_path.c_str(), O_RDWR | O_CLOEXEC);
-    if (card_fd < 0) {
-      BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Could not open " << card_path << " for capture.";
-      return -1;
-    }
-
-    // Switch to the render node so capture never contends for DRM master with
-    // the compositor that owns the card.
-    const int render_fd = hermes_kms::open_render_node(card_fd);
-    ::close(card_fd);
+    // The broker intentionally has no access to private-seat primary cards.
+    // Open the matching render node directly; the compositor opens cardN via
+    // its private seatd connection.
+    const int render_fd = hermes_kms::open_render_node_for_card_index(card_index);
     if (render_fd < 0) {
-      BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Card has no render node; cannot capture without DRM master.";
+      BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] No accessible render node maps to card"
+                       << card_index << ".";
       return -1;
     }
 
-    if (output_index > 0 && !hermes_kms::select_output(render_fd, static_cast<uint32_t>(output_index))) {
+    if (output_index < 0 ||
+        !hermes_kms::bind_session(
+          render_fd,
+          static_cast<uint32_t>(output_index),
+          session_id,
+          session_token
+        )) {
       ::close(render_fd);
       return -1;
     }
@@ -4913,8 +5201,11 @@ namespace VDISPLAY {
   bool hermesKmsAcquireFrame(int render_fd, uint64_t after_sequence,
                              uint32_t timeout_ms, HermesKmsFrame &out) {
     if (render_fd < 0) {
+      errno = EBADF;
       return false;
     }
+
+    out.close();
 
     // Block for a frame newer than what the caller last saw. A zero timeout
     // returns immediately; the caller then uses whatever frame is current.
@@ -4928,17 +5219,23 @@ namespace VDISPLAY {
       }
     }
 
-    hermes_kms::acquire_frame_t frame {};
-    frame.flags = hermes_kms::frame_request_dmabuf | hermes_kms::frame_request_sync_file;
-    for (auto &fd : frame.dma_buf_fd) {
-      fd = -1;
-    }
-    frame.sync_file_fd = -1;
-
     // Time only the acquire ioctl (DMA-BUF export), excluding the wait above,
     // so callers can measure the actual zero-copy cost.
+    hermes_kms::acquire_frame_t frame {};
     const auto acquire_t0 = std::chrono::steady_clock::now();
-    const int acquire_ret = ::ioctl(render_fd, hermes_kms::ioctl_acquire_frame, &frame);
+    int acquire_ret = -1;
+    for (unsigned int attempt = 0; attempt < 4; ++attempt) {
+      frame = {};
+      frame.flags = hermes_kms::frame_request_dmabuf | hermes_kms::frame_request_sync_file;
+      for (auto &fd : frame.dma_buf_fd) {
+        fd = -1;
+      }
+      frame.sync_file_fd = -1;
+      acquire_ret = ::ioctl(render_fd, hermes_kms::ioctl_acquire_frame, &frame);
+      if (acquire_ret == 0 || errno != ESTALE) {
+        break;
+      }
+    }
     const auto acquire_t1 = std::chrono::steady_clock::now();
     out.acquire_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(acquire_t1 - acquire_t0).count();
     if (acquire_ret != 0) {
@@ -4946,7 +5243,9 @@ namespace VDISPLAY {
       return false;
     }
 
-    if (!(frame.flags & hermes_kms::frame_dmabuf_valid) || !frame.plane_count || frame.plane_count > 4) {
+    if (!(frame.flags & hermes_kms::frame_dmabuf_valid) ||
+        !(frame.flags & hermes_kms::frame_sync_file_valid) ||
+        !frame.plane_count || frame.plane_count > 4 || frame.sync_file_fd < 0) {
       // No usable DMA-BUFs; release anything we got back.
       for (auto fd : frame.dma_buf_fd) {
         if (fd >= 0) {
@@ -4956,6 +5255,7 @@ namespace VDISPLAY {
       if (frame.sync_file_fd >= 0) {
         ::close(frame.sync_file_fd);
       }
+      errno = EPROTO;
       return false;
     }
 
@@ -4970,6 +5270,139 @@ namespace VDISPLAY {
       out.dma_buf_fd[i] = frame.dma_buf_fd[i];
       out.pitch[i] = frame.pitch[i];
       out.offset[i] = frame.offset[i];
+    }
+    return true;
+  }
+
+  bool hermesKmsWaitUpdate(int render_fd, uint64_t after_frame_sequence,
+                           uint64_t after_cursor_sequence, uint32_t timeout_ms,
+                           HermesKmsUpdate &out) {
+    out = {};
+    if (render_fd < 0) {
+      errno = EBADF;
+      return false;
+    }
+
+    hermes_kms::wait_update_t wait {};
+    wait.after_frame_sequence = after_frame_sequence;
+    wait.after_cursor_sequence = after_cursor_sequence;
+    wait.timeout_ms = timeout_ms;
+    if (::ioctl(render_fd, hermes_kms::ioctl_wait_update, &wait) != 0) {
+      return false;
+    }
+
+    constexpr uint64_t known_flags = hermes_kms::wait_update_frame_ready |
+                                     hermes_kms::wait_update_cursor_ready;
+    out.frame_ready = (wait.flags & hermes_kms::wait_update_frame_ready) != 0;
+    out.cursor_ready = (wait.flags & hermes_kms::wait_update_cursor_ready) != 0;
+    out.frame_sequence = wait.frame_sequence;
+    out.cursor_sequence = wait.cursor_sequence;
+    if ((wait.flags & ~known_flags) ||
+        out.frame_ready != (out.frame_sequence > after_frame_sequence) ||
+        out.cursor_ready != (out.cursor_sequence > after_cursor_sequence) ||
+        (!out.frame_ready && !out.cursor_ready)) {
+      errno = EPROTO;
+      return false;
+    }
+    return true;
+  }
+
+  bool hermesKmsAcquireCursor(int render_fd, bool request_buffer,
+                              HermesKmsCursor &out) {
+    if (render_fd < 0) {
+      errno = EBADF;
+      return false;
+    }
+
+    out.close();
+    hermes_kms::acquire_cursor_t cursor {};
+    int acquire_ret = -1;
+    for (unsigned int attempt = 0; attempt < 4; ++attempt) {
+      cursor = {};
+      if (request_buffer) {
+        cursor.flags = hermes_kms::cursor_request_dmabuf |
+                       hermes_kms::cursor_request_sync_file;
+      }
+      for (auto &fd : cursor.dma_buf_fd) {
+        fd = -1;
+      }
+      cursor.sync_file_fd = -1;
+      acquire_ret = ::ioctl(render_fd, hermes_kms::ioctl_acquire_cursor, &cursor);
+      if (acquire_ret == 0 || errno != ESTALE) {
+        break;
+      }
+    }
+    if (acquire_ret != 0) {
+      return false;
+    }
+
+    const auto close_reply_fds = [&cursor]() {
+      for (auto &fd : cursor.dma_buf_fd) {
+        if (fd >= 0) {
+          ::close(fd);
+          fd = -1;
+        }
+      }
+      if (cursor.sync_file_fd >= 0) {
+        ::close(cursor.sync_file_fd);
+        cursor.sync_file_fd = -1;
+      }
+    };
+
+    const bool metadata_valid = (cursor.flags & hermes_kms::cursor_metadata_valid) != 0;
+    const bool buffer_valid = (cursor.flags & hermes_kms::cursor_buffer_valid) != 0;
+    const bool dmabuf_valid = (cursor.flags & hermes_kms::cursor_dmabuf_valid) != 0;
+    const bool sync_file_valid = (cursor.flags & hermes_kms::cursor_sync_file_valid) != 0;
+    const bool invalid_layout =
+      cursor.plane_count > 4 ||
+      (buffer_valid && (!cursor.plane_count || !cursor.width || !cursor.height || !cursor.format)) ||
+      (request_buffer && buffer_valid &&
+       (!dmabuf_valid || !sync_file_valid || cursor.sync_file_fd < 0));
+    if (!metadata_valid || invalid_layout) {
+      close_reply_fds();
+      errno = EPROTO;
+      return false;
+    }
+    if (request_buffer && buffer_valid) {
+      for (uint32_t i = 0; i < cursor.plane_count; ++i) {
+        if (cursor.dma_buf_fd[i] < 0 || !cursor.pitch[i]) {
+          close_reply_fds();
+          errno = EPROTO;
+          return false;
+        }
+      }
+    }
+
+    out.visible = (cursor.flags & hermes_kms::cursor_visible) != 0;
+    out.position_valid = (cursor.flags & hermes_kms::cursor_position_valid) != 0;
+    out.geometry_valid = (cursor.flags & hermes_kms::cursor_geometry_valid) != 0;
+    out.buffer_valid = buffer_valid;
+    out.position_x = cursor.position_x;
+    out.position_y = cursor.position_y;
+    out.crtc_x = cursor.crtc_x;
+    out.crtc_y = cursor.crtc_y;
+    out.crtc_w = cursor.crtc_w;
+    out.crtc_h = cursor.crtc_h;
+    out.src_x = cursor.src_x;
+    out.src_y = cursor.src_y;
+    out.src_w = cursor.src_w;
+    out.src_h = cursor.src_h;
+    out.hotspot_x = cursor.hotspot_x;
+    out.hotspot_y = cursor.hotspot_y;
+    out.width = cursor.width;
+    out.height = cursor.height;
+    out.fourcc = cursor.format;
+    out.modifier = cursor.modifier;
+    out.plane_count = cursor.plane_count;
+    out.sync_file_fd = cursor.sync_file_fd;
+    out.sequence = cursor.sequence;
+    out.image_sequence = cursor.image_sequence;
+    cursor.sync_file_fd = -1;
+    for (uint32_t i = 0; i < 4; ++i) {
+      out.dma_buf_fd[i] = cursor.dma_buf_fd[i];
+      out.pitch[i] = cursor.pitch[i];
+      out.offset[i] = cursor.offset[i];
+      cursor.dma_buf_fd[i] = -1;
     }
     return true;
   }

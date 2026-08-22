@@ -3,18 +3,22 @@
  * @brief Definitions for KMS screen capture.
  */
 // standard includes
+#include <array>
 #include <errno.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <limits>
 #include <thread>
 #include <unistd.h>
 
 // platform includes
 #include <drm_fourcc.h>
 #include <linux/dma-buf.h>
+#include <linux/sync_file.h>
 #include <poll.h>
 #include <sys/capability.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
@@ -55,6 +59,113 @@ namespace platf {
         peak = 0;
         count = 0;
       }
+    }
+
+    enum class hermes_fence_wait_e {
+      ready,
+      timeout,
+      failed,
+      error,
+    };
+
+    // WAIT_FRAME takes an unsigned timeout while poll() takes a signed one.
+    // Clamp once so acquisition and explicit-fence waiting share one bounded
+    // deadline and a very large caller duration cannot wrap either API.
+    inline std::uint32_t hermes_timeout_ms(std::chrono::milliseconds timeout) {
+      if (timeout <= 0ms) {
+        return 1;
+      }
+
+      constexpr auto max_poll_timeout = std::chrono::milliseconds {
+        std::numeric_limits<int>::max()
+      };
+      if (timeout >= max_poll_timeout) {
+        return static_cast<std::uint32_t>(std::numeric_limits<int>::max());
+      }
+      return static_cast<std::uint32_t>(timeout.count());
+    }
+
+    // A sync_file becomes pollable for both successful and failed fences.
+    // Query its status after poll() so a producer error is never mistaken for
+    // a frame that is safe to import or read.
+    inline hermes_fence_wait_e wait_hermes_frame_fence(
+      int fd,
+      std::chrono::steady_clock::time_point deadline
+    ) {
+      while (true) {
+        const auto now = std::chrono::steady_clock::now();
+        int wait_ms = 0;
+        if (now < deadline) {
+          const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+          wait_ms = static_cast<int>(std::max<std::int64_t>(1, remaining.count()));
+        }
+
+        pollfd fence_poll {fd, POLLIN, 0};
+        const int poll_result = ::poll(&fence_poll, 1, wait_ms);
+        if (poll_result < 0) {
+          if (errno == EINTR) {
+            continue;
+          }
+          return hermes_fence_wait_e::error;
+        }
+        if (poll_result == 0) {
+          errno = ETIMEDOUT;
+          return hermes_fence_wait_e::timeout;
+        }
+        if (fence_poll.revents & POLLNVAL) {
+          errno = EBADF;
+          return hermes_fence_wait_e::error;
+        }
+
+        sync_file_info info {};
+        int info_result;
+        do {
+          info_result = ::ioctl(fd, SYNC_IOC_FILE_INFO, &info);
+        } while (info_result < 0 && errno == EINTR);
+        if (info_result < 0) {
+          return hermes_fence_wait_e::error;
+        }
+        if (info.status < 0) {
+          errno = info.status >= -4095 ? -info.status : EIO;
+          return hermes_fence_wait_e::failed;
+        }
+        if (info.status > 0) {
+          return hermes_fence_wait_e::ready;
+        }
+
+        // poll() should not report an active fence as readable. Treat any
+        // other terminal event as a malformed sync_file instead of spinning.
+        errno = EIO;
+        return hermes_fence_wait_e::error;
+      }
+    }
+
+    inline capture_e hermes_acquire_failure(const char *path, int acquire_errno) {
+      if (acquire_errno == ETIMEDOUT || acquire_errno == EAGAIN) {
+        return capture_e::timeout;
+      }
+      if (acquire_errno == EINTR) {
+        return capture_e::interrupted;
+      }
+
+      if (!acquire_errno) {
+        acquire_errno = EPROTO;
+      }
+      BOOST_LOG(error) << "Hermes-KMS "sv << path
+                       << " capture failed; reinitializing: "sv
+                       << strerror(acquire_errno);
+      return capture_e::reinit;
+    }
+
+    inline int hermes_dma_buf_sync(int fd, std::uint64_t flags) {
+      dma_buf_sync sync {};
+      sync.flags = flags;
+
+      int result;
+      do {
+        result = ::ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
+      } while (result < 0 && errno == EINTR);
+      return result;
     }
 
     class cap_sys_admin {
@@ -312,6 +423,253 @@ namespace platf {
       std::uint64_t prop_src_x, prop_src_y, prop_src_w, prop_src_h;
       std::uint32_t fb_id;
     };
+
+    inline capture_e refresh_hermes_cursor(
+      int render_fd,
+      std::chrono::steady_clock::time_point deadline,
+      cursor_t &captured_cursor,
+      std::uint64_t &last_cursor_sequence
+    ) {
+      VDISPLAY::HermesKmsCursor cursor;
+      errno = 0;
+      if (!VDISPLAY::hermesKmsAcquireCursor(render_fd, true, cursor)) {
+        if (errno == ESTALE || errno == EAGAIN) {
+          return capture_e::timeout;
+        }
+        return hermes_acquire_failure("cursor", errno);
+      }
+      auto cursor_guard = util::fail_guard([&cursor]() { cursor.close(); });
+
+      if (!cursor.visible) {
+        captured_cursor.visible = false;
+        last_cursor_sequence = cursor.sequence;
+        return capture_e::ok;
+      }
+
+      constexpr std::uint32_t fixed_fraction_mask = (1U << 16) - 1U;
+      const bool integral_source =
+        ((cursor.src_x | cursor.src_y | cursor.src_w | cursor.src_h) & fixed_fraction_mask) == 0;
+      const std::uint32_t src_x = cursor.src_x >> 16;
+      const std::uint32_t src_y = cursor.src_y >> 16;
+      const std::uint32_t src_w = cursor.src_w >> 16;
+      const std::uint32_t src_h = cursor.src_h >> 16;
+      const bool supported_layout =
+        cursor.position_valid && cursor.geometry_valid && cursor.buffer_valid &&
+        cursor.plane_count == 1 && cursor.dma_buf_fd[0] >= 0 && cursor.sync_file_fd >= 0 &&
+        cursor.fourcc == DRM_FORMAT_ARGB8888 &&
+        (cursor.modifier == DRM_FORMAT_MOD_LINEAR || cursor.modifier == DRM_FORMAT_MOD_INVALID) &&
+        integral_source && src_w && src_h && cursor.crtc_w == src_w && cursor.crtc_h == src_h &&
+        src_x <= cursor.width && src_w <= cursor.width - src_x &&
+        src_y <= cursor.height && src_h <= cursor.height - src_y;
+      if (!supported_layout) {
+        BOOST_LOG(error) << "Hermes-KMS cursor capture: unsupported or malformed cursor layout."sv;
+        return capture_e::reinit;
+      }
+
+      const auto fence_status = wait_hermes_frame_fence(cursor.sync_file_fd, deadline);
+      if (fence_status == hermes_fence_wait_e::timeout) {
+        BOOST_LOG(warning) << "Hermes-KMS cursor capture: producer fence timed out."sv;
+        return capture_e::timeout;
+      }
+      if (fence_status == hermes_fence_wait_e::failed) {
+        const int fence_errno = errno;
+        BOOST_LOG(warning) << "Hermes-KMS cursor capture: dropping update "sv
+                           << cursor.sequence << " after producer fence failure: "sv
+                           << strerror(fence_errno);
+        captured_cursor.visible = false;
+        last_cursor_sequence = cursor.sequence;
+        return capture_e::ok;
+      }
+      if (fence_status == hermes_fence_wait_e::error) {
+        BOOST_LOG(error) << "Hermes-KMS cursor capture: invalid sync file: "sv << strerror(errno);
+        return capture_e::reinit;
+      }
+
+      const std::size_t pitch = cursor.pitch[0];
+      const std::size_t offset = cursor.offset[0];
+      const std::size_t source_x_bytes = static_cast<std::size_t>(src_x) * 4U;
+      const std::size_t row_bytes = static_cast<std::size_t>(src_w) * 4U;
+      const std::size_t last_source_row = static_cast<std::size_t>(src_y) + src_h - 1U;
+      if (pitch < source_x_bytes || row_bytes > pitch - source_x_bytes ||
+          last_source_row > (std::numeric_limits<std::size_t>::max() - offset) / pitch) {
+        BOOST_LOG(error) << "Hermes-KMS cursor capture: cursor row layout overflows size_t."sv;
+        return capture_e::reinit;
+      }
+      const std::size_t last_row_offset = offset + last_source_row * pitch;
+      if (source_x_bytes > std::numeric_limits<std::size_t>::max() - last_row_offset ||
+          row_bytes > std::numeric_limits<std::size_t>::max() - last_row_offset - source_x_bytes) {
+        BOOST_LOG(error) << "Hermes-KMS cursor capture: cursor mapping length overflows size_t."sv;
+        return capture_e::reinit;
+      }
+      const std::size_t map_len = last_row_offset + source_x_bytes + row_bytes;
+      if (static_cast<std::size_t>(src_h) >
+          std::numeric_limits<std::size_t>::max() / row_bytes) {
+        BOOST_LOG(error) << "Hermes-KMS cursor capture: cursor image size overflows size_t."sv;
+        return capture_e::reinit;
+      }
+
+      struct stat dmabuf_stat {};
+      if (::fstat(cursor.dma_buf_fd[0], &dmabuf_stat) < 0 || dmabuf_stat.st_size <= 0 ||
+          static_cast<std::uintmax_t>(map_len) > static_cast<std::uintmax_t>(dmabuf_stat.st_size)) {
+        BOOST_LOG(error) << "Hermes-KMS cursor capture: cursor metadata exceeds its DMA-BUF."sv;
+        return capture_e::reinit;
+      }
+
+      cursor_t next_cursor {};
+      next_cursor.pixels.resize(static_cast<std::size_t>(src_h) * row_bytes);
+      void *map = ::mmap(nullptr, map_len, PROT_READ, MAP_SHARED, cursor.dma_buf_fd[0], 0);
+      if (map == MAP_FAILED) {
+        BOOST_LOG(error) << "Hermes-KMS cursor capture: mmap failed: "sv << strerror(errno);
+        return capture_e::reinit;
+      }
+      if (hermes_dma_buf_sync(cursor.dma_buf_fd[0], DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ) < 0) {
+        const int sync_errno = errno;
+        ::munmap(map, map_len);
+        BOOST_LOG(error) << "Hermes-KMS cursor capture: DMA_BUF_SYNC_START failed: "sv
+                         << strerror(sync_errno);
+        return capture_e::reinit;
+      }
+
+      const auto *source = static_cast<const std::uint8_t *>(map) + offset +
+                           static_cast<std::size_t>(src_y) * pitch + source_x_bytes;
+      for (std::size_t y = 0; y < src_h; ++y) {
+        std::memcpy(next_cursor.pixels.data() + y * row_bytes, source + y * pitch, row_bytes);
+      }
+
+      const int sync_end_result = hermes_dma_buf_sync(
+        cursor.dma_buf_fd[0],
+        DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ
+      );
+      const int sync_end_errno = errno;
+      const int unmap_result = ::munmap(map, map_len);
+      const int unmap_errno = errno;
+      if (sync_end_result < 0 || unmap_result < 0) {
+        BOOST_LOG(error) << "Hermes-KMS cursor capture: cleanup failed: "sv
+                         << strerror(sync_end_result < 0 ? sync_end_errno : unmap_errno);
+        return capture_e::reinit;
+      }
+
+      next_cursor.visible = true;
+      next_cursor.x = cursor.crtc_x;
+      next_cursor.y = cursor.crtc_y;
+      next_cursor.dst_w = cursor.crtc_w;
+      next_cursor.dst_h = cursor.crtc_h;
+      next_cursor.src_w = src_w;
+      next_cursor.src_h = src_h;
+      next_cursor.serial = captured_cursor.serial + 1;
+      next_cursor.prop_src_x = cursor.src_x;
+      next_cursor.prop_src_y = cursor.src_y;
+      next_cursor.prop_src_w = cursor.src_w;
+      next_cursor.prop_src_h = cursor.src_h;
+      captured_cursor = std::move(next_cursor);
+      last_cursor_sequence = cursor.sequence;
+      return capture_e::ok;
+    }
+
+    inline void attach_hermes_cursor(
+      egl::img_descriptor_t &img,
+      bool requested,
+      const cursor_t &captured_cursor
+    ) {
+      if (!requested || !captured_cursor.visible) {
+        img.data = nullptr;
+        return;
+      }
+
+      if (img.serial != captured_cursor.serial) {
+        img.buffer = captured_cursor.pixels;
+        img.serial = captured_cursor.serial;
+      }
+      img.x = captured_cursor.x;
+      img.y = captured_cursor.y;
+      img.src_w = captured_cursor.src_w;
+      img.src_h = captured_cursor.src_h;
+      img.width = captured_cursor.dst_w;
+      img.height = captured_cursor.dst_h;
+      img.pixel_pitch = 4;
+      img.row_pitch = img.pixel_pitch * img.src_w;
+      img.data = img.buffer.data();
+    }
+
+    inline void blend_hermes_cursor(img_t &img, const cursor_t &cursor) {
+      if (!cursor.visible || !img.data || img.pixel_pitch != 4 || img.row_pitch <= 0 ||
+          img.width <= 0 || img.height <= 0 || !cursor.src_w || !cursor.src_h ||
+          cursor.src_w > std::numeric_limits<std::size_t>::max() / 4U) {
+        return;
+      }
+
+      const std::int32_t left = std::max<std::int32_t>(0, cursor.x);
+      const std::int32_t top = std::max<std::int32_t>(0, cursor.y);
+      const std::int64_t cursor_right = static_cast<std::int64_t>(cursor.x) + cursor.src_w;
+      const std::int64_t cursor_bottom = static_cast<std::int64_t>(cursor.y) + cursor.src_h;
+      const std::int32_t right = static_cast<std::int32_t>(
+        std::min<std::int64_t>(img.width, cursor_right)
+      );
+      const std::int32_t bottom = static_cast<std::int32_t>(
+        std::min<std::int64_t>(img.height, cursor_bottom)
+      );
+      if (left >= right || top >= bottom) {
+        return;
+      }
+
+      const std::size_t cursor_pitch = static_cast<std::size_t>(cursor.src_w) * 4U;
+      if (cursor.src_h > std::numeric_limits<std::size_t>::max() / cursor_pitch) {
+        return;
+      }
+      const std::size_t required_cursor_bytes = static_cast<std::size_t>(cursor.src_h) * cursor_pitch;
+      if (cursor.pixels.size() < required_cursor_bytes ||
+          static_cast<std::size_t>(img.row_pitch) < static_cast<std::size_t>(img.width) * 4U) {
+        return;
+      }
+
+      const std::size_t source_x = static_cast<std::size_t>(left - cursor.x);
+      const std::size_t source_y = static_cast<std::size_t>(top - cursor.y);
+      for (std::int32_t y = top; y < bottom; ++y) {
+        const auto *source = cursor.pixels.data() +
+                             (source_y + static_cast<std::size_t>(y - top)) * cursor_pitch +
+                             source_x * 4U;
+        auto *destination = img.data + static_cast<std::size_t>(y) * img.row_pitch +
+                            static_cast<std::size_t>(left) * 4U;
+        for (std::int32_t x = left; x < right; ++x, source += 4, destination += 4) {
+          const unsigned int alpha = source[3];
+          if (alpha == 255U) {
+            std::memcpy(destination, source, 4);
+          } else if (alpha) {
+            // DRM cursor pixels use premultiplied alpha.
+            destination[0] = static_cast<std::uint8_t>(
+              source[0] + (destination[0] * (255U - alpha) + 127U) / 255U
+            );
+            destination[1] = static_cast<std::uint8_t>(
+              source[1] + (destination[1] * (255U - alpha) + 127U) / 255U
+            );
+            destination[2] = static_cast<std::uint8_t>(
+              source[2] + (destination[2] * (255U - alpha) + 127U) / 255U
+            );
+          }
+        }
+      }
+    }
+
+#ifdef SUNSHINE_TESTS
+    void blend_hermes_cursor_for_test(
+      img_t &img,
+      bool visible,
+      std::int32_t x,
+      std::int32_t y,
+      std::uint32_t width,
+      std::uint32_t height,
+      const std::vector<std::uint8_t> &pixels
+    ) {
+      cursor_t cursor {};
+      cursor.visible = visible;
+      cursor.x = x;
+      cursor.y = y;
+      cursor.src_w = width;
+      cursor.src_h = height;
+      cursor.pixels = pixels;
+      blend_hermes_cursor(img, cursor);
+    }
+#endif
 
     class card_t {
     public:
@@ -1651,21 +2009,6 @@ namespace platf {
 
       int init(const std::string &display_name, const ::video::config_t &config) {
         BOOST_LOG(info) << "Hermes-KMS zero-copy capture path selected for ["sv << display_name << ']';
-        delay = std::chrono::nanoseconds {1s} / config.framerate;
-
-        const int card_index = VDISPLAY::getHermesKmsCardIndex(display_name);
-        if (card_index < 0) {
-          BOOST_LOG(error) << "Hermes-KMS capture: no DRM card for ["sv << display_name << ']';
-          return -1;
-        }
-
-        // Open the card for its render node (used by the VAAPI encoder). We do
-        // not take DRM master or touch KMS objects here.
-        const std::string card_path = "/dev/dri/card" + std::to_string(card_index);
-        if (card.init(card_path.c_str())) {
-          BOOST_LOG(error) << "Hermes-KMS capture: could not open "sv << card_path;
-          return -1;
-        }
 
         hermes_fd = VDISPLAY::hermesKmsOpenCapture(display_name);
         if (hermes_fd < 0) {
@@ -1711,8 +2054,8 @@ namespace platf {
         }
 
         // The Hermes render node only exports DMA-BUFs; it is not a render GPU,
-        // so VAAPI must run on a real GPU (e.g. amdgpu/renderD128). Find the
-        // first render node that is not Hermes and validate VAAPI there.
+        // so VAAPI must run on a real GPU (e.g. amdgpu/renderD128). Honour an
+        // explicitly configured adapter; only auto-scan when none was set.
         encode_render_fd.el = open_real_render_node();
         if (encode_render_fd.el < 0) {
           BOOST_LOG(error) << "Hermes-KMS capture: no render GPU found for encoding."sv;
@@ -1739,36 +2082,63 @@ namespace platf {
 
       // Open the render node of a real GPU (not the Hermes virtual device),
       // used to import the captured DMA-BUFs and run the encoder.
+      static bool is_usable_encode_node(int fd, std::string_view node) {
+        version_t version {drmGetVersion(fd)};
+        if (!version || !version->name) {
+          BOOST_LOG(error) << "Hermes-KMS capture: could not identify DRM adapter "sv << node;
+          return false;
+        }
+        if (std::string_view {version->name} == "hermes-kms"sv) {
+          BOOST_LOG(error) << "Hermes-KMS capture: adapter "sv << node
+                           << " is the capture-only Hermes render node, not an encoding GPU."sv;
+          return false;
+        }
+        return true;
+      }
+
       static int open_real_render_node() {
-        drmDevice *devices[16];
-        const int n = drmGetDevices2(0, devices, 16);
+        if (!config::video.adapter_name.empty()) {
+          const auto &node = config::video.adapter_name;
+          const int candidate = ::open(node.c_str(), O_RDWR | O_CLOEXEC);
+          if (candidate < 0) {
+            BOOST_LOG(error) << "Hermes-KMS capture: could not open configured adapter "sv
+                             << node << ": "sv << strerror(errno);
+            return -1;
+          }
+          if (!is_usable_encode_node(candidate, node)) {
+            ::close(candidate);
+            return -1;
+          }
+          return candidate;
+        }
+
+        std::array<drmDevicePtr, DRM_MAX_MINOR> devices {};
+        const int n = drmGetDevices2(0, devices.data(), static_cast<int>(devices.size()));
         if (n <= 0) {
           return -1;
         }
+        const int device_count = std::min(n, static_cast<int>(devices.size()));
         int fd = -1;
-        for (int i = 0; i < n; ++i) {
-          if (!(devices[i]->available_nodes & (1 << DRM_NODE_RENDER))) {
+        for (int i = 0; i < device_count; ++i) {
+          if (!devices[i] || !(devices[i]->available_nodes & (1U << DRM_NODE_RENDER))) {
             continue;
           }
           const char *node = devices[i]->nodes[DRM_NODE_RENDER];
-          const int candidate = open(node, O_RDWR | O_CLOEXEC);
+          if (!node) {
+            continue;
+          }
+          const int candidate = ::open(node, O_RDWR | O_CLOEXEC);
           if (candidate < 0) {
             continue;
           }
-          // Reject the Hermes render node: it has no rendering capability.
-          drmVersionPtr ver = drmGetVersion(candidate);
-          const bool is_hermes = ver && ver->name && std::string_view {ver->name} == "hermes-kms"sv;
-          if (ver) {
-            drmFreeVersion(ver);
-          }
-          if (is_hermes) {
-            close(candidate);
+          if (!is_usable_encode_node(candidate, node)) {
+            ::close(candidate);
             continue;
           }
           fd = candidate;
           break;
         }
-        drmFreeDevices(devices, n);
+        drmFreeDevices(devices.data(), device_count);
         return fd;
       }
 
@@ -1797,18 +2167,41 @@ namespace platf {
         return nullptr;
       }
 
-      capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool /* cursor */) {
+      capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_requested) {
         if (!pull_free_image_cb(img_out)) {
           return platf::capture_e::interrupted;
         }
-        auto img = (egl::img_descriptor_t *) img_out.get();
-        img->reset();
+        auto img = static_cast<egl::img_descriptor_t *>(img_out.get());
 
         VDISPLAY::HermesKmsFrame frame;
-        const auto timeout_ms = static_cast<uint32_t>(std::max<std::chrono::milliseconds::rep>(1, timeout.count()));
-        if (!VDISPLAY::hermesKmsAcquireFrame(hermes_fd, last_sequence, timeout_ms, frame)) {
-          // No new frame within the timeout: emit the previous image unchanged.
-          return platf::capture_e::timeout;
+        const auto timeout_ms = hermes_timeout_ms(timeout);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds {timeout_ms};
+        const bool cursor_mode_changed =
+          !last_cursor_requested || *last_cursor_requested != cursor_requested;
+        bool cursor_ready = false;
+        errno = 0;
+        if (cursor_requested && !cursor_mode_changed) {
+          VDISPLAY::HermesKmsUpdate update;
+          if (!VDISPLAY::hermesKmsWaitUpdate(
+                hermes_fd,
+                last_sequence,
+                last_cursor_sequence,
+                timeout_ms,
+                update)) {
+            return hermes_acquire_failure("zero-copy update wait", errno);
+          }
+          cursor_ready = update.cursor_ready;
+        } else if (cursor_requested) {
+          cursor_ready = true;
+        }
+        if (!VDISPLAY::hermesKmsAcquireFrame(
+              hermes_fd,
+              last_sequence,
+              (cursor_requested || cursor_mode_changed) ? 0U : timeout_ms,
+              frame)) {
+          // A real timeout re-emits the previous image. Authorization changes,
+          // device removal and malformed replies must instead rebuild capture.
+          return hermes_acquire_failure("zero-copy", errno);
         }
         // Measure only the ACQUIRE_FRAME cost (DMA-BUF export), excluding the
         // blocking wait for a new frame, to compare fairly against EVDI's
@@ -1820,33 +2213,95 @@ namespace platf {
           return platf::capture_e::reinit;
         }
 
-        // Hand the DMA-BUFs to EGL/VAAPI through the surface descriptor.
+        bool valid_layout = frame.fourcc != 0;
+        for (std::uint32_t i = 0; i < frame.plane_count; ++i) {
+          valid_layout = valid_layout && frame.dma_buf_fd[i] >= 0 && frame.pitch[i] > 0;
+        }
+        if (!valid_layout) {
+          BOOST_LOG(error) << "Hermes-KMS zero-copy capture: invalid DMA-BUF plane metadata."sv;
+          frame.close();
+          return platf::capture_e::reinit;
+        }
+
+        if (frame.sync_file_fd >= 0) {
+          const auto fence_status = wait_hermes_frame_fence(frame.sync_file_fd, deadline);
+          if (fence_status == hermes_fence_wait_e::timeout) {
+            BOOST_LOG(warning) << "Hermes-KMS zero-copy capture: frame fence timed out."sv;
+            frame.close();
+            return platf::capture_e::timeout;
+          }
+          if (fence_status == hermes_fence_wait_e::failed) {
+            const int fence_errno = errno;
+            BOOST_LOG(warning) << "Hermes-KMS zero-copy capture: dropping frame "sv
+                               << frame.sequence << " after producer fence failure: "sv
+                               << strerror(fence_errno);
+            last_sequence = frame.sequence;
+            frame.close();
+            return platf::capture_e::timeout;
+          }
+          if (fence_status == hermes_fence_wait_e::error) {
+            const int fence_errno = errno;
+            BOOST_LOG(error) << "Hermes-KMS zero-copy capture: invalid sync file: "sv
+                             << strerror(fence_errno);
+            frame.close();
+            return platf::capture_e::reinit;
+          }
+        }
+
+        std::optional<cursor_t> pending_cursor;
+        uint64_t pending_cursor_sequence = last_cursor_sequence;
+        if (cursor_ready) {
+          pending_cursor = captured_cursor;
+          const auto cursor_status = refresh_hermes_cursor(
+            hermes_fd,
+            deadline,
+            *pending_cursor,
+            pending_cursor_sequence
+          );
+          if (cursor_status != capture_e::ok) {
+            frame.close();
+            return cursor_status;
+          }
+        }
+
+        // Keep the old descriptor alive through acquisition and fence waiting:
+        // timeout callbacks reuse it. Only replace it once the new frame is
+        // known to be complete and all metadata has been validated.
+        img->reset();
         img->sd.width = frame.width;
         img->sd.height = frame.height;
         img->sd.fourcc = frame.fourcc;
         img->sd.modifier = frame.modifier;
-        for (int i = 0; i < 4; ++i) {
+        std::fill_n(img->sd.offsets, 4, 0);
+        std::fill_n(img->sd.pitches, 4, 0);
+        for (std::uint32_t i = 0; i < frame.plane_count; ++i) {
           img->sd.fds[i] = frame.dma_buf_fd[i];
           img->sd.offsets[i] = frame.offset[i];
           img->sd.pitches[i] = frame.pitch[i];
-        }
-        // The sync_file fence is satisfied by the compositor's commit; the
-        // VAAPI import waits on the buffer implicitly, so just release it.
-        if (frame.sync_file_fd >= 0) {
-          ::close(frame.sync_file_fd);
-          frame.sync_file_fd = -1;
-        }
-
-        last_sequence = frame.sequence;
-        img->sequence = ++sequence;
-        img->frame_timestamp = std::chrono::steady_clock::now();
-        img->data = nullptr;  // No separate cursor overlay: the compositor bakes it in.
-
-        // The descriptor now owns the dma-buf fds; EGL import dups them, and the
-        // image holds them until reuse. Close happens when the image is reset.
-        for (int i = 0; i < 4; ++i) {
           frame.dma_buf_fd[i] = -1;  // ownership transferred to img->sd
         }
+        frame.close();  // closes the fence and any unexpected surplus fds
+
+        const bool primary_advanced = frame.sequence != last_sequence;
+        last_sequence = frame.sequence;
+        if (primary_advanced || !sequence) {
+          ++sequence;
+        }
+        img->sequence = sequence;
+        img->frame_timestamp = std::chrono::steady_clock::now();
+        attach_hermes_cursor(
+          *img,
+          cursor_requested,
+          pending_cursor ? *pending_cursor : captured_cursor
+        );
+        if (pending_cursor) {
+          captured_cursor = std::move(*pending_cursor);
+          last_cursor_sequence = pending_cursor_sequence;
+        }
+        last_cursor_requested = cursor_requested;
+
+        // The descriptor now owns the DMA-BUF fds; the image holds them until
+        // reuse, leaving the cursor fields available for the cursor UAPI path.
         return platf::capture_e::ok;
       }
 
@@ -1880,6 +2335,8 @@ namespace platf {
       int hermes_fd {-1};
       file_t encode_render_fd;
       uint64_t last_sequence {0};
+      uint64_t last_cursor_sequence {0};
+      std::optional<bool> last_cursor_requested;
     };
 
     // Hermes-KMS capture through a CPU copy of the scanout DMA-BUF.
@@ -1904,9 +2361,8 @@ namespace platf {
         }
       }
 
-      int init(const std::string &display_name, const ::video::config_t &config) {
+      int init(const std::string &display_name, const ::video::config_t & /* config */) {
         BOOST_LOG(info) << "Hermes-KMS CPU-copy capture path selected for ["sv << display_name << ']';
-        delay = std::chrono::nanoseconds {1s} / config.framerate;
 
         hermes_fd = VDISPLAY::hermesKmsOpenCapture(display_name);
         if (hermes_fd < 0) {
@@ -1917,6 +2373,16 @@ namespace platf {
         int h = 0;
         if (!VDISPLAY::hermesKmsCaptureSize(hermes_fd, w, h) || w <= 0 || h <= 0) {
           BOOST_LOG(error) << "Hermes-KMS capture: no active scanout geometry yet."sv;
+          return -1;
+        }
+
+        constexpr auto bytes_per_pixel = std::size_t {4};
+        if (static_cast<std::size_t>(w) >
+              static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) / bytes_per_pixel ||
+            static_cast<std::size_t>(h) >
+              std::numeric_limits<std::size_t>::max() / (static_cast<std::size_t>(w) * bytes_per_pixel)) {
+          BOOST_LOG(error) << "Hermes-KMS CPU capture: scanout geometry is too large: "sv
+                           << w << 'x' << h;
           return -1;
         }
 
@@ -1936,8 +2402,9 @@ namespace platf {
         img->width = width;
         img->height = height;
         img->pixel_pitch = 4;
-        img->row_pitch = img->pixel_pitch * width;
-        img->data = new std::uint8_t[height * img->row_pitch];
+        const auto row_pitch = static_cast<std::size_t>(width) * static_cast<std::size_t>(img->pixel_pitch);
+        img->row_pitch = static_cast<std::int32_t>(row_pitch);
+        img->data = new std::uint8_t[static_cast<std::size_t>(height) * row_pitch];
 
         return img;
       }
@@ -1960,7 +2427,7 @@ namespace platf {
         return std::make_unique<avcodec_encode_device_t>();
       }
 
-      capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool /* cursor */) {
+      capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_requested) {
         // Pull the destination image before acquiring, like
         // display_hermes_vram_t does: the timeout path below re-emits
         // img_out, so it must already hold a valid image by then.
@@ -1969,10 +2436,32 @@ namespace platf {
         }
 
         VDISPLAY::HermesKmsFrame frame;
-        const auto timeout_ms = static_cast<uint32_t>(std::max<std::chrono::milliseconds::rep>(1, timeout.count()));
-        if (!VDISPLAY::hermesKmsAcquireFrame(hermes_fd, last_sequence, timeout_ms, frame)) {
-          // No new frame within the timeout: emit the previous image unchanged.
-          return platf::capture_e::timeout;
+        const auto timeout_ms = hermes_timeout_ms(timeout);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds {timeout_ms};
+        const bool cursor_mode_changed =
+          !last_cursor_requested || *last_cursor_requested != cursor_requested;
+        bool cursor_ready = false;
+        errno = 0;
+        if (cursor_requested && !cursor_mode_changed) {
+          VDISPLAY::HermesKmsUpdate update;
+          if (!VDISPLAY::hermesKmsWaitUpdate(
+                hermes_fd,
+                last_sequence,
+                last_cursor_sequence,
+                timeout_ms,
+                update)) {
+            return hermes_acquire_failure("CPU-copy update wait", errno);
+          }
+          cursor_ready = update.cursor_ready;
+        } else if (cursor_requested) {
+          cursor_ready = true;
+        }
+        if (!VDISPLAY::hermesKmsAcquireFrame(
+              hermes_fd,
+              last_sequence,
+              (cursor_requested || cursor_mode_changed) ? 0U : timeout_ms,
+              frame)) {
+          return hermes_acquire_failure("CPU-copy", errno);
         }
         accumulate_capture_metric("hermes-kms-cpu", frame.acquire_ns);
 
@@ -1981,44 +2470,109 @@ namespace platf {
           return platf::capture_e::reinit;
         }
 
-        // A successful ACQUIRE_FRAME only means the frame was exported, not
-        // that the producer finished writing it. The driver exports the
-        // framebuffer's write fence as a sync file; wait for it before
-        // touching the pixels.
-        if (frame.sync_file_fd >= 0) {
-          pollfd fence_poll {frame.sync_file_fd, POLLIN, 0};
-          int poll_result = 0;
-          do {
-            poll_result = poll(&fence_poll, 1, static_cast<int>(timeout_ms));
-          } while (poll_result < 0 && errno == EINTR);
-          if (poll_result <= 0) {
-            BOOST_LOG(warning) << "Hermes-KMS CPU capture: frame fence did not signal in time."sv;
-            frame.close();
-            return platf::capture_e::timeout;
-          }
-        }
-
-        const size_t row_bytes = (size_t) img_width * 4;
-        if (frame.plane_count != 1 ||
-            (frame.fourcc != DRM_FORMAT_XRGB8888 && frame.fourcc != DRM_FORMAT_ARGB8888) ||
-            frame.pitch[0] < row_bytes) {
+        const auto frame_height = static_cast<std::size_t>(frame.height);
+        const auto row_bytes = static_cast<std::size_t>(img_width) * std::size_t {4};
+        const bool valid_layout =
+          frame.plane_count == 1 &&
+          frame.dma_buf_fd[0] >= 0 &&
+          (frame.fourcc == DRM_FORMAT_XRGB8888 || frame.fourcc == DRM_FORMAT_ARGB8888) &&
+          (frame.modifier == DRM_FORMAT_MOD_LINEAR || frame.modifier == DRM_FORMAT_MOD_INVALID) &&
+          static_cast<std::size_t>(frame.pitch[0]) >= row_bytes;
+        const bool valid_destination =
+          img_out->data && img_out->width == img_width && img_out->height == img_height &&
+          img_out->pixel_pitch == 4 && img_out->row_pitch > 0 &&
+          static_cast<std::size_t>(img_out->row_pitch) >= row_bytes;
+        if (!valid_layout || !valid_destination) {
           BOOST_LOG(error) << "Hermes-KMS CPU capture: unexpected frame layout (planes="sv << frame.plane_count
                            << ", fourcc=0x"sv << std::hex << frame.fourcc << std::dec
+                           << ", modifier=0x"sv << std::hex << frame.modifier << std::dec
                            << ", pitch="sv << frame.pitch[0] << ')';
           frame.close();
           return platf::capture_e::error;
         }
 
-        const size_t map_len = (size_t) frame.pitch[0] * frame.height + frame.offset[0];
-        const off_t dmabuf_size = lseek(frame.dma_buf_fd[0], 0, SEEK_END);
-        if (dmabuf_size > 0 && map_len > (size_t) dmabuf_size) {
+        // A successful ACQUIRE_FRAME only means the frame was exported, not
+        // that the producer finished writing it. The driver exports the
+        // framebuffer's write fence as a sync file; wait for it before
+        // touching the pixels.
+        if (frame.sync_file_fd >= 0) {
+          const auto fence_status = wait_hermes_frame_fence(frame.sync_file_fd, deadline);
+          if (fence_status == hermes_fence_wait_e::timeout) {
+            BOOST_LOG(warning) << "Hermes-KMS CPU capture: frame fence timed out."sv;
+            frame.close();
+            return platf::capture_e::timeout;
+          }
+          if (fence_status == hermes_fence_wait_e::failed) {
+            const int fence_errno = errno;
+            BOOST_LOG(warning) << "Hermes-KMS CPU capture: dropping frame "sv
+                               << frame.sequence << " after producer fence failure: "sv
+                               << strerror(fence_errno);
+            last_sequence = frame.sequence;
+            frame.close();
+            return platf::capture_e::timeout;
+          }
+          if (fence_status == hermes_fence_wait_e::error) {
+            const int fence_errno = errno;
+            BOOST_LOG(error) << "Hermes-KMS CPU capture: invalid sync file: "sv
+                             << strerror(fence_errno);
+            frame.close();
+            return platf::capture_e::reinit;
+          }
+        }
+
+        std::optional<cursor_t> pending_cursor;
+        uint64_t pending_cursor_sequence = last_cursor_sequence;
+        if (cursor_ready) {
+          pending_cursor = captured_cursor;
+          const auto cursor_status = refresh_hermes_cursor(
+            hermes_fd,
+            deadline,
+            *pending_cursor,
+            pending_cursor_sequence
+          );
+          if (cursor_status != capture_e::ok) {
+            frame.close();
+            return cursor_status;
+          }
+        }
+
+        const auto source_pitch = static_cast<std::size_t>(frame.pitch[0]);
+        const auto source_offset = static_cast<std::size_t>(frame.offset[0]);
+        const auto last_row = frame_height - 1;
+        if (last_row > (std::numeric_limits<std::size_t>::max() - source_offset) / source_pitch) {
+          BOOST_LOG(error) << "Hermes-KMS CPU capture: DMA-BUF row offset overflows size_t."sv;
+          frame.close();
+          return platf::capture_e::error;
+        }
+        const auto last_row_offset = source_offset + last_row * source_pitch;
+        if (row_bytes > std::numeric_limits<std::size_t>::max() - last_row_offset) {
+          BOOST_LOG(error) << "Hermes-KMS CPU capture: DMA-BUF mapping length overflows size_t."sv;
+          frame.close();
+          return platf::capture_e::error;
+        }
+        const auto map_len = last_row_offset + row_bytes;
+
+        struct stat dmabuf_stat {};
+        if (::fstat(frame.dma_buf_fd[0], &dmabuf_stat) < 0) {
+          const int stat_errno = errno;
+          BOOST_LOG(error) << "Hermes-KMS CPU capture: could not determine DMA-BUF size: "sv
+                           << strerror(stat_errno);
+          frame.close();
+          return platf::capture_e::error;
+        }
+        if (dmabuf_stat.st_size <= 0) {
+          BOOST_LOG(error) << "Hermes-KMS CPU capture: DMA-BUF reports an invalid zero size."sv;
+          frame.close();
+          return platf::capture_e::error;
+        }
+        if (static_cast<std::uintmax_t>(map_len) > static_cast<std::uintmax_t>(dmabuf_stat.st_size)) {
           BOOST_LOG(error) << "Hermes-KMS CPU capture: frame metadata exceeds the DMA-BUF ("sv
-                           << map_len << " > "sv << dmabuf_size << ')';
+                           << map_len << " > "sv << dmabuf_stat.st_size << ')';
           frame.close();
           return platf::capture_e::error;
         }
 
-        void *map = mmap(nullptr, map_len, PROT_READ, MAP_SHARED, frame.dma_buf_fd[0], 0);
+        void *map = ::mmap(nullptr, map_len, PROT_READ, MAP_SHARED, frame.dma_buf_fd[0], 0);
         if (map == MAP_FAILED) {
           BOOST_LOG(error) << "Hermes-KMS CPU capture: mmap failed: "sv << strerror(errno);
           frame.close();
@@ -2026,26 +2580,57 @@ namespace platf {
         }
 
         // Bracket the CPU read as the DMA-BUF mmap contract requires.
-        struct dma_buf_sync sync;
-        sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ;
-        drmIoctl(frame.dma_buf_fd[0], DMA_BUF_IOCTL_SYNC, &sync);
+        if (hermes_dma_buf_sync(frame.dma_buf_fd[0], DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ) < 0) {
+          const int sync_errno = errno;
+          BOOST_LOG(error) << "Hermes-KMS CPU capture: DMA_BUF_SYNC_START failed: "sv
+                           << strerror(sync_errno);
+          ::munmap(map, map_len);
+          frame.close();
+          return platf::capture_e::error;
+        }
 
         const auto *src = static_cast<const std::uint8_t *>(map) + frame.offset[0];
         auto *dst = img_out->data;
-        if (frame.pitch[0] == row_bytes) {
-          std::memcpy(dst, src, row_bytes * img_height);
+        const auto destination_pitch = static_cast<std::size_t>(img_out->row_pitch);
+        if (source_pitch == row_bytes && destination_pitch == row_bytes) {
+          std::memcpy(dst, src, row_bytes * frame_height);
         } else {
-          for (int y = 0; y < img_height; ++y) {
-            std::memcpy(dst + (size_t) y * row_bytes, src + (size_t) y * frame.pitch[0], row_bytes);
+          for (std::size_t y = 0; y < frame_height; ++y) {
+            std::memcpy(dst + y * destination_pitch, src + y * source_pitch, row_bytes);
           }
         }
 
-        sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
-        drmIoctl(frame.dma_buf_fd[0], DMA_BUF_IOCTL_SYNC, &sync);
+        const int sync_end_result = hermes_dma_buf_sync(
+          frame.dma_buf_fd[0],
+          DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ
+        );
+        const int sync_end_errno = errno;
+        const int unmap_result = ::munmap(map, map_len);
+        const int unmap_errno = errno;
+        if (sync_end_result < 0) {
+          BOOST_LOG(error) << "Hermes-KMS CPU capture: DMA_BUF_SYNC_END failed: "sv
+                           << strerror(sync_end_errno);
+          frame.close();
+          return platf::capture_e::error;
+        }
+        if (unmap_result < 0) {
+          BOOST_LOG(error) << "Hermes-KMS CPU capture: munmap failed: "sv << strerror(unmap_errno);
+          frame.close();
+          return platf::capture_e::error;
+        }
 
-        munmap(map, map_len);
+        const cursor_t &cursor_for_frame = pending_cursor ? *pending_cursor : captured_cursor;
+        if (cursor_requested && cursor_for_frame.visible) {
+          blend_hermes_cursor(*img_out, cursor_for_frame);
+        }
+
         last_sequence = frame.sequence;
         frame.close();
+        if (pending_cursor) {
+          captured_cursor = std::move(*pending_cursor);
+          last_cursor_sequence = pending_cursor_sequence;
+        }
+        last_cursor_requested = cursor_requested;
 
         img_out->frame_timestamp = std::chrono::steady_clock::now();
         return platf::capture_e::ok;
@@ -2080,6 +2665,8 @@ namespace platf {
 
       int hermes_fd {-1};
       uint64_t last_sequence {0};
+      uint64_t last_cursor_sequence {0};
+      std::optional<bool> last_cursor_requested;
     };
 
   }  // namespace kms

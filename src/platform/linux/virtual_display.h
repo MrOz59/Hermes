@@ -118,12 +118,12 @@ namespace VDISPLAY {
   };
 
   /**
-   * @brief Device-lifetime counters read from the Hermes-KMS GET_METRICS ioctl.
+   * @brief Output-lifetime counters read from the Hermes-KMS GET_METRICS ioctl.
    *
-   * These are cumulative since the driver bound the device (not per-session) and
-   * are exposed by the diagnostics endpoint when the hermes_kms backend is in
-   * use. `available` is false when no Hermes-KMS device is present or the device
-   * does not advertise the metrics capability.
+   * These are cumulative since the driver created the output (not per-session)
+   * and are exposed by the diagnostics endpoint while Apollo owns an active
+   * Hermes-KMS session. `available` is false when there is no active authorized
+   * output or the device does not advertise the metrics capability.
    */
   struct HermesKmsMetrics {
     bool available = false;
@@ -147,8 +147,8 @@ namespace VDISPLAY {
 
   /**
    * @brief Read the Hermes-KMS device metrics, if a metrics-capable device is
-   *        present. Opens and closes its own short-lived fd, so it is safe to
-   *        call from the diagnostics endpoint regardless of session state.
+   *        present. It opens a short-lived render fd and binds the active
+   *        generic session capability before reading protected counters.
    * @return Metrics with `available=true` on success; a default (`available=false`)
    *         value when no metrics-capable Hermes-KMS device is found.
    */
@@ -663,6 +663,47 @@ namespace VDISPLAY {
     void close();  ///< Close all owned fds (dma_buf_fd[] and sync_file_fd).
   };
 
+  /** Result of waiting for either independently captured plane to advance. */
+  struct HermesKmsUpdate {
+    bool frame_ready {false};
+    bool cursor_ready {false};
+    uint64_t frame_sequence {0};
+    uint64_t cursor_sequence {0};
+  };
+
+  /** Latest cursor-plane state exported by the generic Hermes-KMS UAPI. */
+  struct HermesKmsCursor {
+    bool visible {false};
+    bool position_valid {false};
+    bool geometry_valid {false};
+    bool buffer_valid {false};
+    int32_t position_x {0};
+    int32_t position_y {0};
+    int32_t crtc_x {0};
+    int32_t crtc_y {0};
+    uint32_t crtc_w {0};
+    uint32_t crtc_h {0};
+    uint32_t src_x {0};  ///< DRM 16.16 fixed point.
+    uint32_t src_y {0};  ///< DRM 16.16 fixed point.
+    uint32_t src_w {0};  ///< DRM 16.16 fixed point.
+    uint32_t src_h {0};  ///< DRM 16.16 fixed point.
+    int32_t hotspot_x {0};
+    int32_t hotspot_y {0};
+    uint32_t width {0};
+    uint32_t height {0};
+    uint32_t fourcc {0};
+    uint64_t modifier {0};
+    uint32_t plane_count {0};
+    int dma_buf_fd[4] {-1, -1, -1, -1};
+    uint32_t pitch[4] {0, 0, 0, 0};
+    uint32_t offset[4] {0, 0, 0, 0};
+    int sync_file_fd {-1};
+    uint64_t sequence {0};
+    uint64_t image_sequence {0};
+
+    void close();  ///< Close all owned fds (dma_buf_fd[] and sync_file_fd).
+  };
+
   /**
    * Open the render node of the Hermes-KMS card behind @p display_name.
    * @return a render-node fd >= 0 on success, or -1 on failure.
@@ -688,5 +729,14 @@ namespace VDISPLAY {
    */
   bool hermesKmsAcquireFrame(int render_fd, uint64_t after_sequence,
                              uint32_t timeout_ms, HermesKmsFrame &out);
+
+  /** Wait until the primary frame or cursor stream advances. */
+  bool hermesKmsWaitUpdate(int render_fd, uint64_t after_frame_sequence,
+                           uint64_t after_cursor_sequence, uint32_t timeout_ms,
+                           HermesKmsUpdate &out);
+
+  /** Acquire current cursor metadata and, when requested, its DMA-BUF. */
+  bool hermesKmsAcquireCursor(int render_fd, bool request_buffer,
+                              HermesKmsCursor &out);
 
 }  // namespace VDISPLAY

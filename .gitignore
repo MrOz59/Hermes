@@ -70,3 +70,5 @@ apollo-linux-build
 
 docs/codex/*
 jsson-lsp.log
+test_sunshine.log*
+write_file_test_*.txt

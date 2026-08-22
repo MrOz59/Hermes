@@ -14,7 +14,7 @@
 	# This fork holds a snapshot of that branch. Point it back upstream if the
 	# branch is ever restored.
 	url = https://github.com/MrOz59/build-deps.git
-	branch = dist
+	branch = dist-snapshot
 [submodule "third-party/doxyconfig"]
 	path = third-party/doxyconfig
 	url = https://github.com/LizardByte/doxyconfig.git

@@ -210,6 +210,36 @@ namespace wl {
   bool restore_virtual_output_layout();
   /** Check whether the current compositor exposes wlroots output management. */
   bool output_management_supported();
+
+  /**
+   * @brief Which Wayland globals the running session advertises.
+   *
+   * Hermes' features are not "Wayland" features. Each one needs particular
+   * protocols, and which of them a compositor implements is the whole
+   * difference between a working stream and a black one - COSMIC has
+   * wlr-output-management but no wlr-screencopy, Hyprland has both plus
+   * ext-image-copy-capture. Asking the registry once is cheaper and far more
+   * informative than attempting each feature and reading the failure, and it is
+   * the only way to say *before* a stream starts what this session can do.
+   */
+  struct session_protocols_t {
+    bool connected;  ///< A Wayland display was reachable at all.
+    bool output_management;  ///< zwlr_output_manager_v1: enable/mode/position an output.
+    bool screencopy;  ///< zwlr_screencopy_manager_v1: the wlgrab capture backend.
+    bool image_copy_capture;  ///< ext_image_copy_capture_manager_v1: the successor to screencopy.
+    bool output_capture_source;  ///< ext_output_image_capture_source_manager_v1: names an output as a source.
+    bool linux_dmabuf;  ///< zwp_linux_dmabuf_v1: without it capture is a CPU copy.
+    bool xdg_output;  ///< zxdg_output_manager_v1: logical geometry of each output.
+  };
+
+  /**
+   * @brief Probe the session's globals in a single registry roundtrip.
+   *
+   * Binds nothing: it records which interfaces the compositor advertises, so it
+   * is safe to call from diagnostics without disturbing a running stream.
+   */
+  session_protocols_t probe_protocols();
+
   int init();
 }  // namespace wl
 #else
@@ -253,6 +283,20 @@ namespace wl {
 
   inline bool output_management_supported() {
     return false;
+  }
+
+  struct session_protocols_t {
+    bool connected;
+    bool output_management;
+    bool screencopy;
+    bool image_copy_capture;
+    bool output_capture_source;
+    bool linux_dmabuf;
+    bool xdg_output;
+  };
+
+  inline session_protocols_t probe_protocols() {
+    return {};
   }
 }  // namespace wl
 #endif

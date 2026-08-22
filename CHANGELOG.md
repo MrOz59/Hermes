@@ -14,6 +14,51 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [0.5.1] - 2026-08-22
 
 ### Added
+- Hermes now probes what the running session can actually do and says so at
+  startup, per feature, with the fix for anything it cannot. The classification
+  answers *which* compositor; this answers *what it supports*, and the two are
+  not the same question: COSMIC drives an output but cannot capture one, Hyprland
+  speaks every protocol involved and still cannot keep content on a virtual
+  display. The session's Wayland globals are read in a single registry roundtrip
+  that binds nothing, so the probe is safe to run beside a live stream, and the
+  rules that turn observations into advice are a pure function - every session
+  shape Hermes has to advise is a test row rather than a machine somebody has to
+  own.
+- `readiness` distinguishes *degraded* and *unknown* from *unavailable*. "Works,
+  but not as you asked" and "could not be determined" are different messages,
+  and collapsing either into "unsupported" is how a fixable configuration gets
+  read as a missing capability. A session with no window system attached now
+  reports unknown for everything instead of inheriting X11's answers - that
+  path previously told such a process every feature was ready.
+- Hermes checks whether Hermes-KMS session cards carry a private DRM seat.
+  Isolation has two halves installed separately: Hermes' own udev rules put a
+  session's input devices on a private seat, and the driver's
+  `70-hermes-kms-session-seats.rules` does the same for its DRM cards. With only
+  the first in place a session starts, gets isolated input, and shares the host
+  compositor's screen, because a card with no `ID_SEAT` is on seat0 where the
+  host claims it. That was previously invisible: the seatd socket was validated
+  and the seat assignment never was.
+- Compositor classification now names the wlroots family and COSMIC instead of
+  reporting them as unknown. sway, wayfire, river, labwc and niri take one
+  strategy - plain `wlr-output-management`, no per-compositor workaround - so
+  they are one class rather than one case each, and a new wlroots compositor
+  needs no code beyond that list. The distinction matters because "unknown" has
+  to keep meaning *Hermes cannot advise this session*: diagnostics previously
+  could not tell a sway session, which is expected to work, from a desktop
+  nobody has ever classified. `wlroots` is also matched as a family name, but
+  only after every token has been read, because a desktop list is not ordered by
+  specificity - Hyprland ships `Hyprland:wlroots`, and the reverse order must not
+  turn the one compositor with a dedicated strategy into the generic family.
+- A session that names no desktop is now classified from the control socket its
+  compositor exports. `SWAYSOCK` and `WAYFIRE_SOCKET` join the existing
+  `HYPRLAND_INSTANCE_SIGNATURE` fallback, because a compositor started from a TTY
+  with `exec sway` leaves both `XDG_CURRENT_DESKTOP` and `XDG_SESSION_DESKTOP`
+  empty - and that is precisely the setup a user reaching for virtual displays
+  tends to have.
+- The `output_layout_backend` reported by diagnostics names whichever compositor
+  is driving `wlr-output-management`, not only Hyprland. The protocol is not a
+  strategy, and a bug report that says COSMIC is a different report from one that
+  says sway.
 - Hermes now classifies the Wayland compositor it is running under instead of
   treating "wayland" as one case. KWin is configured through `kscreen-doctor`,
   Mutter only through `ApplyMonitorsConfig`, and Hyprland accepts the output

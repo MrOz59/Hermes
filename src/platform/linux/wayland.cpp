@@ -991,6 +991,59 @@ namespace wl {
     return control.init() && control.collect();
   }
 
+  session_protocols_t probe_protocols() {
+    session_protocols_t protocols {};
+
+    display_t display;
+    if (display.init() != 0) {
+      // Not a failure worth logging as an error: an X11 session reaching the
+      // diagnostics path is the ordinary case, and `connected` says so.
+      return protocols;
+    }
+    protocols.connected = true;
+
+    // A probe must not require bindings for protocols Hermes does not
+    // implement, so the two ext-* globals are matched by name. They are staging
+    // protocols whose names are part of their wire identity and cannot change
+    // without a new global, which is exactly what makes the string safe here.
+    static constexpr auto image_copy_capture_name = "ext_image_copy_capture_manager_v1"sv;
+    static constexpr auto output_capture_source_name = "ext_output_image_capture_source_manager_v1"sv;
+
+    struct probe_state_t {
+      session_protocols_t *protocols;
+      wl_registry_listener listener;
+    };
+
+    probe_state_t state {
+      .protocols = &protocols,
+      .listener = {
+        .global = [](void *data, wl_registry *, std::uint32_t, const char *interface, std::uint32_t) {
+          auto *found = static_cast<probe_state_t *>(data)->protocols;
+          const std::string_view name {interface};
+          if (name == zwlr_output_manager_v1_interface.name) {
+            found->output_management = true;
+          } else if (name == zwlr_screencopy_manager_v1_interface.name) {
+            found->screencopy = true;
+          } else if (name == zwp_linux_dmabuf_v1_interface.name) {
+            found->linux_dmabuf = true;
+          } else if (name == zxdg_output_manager_v1_interface.name) {
+            found->xdg_output = true;
+          } else if (name == image_copy_capture_name) {
+            found->image_copy_capture = true;
+          } else if (name == output_capture_source_name) {
+            found->output_capture_source = true;
+          }
+        },
+        .global_remove = [](void *, wl_registry *, std::uint32_t) {},
+      },
+    };
+
+    wl_registry_add_listener(display.registry(), &state.listener, &state);
+    display.roundtrip();
+
+    return protocols;
+  }
+
   static bool validate() {
     display_t display;
 

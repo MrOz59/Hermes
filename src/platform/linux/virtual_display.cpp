@@ -927,6 +927,13 @@ namespace VDISPLAY {
   }  // namespace
 
   compositor_e compositorFromDesktopNames(const std::string &desktop_names) {
+    // "wlroots" is a family name, not a compositor: Hyprland advertises it too,
+    // and a desktop list is not ordered by specificity ("wlroots:sway" and
+    // "Hyprland:wlroots" are both shipped). Naming a compositor therefore wins
+    // over naming its family no matter which token came first, so the generic
+    // match is held back and only used once every token has been read.
+    bool wlroots_family = false;
+
     std::string_view remaining {desktop_names};
     while (!remaining.empty()) {
       const auto separator = remaining.find(':');
@@ -940,12 +947,26 @@ namespace VDISPLAY {
       if (desktop_token_matches(token, "hyprland")) {
         return compositor_e::hyprland;
       }
+      if (desktop_token_matches(token, "cosmic")) {
+        return compositor_e::cosmic;
+      }
+      // These drive one strategy - plain wlr-output-management, no
+      // per-compositor workaround - so they are one class, not one enumerator
+      // each. A new wlroots compositor needs no code beyond this list.
+      for (const auto *wlr : {"sway", "wayfire", "river", "labwc", "niri"}) {
+        if (desktop_token_matches(token, wlr)) {
+          return compositor_e::wlroots;
+        }
+      }
+      if (desktop_token_matches(token, "wlroots")) {
+        wlroots_family = true;
+      }
       if (separator == std::string_view::npos) {
         break;
       }
       remaining.remove_prefix(separator + 1);
     }
-    return compositor_e::unknown;
+    return wlroots_family ? compositor_e::wlroots : compositor_e::unknown;
   }
 
   compositor_e sessionCompositor() {
@@ -957,12 +978,336 @@ namespace VDISPLAY {
         }
       }
     }
-    // Hyprland exports this unconditionally, including in sessions started
-    // without a desktop file to name it.
-    if (const char *signature = std::getenv("HYPRLAND_INSTANCE_SIGNATURE"); signature && signature[0]) {
-      return compositor_e::hyprland;
+    // A session started from a TTY - `exec Hyprland`, `exec sway` - carries no
+    // desktop name at all, which is precisely the setup a user reaching for
+    // virtual displays is likely to have. Each of these compositors exports its
+    // control socket unconditionally, so the socket names the session when the
+    // desktop variables do not.
+    struct socket_hint {
+      const char *variable;
+      compositor_e compositor;
+    };
+    for (const auto &[variable, compositor] : {
+           socket_hint {"HYPRLAND_INSTANCE_SIGNATURE", compositor_e::hyprland},
+           socket_hint {"SWAYSOCK", compositor_e::wlroots},
+           socket_hint {"WAYFIRE_SOCKET", compositor_e::wlroots},
+         }) {
+      if (const char *value = std::getenv(variable); value && value[0]) {
+        return compositor;
+      }
     }
     return compositor_e::unknown;
+  }
+
+  std::string compositorName(compositor_e compositor) {
+    switch (compositor) {
+      case compositor_e::kwin:
+        return "KWin (KDE Plasma)";
+      case compositor_e::mutter:
+        return "Mutter (GNOME)";
+      case compositor_e::hyprland:
+        return "Hyprland";
+      case compositor_e::wlroots:
+        return "a wlroots compositor";
+      case compositor_e::cosmic:
+        return "COSMIC";
+      case compositor_e::unknown:
+        break;
+    }
+    return "an unrecognised compositor";
+  }
+
+  std::string featureName(feature_e feature) {
+    switch (feature) {
+      case feature_e::virtual_display:
+        return "virtual display";
+      case feature_e::client_requested_mode:
+        return "client-requested mode";
+      case feature_e::exclusive_mode:
+        return "exclusive mode";
+      case feature_e::multiple_displays:
+        return "multiple virtual displays";
+      case feature_e::isolated_sessions:
+        return "isolated sessions";
+      case feature_e::zero_copy_capture:
+        return "zero-copy capture";
+    }
+    return "unknown feature";
+  }
+
+  std::string readinessName(readiness_e readiness) {
+    switch (readiness) {
+      case readiness_e::ready:
+        return "ready";
+      case readiness_e::degraded:
+        return "degraded";
+      case readiness_e::unavailable:
+        return "unavailable";
+      case readiness_e::unknown:
+        return "unknown";
+    }
+    return "unknown";
+  }
+
+  namespace {
+
+    /**
+     * The seat a DRM card was assigned, as udev recorded it.
+     *
+     * Read from udev's own database rather than through libudev: the answer is
+     * one property of one device, and linking a new library into every build to
+     * read it would cost more than it explains. An absent file or an absent
+     * property both mean the same thing to logind and to every compositor -
+     * the device is on seat0 - so both return empty.
+     */
+    std::string drm_card_seat(const std::filesystem::path &card) {
+      std::ifstream dev_file {card / "dev"};
+      std::string devnum;
+      if (!std::getline(dev_file, devnum) || devnum.empty()) {
+        return {};
+      }
+
+      std::ifstream udev_db {std::filesystem::path {"/run/udev/data"} / ("c" + devnum)};
+      if (!udev_db) {
+        return {};
+      }
+
+      static constexpr std::string_view seat_prefix {"E:ID_SEAT="};
+      for (std::string line; std::getline(udev_db, line);) {
+        if (line.starts_with(seat_prefix)) {
+          return line.substr(seat_prefix.size());
+        }
+      }
+      return {};
+    }
+
+    /** Whether a DRM card node belongs to the hermes-kms driver. */
+    bool is_hermes_kms_card(const std::filesystem::path &card) {
+      std::ifstream uevent {card / "device" / "uevent"};
+      for (std::string line; std::getline(uevent, line);) {
+        if (line == "DRIVER=hermes-kms") {
+          return true;
+        }
+      }
+      return false;
+    }
+
+  }  // namespace
+
+  std::vector<FeatureReport> assessSession(const SessionFacts &facts) {
+    std::vector<FeatureReport> reports;
+    const auto add = [&reports](feature_e feature, readiness_e readiness, std::string detail, std::string remediation = {}) {
+      reports.push_back({feature, readiness, std::move(detail), std::move(remediation)});
+    };
+
+    // --- virtual display -----------------------------------------------------
+    // Hyprland is judged on the compositor, not the backend: aquamarine's
+    // trouble is with driving any display-only DRM device, so EVDI fails the
+    // same way Hermes-KMS does and naming the backend would misdirect the user.
+    readiness_e display_readiness = readiness_e::unavailable;
+    if (!facts.wayland && !facts.x11) {
+      // Not a verdict about the session: there isn't one yet. Saying "ready"
+      // here - which treating this as X11 would - is worse than saying nothing.
+      for (const auto feature : {
+             feature_e::virtual_display,
+             feature_e::client_requested_mode,
+             feature_e::exclusive_mode,
+             feature_e::multiple_displays,
+             feature_e::isolated_sessions,
+             feature_e::zero_copy_capture,
+           }) {
+        add(
+          feature,
+          readiness_e::unknown,
+          "No window system is attached to this process, so nothing about the session can be observed.",
+          "Run Hermes from inside the graphical session you intend to stream."
+        );
+      }
+      return reports;
+    }
+    if (facts.x11) {
+      display_readiness = readiness_e::ready;
+      add(feature_e::virtual_display, display_readiness, "X11 session: the xrandr layout path applies.");
+    } else if (facts.compositor == compositor_e::kwin) {
+      display_readiness = facts.kscreen ? readiness_e::ready : readiness_e::unavailable;
+      add(
+        feature_e::virtual_display,
+        display_readiness,
+        facts.kscreen ? "KWin, configured through kscreen-doctor." :
+                        "KWin is running but kscreen-doctor did not answer, so no layout can be applied.",
+        facts.kscreen ? "" : "Install the kscreen package that provides kscreen-doctor."
+      );
+    } else if (facts.compositor == compositor_e::mutter) {
+      display_readiness = facts.mutter ? readiness_e::ready : readiness_e::unavailable;
+      add(
+        feature_e::virtual_display,
+        display_readiness,
+        facts.mutter ? "GNOME, driven through org.gnome.Mutter.DisplayConfig." :
+                       "GNOME is running but org.gnome.Mutter.DisplayConfig did not answer.",
+        facts.mutter ? "" : "Check that gnome-shell is running and that Hermes may reach the session bus."
+      );
+    } else if (facts.compositor == compositor_e::hyprland) {
+      display_readiness = readiness_e::unavailable;
+      add(
+        feature_e::virtual_display,
+        display_readiness,
+        "Hyprland adopts the virtual output and then cannot keep content on it: its aquamarine "
+        "backend wants every GPU owning an output to host a GL renderer, which a display-only "
+        "device cannot, and the builds that import directly instead stall on the page-flip "
+        "handshake against the driver's software vblank.",
+        "Use a KDE or wlroots session, or Hermes' per-session gamescope path, until the "
+        "Hyprland-native output path lands."
+      );
+    } else if (facts.output_management) {
+      const bool verified = facts.compositor == compositor_e::wlroots || facts.compositor == compositor_e::cosmic;
+      display_readiness = verified ? readiness_e::ready : readiness_e::degraded;
+      add(
+        feature_e::virtual_display,
+        display_readiness,
+        verified ? compositorName(facts.compositor) + ", driven through wlr-output-management." :
+                   "This compositor is not one Hermes has verified, but it advertises "
+                   "wlr-output-management, so the generic path applies."
+      );
+    } else {
+      add(
+        feature_e::virtual_display,
+        readiness_e::unavailable,
+        "The session advertises none of the protocols Hermes can drive an output with.",
+        "A KDE, GNOME or wlroots session is required for automatic virtual-display activation."
+      );
+    }
+
+    // --- client-requested mode ----------------------------------------------
+    if (display_readiness == readiness_e::unavailable) {
+      add(
+        feature_e::client_requested_mode,
+        readiness_e::unavailable,
+        "No virtual display can be driven here, so no mode can be applied to one."
+      );
+    } else if (facts.compositor == compositor_e::unknown && facts.wayland) {
+      // wlr-output-management carries set_custom_mode, but whether a compositor
+      // honours it for an arbitrary geometry is a per-compositor answer.
+      add(
+        feature_e::client_requested_mode,
+        readiness_e::unknown,
+        "The mode is requested through wlr-output-management, which this compositor advertises. "
+        "Whether it honours an arbitrary custom mode has not been verified here."
+      );
+    } else {
+      add(feature_e::client_requested_mode, readiness_e::ready, "The mode the client asks for is pushed to the compositor and confirmed.");
+    }
+
+    // --- exclusive mode ------------------------------------------------------
+    const bool exclusive_mechanism = facts.x11 ||
+                                     (facts.compositor == compositor_e::kwin && facts.kscreen) ||
+                                     facts.output_management;
+    if (facts.compositor == compositor_e::mutter) {
+      add(
+        feature_e::exclusive_mode,
+        readiness_e::unavailable,
+        "Mutter exposes no way to disable a physical output for the duration of a session.",
+        "Exclusive mode needs a KDE, wlroots or X11 session."
+      );
+    } else if (!exclusive_mechanism) {
+      add(feature_e::exclusive_mode, readiness_e::unavailable, "No protocol in this session can disable a physical output.");
+    } else if (display_readiness == readiness_e::unavailable) {
+      // Worth saying rather than reporting "ready": the mechanism is present
+      // and would work, but there is nothing here for it to blank the physical
+      // monitors on behalf of.
+      add(
+        feature_e::exclusive_mode,
+        readiness_e::degraded,
+        "The compositor can disable a physical output, but this session has no virtual display "
+        "to blank it for."
+      );
+    } else {
+      add(feature_e::exclusive_mode, readiness_e::ready, "Physical outputs are disabled for the session and restored afterwards.");
+    }
+
+    // --- multiple displays ---------------------------------------------------
+    if (!facts.hermes_kms_present) {
+      add(
+        feature_e::multiple_displays,
+        readiness_e::unavailable,
+        "More than one virtual display needs the Hermes-KMS backend; no Hermes-KMS device was opened.",
+        "Install and load the hermes-kms module."
+      );
+    } else if (facts.hermes_kms_multi_output || facts.hermes_kms_multi_device) {
+      add(feature_e::multiple_displays, readiness_e::ready, "The Hermes-KMS device exposes more than one output.");
+    } else {
+      add(
+        feature_e::multiple_displays,
+        readiness_e::unavailable,
+        "The Hermes-KMS device exposes a single output.",
+        "Load hermes_kms with outputs=N (or session_devices=N) and enable the multi-output option."
+      );
+    }
+
+    // --- isolated sessions ---------------------------------------------------
+    if (!facts.hermes_kms_multi_device) {
+      add(
+        feature_e::isolated_sessions,
+        readiness_e::unavailable,
+        "The loaded hermes-kms driver exposes no session-device pool.",
+        "Update hermes-kms to a version providing private session devices."
+      );
+    } else if (!facts.drm_seat_isolation) {
+      // The failure this whole probe exists for: every other check passes, the
+      // session starts, its input is isolated - and its screen is not, because
+      // a card with no ID_SEAT is on seat0 where the host compositor claims it.
+      add(
+        feature_e::isolated_sessions,
+        readiness_e::unavailable,
+        "No Hermes-KMS card carries a private DRM seat, so the host compositor claims the session "
+        "cards and a session would share the host's screen. Input isolation is installed "
+        "separately and may already be working, which is what makes this failure quiet.",
+        "Install the driver's 70-hermes-kms-session-seats.rules (make install-udev) and reload "
+        "udev, then re-plug or reload the hermes-kms module."
+      );
+    } else {
+      add(feature_e::isolated_sessions, readiness_e::ready, "Hermes-KMS session cards carry private DRM seats.");
+    }
+
+    // --- zero-copy capture ---------------------------------------------------
+    if (facts.hermes_kms_present) {
+      add(feature_e::zero_copy_capture, readiness_e::ready, "Captured as DMA-BUF over the Hermes-KMS render node.");
+    } else if (facts.x11) {
+      add(feature_e::zero_copy_capture, readiness_e::degraded, "X11 capture goes through a CPU copy.");
+    } else if (facts.linux_dmabuf && (facts.screencopy || facts.image_copy_capture)) {
+      add(feature_e::zero_copy_capture, readiness_e::ready, "The session offers a screen-capture protocol with linux-dmabuf.");
+    } else if (!facts.screencopy && !facts.image_copy_capture) {
+      add(
+        feature_e::zero_copy_capture,
+        readiness_e::unavailable,
+        "The session advertises no screen-capture protocol Hermes can use."
+      );
+    } else {
+      add(
+        feature_e::zero_copy_capture,
+        readiness_e::degraded,
+        "A capture protocol is available but linux-dmabuf is not, so frames are copied through the CPU."
+      );
+    }
+
+    return reports;
+  }
+
+  bool hermesKmsSeatIsolationActive() {
+    // In the session-device pool the host card deliberately stays on seat0, so
+    // the question is not whether every card carries a private seat but whether
+    // any does. None of them doing so is the signature of the driver's udev
+    // rule not being installed, which is the failure this exists to catch.
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator {"/sys/class/drm", ec}) {
+      const auto name = entry.path().filename().string();
+      if (!name.starts_with("card") || name.find('-') != std::string::npos) {
+        continue;  // "card0-Virtual-1" is a connector, not a card.
+      }
+      if (is_hermes_kms_card(entry.path()) && drm_card_seat(entry.path()).starts_with("hermes-kms-")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -2732,6 +3077,55 @@ namespace VDISPLAY {
     return EVDI_DIAGNOSTIC::READY;
   }
 
+  SessionFacts probeSessionFacts() {
+    SessionFacts facts;
+    facts.compositor = sessionCompositor();
+    facts.wayland = window_system == window_system_e::WAYLAND;
+    facts.x11 = window_system == window_system_e::X11;
+
+#ifdef SUNSHINE_BUILD_WAYLAND
+    if (facts.wayland) {
+      const auto protocols = wl::probe_protocols();
+      facts.output_management = protocols.output_management;
+      facts.screencopy = protocols.screencopy;
+      facts.image_copy_capture = protocols.image_copy_capture;
+      facts.linux_dmabuf = protocols.linux_dmabuf;
+      facts.kscreen = kscreen::available();
+      facts.mutter = mutter::available();
+    }
+#endif
+
+    const auto hermes_kms = getHermesKmsStatus();
+    facts.hermes_kms_present = hermes_kms.device_present;
+    facts.hermes_kms_multi_output = hermes_kms.multi_output_capable;
+    facts.hermes_kms_multi_device = hermes_kms.multi_device_capable;
+    facts.drm_seat_isolation = hermesKmsSeatIsolationActive();
+    facts.isolated_sessions_requested = config::video.hermes_kms_isolated_sessions;
+
+    return facts;
+  }
+
+  void logSessionAssessment() {
+    const auto facts = probeSessionFacts();
+    BOOST_LOG(info) << "[VDISPLAY] Session: " << compositorName(facts.compositor)
+                    << (facts.wayland ? " (Wayland)" : facts.x11 ? " (X11)" : " (no window system)");
+    for (const auto &report : assessSession(facts)) {
+      // A feature that works is one line; one that does not carries the reason
+      // and the fix, because a user who reads only the log is the user this
+      // exists for.
+      if (report.readiness == readiness_e::ready) {
+        BOOST_LOG(info) << "[VDISPLAY]   " << featureName(report.feature) << ": ready - " << report.detail;
+        continue;
+      }
+      std::string message = "[VDISPLAY]   " + featureName(report.feature) + ": " +
+                            readinessName(report.readiness) + " - " + report.detail;
+      if (!report.remediation.empty()) {
+        message += " Fix: " + report.remediation;
+      }
+      BOOST_LOG(warning) << message;
+    }
+  }
+
   EvdiStatus getEvdiStatus() {
     const std::string session_type = window_system == window_system_e::X11 ? "x11" :
                                      window_system == window_system_e::WAYLAND ? "wayland" : "unknown";
@@ -2752,12 +3146,8 @@ namespace VDISPLAY {
         // Hermes-KMS output is ever composited onto. A bug report that says
         // Hyprland is a different report from one that says sway.
         output_layout_backend = "wlr-output-management";
-        switch (sessionCompositor()) {
-          case compositor_e::hyprland:
-            output_layout_backend += " (Hyprland)";
-            break;
-          default:
-            break;
+        if (const auto compositor = sessionCompositor(); compositor != compositor_e::unknown) {
+          output_layout_backend += " (" + compositorName(compositor) + ")";
         }
       }
     }

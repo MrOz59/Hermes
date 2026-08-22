@@ -261,13 +261,133 @@ namespace VDISPLAY {
    * wlr-output-management and then cannot composite onto it. Treating
    * "wayland" as a single case hides those differences until someone reports a
    * black stream, so the session is classified once and dispatched on.
+   *
+   * The wlroots family is named rather than left unknown because "unknown" is
+   * the answer for a session Hermes cannot advise at all, while sway, wayfire,
+   * river and labwc are a case it *can* advise: they take the plain
+   * wlr-output-management path with no per-compositor workaround. Reporting
+   * them as unknown means the diagnostics cannot tell a user their session is
+   * expected to work from one where nobody knows.
    */
   enum class compositor_e {
-    unknown,   ///< X11, no session, or a compositor with no dedicated strategy.
+    unknown,   ///< X11, no session, or a compositor Hermes cannot name.
     kwin,      ///< KDE Plasma.
     mutter,    ///< GNOME.
-    hyprland,  ///< Hyprland.
+    hyprland,  ///< Hyprland - aquamarine, not wlroots, and it does not behave like it.
+    wlroots,   ///< sway, wayfire, river, labwc: the plain wlr-output-management path.
+    cosmic,    ///< COSMIC: wlr-output-management, but no wlr-screencopy for capture.
   };
+
+  /** Human-readable name for a compositor class, for logs and diagnostics. */
+  std::string compositorName(compositor_e compositor);
+
+  /**
+   * @brief A thing Hermes does that a session either supports or does not.
+   *
+   * These are the promises a user reads on the box, and each one rests on a
+   * different mechanism: driving a mode is wlr-output-management or
+   * kscreen-doctor, blanking the physical monitor is the same protocols used
+   * differently, and isolating a session does not involve the session
+   * compositor at all. Reporting "virtual displays: unsupported" for a session
+   * that can do four of the five is what makes the failures unactionable.
+   */
+  enum class feature_e {
+    virtual_display,  ///< Create a virtual display and have it composited onto.
+    client_requested_mode,  ///< Drive it at the geometry the client asked for.
+    exclusive_mode,  ///< Blank the physical monitors for the duration of a session.
+    multiple_displays,  ///< More than one virtual display in the same session.
+    isolated_sessions,  ///< One seat and one compositor per client.
+    zero_copy_capture,  ///< Capture over DMA-BUF rather than through a CPU copy.
+  };
+
+  /**
+   * @brief How well a session supports one feature.
+   *
+   * `degraded` and `unknown` are deliberately distinct from `unavailable`:
+   * "works, but not the way you asked" and "could not be determined" are
+   * different messages to a user, and collapsing either into "unsupported" is
+   * how a fixable configuration ends up read as a missing capability.
+   */
+  enum class readiness_e {
+    ready,  ///< Verified available in this session.
+    degraded,  ///< Usable, but not as asked for - the detail says how.
+    unavailable,  ///< Cannot work here; remediation says what would change that.
+    unknown,  ///< Could not be probed - never assume this means broken.
+  };
+
+  struct FeatureReport {
+    feature_e feature;
+    readiness_e readiness;
+    std::string detail;  ///< Why this verdict, in terms of what was observed.
+    std::string remediation;  ///< What the user can do; empty when nothing can be.
+  };
+
+  /**
+   * @brief What was observed about the session, before any verdict is drawn.
+   *
+   * Separated from the assessment so the rules that turn observations into
+   * advice are a pure function: every combination a user can present - COSMIC
+   * without screencopy, Hyprland with the isolation rule missing, an
+   * unrecognised compositor that nonetheless speaks wlr-output-management - is
+   * then a table row in a test rather than a machine somebody has to own.
+   */
+  struct SessionFacts {
+    compositor_e compositor {compositor_e::unknown};
+    // Deliberately two flags rather than one: "not Wayland" and "X11" are
+    // different claims, and a session that is neither - a headless service, a
+    // daemon started before any window system - must not inherit X11's answers.
+    // Reporting such a session as a working X11 one is the failure mode a
+    // diagnostic can least afford.
+    bool wayland {false};  ///< A Wayland session Hermes will capture from.
+    bool x11 {false};  ///< An X11 session, which has its own xrandr layout path.
+    bool output_management {false};  ///< zwlr_output_manager_v1 is advertised.
+    bool screencopy {false};  ///< zwlr_screencopy_manager_v1 is advertised.
+    bool image_copy_capture {false};  ///< ext_image_copy_capture_manager_v1 is advertised.
+    bool linux_dmabuf {false};  ///< zwp_linux_dmabuf_v1 is advertised.
+    bool kscreen {false};  ///< kscreen-doctor is usable.
+    bool mutter {false};  ///< org.gnome.Mutter.DisplayConfig answers.
+    bool hermes_kms_present {false};  ///< A Hermes-KMS device was opened.
+    bool hermes_kms_multi_output {false};  ///< The device advertises more than one output.
+    bool hermes_kms_multi_device {false};  ///< The driver exposes a session-device pool.
+    bool drm_seat_isolation {false};  ///< Session DRM cards carry a private ID_SEAT.
+    bool isolated_sessions_requested {false};  ///< The user turned isolation on.
+  };
+
+  /** Human-readable names, for logs, diagnostics and the Web UI. */
+  std::string featureName(feature_e feature);
+  std::string readinessName(readiness_e readiness);
+
+  /**
+   * @brief Turn observations into a per-feature verdict with remediation.
+   *
+   * Pure: it reads @p facts and nothing else, so it is the whole of Hermes'
+   * advice and can be tested for every session shape without one existing.
+   */
+  std::vector<FeatureReport> assessSession(const SessionFacts &facts);
+
+  /** Observe the running session. Safe to call while a stream is running. */
+  SessionFacts probeSessionFacts();
+
+  /**
+   * @brief Probe, assess and log what this session can and cannot do.
+   *
+   * Written for the user who only ever sees the log: a working feature is one
+   * line, and one that is not carries both the reason and the fix.
+   */
+  void logSessionAssessment();
+
+  /**
+   * @brief Whether Hermes-KMS session cards carry a private DRM seat.
+   *
+   * Isolation has two halves and they are installed separately: Hermes' own
+   * udev rules place a session's input devices on a private seat, while the
+   * driver's `70-hermes-kms-session-seats.rules` does the same for its DRM
+   * cards. With only the first installed a session still starts, still gets its
+   * own input, and shares the host compositor's screen - and every check Hermes
+   * performs today passes. This is the missing check: a card with no ID_SEAT is
+   * on seat0, where the host compositor claims it.
+   */
+  bool hermesKmsSeatIsolationActive();
 
   /**
    * @brief Classify a compositor from an XDG_CURRENT_DESKTOP-style value.
@@ -286,8 +406,10 @@ namespace VDISPLAY {
    * @brief Classify the compositor of the running session.
    *
    * Reads XDG_CURRENT_DESKTOP, falls back to XDG_SESSION_DESKTOP, and finally
-   * to HYPRLAND_INSTANCE_SIGNATURE - which Hyprland always exports even when a
-   * session file left the desktop name unset.
+   * to the sockets a compositor exports whether or not a session file named it:
+   * HYPRLAND_INSTANCE_SIGNATURE, SWAYSOCK and WAYFIRE_SOCKET. A session started
+   * from a TTY or a bare `exec sway` frequently leaves both desktop variables
+   * empty, which is the case that used to reach the generic path unnamed.
    */
   compositor_e sessionCompositor();
 

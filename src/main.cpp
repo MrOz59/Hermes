@@ -353,6 +353,14 @@ int main(int argc, char *argv[]) {
   // Initialize virtual display driver early so clients know it's supported
   proc::initVDisplayDriver();
 
+#ifdef __linux__
+  // Say what this session can and cannot do before anything depends on it. A
+  // virtual-display feature that is unavailable here is almost always a
+  // configuration a user can fix, and the alternative to saying so at startup
+  // is that they find out from a black stream.
+  VDISPLAY::logSessionAssessment();
+#endif
+
   reed_solomon_init();
   auto input_deinit_guard = input::init();
 

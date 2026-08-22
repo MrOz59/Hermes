@@ -433,6 +433,15 @@ const validateFallbackMode = (event) => {
       :config="config"
     />
 
+    <!-- Two users read the driver status as "ready" and expected a virtual display to
+         appear on its own. Nothing here asks for one; say so before the settings. -->
+    <div class="alert alert-info small" v-if="platform === 'linux' || platform === 'windows'">
+      <div class="fw-semibold mb-1">
+        <i class="fa-solid fa-circle-info"></i> {{ $t('config.virtual_display_request_title') }}
+      </div>
+      {{ $t('config.virtual_display_request_desc') }}
+    </div>
+
     <div class="mb-3" v-if="platform === 'linux'">
       <label for="virtual_display_backend" class="form-label">{{ $t('config.virtual_display_backend') }}</label>
       <select id="virtual_display_backend" class="form-select" v-model="config.virtual_display_backend">

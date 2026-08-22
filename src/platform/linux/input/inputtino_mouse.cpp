@@ -27,7 +27,16 @@ namespace platf::mouse {
 
   void move_abs(input_raw_t *raw, const touch_port_t &touch_port, float x, float y) {
     if (raw->mouse) {
-      (*raw->mouse).move_abs(x, y, touch_port.width, touch_port.height);
+      // x/y are in the virtual display's own pixel space; the uinput device's
+      // absolute range covers the whole host desktop (touch_port.width/height
+      // are the desktop envelope). Without the desktop offset of the virtual
+      // display, absolute input lands on whichever monitor occupies the
+      // desktop origin (the physical one) instead of the virtual display.
+      (*raw->mouse).move_abs(
+        static_cast<int>(std::lround(touch_port.offset_x + x)),
+        static_cast<int>(std::lround(touch_port.offset_y + y)),
+        touch_port.width,
+        touch_port.height);
     }
   }
 

@@ -3,6 +3,7 @@
  * @brief Definitions for inputtino mouse input handling.
  */
 // lib includes
+#include <cmath>
 #include <boost/locale.hpp>
 #include <inputtino/input.hpp>
 #include <libevdev/libevdev.h>

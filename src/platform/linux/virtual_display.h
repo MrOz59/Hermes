@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -252,6 +253,45 @@ namespace VDISPLAY {
   std::string getHermesKmsConnectorName(const std::string &displayName);
 
   /**
+   * @brief The Wayland compositor driving this session.
+   *
+   * Hermes' virtual-display strategy differs per compositor in kind, not in
+   * detail: KWin is configured through kscreen-doctor, Mutter only through
+   * org.gnome.Mutter.DisplayConfig, and Hyprland accepts the output through
+   * wlr-output-management and then cannot composite onto it. Treating
+   * "wayland" as a single case hides those differences until someone reports a
+   * black stream, so the session is classified once and dispatched on.
+   */
+  enum class compositor_e {
+    unknown,   ///< X11, no session, or a compositor with no dedicated strategy.
+    kwin,      ///< KDE Plasma.
+    mutter,    ///< GNOME.
+    hyprland,  ///< Hyprland.
+  };
+
+  /**
+   * @brief Classify a compositor from an XDG_CURRENT_DESKTOP-style value.
+   *
+   * The variable holds a colon-separated list whose case is not guaranteed
+   * ("KDE", "Hyprland", "ubuntu:GNOME"), so it is matched token by token: a
+   * substring test would classify a desktop merely *mentioning* another one.
+   * A token is accepted when it equals the compositor's desktop name or is a
+   * variant of it ("GNOME-Classic").
+   *
+   * Exposed so the classification can be tested without a session.
+   */
+  compositor_e compositorFromDesktopNames(const std::string &desktop_names);
+
+  /**
+   * @brief Classify the compositor of the running session.
+   *
+   * Reads XDG_CURRENT_DESKTOP, falls back to XDG_SESSION_DESKTOP, and finally
+   * to HYPRLAND_INSTANCE_SIGNATURE - which Hyprland always exports even when a
+   * session file left the desktop name unset.
+   */
+  compositor_e sessionCompositor();
+
+  /**
    * @brief Build the Mutter ApplyMonitorsConfig payload that drops a connector.
    *
    * Pure text transformation over an org.gnome.Mutter.DisplayConfig
@@ -303,6 +343,68 @@ namespace VDISPLAY {
     uint32_t refresh_mhz,
     std::string &serial,
     std::string &argument
+  );
+
+  /**
+   * @brief Build the kscreen-doctor invocation that enables a virtual output,
+   *        places it, and drives it at a requested mode.
+   *
+   * KWin adopts a hotplugged connector at whichever mode it prefers rather than
+   * the one the streaming client negotiated: Hermes-KMS marks the client's
+   * exact CVT mode preferred but still exposes the standard mode ladder, and
+   * KWin has been seen taking 1920x1080 from that ladder for an 854x480
+   * session. Because the capture path reports the real scanout, the client then
+   * receives a full-resolution stream of a display it asked to be small, so the
+   * mode has to be pushed rather than assumed.
+   *
+   * Every output in @p enabled_before is re-enabled at its own priority and the
+   * virtual output takes the next one, keeping the local displays lit. Passing
+   * a non-positive component in @p mode_width, @p mode_height or
+   * @p mode_refresh_hz omits the mode, which is also how the caller retries a
+   * layout that KWin rejected for the mode alone.
+   *
+   * Exposed so the invocation can be checked without a running KDE session.
+   *
+   * @return the complete command line.
+   */
+  std::string buildKScreenLayoutCommand(
+    const std::string &virtual_output,
+    const std::map<std::string, int> &enabled_before,
+    int target_x,
+    int target_y,
+    int mode_width,
+    int mode_height,
+    int mode_refresh_hz
+  );
+
+  /** @brief What `kscreen-doctor -j` says about a mode on one output. */
+  enum class kscreen_mode_state_e {
+    unknown_output,  ///< KWin does not report that output at all.
+    not_advertised,  ///< The output exists but offers no such mode.
+    advertised,      ///< The mode exists and is not the one being driven.
+    current,         ///< KWin already drives the output at that mode.
+  };
+
+  /**
+   * @brief Find a mode on one output in a `kscreen-doctor -j` reply.
+   *
+   * Pushing a mode blind gives the same generic failure whether KWin refused a
+   * valid request, the connector never advertised the geometry, or it was
+   * already being driven at it. Reading the reply first separates those, and
+   * the last case removes a needless kscreen-doctor call per session.
+   *
+   * Refresh rates are compared rounded to whole Hz, which is how kscreen-doctor
+   * itself matches a `WxH@R` argument against the mode list: a connector
+   * advertising 89.991 Hz is driven by asking for 90.
+   *
+   * Exposed so the reply can be interpreted without a running KDE session.
+   */
+  kscreen_mode_state_e kscreenModeState(
+    const std::string &json_text,
+    const std::string &output,
+    int width,
+    int height,
+    int refresh_hz
   );
 
   /** Record whether capture was routed away from an uncomposited virtual output. */

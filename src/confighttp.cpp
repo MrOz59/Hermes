@@ -1593,7 +1593,7 @@ namespace confighttp {
       }},
       {"desktop", {
         {"environment", evdi_status.session_type},
-        {"kscreen_available", evdi_status.output_layout_backend == "kscreen"},
+        {"kscreen_available", evdi_status.output_layout_backend.rfind("kscreen", 0) == 0},
         {"kscreen_output", display ? display->name : ""},
       }},
     };

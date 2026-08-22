@@ -16,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -907,6 +908,167 @@ namespace VDISPLAY {
   static std::thread evdi_events_thread;
   static std::string evdi_connector_name(int card_index);
 
+  namespace {
+
+    /** Case-insensitive comparison of one XDG_CURRENT_DESKTOP token. */
+    bool desktop_token_matches(std::string_view token, std::string_view desktop) {
+      if (token.size() < desktop.size()) {
+        return false;
+      }
+      for (size_t i = 0; i < desktop.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(token[i])) != desktop[i]) {
+          return false;
+        }
+      }
+      // "GNOME" and "GNOME-Classic" are both Mutter; "GNOMEish" is not GNOME.
+      return token.size() == desktop.size() || token[desktop.size()] == '-';
+    }
+
+  }  // namespace
+
+  compositor_e compositorFromDesktopNames(const std::string &desktop_names) {
+    std::string_view remaining {desktop_names};
+    while (!remaining.empty()) {
+      const auto separator = remaining.find(':');
+      const auto token = remaining.substr(0, separator);
+      if (desktop_token_matches(token, "kde") || desktop_token_matches(token, "plasma")) {
+        return compositor_e::kwin;
+      }
+      if (desktop_token_matches(token, "gnome")) {
+        return compositor_e::mutter;
+      }
+      if (desktop_token_matches(token, "hyprland")) {
+        return compositor_e::hyprland;
+      }
+      if (separator == std::string_view::npos) {
+        break;
+      }
+      remaining.remove_prefix(separator + 1);
+    }
+    return compositor_e::unknown;
+  }
+
+  compositor_e sessionCompositor() {
+    for (const char *variable : {"XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP"}) {
+      const char *value = std::getenv(variable);
+      if (value && value[0]) {
+        if (const auto compositor = compositorFromDesktopNames(value); compositor != compositor_e::unknown) {
+          return compositor;
+        }
+      }
+    }
+    // Hyprland exports this unconditionally, including in sessions started
+    // without a desktop file to name it.
+    if (const char *signature = std::getenv("HYPRLAND_INSTANCE_SIGNATURE"); signature && signature[0]) {
+      return compositor_e::hyprland;
+    }
+    return compositor_e::unknown;
+  }
+
+  /**
+   * Output names reach kscreen-doctor and xrandr as words of a shell command.
+   * They come from the compositor or from sysfs, but the guard is what makes
+   * that an assumption the code states rather than one it relies on.
+   */
+  static bool safe_output_name(const std::string &name) {
+    return !name.empty() && name.size() <= 64 && std::all_of(name.begin(), name.end(), [](unsigned char c) {
+      return std::isalnum(c) || c == '-' || c == '_';
+    });
+  }
+
+  std::string buildKScreenLayoutCommand(
+    const std::string &virtual_output,
+    const std::map<std::string, int> &enabled_before,
+    int target_x,
+    int target_y,
+    int mode_width,
+    int mode_height,
+    int mode_refresh_hz
+  ) {
+    if (!safe_output_name(virtual_output)) {
+      // Every caller reads this name back from the compositor, which has no
+      // reason to invent one a shell would reinterpret. Refuse rather than
+      // quote: a name that fails this is a bug upstream of here, not a layout
+      // to apply.
+      return {};
+    }
+
+    std::string command = "kscreen-doctor";
+    int next_priority = 1;
+    for (const auto &[output, priority] : enabled_before) {
+      if (output == virtual_output || !safe_output_name(output)) {
+        continue;
+      }
+      command += " output." + output + ".enable";
+      if (priority > 0) {
+        command += " output." + output + ".priority." + std::to_string(priority);
+        next_priority = std::max(next_priority, priority + 1);
+      }
+    }
+
+    command += " output." + virtual_output + ".enable";
+    command += " output." + virtual_output + ".priority." + std::to_string(next_priority);
+    command += " output." + virtual_output + ".position." +
+               std::to_string(target_x) + ',' + std::to_string(target_y);
+
+    // KWin adopts a hotplugged connector at the mode it prefers, not the one
+    // the client negotiated. Hermes-KMS marks the client's exact CVT mode
+    // DRM_MODE_TYPE_PREFERRED and still exposes the standard ladder beside it,
+    // and KWin picked 1920x1080 out of that ladder for an 854x480 session. The
+    // capture path reports the real scanout, so the client received a
+    // full-resolution stream of a display it had asked to be small. Presence
+    // was never enough to check - push the mode, as the Mutter path does
+    // through ApplyMonitorsConfig.
+    if (mode_width > 0 && mode_height > 0 && mode_refresh_hz > 0) {
+      command += " output." + virtual_output + ".mode." +
+                 std::to_string(mode_width) + 'x' + std::to_string(mode_height) +
+                 '@' + std::to_string(mode_refresh_hz);
+    }
+
+    return command;
+  }
+
+  kscreen_mode_state_e kscreenModeState(
+    const std::string &json_text,
+    const std::string &output,
+    int width,
+    int height,
+    int refresh_hz
+  ) {
+    if (json_text.empty() || output.empty() || width <= 0 || height <= 0 || refresh_hz <= 0) {
+      return kscreen_mode_state_e::unknown_output;
+    }
+
+    try {
+      const auto data = nlohmann::json::parse(json_text);
+      for (const auto &entry : data.value("outputs", nlohmann::json::array())) {
+        if (entry.value("name", std::string {}) != output) {
+          continue;
+        }
+
+        const auto current_mode_id = entry.value("currentModeId", std::string {});
+        auto state = kscreen_mode_state_e::not_advertised;
+        for (const auto &mode : entry.value("modes", nlohmann::json::array())) {
+          const auto size = mode.value("size", nlohmann::json::object());
+          if (size.value("width", 0) != width || size.value("height", 0) != height) {
+            continue;
+          }
+          if (std::lround(mode.value("refreshRate", 0.0)) != refresh_hz) {
+            continue;
+          }
+          if (!current_mode_id.empty() && mode.value("id", std::string {}) == current_mode_id) {
+            return kscreen_mode_state_e::current;
+          }
+          state = kscreen_mode_state_e::advertised;
+        }
+        return state;
+      }
+    } catch (const std::exception &error) {
+      BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not parse the mode list: " << error.what();
+    }
+    return kscreen_mode_state_e::unknown_output;
+  }
+
   namespace kscreen {
     struct output_t {
       std::string name;
@@ -932,15 +1094,8 @@ namespace VDISPLAY {
     static std::mutex layouts_mutex;
     static std::map<std::string, layout_t> layouts;
 
-    static bool safe_output_name(const std::string &name) {
-      return !name.empty() && name.size() <= 64 && std::all_of(name.begin(), name.end(), [](unsigned char c) {
-        return std::isalnum(c) || c == '-' || c == '_';
-      });
-    }
-
     static bool available() {
-      const char *desktop = std::getenv("XDG_CURRENT_DESKTOP");
-      if (!desktop || std::string_view {desktop}.find("KDE") == std::string_view::npos) {
+      if (sessionCompositor() != compositor_e::kwin) {
         return false;
       }
       return ::access("/usr/bin/kscreen-doctor", X_OK) == 0 || ::access("/bin/kscreen-doctor", X_OK) == 0;
@@ -1166,7 +1321,10 @@ namespace VDISPLAY {
      */
     static bool apply_pre_session_layout(
       const std::string &virtual_output,
-      const std::map<std::string, int> &enabled_before
+      const std::map<std::string, int> &enabled_before,
+      int mode_width,
+      int mode_height,
+      int mode_refresh_hz
     ) {
       const auto current = outputs();
       int target_x = 0;
@@ -1194,24 +1352,29 @@ namespace VDISPLAY {
         target_x = std::max(target_x, output.x + output.width);
       }
 
-      std::string command = "kscreen-doctor";
-      int next_priority = 1;
-      for (const auto &[output, priority] : enabled_before) {
-        if (output == virtual_output) {
-          continue;
-        }
-        command += " output." + output + ".enable";
-        if (priority > 0) {
-          command += " output." + output + ".priority." + std::to_string(priority);
-          next_priority = std::max(next_priority, priority + 1);
-        }
-      }
-      command += " output." + virtual_output + ".enable";
-      command += " output." + virtual_output + ".priority." + std::to_string(next_priority);
-      command += " output." + virtual_output + ".position." +
-                 std::to_string(target_x) + ',' + std::to_string(target_y);
-      if (!run_layout_command(command)) {
+      const bool has_mode = mode_width > 0 && mode_height > 0 && mode_refresh_hz > 0;
+      const auto command = buildKScreenLayoutCommand(
+        virtual_output, enabled_before, target_x, target_y, mode_width, mode_height, mode_refresh_hz);
+      if (command.empty()) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Refusing to build a layout around output name "
+                           << virtual_output;
         return false;
+      }
+
+      if (!run_layout_command(command)) {
+        // A mode KWin refuses must not cost us the rest of the layout: the
+        // output still has to be enabled and placed or there is nothing to
+        // capture at all. Retry without it, and say what the session lost
+        // rather than leaving a silent resolution mismatch.
+        if (!has_mode || !run_layout_command(buildKScreenLayoutCommand(
+                           virtual_output, enabled_before, target_x, target_y, 0, 0, 0))) {
+          return false;
+        }
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] KWin rejected mode "
+                           << mode_width << 'x' << mode_height << '@' << mode_refresh_hz
+                           << " for " << virtual_output
+                           << "; the output is enabled at the mode KWin chose, so the stream "
+                              "will not match the resolution the client asked for.";
       }
       BOOST_LOG(info) << "[VDISPLAY/KScreen] Positioned " << virtual_output
                       << " at " << target_x << ',' << target_y
@@ -1265,7 +1428,10 @@ namespace VDISPLAY {
       const std::set<std::string> &outputs_before,
       const std::map<std::string, int> &enabled_before,
       const std::string &connector_name,
-      const char *backend_label
+      const char *backend_label,
+      int mode_width,
+      int mode_height,
+      int mode_refresh_hz
     ) {
       if (!available()) {
         return false;
@@ -1310,7 +1476,7 @@ namespace VDISPLAY {
           original_outputs.emplace(output, priority);
         }
       }
-      if (!apply_pre_session_layout(virtual_output, enabled_before)) {
+      if (!apply_pre_session_layout(virtual_output, enabled_before, mode_width, mode_height, mode_refresh_hz)) {
         return false;
       }
 
@@ -1328,6 +1494,78 @@ namespace VDISPLAY {
     static bool is_active(const std::string &display_name) {
       std::lock_guard<std::mutex> lock(layouts_mutex);
       return layouts.find(display_name) != layouts.end();
+    }
+
+    /**
+     * Drive this session's virtual output at @p width x @p height @ @p refresh_hz.
+     *
+     * Telling the kernel is only half of a mode change: KWin keeps driving the
+     * connector at whatever mode it adopted until something asks it to move,
+     * and the capture path reads the real scanout, so a change that stops at
+     * the driver leaves the stream on the old geometry.
+     *
+     * Read KWin's mode list first and confirm afterwards, rather than firing a
+     * command and trusting its exit code. That separates the three ways this
+     * fails - the output is not enumerated, it does not advertise the geometry,
+     * or KWin took the request and did not keep it - which otherwise arrive as
+     * one indistinguishable "Layout command failed".
+     */
+    static bool apply_mode(const std::string &display_name, int width, int height, int refresh_hz) {
+      if (!available() || width <= 0 || height <= 0 || refresh_hz <= 0) {
+        return false;
+      }
+
+      std::string output_name;
+      {
+        std::lock_guard<std::mutex> lock(layouts_mutex);
+        const auto it = layouts.find(display_name);
+        if (it == layouts.end()) {
+          return false;
+        }
+        output_name = it->second.virtual_output;
+      }
+      if (!safe_output_name(output_name)) {
+        return false;
+      }
+
+      const std::string mode = std::to_string(width) + 'x' + std::to_string(height) + '@' +
+                               std::to_string(refresh_hz);
+
+      switch (kscreenModeState(command_output("kscreen-doctor -j"), output_name, width, height, refresh_hz)) {
+        case kscreen_mode_state_e::current:
+          BOOST_LOG(debug) << "[VDISPLAY/KScreen] " << output_name << " is already driven at " << mode << '.';
+          return true;
+        case kscreen_mode_state_e::not_advertised:
+          BOOST_LOG(warning) << "[VDISPLAY/KScreen] " << output_name << " does not advertise " << mode
+                             << "; leaving KWin's own choice in place.";
+          return false;
+        case kscreen_mode_state_e::unknown_output:
+          // KWin may not have enumerated the hotplug yet, and a reply we could
+          // not read is not evidence of anything. Ask for the mode anyway.
+          break;
+        case kscreen_mode_state_e::advertised:
+          break;
+      }
+
+      if (!run_layout_command("kscreen-doctor output." + output_name + ".mode." + mode)) {
+        return false;
+      }
+
+      switch (kscreenModeState(command_output("kscreen-doctor -j"), output_name, width, height, refresh_hz)) {
+        case kscreen_mode_state_e::current:
+          BOOST_LOG(info) << "[VDISPLAY/KScreen] Driving " << output_name << " at " << mode
+                          << " for this session.";
+          return true;
+        case kscreen_mode_state_e::unknown_output:
+          BOOST_LOG(debug) << "[VDISPLAY/KScreen] Applied " << mode << " to " << output_name
+                           << "; KWin's reply was unreadable, so it could not be confirmed.";
+          return true;
+        default:
+          BOOST_LOG(warning) << "[VDISPLAY/KScreen] KWin accepted " << mode << " for " << output_name
+                             << " but is not driving it; the stream will not match the resolution the "
+                                "client asked for.";
+          return false;
+      }
     }
 
     static bool geometry(const std::string &display_name, int &x, int &y, int &env_width, int &env_height) {
@@ -1466,12 +1704,7 @@ namespace VDISPLAY {
   // (which is all-or-nothing and risky to build blind).
   namespace mutter {
     static bool available() {
-      const char *desktop = std::getenv("XDG_CURRENT_DESKTOP");
-      if (!desktop) {
-        return false;
-      }
-      const std::string_view d {desktop};
-      if (d.find("GNOME") == std::string_view::npos && d.find("gnome") == std::string_view::npos) {
+      if (sessionCompositor() != compositor_e::mutter) {
         return false;
       }
       return ::access("/usr/bin/gdbus", X_OK) == 0 || ::access("/bin/gdbus", X_OK) == 0;
@@ -2046,6 +2279,37 @@ namespace VDISPLAY {
     }
 
     /**
+     * Re-read Mutter's state until it reports @p connector at the requested
+     * mode. Mutter applies asynchronously, so a single immediate read races
+     * with the config it just accepted.
+     */
+    static bool mode_confirmed(const std::string &connector, uint32_t width, uint32_t height, uint32_t refresh_mhz) {
+      for (int attempt = 0; attempt < 10; ++attempt) {  // ~1s
+        state_t state;
+        std::string argument;
+        switch (build_layout_with_mode(command_output(get_current_state_command),
+                                       connector, width, height, refresh_mhz, state, argument)) {
+          case mode_push::already_set:
+            return true;
+          case mode_push::unavailable:
+            // An unreadable reply is not evidence that the mode was refused;
+            // keep the session going rather than tearing it down over it.
+            BOOST_LOG(debug) << "[VDISPLAY/Mutter] Could not read back the state of " << connector
+                             << "; assuming the applied mode holds.";
+            return true;
+          default:
+            std::this_thread::sleep_for(std::chrono::milliseconds {100});
+            break;
+        }
+      }
+
+      BOOST_LOG(warning) << "[VDISPLAY/Mutter] " << connector << " is not being driven at " << width << 'x'
+                         << height << " after the config was applied; something else is rewriting the "
+                            "display layout, and the stream will not match what the client asked for.";
+      return false;
+    }
+
+    /**
      * Make Mutter drive @p connector at the geometry the streaming client asked
      * for.
      *
@@ -2101,7 +2365,17 @@ namespace VDISPLAY {
         // rewrite the user's saved layout in ~/.config/monitors.xml. Mutter
         // keeps a temporary config until something else replaces it; it does
         // not revert on its own.
-        return run_apply(state, argument, apply_method::temporary);
+        if (!run_apply(state, argument, apply_method::temporary)) {
+          return false;
+        }
+
+        // ApplyMonitorsConfig returning cleanly is not the same as Mutter
+        // scanning out the mode: it can be superseded by a hotplug or by
+        // anything else that rewrites the layout while we are still setting up.
+        // The capture path reports the real scanout, so an unconfirmed mode is
+        // exactly the resolution mismatch that reaches the client as a broken
+        // image. Confirm it, and say so when it did not stick.
+        return mode_confirmed(connector, width, height, refresh_mhz);
       }
 
       BOOST_LOG(warning) << "[VDISPLAY/Mutter] " << connector << " never appeared in Mutter's monitor state.";
@@ -2473,7 +2747,18 @@ namespace VDISPLAY {
     if (window_system == window_system_e::WAYLAND) {
       if (!exclusive_layout_supported && wl::output_management_supported()) {
         exclusive_layout_supported = true;
+        // Name the compositor: "wlr-output-management" is the protocol, not a
+        // strategy, and the compositor behind it is what decides whether a
+        // Hermes-KMS output is ever composited onto. A bug report that says
+        // Hyprland is a different report from one that says sway.
         output_layout_backend = "wlr-output-management";
+        switch (sessionCompositor()) {
+          case compositor_e::hyprland:
+            output_layout_backend += " (Hyprland)";
+            break;
+          default:
+            break;
+        }
       }
     }
 #endif
@@ -3359,7 +3644,10 @@ namespace VDISPLAY {
             outputs_before,
             enabled_before,
             vdinfo.connector_name,
-            "Hermes-KMS"
+            "Hermes-KMS",
+            static_cast<int>(vdinfo.width),
+            static_cast<int>(vdinfo.height),
+            static_cast<int>(vdinfo.fps / 1000)
           );
         }
       }
@@ -3421,7 +3709,10 @@ namespace VDISPLAY {
               outputs_before,
               enabled_before,
               evdi_connector_name(vdinfo.drm_card_index),
-              "EVDI"
+              "EVDI",
+              static_cast<int>(vdinfo.width),
+              static_cast<int>(vdinfo.height),
+              static_cast<int>(vdinfo.fps / 1000)
             );
           } else {
             BOOST_LOG(error) << "[VDISPLAY] EVDI connected but no matching DRM card appeared.";
@@ -3489,8 +3780,17 @@ namespace VDISPLAY {
     return true;
   }
 
+  static std::string virtual_display_connector_name(const std::string &display_name);
+  static bool pushVirtualOutputMode(
+    const std::string &displayName,
+    const std::string &connector,
+    int width,
+    int height,
+    int refresh_mhz
+  );
+
   int changeDisplaySettings(const char *deviceName, int width, int height, int refresh_rate) {
-    std::lock_guard<std::mutex> lock(vdisplay_mutex);
+    std::unique_lock<std::mutex> lock(vdisplay_mutex);
 
     refresh_rate = normalize_refresh_rate(refresh_rate);
     const int refresh_hz = refresh_rate / 1000;
@@ -3505,12 +3805,23 @@ namespace VDISPLAY {
                     << " to " << width << "x" << height << "@" << refresh_hz << "Hz";
 
     // Find the virtual display
+    bool found = false;
+    std::string push_mode_for;
     for (auto &[guid, vdinfo] : virtual_displays) {
       if (vdinfo.name == deviceName) {
         // createVirtualDisplay() is normally followed by this call with the
         // same values. Reconnecting EVDI in that case causes an avoidable
         // compositor modeset and a burst of capture reinitializations.
-        if (vdinfo.width == static_cast<uint32_t>(width) &&
+        //
+        // Hermes-KMS is exempt. hermes_kms::set_output() is a cheap idempotent
+        // ioctl rather than a reconnect, so the cost this guard avoids does not
+        // exist there, while the skip silently dropped the only reassertion of
+        // the client's mode: because KWin adopts the connector at its own
+        // preferred mode, a session whose requested mode already matched what
+        // createVirtualDisplay() recorded pushed nothing and streamed the
+        // compositor's resolution instead of the client's.
+        if (!vdinfo.using_hermes_kms &&
+            vdinfo.width == static_cast<uint32_t>(width) &&
             vdinfo.height == static_cast<uint32_t>(height) &&
             vdinfo.fps == static_cast<uint32_t>(refresh_rate)) {
           BOOST_LOG(debug) << "[VDISPLAY] Requested mode is already active; skipping virtual-display reconnect.";
@@ -3532,14 +3843,36 @@ namespace VDISPLAY {
           if (!hermes_kms::set_output(vdinfo.drm_fd, true, width, height, refresh_hz, vdinfo.session_id)) {
             return -1;
           }
+          // The driver now scans out the new geometry, but the compositor still
+          // drives the connector at the mode it adopted, and the capture path
+          // follows the compositor. Move it too - after the lock is released,
+          // because resolving the connector takes vdisplay_mutex again.
+          push_mode_for = vdinfo.name;
         }
 
         BOOST_LOG(info) << "[VDISPLAY] Display settings updated successfully.";
-        return 0;
+        found = true;
+        break;
       }
     }
 
-    BOOST_LOG(debug) << "[VDISPLAY] Display not found: " << deviceName;
+    lock.unlock();
+
+    if (!found) {
+      BOOST_LOG(debug) << "[VDISPLAY] Display not found: " << deviceName;
+      return 0;
+    }
+
+    if (!push_mode_for.empty()) {
+      const auto connector = virtual_display_connector_name(push_mode_for);
+      if (connector.empty() ||
+          !pushVirtualOutputMode(push_mode_for, connector, width, height, refresh_rate)) {
+        BOOST_LOG(warning) << "[VDISPLAY] The compositor was not moved to " << width << 'x' << height << '@'
+                           << refresh_hz << "Hz for " << push_mode_for
+                           << "; the stream will not match the resolution the client asked for.";
+      }
+    }
+
     return 0;
   }
 
@@ -3644,8 +3977,63 @@ namespace VDISPLAY {
     return getEvdiConnectorName(display_name);
   }
 
+  /**
+   * Make the compositor drive @p connector at the mode the client negotiated.
+   *
+   * Every compositor adopts a hotplugged connector on its own and at whichever
+   * mode it prefers, while the capture path reports the real scanout - so
+   * without this the client receives the resolution the compositor picked, not
+   * the one it asked for. What differs per compositor is only how it is told:
+   * KWin through kscreen-doctor, Mutter through ApplyMonitorsConfig, everything
+   * else through wlr-output-management.
+   *
+   * @param refresh_mhz Refresh rate in mHz, as Hermes carries it internally.
+   *                    Only the KWin path converts, because only kscreen-doctor
+   *                    speaks whole Hz.
+   * @return true when the compositor ends up driving the requested mode.
+   *
+   * The caller must NOT hold vdisplay_mutex: resolving the connector and the
+   * KScreen layout both read the display registry back.
+   */
+  static bool pushVirtualOutputMode(
+    const std::string &displayName,
+    const std::string &connector,
+    int width,
+    int height,
+    int refresh_mhz
+  ) {
+    if (width <= 0 || height <= 0 || refresh_mhz <= 0 || window_system != window_system_e::WAYLAND) {
+      return false;
+    }
+
+    if (kscreen::is_active(displayName)) {
+      return kscreen::apply_mode(displayName, width, height, refresh_mhz / 1000);
+    }
+    if (mutter::available()) {
+      return mutter::apply_output_mode(connector, width, height, refresh_mhz);
+    }
+#ifdef SUNSHINE_BUILD_WAYLAND
+    return wl::configure_virtual_output(connector, width, height, refresh_mhz, false);
+#else
+    (void) connector;
+    return false;
+#endif
+  }
+
   bool activateVirtualDisplayOutput(const std::string &displayName) {
+    // KWin is configured when the display is created - enabled, placed and
+    // driven at the requested mode in one kscreen-doctor transaction - so
+    // activation only has to confirm the mode still holds. A mode KWin declines
+    // is a warning there, not a failed activation: the output is composited and
+    // capturable either way, and failing here would tear the session down over
+    // a resolution mismatch the user can see.
     if (window_system == window_system_e::WAYLAND && kscreen::is_active(displayName)) {
+      int width = 0;
+      int height = 0;
+      int refresh_mhz = 0;
+      if (virtual_display_mode(displayName, width, height, refresh_mhz)) {
+        kscreen::apply_mode(displayName, width, height, refresh_mhz / 1000);
+      }
       return true;
     }
 
@@ -3659,9 +4047,28 @@ namespace VDISPLAY {
     if (window_system == window_system_e::WAYLAND) {
       int width = 0;
       int height = 0;
-      int refresh_rate = 0;
-      if (!virtual_display_mode(displayName, width, height, refresh_rate)) {
+      int refresh_mhz = 0;
+      if (!virtual_display_mode(displayName, width, height, refresh_mhz)) {
         return false;
+      }
+
+      const auto compositor = sessionCompositor();
+
+      // Hyprland accepts the output through wlr-output-management and modesets
+      // it, then fails to keep content on it. Hermes-KMS assumes the model KWin
+      // and Mutter use - the compositor renders on the real GPU and imports the
+      // buffer into the virtual display - while aquamarine wants every GPU that
+      // owns an output to host its own GL renderer, which a display-only device
+      // cannot. Where a build does import directly, the page-flip handshake
+      // against Hermes-KMS' software vblank stalls instead. Both end as a black
+      // or frozen stream with input working, so say it before the stream starts
+      // rather than leaving the user to find out from a black screen.
+      if (compositor == compositor_e::hyprland && isHermesKmsDisplay(displayName)) {
+        BOOST_LOG(warning) << "[VDISPLAY] Hyprland is not supported with the Hermes-KMS backend yet: "
+                              "aquamarine either cannot build a renderer on the display-only device or "
+                              "stalls on page-flip against its software vblank. The output is being "
+                              "activated anyway, but expect a black or frozen stream - a KDE or GNOME "
+                              "session is what this backend is validated against.";
       }
 
       // GNOME/Mutter exposes neither kscreen-doctor nor wlr-output-management,
@@ -3670,19 +4077,20 @@ namespace VDISPLAY {
       // so waiting for it to appear is not enough: capture would run at the
       // requested geometry while the compositor scans out another one, and the
       // client would receive a black image. Push the mode instead.
-      if (mutter::available()) {
-        if (mutter::apply_output_mode(connector, width, height, refresh_rate)) {
+      if (mutter::available()) {  // implies compositor == compositor_e::mutter
+        if (pushVirtualOutputMode(displayName, connector, width, height, refresh_mhz)) {
           BOOST_LOG(info) << "[VDISPLAY] Mutter is driving virtual output " << connector << " at " << width << "x"
-                          << height << "@" << refresh_rate << "; capturing it directly.";
+                          << height << "@" << refresh_mhz << "; capturing it directly.";
           return true;
         }
         BOOST_LOG(warning) << "[VDISPLAY] GNOME/Mutter did not end up driving " << connector << " at " << width << "x"
-                           << height << "@" << refresh_rate
+                           << height << "@" << refresh_mhz
                            << ". The virtual display may need to be enabled manually in GNOME Settings, "
                            << "or use a KDE/wlroots session for automatic activation.";
         return false;
       }
-      const bool activated = wl::configure_virtual_output(connector, width, height, refresh_rate, false);
+
+      const bool activated = pushVirtualOutputMode(displayName, connector, width, height, refresh_mhz);
       if (activated) {
         BOOST_LOG(info) << "[VDISPLAY] Activated Wayland virtual output " << connector;
       }

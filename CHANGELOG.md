@@ -11,7 +11,70 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+### Added
+- Hermes now classifies the Wayland compositor it is running under instead of
+  treating "wayland" as one case. KWin is configured through `kscreen-doctor`,
+  Mutter only through `ApplyMonitorsConfig`, and Hyprland accepts the output
+  through wlr-output-management and then cannot drive it — three
+  strategies that differ in kind, previously selected by substring-matching
+  `XDG_CURRENT_DESKTOP` twice in two backends, once case-sensitively. The
+  classification reads the variable token by token, so a desktop that merely
+  mentions another one's name is no longer handed its strategy, and a session
+  that only exports `HYPRLAND_INSTANCE_SIGNATURE` is still recognised.
+- A Hyprland session streaming a Hermes-KMS display now says, before the stream
+  starts, that the backend is not supported there yet and roughly why: aquamarine
+  wants every GPU owning an output to host its own GL renderer, which a
+  display-only device cannot provide, and the builds that do import directly
+  stall on the page-flip handshake against the driver's software vblank. The
+  output is still activated — the warning is a diagnosis, not a refusal.
+
 ### Fixed
+- Streaming a Hermes-KMS virtual display on KDE no longer ignores the resolution
+  the client asked for. Every layer below the compositor held the negotiated
+  geometry — the client requested 854x480, the virtual display was created at
+  854x480, and the driver synthesised that exact CVT mode and marked it
+  `DRM_MODE_TYPE_PREFERRED` — but the `kscreen-doctor` invocation only enabled,
+  prioritised and positioned the connector and never named a mode, so KWin took
+  1920x1080 from the standard ladder the driver also advertises. Because the
+  capture path reports the real scanout rather than the requested geometry, the
+  client received a full-resolution stream of a display it had asked to be
+  small, with nothing in the log disagreeing. The layout command now carries the
+  requested mode, and retries without one — warning that the stream will not
+  match — if KWin refuses it. The same omission silenced mid-session mode
+  changes: `changeDisplaySettings()` returned early whenever the requested mode
+  already matched what creation had recorded, which is the ordinary case, so
+  neither `hermes_kms::set_output()` nor the compositor was ever told. That
+  shortcut now applies only to EVDI, whose costly reconnect it was written to
+  avoid.
+- Applying a mode to the compositor is now one path shared by every backend
+  rather than two that had drifted apart. A mid-session resolution change told
+  KWin and nothing else; GNOME was covered only because `process.cpp` happens to
+  call `activateVirtualDisplayOutput()` immediately afterwards, and a wlroots
+  session was not covered at all. The dispatch also cannot be called with
+  `vdisplay_mutex` held — resolving the connector takes that same non-recursive
+  mutex — so the lock is now released first and the constraint is stated where
+  the next caller will read it.
+- KWin is no longer asked for a mode blind. Hermes reads `kscreen-doctor -j`
+  first and confirms afterwards, which separates the three failures that used to
+  arrive as one `Layout command failed`: the output is not enumerated, it does
+  not advertise the geometry, or KWin accepted the request and did not keep it.
+  Refresh rates are compared rounded to whole Hz, the way `kscreen-doctor`
+  itself matches a `WxH@R` argument, so a connector advertising 89.991 Hz is
+  driven by asking for 90 instead of being reported as not advertising it.
+- Mutter is likewise confirmed rather than trusted: `ApplyMonitorsConfig`
+  returning cleanly is not the same as Mutter scanning out the mode, and an
+  unconfirmed mode reaches the client as the resolution mismatch that renders as
+  a broken image. Hermes now polls the state back for a second and says plainly
+  when something else rewrote the layout.
+- Output names reaching `kscreen-doctor` as words of a shell command are checked
+  where the command is built, not only where the names were read. A name that
+  fails the check costs that output rather than the session, except for the
+  virtual output itself, whose layout is refused outright.
+- `/api/virtual-display/status` reported `desktop.kscreen_available: false` on
+  every KDE session: it compared the backend label against `"kscreen"` while the
+  label has been `"kscreen-doctor"`. The generic wlroots label also now names the
+  compositor behind it, so a report saying Hyprland is distinguishable from one
+  saying sway.
 - A session that falls back to the physical display now says why. Selecting a
   virtual-display backend is not the same as asking for a virtual display:
   `virtual_display_backend` and `hermes_kms_multi_output` choose which backend

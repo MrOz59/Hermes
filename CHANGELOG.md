@@ -11,6 +11,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-22
+
 ### Added
 - Hermes now classifies the Wayland compositor it is running under instead of
   treating "wayland" as one case. KWin is configured through `kscreen-doctor`,
@@ -461,7 +463,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   host with low-latency virtual displays via Hermes-KMS (zero-copy DRM/KMS),
   EVDI still supported, and Hestia/Moonlight/Artemis protocol compatibility.
 
-[Unreleased]: https://github.com/MrOz59/Hermes/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/MrOz59/Hermes/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/MrOz59/Hermes/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/MrOz59/Hermes/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/MrOz59/Hermes/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/MrOz59/Hermes/compare/v0.3.0...v0.4.0

@@ -40,6 +40,7 @@ compositor rather than per distribution.
 | KDE Plasma / KWin (Wayland) | `kscreen-doctor` | Verified |
 | COSMIC / cosmic-comp | `wlr-output-management` v4 | Verified at protocol level |
 | wlroots (sway, …) | `wlr-output-management` | Expected to work |
+| Hyprland / aquamarine | `wlr-output-management` | Known broken |
 | Weston | none — see below | Driver verified, activation N/A |
 | GNOME / Mutter | `org.gnome.Mutter.DisplayConfig` | Fix landed, unconfirmed |
 | gamescope | n/a (own session) | Expected to work |
@@ -117,6 +118,93 @@ same protocol and version verified on COSMIC, so the same Hermes code path
 applies. The container image in `packaging/container` runs Hermes on a headless
 sway session. They also implement `wlr-screencopy`, so the `wlgrab` capture
 backend is available there in addition to Hermes-KMS.
+
+### Hyprland — known broken
+
+Investigated 2026-08-22 on CachyOS, kernel 7.1.8-1-cachyos, Hyprland 0.56.2-1,
+aquamarine 0.14.0-2.2 and Hermes-KMS 0.3.0, from live session logs and a
+controlled reproduction.
+
+Hyprland is not a wlroots compositor. It has its own backend, **aquamarine**, so
+it does not share the code path verified on sway and COSMIC — and that
+difference is exactly what breaks virtual displays. The Hermes side is not the
+problem: Hyprland implements `zwlr_output_manager_v1`, the protocol Hermes uses
+to enable a virtual output, and it does adopt the connector when the driver
+connects it, giving the virtual monitor its own workspace. The failure is a
+layer below, in how aquamarine drives a secondary DRM device.
+
+**Stock aquamarine cannot drive a virtual display at all.** In its multi-GPU
+model the card holding the physical monitor becomes the primary DRM device, and
+every other KMS device with an enabled output has to host its own EGL/GLES
+renderer, because aquamarine renders on the primary and blits into the secondary
+before scanout. A virtual display cannot host a GL renderer — Mesa has no DRI
+driver for the device, so `eglInitialize` fails:
+
+```
+ERR  [EGL] eglInitialize errored out with EGL_NOT_INITIALIZED: DRI2: failed to create screen
+ERR  CDRMRenderer: fail, eglInitialize failed
+ERR  drm: initMgpu: no renderer
+ERR  drm: Failed to initialize renderer backend for blitting
+```
+
+The connector appears and the modeset succeeds, but every commit fails at the
+blit stage and no frame is ever presented — a black output while Hyprland
+retries each frame. One session logged 653 blit failures and 969 `initMgpu: no
+renderer`.
+
+Exposing a render node does not help, and is what makes the failure loud rather
+than silent. Hermes-KMS has one because its capture channel needs it, so
+aquamarine selects it and fails at `eglInitialize` instead of skipping the
+device. EVDI, which has no render node, produces the symmetric warning and is
+equally unusable.
+
+**Remove the blit and page-flip pacing fails instead.** A locally patched
+aquamarine that imports the primary GPU's buffer over PRIME and scans it out
+directly — the KWin/GNOME model — does present frames, and then stalls. Over a
+three-minute controlled run the driver's frame sequence advanced 149 times,
+about 1 fps where 60 was requested, before commits stopped being accepted at
+all:
+
+```
+ERR  drm: Cannot commit when a page-flip is awaiting
+```
+
+aquamarine arms a pending flip on every buffer commit and refuses the next one
+until the page-flip event arrives. Nothing in the log shows a stale event being
+discarded, so either the event never reaches it, or the arm/deliver cycle
+desynchronises and its scheduler never sees the flip. The leading suspect is the
+driver's software vblank: `hrtimer_forward_now()` skips missed periods without
+calling `drm_crtc_handle_vblank()` for each one, which under load produces
+exactly the sparse flips observed. **This is not proven** — closing it needs DRM
+vblank tracing alongside aquamarine at trace level.
+
+**Smaller gaps, none fatal on their own.** The Hermes-KMS CRTC carries only a
+mode, a primary plane and a cursor, so everything Hyprland commits beyond that
+fails:
+
+| Missing | Effect |
+| --- | --- |
+| `CTM` | Hyprland's colour management commits a matrix on *every* state commit, even the identity one, so `failed to commit ctm: no ctm prop support` repeats per commit rather than per modeset |
+| `GAMMA_LUT` / `DEGAMMA_LUT` | `Couldn't get the gamma_size prop`; no gamma control, so `hyprsunset` cannot work on the virtual output |
+| `VRR_CAPABLE`, `HDR_OUTPUT_METADATA`, `Colorspace`, syncobj | reported unsupported at probe — no VRR, HDR or explicit sync |
+| `IN_FORMATS` | the primary plane advertises no modifier blob, so only implicit linear is available |
+
+The synthetic EDID is rejected as well: aquamarine parses it with
+libdisplay-info, which is stricter than KWin's parser, so `hyprctl monitors`
+shows the virtual output with empty make, model and serial. Cosmetic, but it
+applies to any libdisplay-info consumer, not only Hyprland.
+
+Streaming an ordinary physical display should be unaffected —
+`zwlr_screencopy_manager_v1` is present, so the `wlgrab` backend is available —
+but no full session has been run that way.
+
+**What would fix it.** On the aquamarine side: keep a direct import-and-scanout
+path for secondary devices that cannot render, and make the flip handshake
+tolerate a software vblank instead of wedging on `frameInFlight`. On the driver
+side: guarantee the flip event for every commit carrying
+`DRM_MODE_PAGE_FLIP_EVENT`, and add no-op `CTM` and gamma properties so the
+colour pipeline stops erroring on every commit. Until then, use KDE or a wlroots
+compositor, or Hermes' per-session gamescope path.
 
 ### Weston — driver verified, activation not applicable
 
@@ -230,7 +318,7 @@ An EVDI connector also reports *disconnected* until a userspace client calls
 | --- | --- | --- |
 | Hermes-KMS | `ACQUIRE_FRAME` ioctl on the render node | Any compositor — no Wayland protocol involved |
 | EVDI | `libevdi` CPU buffer | Any compositor |
-| `wlgrab` | `wlr-screencopy-unstable-v1` | wlroots, KWin — **not COSMIC** |
+| `wlgrab` | `wlr-screencopy-unstable-v1` | wlroots, KWin, Hyprland — **not COSMIC** |
 | `kmsgrab` | DRM/KMS | needs DRM master or suitable permissions |
 | `x11grab` | X11 | X11 sessions |
 
@@ -250,13 +338,21 @@ streaming. No upgrade can fix this, because the package does not own that file.
 The package reports it on install and upgrade and the driver logs a warning at
 probe; neither rewrites the file. Remove it, or set `initial_enabled=0`.
 
+**The development udev rule hides the card from every compositor.**
+`udev/99-hermes-kms-ignore-seat.rules` strips `TAG+="seat"` and `ID_SEAT` from
+the Hermes-KMS card so an isolated test session can claim it. With that rule
+installed no compositor adopts the virtual output — KWin, Hyprland or any other
+— which is usually reported as "the virtual display never appears at all". The
+rule is for isolated testing only; remove it for streaming.
+
 **Portrait modes above 2160 px tall are rejected.** The driver caps geometry at
 `HERMES_KMS_MAX_WIDTH` 3840 by `HERMES_KMS_MAX_HEIGHT` 2160, so a client asking
 for a portrait mode such as 1440x2560 fails validation with `-EINVAL`. This
 affects tablets and phones streaming in portrait orientation.
 
 **Exclusive mode is KDE and wlroots only.** See
-[GNOME / Mutter](#gnome--mutter--fix-landed-unconfirmed).
+[GNOME / Mutter](#gnome--mutter--fix-landed-unconfirmed). On Hyprland the
+question does not arise yet — see [Hyprland](#hyprland--known-broken).
 
 **Confined packaging may lose output management.** COSMIC filters privileged
 protocol globals by Wayland security context; clients without a security context

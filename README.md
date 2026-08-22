@@ -30,9 +30,14 @@ keeping several of each verified is not something one person can do alone.
 [docs/compatibility.md](docs/compatibility.md) records the current state
 honestly: what has actually been tested and how, what shares a verified code
 path but has never been run, what is known broken, and the limitations worth
-knowing before you file a bug. It covers KDE, COSMIC, GNOME, wlroots and
-gamescope, the AMD/Intel/NVIDIA encoder paths, and the Hermes-KMS and EVDI
-backends.
+knowing before you file a bug. It covers KDE, COSMIC, GNOME, wlroots,
+Hyprland and gamescope, the AMD/Intel/NVIDIA encoder paths, and the Hermes-KMS
+and EVDI backends.
+
+**Hyprland does not work with virtual displays.** Its aquamarine backend
+requires every DRM device with an output to host its own GL renderer, which a
+virtual display cannot do — see
+[docs/compatibility.md](docs/compatibility.md#hyprland--known-broken).
 
 **Issues and pull requests are very welcome**, including reports that something
 simply works — those are what move an entry from "expected to work" to

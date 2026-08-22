@@ -64,6 +64,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   file-descriptor-scoped session-token contract. This path requires Hermes-KMS
   0.4.x with UAPI v11 and is intended for Hermes 0.6.0.
 
+### Changed
+- The compatibility record no longer treats RDNA3/Navi 3x as a suspect in the
+  GNOME black-stream report. The same import succeeded from plain `udmabuf` on
+  the affected RX 7800 XT, the actual Hermes-KMS imported-scanout re-export bug
+  is fixed in 0.3.2, and the reporter confirmed video; the RDNA3-specific tester
+  request is therefore retired ([#23]).
+
 ## [0.5.1] - 2026-08-22
 
 ### Added
@@ -418,6 +425,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#19]: https://github.com/MrOz59/Hermes/issues/19
 [#20]: https://github.com/MrOz59/Hermes/issues/20
 [#22]: https://github.com/MrOz59/Hermes/issues/22
+[#23]: https://github.com/MrOz59/Hermes/issues/23
 [#25]: https://github.com/MrOz59/Hermes/issues/25
 
 ## [0.4.0] - 2026-07-02

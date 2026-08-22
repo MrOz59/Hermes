@@ -86,4 +86,5 @@ Legend: `[x]` done · `[~]` partially done · `[ ]` not started.
 - [x] Detect the session/compositor environment (desktop vs Gamescope).
 - [x] Route capture directly to Gamescope in a standalone Gamescope session.
 - [x] Configurable Gamescope backend with a Hermes-branded launcher and `HERMES_*` env.
-- [x] GNOME/Mutter virtual-display support (verify-only) with honest diagnostics.
+- [x] GNOME/Mutter virtual-display activation, temporary mode/layout application,
+  and compositor-aware diagnostics.

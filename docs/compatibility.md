@@ -42,7 +42,7 @@ compositor rather than per distribution.
 | wlroots (sway, …) | `wlr-output-management` | Expected to work |
 | Hyprland / aquamarine | `wlr-output-management` | Known broken |
 | Weston | none — see below | Driver verified, activation N/A |
-| GNOME / Mutter | `org.gnome.Mutter.DisplayConfig` | Fix landed, unconfirmed |
+| GNOME / Mutter | `org.gnome.Mutter.DisplayConfig` | Video verified; exclusive mode unsupported |
 | gamescope | n/a (own session) | Expected to work |
 | X11 | X11 capture path | Expected to work |
 
@@ -82,13 +82,14 @@ GNOME.
 Capture on COSMIC works only with the Hermes-KMS backend — see
 [Capture backends](#capture-backends).
 
-### GNOME / Mutter — fix landed, unconfirmed
+### GNOME / Mutter — video verified
 
 Mutter implements neither `kscreen-doctor` nor `wlr-output-management`, only its
 own `org.gnome.Mutter.DisplayConfig` D-Bus interface.
 
 This was reported broken as a black screen on the client while input and audio
-kept working. Two causes, both fixed:
+kept working. The investigation found three independent problems, all fixed for
+the video path:
 
 - Hermes asked whether Mutter had adopted the connector with a single call
   issued milliseconds after connecting it. Mutter adopts asynchronously, so the
@@ -96,6 +97,12 @@ kept working. Two causes, both fixed:
 - Mutter does adopt the connector, but at whichever mode *it* prefers. It drove
   the output at one resolution while Hermes captured at the requested one, so
   the encoder published frames the compositor never rendered.
+- Mutter renders on the real GPU and PRIME-imports that DMA-BUF into Hermes-KMS
+  for scanout. `ACQUIRE_FRAME` incorrectly re-exported the imported GEM wrapper
+  instead of returning its original DMA-BUF. The wrapper has no shmem file for
+  the consumer to pin, so the attach failed with `-EINVAL`, surfaced by EGL as
+  `EGL_BAD_ALLOC`. Hermes-KMS 0.3.2 returns the original DMA-BUF and carries a
+  regression test for this imported-scanout path.
 
 Hermes now waits for Mutter to probe the connector and pushes the requested mode
 through `ApplyMonitorsConfig`. Because that call is all-or-nothing, every config
@@ -103,8 +110,11 @@ is submitted to Mutter's `VERIFY` method first and abandoned if it does not
 validate, and it is applied as *temporary* so `~/.config/monitors.xml` is never
 rewritten.
 
-The payload was validated against mutter 50.4 running headless. **It has not yet
-been confirmed in a real GNOME session on real hardware.**
+The output and scanout path was exercised on 2026-08-22 in a CachyOS VM with
+kernel 7.1.8 and GNOME Shell/Mutter 50.4. Separately, the original reporter in
+[#22](https://github.com/MrOz59/Hermes/issues/22) confirmed a working video
+stream on an RX 7800 XT after installing the driver fix. This verifies the video
+path; it does not change the exclusive-mode limitation below.
 
 **Exclusive mode is not supported on GNOME.** There is no interface Hermes can
 use to disable the physical outputs, so it logs a warning and the physical
@@ -241,8 +251,8 @@ headless sway session with audio and XWayland.
 
 | Vendor | Encoder | Capture path | Status |
 | --- | --- | --- | --- |
-| AMD RDNA2 (Navi 2x) | VAAPI | Zero-copy DMA-BUF import | Verified |
-| AMD RDNA3 (Navi 3x) | VAAPI | Zero-copy DMA-BUF import | One unexplained report, see below |
+| AMD RDNA2 (Navi 2x) | VAAPI | Zero-copy DMA-BUF import | Verified on the development system |
+| AMD RDNA3 (Navi 3x) | VAAPI | Zero-copy DMA-BUF import | Verified on RX 7800 XT (Navi 32) |
 | Intel | VAAPI | Zero-copy DMA-BUF import | Expected to work |
 | NVIDIA | NVENC | CPU copy | Contributed, see below |
 | any | software | either | Fallback |
@@ -250,35 +260,19 @@ headless sway session with audio and XWayland.
 The zero-copy path is validated with `XRGB8888`, linear. NV12/P010 and HDR are
 not validated.
 
-### An unexplained DMA-BUF import failure on RDNA3
+### AMD zero-copy status
 
-One report ([#22](https://github.com/MrOz59/Hermes/issues/22)) has
-`eglCreateImage(EGL_LINUX_DMA_BUF_EXT)` refusing the Hermes-KMS scanout buffer
-with `EGL_BAD_ALLOC` on an RX 7800 XT (Navi 32, RDNA3), leaving the client with
-a black image while input and audio work. The same import succeeds on an
-RX 6700 XT (Navi 22, RDNA2).
+The RX 7800 XT failure reported in [#22](https://github.com/MrOz59/Hermes/issues/22)
+was the GNOME/Mutter imported-scanout bug described above, not a GPU-generation
+limitation. The decisive control imported the same geometry from a plain
+`udmabuf` on the same card, kernel and Mesa stack; that succeeded both with and
+without explicit modifier attributes. After Hermes-KMS returned the original
+DMA-BUF, the reporter confirmed that video streaming worked.
 
-**This is a single report and RDNA3 is not established as the cause.** It is
-recorded here because everything else that could plausibly differ has been
-tested and ruled out, not because the GPU generation has been proven guilty:
-
-- the buffer is byte-for-byte identical on both machines — `1600x1068`,
-  `XR24`, modifier `0x0` (linear), pitch 6400, DMA-BUF 6836224 bytes;
-- Hermes-KMS 0.3.0 and 0.3.1 produce the same buffer, down to the same CRC;
-- kernels 7.0.9 and 7.1.8 produce the same buffer and the same successful CPU
-  mapping of it;
-- Mesa 26.1.0 and 26.1.6 both import it successfully on RDNA2;
-- `EGL_EXT_image_dma_buf_import_modifiers` is present on both, so both sides
-  pass the same attributes.
-
-Two things are still uncontrolled. The reporter runs CachyOS's Mesa build
-(`3:26.1.6-1`), while the comparison used Arch's (`1:26.1.6-1`) — same upstream
-version, different packaging. And the isolated import checker has not yet been
-run to completion on the affected machine, so the failure is currently only
-observed through Hermes, not reproduced standalone.
-
-If you have an RDNA3 card, a data point either way is genuinely useful — see
-[Reporting problems and contributing](#reporting-problems-and-contributing).
+This is direct confirmation for Navi 32, not a claim that every RDNA3 model has
+been exercised. No RDNA3-specific failure is currently known, so the dedicated
+hardware-testing request in [#23](https://github.com/MrOz59/Hermes/issues/23)
+has been retired.
 
 **NVIDIA needs a CPU copy.** NVIDIA's EGL import of the driver's system-memory
 DMA-BUFs reads the wrong pages beyond the first ones, so NVENC sessions capture
@@ -351,7 +345,7 @@ for a portrait mode such as 1440x2560 fails validation with `-EINVAL`. This
 affects tablets and phones streaming in portrait orientation.
 
 **Exclusive mode is KDE and wlroots only.** See
-[GNOME / Mutter](#gnome--mutter--fix-landed-unconfirmed). On Hyprland the
+[GNOME / Mutter](#gnome--mutter--video-verified). On Hyprland the
 question does not arise yet — see [Hyprland](#hyprland--known-broken).
 
 **Confined packaging may lose output management.** COSMIC filters privileged

@@ -11,8 +11,6 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
-## [0.5.1] - 2026-08-22
-
 ### Added
 - Hermes now probes what the running session can actually do and says so at
   startup, per feature, with the fix for anything it cannot. The classification
@@ -59,6 +57,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   is driving `wlr-output-management`, not only Hyprland. The protocol is not a
   strategy, and a bug report that says COSMIC is a different report from one that
   says sway.
+- Hermes now captures Hermes-KMS cursor-plane updates independently from primary
+  frames and composites premultiplied ARGB cursors in both zero-copy and CPU-copy
+  capture paths. The implementation validates fences, buffer layouts and update
+  generations, handles hidden and edge-clipped cursors, and adopts the generic
+  file-descriptor-scoped session-token contract. This path requires Hermes-KMS
+  0.4.x with UAPI v11 and is intended for Hermes 0.6.0.
+
+## [0.5.1] - 2026-08-22
+
+### Added
 - Hermes now classifies the Wayland compositor it is running under instead of
   treating "wayland" as one case. KWin is configured through `kscreen-doctor`,
   Mutter only through `ApplyMonitorsConfig`, and Hyprland accepts the output

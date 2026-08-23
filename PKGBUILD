@@ -90,8 +90,11 @@ prepare() {
 
 build() {
     cd "${startdir}"
-    export BRANCH=local
-    export BUILD_VERSION="${pkgver}"
+    # Nightly CI stamps the short commit into pkgver (0.5.1+abc1234) and passes
+    # the matching BUILD_VERSION, so the binary reports the commit it was built
+    # from. A plain local `makepkg` inherits neither and falls back to pkgver.
+    export BRANCH="${BRANCH:-local}"
+    export BUILD_VERSION="${BUILD_VERSION:-${pkgver}}"
     export COMMIT="${COMMIT:-$(git rev-parse HEAD)}"
 
     # CUDA is required so the package ships NVIDIA NVENC hardware encoding. The

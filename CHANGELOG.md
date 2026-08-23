@@ -78,6 +78,15 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   new `announcements` option, which also stops the outbound request.
 
 ### Changed
+- A nightly build now carries the commit it was built from in its own version:
+  `0.5.1+abc1234` rather than a bare `0.5.1` indistinguishable from the release.
+  The boot log, `/api/config` and the home page all show it, so a report from a
+  nightly identifies its exact source. `+` is SemVer build metadata, so it sorts
+  equal to the plain version rather than below it — a nightly is 0.5.1 plus
+  commits, not a 0.5.1 pre-release — and it is the one separator Arch `pkgver`,
+  `dpkg` and `rpm` all accept, so the package filename, the package manager's
+  version and the version the binary reports stay in agreement. A stable release
+  built from a `v*` tag is unchanged and still ships the bare number.
 - The compatibility record no longer treats RDNA3/Navi 3x as a suspect in the
   GNOME black-stream report. The same import succeeded from plain `udmabuf` on
   the affected RX 7800 XT, the actual Hermes-KMS imported-scanout re-export bug

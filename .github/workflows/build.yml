@@ -15,6 +15,40 @@ env:
 
 jobs:
   # ===========================================
+  # Build version (VERSION file + commit stamp)
+  # ===========================================
+  # A stable release (a `v*` tag) ships the bare VERSION number. Every other
+  # build — nightly, PR, manual dispatch — gets the short commit appended as
+  # SemVer build metadata (`0.5.1+abc1234`), so any nightly a user reports from
+  # can be traced back to the exact commit that produced it.
+  #
+  # `+` is the one separator all three package formats accept (Arch pkgver
+  # forbids `-`, rpm Version forbids `-`), and under SemVer build metadata
+  # sorts equal to the plain version instead of below it — which is correct: a
+  # nightly is 0.5.1 *plus* commits, not a 0.5.1 pre-release.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      build_version: ${{ steps.compute.outputs.build_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute build version
+        id: compute
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            build_version="${version}"
+          else
+            build_version="${version}+${GITHUB_SHA:0:7}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "build_version=${build_version}" >> "$GITHUB_OUTPUT"
+          echo "Build version: ${build_version}"
+
+  # ===========================================
   # Unit / integration tests (Arch container)
   # ===========================================
   # Builds with -DBUILD_TESTS=ON and runs the GoogleTest suite via ctest.
@@ -168,10 +202,16 @@ jobs:
     # Gate every package build on the test suite: nothing is compiled, and
     # therefore nothing is ever released or published as nightly, unless the
     # tests pass first.
-    needs: [test]
+    needs: [test, version]
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
+    # Defining both BRANCH and BUILD_VERSION makes cmake/prep/build_version.cmake
+    # take the version verbatim from the environment instead of deriving it from
+    # the git checkout.
+    env:
+      BRANCH: ${{ github.ref_name }}
+      BUILD_VERSION: ${{ needs.version.outputs.build_version }}
 
     steps:
       # Cache the downloaded pacman packages so the large `cuda` toolkit
@@ -233,6 +273,14 @@ jobs:
           submodules: recursive
           fetch-depth: 0
           
+      # makepkg cannot take pkgver from the environment, so rewrite it in the
+      # CI checkout. This keeps the package filename, the pacman version and
+      # the version the binary reports all in agreement.
+      - name: Stamp the build version into the PKGBUILD
+        run: |
+          sed -i "s/^pkgver=.*/pkgver=${BUILD_VERSION}/" PKGBUILD
+          grep '^pkgver=' PKGBUILD
+
       - name: Fix permissions and git
         run: |
           chown -R builder:builder .
@@ -247,7 +295,13 @@ jobs:
           # The Arch `cuda` package installs nvcc under /opt/cuda/bin, which is
           # not on the default PATH; CMake's check_language(CUDA) needs to find
           # it so NVENC is compiled in.
-          su builder -c 'export PATH="/opt/cuda/bin:$PATH"; makepkg -sf --noconfirm'
+          # `su` does not carry the job environment across, so the build vars
+          # are passed explicitly rather than inherited.
+          su builder -c "export PATH=/opt/cuda/bin:\$PATH \
+            BRANCH='${BRANCH}' \
+            BUILD_VERSION='${BUILD_VERSION}' \
+            COMMIT='${COMMIT}'; \
+            makepkg -sf --noconfirm"
 
       - name: Upload Arch Package
         uses: actions/upload-artifact@v4
@@ -265,8 +319,11 @@ jobs:
   # Debian/Ubuntu Package (.deb)
   # ===========================================
   build-deb:
-    needs: [test]
+    needs: [test, version]
     runs-on: ubuntu-24.04
+    env:
+      BRANCH: ${{ github.ref_name }}
+      BUILD_VERSION: ${{ needs.version.outputs.build_version }}
 
     steps:
       - name: Checkout
@@ -350,7 +407,7 @@ jobs:
 
       - name: Create DEB Package
         run: |
-          VERSION="$(cat VERSION)"
+          VERSION="${BUILD_VERSION}"
           PKGDIR="hermes_${VERSION}_amd64"
 
           mkdir -p ${PKGDIR}/DEBIAN
@@ -444,10 +501,13 @@ jobs:
   # Fedora RPM Build
   # ===========================================
   build-rpm:
-    needs: [test]
+    needs: [test, version]
     runs-on: ubuntu-latest
     container:
       image: fedora:40
+    env:
+      BRANCH: ${{ github.ref_name }}
+      BUILD_VERSION: ${{ needs.version.outputs.build_version }}
 
     steps:
       - name: Install Dependencies
@@ -541,7 +601,7 @@ jobs:
 
       - name: Create RPM Package
         run: |
-          VERSION="$(cat VERSION)"
+          VERSION="${BUILD_VERSION}"
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
           # Create source tarball; install the binary as `hermes`
@@ -639,7 +699,7 @@ jobs:
   # commit so the release always points at the newest build.
   nightly:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build-deb, build-arch-pkg, build-rpm]
+    needs: [version, build-deb, build-arch-pkg, build-rpm]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -647,10 +707,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Read version
-        id: version
-        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -680,11 +736,11 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: nightly
-          name: "Hermes nightly (v${{ steps.version.outputs.version }})"
+          name: "Hermes nightly (v${{ needs.version.outputs.build_version }})"
           body: |
             Rolling nightly build of Hermes from the `main` branch.
 
-            - Version: `v${{ steps.version.outputs.version }}`
+            - Version: `v${{ needs.version.outputs.build_version }}`
             - Commit: ${{ github.sha }}
             - Built: ${{ github.event.head_commit.timestamp }}
 

@@ -132,8 +132,15 @@ backend is available there in addition to Hermes-KMS.
 ### Hyprland — verified through its own headless output
 
 **Verified 2026-08-23** on CachyOS, kernel 7.1.8-1-cachyos, Hyprland 0.56.2-1,
-aquamarine 0.14.0-2.2, Radeon RX 6700 XT: create, client-requested mode,
-capture and teardown, exercised end to end through Hermes' own code path.
+aquamarine 0.14.0-2.2, Radeon RX 6700 XT. Exercised through Hermes' own code
+path, not a mock: the output is created, the client's mode is applied and read
+back from the compositor, capture initialises on it at that mode, and removing
+the display leaves the session as it was.
+
+Where the verification stops: **no full stream to a client has been completed
+yet.** Capture initialising is not the same as frames reaching Moonlight, and
+the pacing question below is open — a headless output redraws on damage, so a
+still screen may not produce frames at the requested rate on its own.
 
 Hermes does not give Hyprland a virtual DRM device. It asks Hyprland to create a
 **headless output**, which Hyprland renders itself on the primary GPU — so the
@@ -166,10 +173,10 @@ configured backend.
 
 ### Why the DRM backends do not work here
 
-
 Investigated 2026-08-22 on CachyOS, kernel 7.1.8-1-cachyos, Hyprland 0.56.2-1,
 aquamarine 0.14.0-2.2 and Hermes-KMS 0.3.0, from live session logs and a
-controlled reproduction.
+controlled reproduction. Re-checked against Hermes-KMS 0.4.0 on 2026-08-23; what
+changed is noted where it changed.
 
 Hyprland is not a wlroots compositor. It has its own backend, **aquamarine**, so
 it does not share the code path verified on sway and COSMIC — and that
@@ -218,15 +225,24 @@ ERR  drm: Cannot commit when a page-flip is awaiting
 aquamarine arms a pending flip on every buffer commit and refuses the next one
 until the page-flip event arrives. Nothing in the log shows a stale event being
 discarded, so either the event never reaches it, or the arm/deliver cycle
-desynchronises and its scheduler never sees the flip. The leading suspect is the
-driver's software vblank: `hrtimer_forward_now()` skips missed periods without
-calling `drm_crtc_handle_vblank()` for each one, which under load produces
-exactly the sparse flips observed. **This is not proven** — closing it needs DRM
-vblank tracing alongside aquamarine at trace level.
+desynchronises and its scheduler never sees the flip.
+
+The leading suspect was the driver's own software vblank: Hermes-KMS 0.3.0 drove
+it from a hand-rolled `hrtimer`, and `hrtimer_forward_now()` skips missed periods
+without calling `drm_crtc_handle_vblank()` for each one — under load, exactly the
+sparse flips observed.
+
+**That suspect no longer exists.** Hermes-KMS 0.4.0 moved the timer to the DRM
+core helpers (`DRM_CRTC_VBLANK_TIMER_FUNCS` plus a `handle_vblank_timeout` hook);
+the manual `hrtimer` path is gone. The wedge has **not been retested** against
+0.4.0, so its status is now genuinely unknown rather than suspected — and since
+the headless path made Hyprland work without answering this, nothing has forced
+the question. Anyone picking it up starts from a controlled `hermes-kmsctl hold`
+run on 0.4.0, not from the 0.3.0 evidence above.
 
 **Smaller gaps, none fatal on their own.** The Hermes-KMS CRTC carries only a
 mode, a primary plane and a cursor, so everything Hyprland commits beyond that
-fails:
+fails. All four were re-checked against 0.4.0 and all four are still absent:
 
 | Missing | Effect |
 | --- | --- |
@@ -247,10 +263,15 @@ but no full session has been run that way.
 **What would fix it.** On the aquamarine side: keep a direct import-and-scanout
 path for secondary devices that cannot render, and make the flip handshake
 tolerate a software vblank instead of wedging on `frameInFlight`. On the driver
-side: guarantee the flip event for every commit carrying
-`DRM_MODE_PAGE_FLIP_EVENT`, and add no-op `CTM` and gamma properties so the
-colour pipeline stops erroring on every commit. Until then, use KDE or a wlroots
-compositor, or Hermes' per-session gamescope path.
+side: add no-op `CTM` and gamma properties so the colour pipeline stops erroring
+on every commit, and re-measure the flip handshake now that the vblank timer is
+the core one.
+
+None of this blocks streaming on Hyprland any more — the headless output above
+does not go through a DRM device at all. It matters for using **Hermes-KMS
+itself** under Hyprland, which is what the multi-session and seat-isolation
+features are built on: those still need KDE, GNOME, a wlroots compositor, or
+Hermes' per-session gamescope path.
 
 ### Weston — driver verified, activation not applicable
 
@@ -346,9 +367,9 @@ An EVDI connector also reports *disconnected* until a userspace client calls
 
 | Backend | Protocol / mechanism | Works on |
 | --- | --- | --- |
-| Hermes-KMS | `ACQUIRE_FRAME` ioctl on the render node | Any compositor — no Wayland protocol involved |
-| EVDI | `libevdi` CPU buffer | Any compositor |
-| `wlgrab` | `wlr-screencopy-unstable-v1` | wlroots, KWin, Hyprland — **not COSMIC** |
+| Hermes-KMS | `ACQUIRE_FRAME` ioctl on the render node | Any compositor — no Wayland protocol involved. *Capturing* is universal; getting a compositor to draw on the device is not — see [Hyprland](#why-the-drm-backends-do-not-work-here) |
+| EVDI | `libevdi` CPU buffer | Any compositor, with the same caveat |
+| `wlgrab` | `wlr-screencopy-unstable-v1` | wlroots, KWin, Hyprland — **not COSMIC**. This is the capture path for a Hyprland headless output |
 | `kmsgrab` | DRM/KMS | needs DRM master or suitable permissions |
 | `x11grab` | X11 | X11 sessions |
 
@@ -367,6 +388,15 @@ owns it, and the compositor extends the desktop onto a black output nobody is
 streaming. No upgrade can fix this, because the package does not own that file.
 The package reports it on install and upgrade and the driver logs a warning at
 probe; neither rewrites the file. Remove it, or set `initial_enabled=0`.
+
+**A virtual display is selected by name, and the name comes from `xdg_output`.**
+`wlgrab` matches the compositor's output name against the one Hermes recorded
+when it created the display. Until 2026-08-23 the names were read *after* the
+match ran, so every by-name selection failed with "is not enabled by the
+compositor" for an output the same log had just listed. Only the Hyprland
+headless path selects by name — a physical monitor is selected by index — so
+this never surfaced before. Fixed; noted here because the error message points
+at the compositor and the fault was Hermes'.
 
 **The development udev rule hides the card from every compositor.**
 `udev/99-hermes-kms-ignore-seat.rules` strips `TAG+="seat"` and `ID_SEAT` from

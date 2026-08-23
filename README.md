@@ -34,10 +34,12 @@ knowing before you file a bug. It covers KDE, COSMIC, GNOME, wlroots,
 Hyprland and gamescope, the AMD/Intel/NVIDIA encoder paths, and the Hermes-KMS
 and EVDI backends.
 
-**Hyprland does not work with virtual displays.** Its aquamarine backend
-requires every DRM device with an output to host its own GL renderer, which a
-virtual display cannot do — see
-[docs/compatibility.md](docs/compatibility.md#hyprland--known-broken).
+**Hyprland works through its own headless output, not a virtual DRM device.**
+Its aquamarine backend requires every DRM device with an output to host its own
+GL renderer, which a virtual display cannot do, so Hermes-KMS and EVDI are both
+unusable there. Hermes asks Hyprland for a headless output instead, which it
+renders on the primary GPU — see
+[docs/compatibility.md](docs/compatibility.md#hyprland--verified-through-its-own-headless-output).
 
 **Issues and pull requests are very welcome**, including reports that something
 simply works — those are what move an entry from "expected to work" to

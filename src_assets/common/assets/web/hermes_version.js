@@ -1,3 +1,18 @@
+/**
+ * Parse the leading `MAJOR.MINOR.PATCH` of a version string, or return null.
+ *
+ * Anything after the patch number is ignored on purpose: a nightly stamps its
+ * commit into the version (`0.5.1+abc1234`), and that build is still release
+ * 0.5.1 for comparison purposes.
+ */
+export function parseVersionParts(version) {
+  if (!version) {
+    return null;
+  }
+  const match = `${version}`.match(/^v?(\d+)\.(\d+)\.(\d+)/);
+  return match ? match.slice(1, 4).map(value => Number.parseInt(value, 10)) : null;
+}
+
 class HermesVersion {
   constructor(release = null, version = null) {
     if (release) {
@@ -32,11 +47,7 @@ class HermesVersion {
   }
 
   parseVersion(version) {
-    if (!version) {
-      return null;
-    }
-    const match = `${version}`.match(/^v?(\d+)\.(\d+)\.(\d+)/);
-    return match ? match.slice(1, 4).map(value => Number.parseInt(value, 10)) : null;
+    return parseVersionParts(version);
   }
 
   isGreater(otherVersion) {

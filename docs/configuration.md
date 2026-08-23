@@ -287,6 +287,34 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### announcements
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Whether the Web UI home page shows announcements published by the
+            Hermes maintainers, such as a known issue affecting your version.
+            The message list is fetched from GitHub when the home page loads,
+            so disabling this stops that request. Announcements never install
+            or change anything; they are text, an optional link, and a dismiss
+            button.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            announcements = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### system_tray
 
 <table>
@@ -3562,7 +3590,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
 
 | Previous          |                            Next |
 |:------------------|--------------------------------:|
-| [Legal](legal.md) | [App Examples](app_examples.md) |
+| [Legal](legal.md) | [Announcements](announcements.md) |
 
 </div>
 

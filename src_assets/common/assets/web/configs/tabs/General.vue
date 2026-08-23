@@ -229,6 +229,14 @@ onMounted(() => {
               default="false"
     ></Checkbox>
 
+    <!-- Maintainer announcements on the home page -->
+    <Checkbox class="mb-3"
+              id="announcements"
+              locale-prefix="config"
+              v-model="config.announcements"
+              default="true"
+    ></Checkbox>
+
     <!-- Enable system tray -->
     <Checkbox class="mb-3"
               id="system_tray"

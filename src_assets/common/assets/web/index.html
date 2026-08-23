@@ -21,6 +21,8 @@
       </ul>
       <a class="btn btn-danger" href="./troubleshooting#logs">View Logs</a>
     </div>
+    <!-- Announcements from the Hermes maintainers -->
+    <Announcement-Feed v-if="config && announcementsEnabled" :version="config.version"></Announcement-Feed>
     <!-- Version -->
     <div class="card p-2 my-4">
       <div class="card-body" v-if="config">
@@ -106,6 +108,7 @@
   import Navbar from './Navbar.vue'
   import ClientCard from './ClientCard.vue'
   import ResourceCard from './ResourceCard.vue'
+  import AnnouncementFeed from './AnnouncementFeed.vue'
   import HermesVersion from './hermes_version'
 
   console.log("Hello, Hermes!")
@@ -114,7 +117,8 @@
     components: {
       Navbar,
       ClientCard,
-      ResourceCard
+      ResourceCard,
+      AnnouncementFeed
     },
     data() {
       return {
@@ -202,6 +206,16 @@
       },
     },
     computed: {
+      announcementsEnabled() {
+        const value = this.config?.announcements;
+        if (value === undefined || value === null || value === "") {
+          // Absent from the config file: on by default. This is how the
+          // maintainers reach users about a known issue, so it has to be opt
+          // *out*, not opt in.
+          return true;
+        }
+        return !["false", "0", "disabled", "disable", "no", "off"].includes(`${value}`.toLowerCase().trim());
+      },
       notifyNightlyUpdates() {
         const value = this.config?.notify_pre_releases;
         if (value === true || value === 1) {

@@ -377,7 +377,7 @@ UAC prompt.
 
 | Previous                          |                                    Next |
 |:----------------------------------|----------------------------------------:|
-| [Configuration](configuration.md) | [Awesome-Sunshine](awesome_sunshine.md) |
+| [Announcements](announcements.md) | [Awesome-Sunshine](awesome_sunshine.md) |
 
 </div>
 

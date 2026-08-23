@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/MrOz59/Hermes/main/docs/feed/feed.schema.json",
+  "version": 1,
+  "messages": [
+    {
+      "id": "example-known-issue",
+      "level": "warning",
+      "title": "Known issue: virtual display stays black on <compositor>",
+      "body": "Already tracked — no need to open a new report.\nA fix is in the nightly channel.",
+      "affects": ">=0.5.0 <0.5.2",
+      "link": {
+        "url": "https://github.com/MrOz59/Hermes/issues/1",
+        "label": "Tracking issue"
+      },
+      "expires": "2030-01-01"
+    }
+  ]
+}

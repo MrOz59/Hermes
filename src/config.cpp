@@ -608,6 +608,7 @@ namespace config {
     "both",  // Address family
     platf::appdata().string() + "/hermes.log",  // log file
     false,  // notify_pre_releases
+    true,  // announcements
     false,  // legacy_ordering
     true,  // system_tray
     {},  // prep commands
@@ -1324,6 +1325,7 @@ namespace config {
     bool_f(vars, "envvar_compatibility_mode", sunshine.envvar_compatibility_mode);
     bool_f(vars, "appliance_mode", sunshine.appliance_mode);
     bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);
+    bool_f(vars, "announcements", sunshine.announcements);
     bool_f(vars, "legacy_ordering", sunshine.legacy_ordering);
     bool_f(vars, "forward_rumble", input.forward_rumble);
 

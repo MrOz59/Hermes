@@ -1,0 +1,31 @@
+# Published to the `feed` branch by scripts/publish-feed.sh, not run from main.
+#
+# The Web UI drops feed entries it cannot parse without reporting anything, so a
+# trailing comma or a mistyped field would look like a missing announcement
+# rather than an error. This validates every push to the branch — including the
+# edit-in-the-browser flow, which has no other check.
+name: Lint announcement feed
+
+on:
+  push:
+    branches: [feed]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the feed
+        uses: actions/checkout@v4
+
+      # The linter has a single copy, on main.
+      - name: Checkout the linter
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: .hermes-main
+          sparse-checkout: scripts/feed_lint.py
+          sparse-checkout-cone-mode: false
+
+      - name: Validate feed.json
+        run: python3 .hermes-main/scripts/feed_lint.py feed.json

@@ -63,6 +63,19 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   generations, handles hidden and edge-clipped cursors, and adopts the generic
   file-descriptor-scoped session-token contract. This path requires Hermes-KMS
   0.4.x with UAPI v11 and is intended for Hermes 0.6.0.
+- Maintainer announcements on the Web UI home page. A known issue can now be
+  published where the people hitting it will actually see it, instead of being
+  rediscovered and reported once per user. Messages come from a `feed.json` on
+  the repository's `feed` branch — deliberately off `main`, because a commit to
+  `main` runs CI, force-moves the `nightly` tag and republishes the nightly
+  release, which would announce a phantom new build to every installation. A
+  message can target a version range, target only nightlies, expire on a date,
+  and be dismissed; bumping its `revision` brings it back after an edit. The
+  feed is untrusted input throughout: every field is validated, links must be
+  absolute `http(s)`, and the text is rendered as text. `scripts/publish-feed.sh`
+  edits and publishes it, validating first because the Web UI drops entries it
+  cannot parse without saying so. Users can turn the whole thing off with the
+  new `announcements` option, which also stops the outbound request.
 
 ### Changed
 - The compatibility record no longer treats RDNA3/Navi 3x as a suspect in the

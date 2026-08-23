@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/MrOz59/Hermes/main/docs/feed/feed.schema.json",
+  "title": "Hermes announcement feed",
+  "description": "Messages the Hermes maintainers publish to the Web UI home page. Lives on the repository's `feed` branch as feed.json.",
+  "type": "object",
+  "required": ["messages"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "description": "Feed format version. Bump only on a breaking format change.",
+      "type": "integer",
+      "const": 1
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/message"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "message": {
+      "type": "object",
+      "required": ["id", "title"],
+      "properties": {
+        "id": {
+          "description": "Stable identifier. Dismissals are remembered per id, so never reuse an id for an unrelated announcement.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+        },
+        "title": {
+          "description": "One-line headline. Plain text; markup is not rendered.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "body": {
+          "description": "Optional detail. Plain text; line breaks are preserved, markup is not rendered.",
+          "type": "string",
+          "maxLength": 2000
+        },
+        "level": {
+          "description": "Severity, which also sets the ordering: danger first, then warning, info, success.",
+          "enum": ["danger", "warning", "info", "success"],
+          "default": "info"
+        },
+        "channel": {
+          "description": "Which builds see this. `nightly` covers any build whose version carries a suffix (0.5.1+abc1234).",
+          "enum": ["all", "stable", "nightly"],
+          "default": "all"
+        },
+        "affects": {
+          "description": "Version range(s) this applies to. Clauses within one string are ANDed (\">=0.5.0 <0.5.2\"); a list is ORed. Build metadata is ignored, so 0.5.1 also covers every 0.5.1 nightly. Omit for all versions.",
+          "oneOf": [
+            {"$ref": "#/$defs/range"},
+            {"type": "array", "items": {"$ref": "#/$defs/range"}, "minItems": 1}
+          ]
+        },
+        "link": {
+          "description": "Optional http(s) link, typically the tracking issue. Any other scheme is discarded by the client.",
+          "oneOf": [
+            {"type": "string", "format": "uri"},
+            {
+              "type": "object",
+              "required": ["url"],
+              "properties": {
+                "url": {"type": "string", "format": "uri"},
+                "label": {"type": "string", "maxLength": 60}
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "starts": {
+          "description": "ISO 8601 date or timestamp before which the message is hidden.",
+          "type": "string"
+        },
+        "expires": {
+          "description": "ISO 8601 date or timestamp from which the message is hidden. Prefer this over deleting an entry, so it disappears on its own.",
+          "type": "string"
+        },
+        "dismissible": {
+          "description": "Whether a user can clear the message. Set false only for something that must stay put.",
+          "type": "boolean",
+          "default": true
+        },
+        "revision": {
+          "description": "Bump after editing a message to show it again to people who already dismissed it.",
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "range": {
+      "type": "string",
+      "pattern": "^(\\*|((>=|<=|>|<|=)?v?\\d+\\.\\d+\\.\\d+)( +(>=|<=|>|<|=)?v?\\d+\\.\\d+\\.\\d+)*)$"
+    }
+  }
+}

@@ -295,6 +295,10 @@ namespace config {
 
     std::string log_file;
     bool notify_pre_releases;
+    /// Show maintainer announcements (known issues, advisories) on the Web UI
+    /// home page. Like notify_pre_releases this is consumed by the Web UI, not
+    /// the host: turning it off stops the browser from fetching the feed.
+    bool announcements;
     bool legacy_ordering;
     bool system_tray;
     std::vector<prep_cmd_t> prep_cmds;

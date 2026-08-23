@@ -40,7 +40,7 @@ compositor rather than per distribution.
 | KDE Plasma / KWin (Wayland) | `kscreen-doctor` | Verified |
 | COSMIC / cosmic-comp | `wlr-output-management` v4 | Verified at protocol level |
 | wlroots (sway, …) | `wlr-output-management` | Expected to work |
-| Hyprland / aquamarine | `wlr-output-management` | Known broken |
+| Hyprland / aquamarine | `hyprctl output create headless` + `wlr-output-management` | Verified |
 | Weston | none — see below | Driver verified, activation N/A |
 | GNOME / Mutter | `org.gnome.Mutter.DisplayConfig` | Video verified; exclusive mode unsupported |
 | gamescope | n/a (own session) | Expected to work |
@@ -129,7 +129,43 @@ applies. The container image in `packaging/container` runs Hermes on a headless
 sway session. They also implement `wlr-screencopy`, so the `wlgrab` capture
 backend is available there in addition to Hermes-KMS.
 
-### Hyprland — known broken
+### Hyprland — verified through its own headless output
+
+**Verified 2026-08-23** on CachyOS, kernel 7.1.8-1-cachyos, Hyprland 0.56.2-1,
+aquamarine 0.14.0-2.2, Radeon RX 6700 XT: create, client-requested mode,
+capture and teardown, exercised end to end through Hermes' own code path.
+
+Hermes does not give Hyprland a virtual DRM device. It asks Hyprland to create a
+**headless output**, which Hyprland renders itself on the primary GPU — so the
+question that breaks the DRM backends here, how aquamarine drives a display-only
+device, never arises. The rest is the path every wlr session already takes: the
+client's mode is applied with `set_custom_mode` over `zwlr_output_manager_v1`
+(confirmed accepted on a headless output), and capture runs over
+`wlr-screencopy-unstable-v1`.
+
+Two things are worth knowing about the mechanism:
+
+- The output is created over Hyprland's **control socket**
+  (`$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock`), not over
+  any Wayland protocol, so Hermes must run inside the session — a service that
+  cannot see `HYPRLAND_INSTANCE_SIGNATURE` reports the feature as unavailable
+  and says so.
+- `output create` replies only `ok`; it does not name what it made, and the
+  `HEADLESS-N` counter does not reset when an output is removed. Hermes learns
+  the name by diffing the monitor list, because the second output of a session
+  is `HEADLESS-2` even when it is the only one alive.
+
+`hyprctl keyword monitor` — the recipe most guides use to set the mode — **does
+not work on a config using the non-legacy parser**; it answers `keyword can't
+work with non-legacy parsers. Use eval.` That is why the mode goes through
+wlr-output-management instead, which is also the path Hermes already had.
+
+Hermes-KMS and EVDI remain unusable on Hyprland for the reasons below, so
+`selected_backend()` routes Hyprland to the headless path regardless of the
+configured backend.
+
+### Why the DRM backends do not work here
+
 
 Investigated 2026-08-22 on CachyOS, kernel 7.1.8-1-cachyos, Hyprland 0.56.2-1,
 aquamarine 0.14.0-2.2 and Hermes-KMS 0.3.0, from live session logs and a
@@ -345,8 +381,9 @@ for a portrait mode such as 1440x2560 fails validation with `-EINVAL`. This
 affects tablets and phones streaming in portrait orientation.
 
 **Exclusive mode is KDE and wlroots only.** See
-[GNOME / Mutter](#gnome--mutter--video-verified). On Hyprland the
-question does not arise yet — see [Hyprland](#hyprland--known-broken).
+[GNOME / Mutter](#gnome--mutter--video-verified). On Hyprland the question
+does not arise: the headless output is not a DRM device — see
+[Hyprland](#hyprland--verified-through-its-own-headless-output).
 
 **Confined packaging may lose output management.** COSMIC filters privileged
 protocol globals by Wayland security context; clients without a security context

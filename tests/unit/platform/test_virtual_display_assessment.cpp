@@ -86,17 +86,50 @@ TEST(SessionAssessment, AWorkingKdeSessionIsReadyThroughout) {
   }
 }
 
-TEST(SessionAssessment, HyprlandCannotDriveAVirtualDisplayAndSaysWhy) {
-  auto facts = workingKwinSession();
-  facts.compositor = VDISPLAY::compositor_e::hyprland;
-  facts.kscreen = false;
-  facts.output_management = true;  // Hyprland does implement it - that is not the problem.
+namespace {
+  VDISPLAY::SessionFacts hyprlandSession(bool control_socket) {
+    auto facts = workingKwinSession();
+    facts.compositor = VDISPLAY::compositor_e::hyprland;
+    facts.kscreen = false;
+    facts.output_management = true;  // Hyprland does implement it - that is not the problem.
+    facts.hyprland_control = control_socket;
+    return facts;
+  }
+}  // namespace
 
+TEST(SessionAssessment, HyprlandDrivesAVirtualDisplayThroughItsOwnHeadlessOutput) {
+  const auto facts = hyprlandSession(true);
+
+  // The point of the headless path: the verdict is ready even though every DRM
+  // backend is unusable in this session, because no DRM device is involved.
+  const auto display = reportFor(facts, VDISPLAY::feature_e::virtual_display);
+  EXPECT_EQ(display.readiness, VDISPLAY::readiness_e::ready) << display.detail;
+  EXPECT_NE(display.detail.find("headless"), std::string::npos)
+    << "the reason must name the mechanism: " << display.detail;
+
+  // No fixed pool of outputs to exhaust, so this must not be answered by
+  // counting Hermes-KMS outputs the way every other session is.
+  const auto multiple = reportFor(facts, VDISPLAY::feature_e::multiple_displays);
+  EXPECT_EQ(multiple.readiness, VDISPLAY::readiness_e::ready) << multiple.detail;
+  EXPECT_EQ(multiple.detail.find("Hermes-KMS"), std::string::npos)
+    << "Hermes-KMS is not what backs a headless output: " << multiple.detail;
+}
+
+TEST(SessionAssessment, HyprlandWithoutItsControlSocketSaysWhyAndHowToFixIt) {
+  const auto facts = hyprlandSession(false);
+
+  // Unreachable socket is a fixable configuration, not a missing feature - but
+  // the reason must still rule out the DRM backends, or the reader will assume
+  // Hermes-KMS is the way out of it.
   const auto display = reportFor(facts, VDISPLAY::feature_e::virtual_display);
   EXPECT_EQ(display.readiness, VDISPLAY::readiness_e::unavailable);
   EXPECT_NE(display.detail.find("aquamarine"), std::string::npos)
     << "the reason must name the backend, not the protocol: " << display.detail;
   EXPECT_FALSE(display.remediation.empty());
+
+  const auto multiple = reportFor(facts, VDISPLAY::feature_e::multiple_displays);
+  EXPECT_EQ(multiple.readiness, VDISPLAY::readiness_e::unavailable);
+  EXPECT_FALSE(multiple.remediation.empty());
 
   // Exclusive mode is degraded rather than unavailable: the compositor really
   // can disable an output - that was measured - there is just no virtual

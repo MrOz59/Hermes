@@ -351,6 +351,11 @@ namespace VDISPLAY {
     bool hermes_kms_multi_device {false};  ///< The driver exposes a session-device pool.
     bool drm_seat_isolation {false};  ///< Session DRM cards carry a private ID_SEAT.
     bool isolated_sessions_requested {false};  ///< The user turned isolation on.
+    /// Hyprland's control socket is reachable, so Hermes can create a headless
+    /// output. Recorded separately from the compositor because a service
+    /// started outside the session sees Hyprland running and still cannot
+    /// reach it - and that is a fixable configuration, not a missing feature.
+    bool hyprland_control {false};
   };
 
   /** Human-readable names, for logs, diagnostics and the Web UI. */
@@ -582,6 +587,15 @@ namespace VDISPLAY {
 
   /** Check if a display is a Hermes-KMS virtual display. */
   bool isHermesKmsDisplay(const std::string &displayName);
+
+  /**
+   * @brief The Hyprland output name backing a virtual display, or empty.
+   *
+   * Non-empty only for a display Hyprland created as a headless output, which
+   * is also the test for "this display works on this session": a Hermes-KMS or
+   * EVDI display in a Hyprland session cannot be composited onto.
+   */
+  std::string getHyprlandOutputName(const std::string &displayName);
 
   /**
    * @brief Get the DRM card index for an EVDI display.

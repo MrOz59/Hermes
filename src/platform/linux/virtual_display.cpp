@@ -16,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <cctype>
+#include <cerrno>
 #include <cstddef>
 #include <cmath>
 #include <cstdio>
@@ -27,6 +28,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -39,6 +41,8 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/utsname.h>
 #include <unistd.h>
 #include <xf86drm.h>
@@ -232,15 +236,188 @@ namespace VDISPLAY {
   enum class VirtualDisplayBackend {
     EVDI,
     HERMES_KMS,
+    HYPRLAND_HEADLESS,
   };
 
+  /**
+   * @brief Which mechanism creates the virtual display for this session.
+   *
+   * The configured backend names a *DRM device* - EVDI or Hermes-KMS - and both
+   * rest on the same assumption: the compositor renders on the real GPU and
+   * imports the buffer into a display-only device it does not render on. That
+   * is how KWin and Mutter work and it is not how aquamarine works, so on
+   * Hyprland neither device backend produces a picture, whichever one is
+   * configured. Hyprland renders its own headless output on the primary GPU
+   * instead, which sidesteps the question entirely, so the compositor - not the
+   * config option - decides here. The option still selects between EVDI and
+   * Hermes-KMS everywhere else.
+   */
   static VirtualDisplayBackend selected_backend() {
+    if (sessionCompositor() == compositor_e::hyprland) {
+      return VirtualDisplayBackend::HYPRLAND_HEADLESS;
+    }
     return config::video.virtual_display_backend == "hermes_kms" ? VirtualDisplayBackend::HERMES_KMS : VirtualDisplayBackend::EVDI;
   }
 
   static const char *backend_name(VirtualDisplayBackend backend) {
-    return backend == VirtualDisplayBackend::HERMES_KMS ? "Hermes-KMS" : "EVDI";
+    switch (backend) {
+      case VirtualDisplayBackend::HERMES_KMS:
+        return "Hermes-KMS";
+      case VirtualDisplayBackend::HYPRLAND_HEADLESS:
+        return "Hyprland headless output";
+      case VirtualDisplayBackend::EVDI:
+        break;
+    }
+    return "EVDI";
   }
+
+  /**
+   * @brief Hyprland's control socket.
+   *
+   * Hyprland creates and destroys outputs over its own IPC, not over any
+   * Wayland protocol, so this is the one part of the headless path that cannot
+   * be done with the wlr clients Hermes already has. The socket is used rather
+   * than the `hyprctl` binary: hyprctl ships in a separate package a user can
+   * be without, and shelling out would run against whatever PATH the service
+   * inherited.
+   */
+  namespace hyprland {
+    static std::string socket_path() {
+      const char *signature = std::getenv("HYPRLAND_INSTANCE_SIGNATURE");
+      if (!signature || !signature[0]) {
+        return {};
+      }
+      const char *runtime_dir = std::getenv("XDG_RUNTIME_DIR");
+      std::string base = runtime_dir && runtime_dir[0] ? runtime_dir : "/run/user/" + std::to_string(getuid());
+      return base + "/hypr/" + signature + "/.socket.sock";
+    }
+
+    static bool available() {
+      const auto path = socket_path();
+      return !path.empty() && std::filesystem::exists(path);
+    }
+
+    /** Send one command and return the whole reply, or nullopt if the socket refused. */
+    static std::optional<std::string> request(const std::string &command) {
+      const auto path = socket_path();
+      if (path.empty() || path.size() >= sizeof(sockaddr_un::sun_path)) {
+        return std::nullopt;
+      }
+
+      const int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+      if (fd < 0) {
+        return std::nullopt;
+      }
+      auto close_fd = util::fail_guard([fd]() {
+        close(fd);
+      });
+
+      sockaddr_un addr {};
+      addr.sun_family = AF_UNIX;
+      std::memcpy(addr.sun_path, path.c_str(), path.size() + 1);
+      if (connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
+        return std::nullopt;
+      }
+
+      size_t written = 0;
+      while (written < command.size()) {
+        const ssize_t n = write(fd, command.data() + written, command.size() - written);
+        if (n <= 0) {
+          if (n < 0 && errno == EINTR) {
+            continue;
+          }
+          return std::nullopt;
+        }
+        written += static_cast<size_t>(n);
+      }
+
+      std::string reply;
+      char buffer[4096];
+      while (true) {
+        const ssize_t n = read(fd, buffer, sizeof(buffer));
+        if (n < 0) {
+          if (errno == EINTR) {
+            continue;
+          }
+          return std::nullopt;
+        }
+        if (n == 0) {
+          break;
+        }
+        reply.append(buffer, static_cast<size_t>(n));
+      }
+      return reply;
+    }
+
+    /** Names of every output Hyprland currently drives. */
+    static std::vector<std::string> monitor_names() {
+      std::vector<std::string> names;
+      const auto reply = request("j/monitors");
+      if (!reply) {
+        return names;
+      }
+      try {
+        const auto monitors = nlohmann::json::parse(*reply);
+        for (const auto &monitor : monitors) {
+          if (const auto name = monitor.find("name"); name != monitor.end() && name->is_string()) {
+            names.emplace_back(name->get<std::string>());
+          }
+        }
+      } catch (const nlohmann::json::exception &e) {
+        BOOST_LOG(warning) << "[VDISPLAY] Could not read Hyprland's monitor list: " << e.what();
+      }
+      return names;
+    }
+
+    /**
+     * @brief Create a headless output and return the name Hyprland gave it.
+     *
+     * The reply to `output create` is just "ok" - it does not name what was
+     * created - and the HEADLESS counter does not reset when an output is
+     * removed, so the second output of a session is HEADLESS-2 even when it is
+     * the only one alive. Diffing the monitor list is therefore the only way to
+     * learn the name; guessing it produces a name that belongs to nothing.
+     */
+    static std::optional<std::string> create_headless() {
+      std::set<std::string> before;
+      for (auto &name : monitor_names()) {
+        before.insert(std::move(name));
+      }
+
+      const auto reply = request("/output create headless");
+      if (!reply || reply->rfind("ok", 0) != 0) {
+        BOOST_LOG(error) << "[VDISPLAY] Hyprland refused to create a headless output"
+                         << (reply ? ": " + *reply : " (no reply from its socket).");
+        return std::nullopt;
+      }
+
+      // The output appears on Hyprland's own event loop, not on the reply.
+      for (int attempt = 0; attempt < 40; ++attempt) {
+        for (const auto &name : monitor_names()) {
+          if (!before.contains(name)) {
+            return name;
+          }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+      }
+
+      BOOST_LOG(error) << "[VDISPLAY] Hyprland accepted the headless output but never published it.";
+      return std::nullopt;
+    }
+
+    static bool remove_output(const std::string &name) {
+      if (name.empty()) {
+        return false;
+      }
+      const auto reply = request("/output remove " + name);
+      if (!reply || reply->rfind("ok", 0) != 0) {
+        BOOST_LOG(warning) << "[VDISPLAY] Hyprland refused to remove output " << name
+                           << (reply ? ": " + *reply : " (no reply from its socket).");
+        return false;
+      }
+      return true;
+    }
+  }  // namespace hyprland
 
   namespace hermes_kms {
     constexpr uint32_t multi_output_uapi_version = 8;
@@ -1141,6 +1318,7 @@ namespace VDISPLAY {
     bool active;
     bool using_evdi;       // true while an EVDI display is connected
     bool using_hermes_kms; // true while a Hermes-KMS output owner fd is held
+    bool using_hyprland_headless; // true while Hyprland owns a headless output for this display
     std::string connector_name;
     uint64_t session_id;
     std::array<uint64_t, 2> session_token;
@@ -1392,16 +1570,28 @@ namespace VDISPLAY {
         facts.mutter ? "" : "Check that gnome-shell is running and that Hermes may reach the session bus."
       );
     } else if (facts.compositor == compositor_e::hyprland) {
-      display_readiness = readiness_e::unavailable;
+      // Hyprland renders a headless output itself, on the primary GPU. That is
+      // a different mechanism from every other entry here - no virtual DRM
+      // device, nothing imported - and it is the reason Hyprland is supported
+      // at all: aquamarine cannot composite onto a display-only device, so the
+      // device backends stay unavailable here no matter which one is
+      // configured.
+      display_readiness = facts.hyprland_control ? readiness_e::ready : readiness_e::unavailable;
       add(
         feature_e::virtual_display,
         display_readiness,
-        "Hyprland adopts the virtual output and then cannot keep content on it: its aquamarine "
-        "backend wants every GPU owning an output to host a GL renderer, which a display-only "
-        "device cannot, and the builds that import directly instead stall on the page-flip "
-        "handshake against the driver's software vblank.",
-        "Use a KDE or wlroots session, or Hermes' per-session gamescope path, until the "
-        "Hyprland-native output path lands."
+        facts.hyprland_control ?
+          "Hyprland creates a headless output on request and renders it on the primary GPU, "
+          "so no virtual DRM device is involved." :
+          "The session is Hyprland, but its control socket is not reachable, so Hermes cannot "
+          "ask it for a headless output. Hermes-KMS and EVDI are not an alternative here: "
+          "aquamarine wants every GPU owning an output to host a GL renderer, which a "
+          "display-only device cannot, and the builds that import directly stall on the "
+          "page-flip handshake against the driver's software vblank.",
+        facts.hyprland_control ?
+          "" :
+          "Hermes reads HYPRLAND_INSTANCE_SIGNATURE from its own environment; start it inside "
+          "the Hyprland session, or import that variable into the service."
       );
     } else if (facts.output_management) {
       const bool verified = facts.compositor == compositor_e::wlroots || facts.compositor == compositor_e::cosmic;
@@ -1470,7 +1660,23 @@ namespace VDISPLAY {
     }
 
     // --- multiple displays ---------------------------------------------------
-    if (!facts.hermes_kms_present) {
+    // Every branch below counts outputs on a Hermes-KMS device, which is the
+    // right question only when a DRM device is what backs a virtual display.
+    // Hyprland creates headless outputs on demand and there is no fixed pool to
+    // exhaust, so asking about hermes-kms here would report "unavailable" for a
+    // session that supports this better than the device backends do.
+    if (facts.compositor == compositor_e::hyprland) {
+      add(
+        feature_e::multiple_displays,
+        facts.hyprland_control ? readiness_e::ready : readiness_e::unavailable,
+        facts.hyprland_control ?
+          "Hyprland creates a headless output per request; there is no fixed pool of outputs." :
+          "Hyprland's control socket is not reachable, so no headless output can be created at all.",
+        facts.hyprland_control ?
+          "" :
+          "Start Hermes inside the Hyprland session, or import HYPRLAND_INSTANCE_SIGNATURE into the service."
+      );
+    } else if (!facts.hermes_kms_present) {
       add(
         feature_e::multiple_displays,
         readiness_e::unavailable,
@@ -3325,6 +3531,7 @@ namespace VDISPLAY {
   SessionFacts probeSessionFacts() {
     SessionFacts facts;
     facts.compositor = sessionCompositor();
+    facts.hyprland_control = facts.compositor == compositor_e::hyprland && hyprland::available();
     facts.wayland = window_system == window_system_e::WAYLAND;
     facts.x11 = window_system == window_system_e::X11;
 
@@ -4203,11 +4410,41 @@ namespace VDISPLAY {
     vdinfo.active = true;
     vdinfo.using_evdi = false;
     vdinfo.using_hermes_kms = false;
+    vdinfo.using_hyprland_headless = false;
     vdinfo.session_id = 0;
     vdinfo.session_token = {};
     vdinfo.evdi_buffer_id = 0;
 
     const auto backend = selected_backend();
+
+    // Hyprland owns its headless outputs; there is no DRM device to claim, no
+    // connector to hotplug and no kscreen layout to diff, so this returns
+    // before any of that runs. The mode is not set here: Hyprland publishes the
+    // output at its own default and takes the client's geometry through
+    // wlr-output-management, which activateVirtualDisplayOutput() already
+    // drives for every wlr session.
+    if (backend == VirtualDisplayBackend::HYPRLAND_HEADLESS) {
+      if (!hyprland::available()) {
+        BOOST_LOG(error) << "[VDISPLAY] The session is Hyprland but its control socket is not reachable. "
+                            "Hermes reads HYPRLAND_INSTANCE_SIGNATURE from its own environment, so a "
+                            "service started outside the session will not find it.";
+        return "";
+      }
+
+      const auto output = hyprland::create_headless();
+      if (!output) {
+        return "";
+      }
+
+      vdinfo.connector_name = *output;
+      vdinfo.using_hyprland_headless = true;
+      virtual_displays[guid_str] = vdinfo;
+
+      BOOST_LOG(info) << "[VDISPLAY] Hyprland created headless output " << *output << " for " << display_name
+                      << "; it renders on the primary GPU, so no virtual DRM device is involved.";
+      return display_name;
+    }
+
     const auto kscreen_before = kscreen::outputs();
     const auto outputs_before = kscreen::connected_output_names(kscreen_before);
     const auto enabled_before = kscreen::enabled_output_priorities(kscreen_before);
@@ -4412,6 +4649,12 @@ namespace VDISPLAY {
     if (vdinfo.using_hermes_kms && vdinfo.drm_fd >= 0) {
       hermes_kms::set_output(vdinfo.drm_fd, false, 0, 0, 0, vdinfo.session_id);
     }
+    // A headless output outlives the session that asked for it - Hyprland keeps
+    // it, and its workspaces, until something removes it - so leaving it behind
+    // strands a monitor on the user's desktop after every stream.
+    if (vdinfo.using_hyprland_headless) {
+      hyprland::remove_output(vdinfo.connector_name);
+    }
     hermes_kms::forget_secret(vdinfo.session_token.data(), sizeof(vdinfo.session_token));
     kscreen::restore(vdinfo.name);
 
@@ -4606,7 +4849,12 @@ namespace VDISPLAY {
   static bool virtual_display_mode(const std::string &display_name, int &width, int &height, int &refresh_rate) {
     std::lock_guard<std::mutex> lock(vdisplay_mutex);
     for (const auto &[guid, display] : virtual_displays) {
-      if (display.name == display_name && (display.using_evdi || display.using_hermes_kms)) {
+      // The backend flags are the test for "this entry still owns a display",
+      // not a list of DRM backends: a Hyprland headless output owns one just as
+      // much, and leaving it out made activation return false with no log at
+      // all - the mode was never pushed and nothing said why.
+      if (display.name == display_name &&
+          (display.using_evdi || display.using_hermes_kms || display.using_hyprland_headless)) {
         width = static_cast<int>(display.width);
         height = static_cast<int>(display.height);
         refresh_rate = static_cast<int>(display.fps);
@@ -4616,7 +4864,24 @@ namespace VDISPLAY {
     return false;
   }
 
+  std::string getHyprlandOutputName(const std::string &displayName) {
+    std::lock_guard<std::mutex> lock(vdisplay_mutex);
+    for (const auto &[guid, vdinfo] : virtual_displays) {
+      if (vdinfo.name == displayName && vdinfo.using_hyprland_headless) {
+        return vdinfo.connector_name;
+      }
+    }
+    return {};
+  }
+
   static std::string virtual_display_connector_name(const std::string &display_name) {
+    // A Hyprland headless output has no DRM connector at all - the name is what
+    // Hyprland called it - but it is the same kind of answer to the same
+    // question every caller here asks: what does the compositor call this
+    // display.
+    if (auto output = getHyprlandOutputName(display_name); !output.empty()) {
+      return output;
+    }
     if (auto connector = getHermesKmsConnectorName(display_name); !connector.empty()) {
       return connector;
     }
@@ -4700,21 +4965,28 @@ namespace VDISPLAY {
 
       const auto compositor = sessionCompositor();
 
-      // Hyprland accepts the output through wlr-output-management and modesets
-      // it, then fails to keep content on it. Hermes-KMS assumes the model KWin
-      // and Mutter use - the compositor renders on the real GPU and imports the
-      // buffer into the virtual display - while aquamarine wants every GPU that
-      // owns an output to host its own GL renderer, which a display-only device
-      // cannot. Where a build does import directly, the page-flip handshake
-      // against Hermes-KMS' software vblank stalls instead. Both end as a black
-      // or frozen stream with input working, so say it before the stream starts
-      // rather than leaving the user to find out from a black screen.
-      if (compositor == compositor_e::hyprland && isHermesKmsDisplay(displayName)) {
-        BOOST_LOG(warning) << "[VDISPLAY] Hyprland is not supported with the Hermes-KMS backend yet: "
+      // A Hyprland headless output is already a real output rendered on the
+      // primary GPU; only its mode is still Hyprland's default. That mode goes
+      // through wlr-output-management like any other wlr session, so this needs
+      // no Hyprland-specific branch - just the generic path below, with the
+      // connector resolved to the HEADLESS name.
+      //
+      // A Hermes-KMS or EVDI display on Hyprland is the case that does not
+      // work. Both assume the model KWin and Mutter use - the compositor
+      // renders on the real GPU and imports the buffer into a display-only
+      // device - while aquamarine wants every GPU that owns an output to host
+      // its own GL renderer, which such a device cannot. Where a build does
+      // import directly, the page-flip handshake against the software vblank
+      // stalls instead. Both end as a black or frozen stream with input
+      // working, so say it before the stream starts. Reaching here means the
+      // display outlived the backend switch, since selected_backend() sends new
+      // Hyprland displays to the headless path.
+      if (compositor == compositor_e::hyprland && getHyprlandOutputName(displayName).empty()) {
+        BOOST_LOG(warning) << "[VDISPLAY] Hyprland cannot composite onto a virtual DRM device: "
                               "aquamarine either cannot build a renderer on the display-only device or "
-                              "stalls on page-flip against its software vblank. The output is being "
-                              "activated anyway, but expect a black or frozen stream - a KDE or GNOME "
-                              "session is what this backend is validated against.";
+                              "stalls on page-flip against its software vblank. This display was not "
+                              "created as a Hyprland headless output, so expect a black or frozen "
+                              "stream; recreating it will take the headless path.";
       }
 
       // GNOME/Mutter exposes neither kscreen-doctor nor wlr-output-management,

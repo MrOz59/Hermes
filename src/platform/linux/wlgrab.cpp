@@ -67,8 +67,15 @@ namespace wl {
           monitor = interface.monitors[streamedMonitor].get();
         }
       } else if (display_name.rfind("VIRTUAL-", 0) == 0 || VDISPLAY::isHermesKmsDisplay(display_name)) {
-        auto connector = VDISPLAY::getHermesKmsConnectorName(display_name);
-        const char *backend_label = "Hermes-KMS";
+        // A Hyprland headless output is named by the compositor, not by a DRM
+        // connector, so it resolves first and by a different route - but from
+        // here on it is matched, selected and captured like any other output.
+        auto connector = VDISPLAY::getHyprlandOutputName(display_name);
+        const char *backend_label = "Hyprland headless";
+        if (connector.empty()) {
+          connector = VDISPLAY::getHermesKmsConnectorName(display_name);
+          backend_label = "Hermes-KMS";
+        }
         if (connector.empty()) {
           connector = VDISPLAY::getEvdiConnectorName(display_name);
           backend_label = "EVDI";

@@ -12,6 +12,20 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- Virtual displays now work on Hyprland, through Hyprland's own headless output
+  rather than a virtual DRM device. Hermes asks the compositor to create one over
+  its control socket, and Hyprland renders it on the primary GPU - so aquamarine
+  never has to drive a display-only device, which is the thing it cannot do and
+  the reason Hermes-KMS and EVDI both produce a black or frozen stream there.
+  Everything after creation is the path wlr sessions already took: the client's
+  mode is applied with `set_custom_mode` over `zwlr_output_manager_v1`, capture
+  runs over `wlr-screencopy`, and the output is removed when the session ends so
+  no stray monitor is left on the desktop. Hyprland sessions take this path
+  whichever virtual-display backend is configured, because neither device backend
+  can work there. It does require Hermes to run inside the session: the control
+  socket is found through `HYPRLAND_INSTANCE_SIGNATURE`, and a service that
+  cannot see it reports the feature as unavailable with the fix rather than
+  failing at stream time.
 - Hermes now probes what the running session can actually do and says so at
   startup, per feature, with the fix for anything it cannot. The classification
   answers *which* compositor; this answers *what it supports*, and the two are

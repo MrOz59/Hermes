@@ -1070,6 +1070,17 @@ std::string get_local_ip_for_gateway() {
   }
 
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
+#ifdef SUNSHINE_BUILD_WAYLAND
+    // A Hyprland headless output has no DRM device behind it, so the KMS
+    // backend has nothing to open. Route it explicitly rather than letting it
+    // fall through to the generic Wayland branch: with capture=kms configured,
+    // falling through would reach kms_display() and fail on a display that
+    // captures perfectly well over wlr-screencopy.
+    if (!VDISPLAY::getHyprlandOutputName(display_name).empty()) {
+      BOOST_LOG(info) << "Screencasting Hyprland headless output with Wayland's protocol"sv;
+      return wl_display(hwdevice_type, display_name, config);
+    }
+#endif
 #ifdef SUNSHINE_BUILD_DRM
     if (VDISPLAY::isHermesKmsDisplay(display_name)) {
       BOOST_LOG(info) << "Screencasting Hermes-KMS virtual display with KMS"sv;

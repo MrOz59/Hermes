@@ -57,6 +57,18 @@ namespace wl {
         return -1;
       }
 
+      // A monitor's name and description arrive on xdg_output, not on the
+      // registry, so every monitor has to be listened to before any of them can
+      // be matched by name. Doing this per selected monitor - as this used to -
+      // meant the match below always ran against empty names: the only path
+      // that reached it selected by numeric index, where the name is never
+      // read. Listening is not repeatable either, since it also adds the
+      // wl_output listener, and wayland-client aborts on a second one.
+      for (auto &candidate : interface.monitors) {
+        candidate->listen(interface.output_manager);
+      }
+      display.roundtrip();
+
       auto monitor = interface.monitors[0].get();
 
       if (!display_name.empty() && display_name.rfind("VIRTUAL-", 0) != 0) {
@@ -91,10 +103,6 @@ namespace wl {
         monitor = monitor_it->get();
         BOOST_LOG(info) << "Selected Wayland "sv << backend_label << " output " << connector;
       }
-
-      monitor->listen(interface.output_manager);
-
-      display.roundtrip();
 
       output = monitor->output;
 

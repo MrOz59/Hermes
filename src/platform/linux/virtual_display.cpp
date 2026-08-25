@@ -234,6 +234,7 @@ namespace VDISPLAY {
 
 
   enum class VirtualDisplayBackend {
+    NONE,
     EVDI,
     HERMES_KMS,
     HYPRLAND_HEADLESS,
@@ -253,6 +254,14 @@ namespace VDISPLAY {
    * Hermes-KMS everywhere else.
    */
   static VirtualDisplayBackend selected_backend() {
+    // Asking for no backend is a decision, not an absence of one, and it comes
+    // before the compositor is consulted: a host that streams an output it
+    // already has - the container image's own headless sway session is the
+    // standing example - wants none of this machinery, and Hyprland is no
+    // exception to that.
+    if (config::video.virtual_display_backend == "none") {
+      return VirtualDisplayBackend::NONE;
+    }
     if (sessionCompositor() == compositor_e::hyprland) {
       return VirtualDisplayBackend::HYPRLAND_HEADLESS;
     }
@@ -265,6 +274,8 @@ namespace VDISPLAY {
         return "Hermes-KMS";
       case VirtualDisplayBackend::HYPRLAND_HEADLESS:
         return "Hyprland headless output";
+      case VirtualDisplayBackend::NONE:
+        return "no";
       case VirtualDisplayBackend::EVDI:
         break;
     }
@@ -4179,6 +4190,20 @@ namespace VDISPLAY {
 
     const auto backend = selected_backend();
     BOOST_LOG(info) << "[VDISPLAY] Initializing Linux virtual display driver with " << backend_name(backend) << " backend...";
+
+    // Nothing to open, nothing to diagnose, and above all nothing to warn
+    // about: a host configured for no virtual-display device is not a host with
+    // a broken one. Returning before the EVDI machinery runs is what keeps it
+    // from reporting a missing library the deployment never wanted.
+    if (backend == VirtualDisplayBackend::NONE) {
+      evdi_available = false;
+      unload_evdi_library();
+      BOOST_LOG(info) << "[VDISPLAY] No virtual-display backend is configured; Hermes will only "
+                         "stream outputs the session already has.";
+      driver_status = DRIVER_STATUS::NOT_SUPPORTED;
+      return driver_status;
+    }
+
     kscreen::recover_on_startup();
 
     if (backend == VirtualDisplayBackend::HERMES_KMS) {
@@ -4416,6 +4441,13 @@ namespace VDISPLAY {
     vdinfo.evdi_buffer_id = 0;
 
     const auto backend = selected_backend();
+
+    if (backend == VirtualDisplayBackend::NONE) {
+      BOOST_LOG(error) << "[VDISPLAY] A virtual display was requested but no virtual-display backend "
+                          "is configured. Set virtual_display_backend to evdi or hermes_kms, or stream "
+                          "an output the session already has.";
+      return "";
+    }
 
     // Hyprland owns its headless outputs; there is no DRM device to claim, no
     // connector to hotplug and no kscreen layout to diff, so this returns

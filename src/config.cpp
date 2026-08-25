@@ -756,6 +756,24 @@ namespace config {
         return;
       }
     }
+
+    // A value that is set but not recognized used to be dropped without a word.
+    // The config file then said one thing and every consumer downstream behaved
+    // according to another, with nothing anywhere to connect the two - a typo,
+    // or a value written by a different version of Hermes, was indistinguishable
+    // from never having set the key at all.
+    if (!temp.empty()) {
+      std::string allowed;
+      for (const auto &allowed_val : allowed_vals) {
+        if (!allowed.empty()) {
+          allowed += ", ";
+        }
+        allowed += allowed_val;
+      }
+      BOOST_LOG(warning) << name << " = " << temp << " is not a recognized value; keeping "
+                         << (input.empty() ? std::string {"the default"} : input)
+                         << " instead. Valid values: " << allowed << '.';
+    }
   }
 
   void path_f(std::unordered_map<std::string, std::string> &vars, const std::string &name, fs::path &input) {
@@ -1197,7 +1215,15 @@ namespace config {
     string_f(vars, "encoder", video.encoder);
     string_f(vars, "adapter_name", video.adapter_name);
     string_f(vars, "output_name", video.output_name);
-    string_restricted_f(vars, "virtual_display_backend", video.virtual_display_backend, {"evdi"sv, "hermes_kms"sv});
+    string_restricted_f(vars, "virtual_display_backend", video.virtual_display_backend, {"evdi"sv, "hermes_kms"sv, "none"sv, "headless"sv});
+    // The container image wrote "headless" for the wlroots-headless fallback
+    // before there was a value for "this host has no virtual-display device".
+    // It was never accepted, so those installs silently ran as EVDI and were
+    // told to install a driver they had no use for. Keep reading it, under the
+    // one name the rest of Hermes has to know.
+    if (video.virtual_display_backend == "headless") {
+      video.virtual_display_backend = "none";
+    }
     bool_f(vars, "hermes_kms_multi_output", video.hermes_kms_multi_output);
     bool_f(vars, "hermes_kms_isolated_sessions", video.hermes_kms_isolated_sessions);
     if (video.hermes_kms_multi_output && video.hermes_kms_isolated_sessions) {

@@ -259,8 +259,11 @@
         const hermesKmsInfo = this.config.hermesKmsInfo || {};
         const clipboardInfo = this.config.clipboardInfo || {};
         const backend = this.config.virtual_display_backend;
-        // The EVDI backend is active unless hermes_kms is explicitly selected.
-        const evdiBackendActive = this.config.platform === 'linux' && backend !== 'hermes_kms';
+        // Only the EVDI backend gets EVDI's readiness warnings. Treating
+        // "not hermes_kms" as EVDI meant a host configured for no virtual-display
+        // device at all was told to go install one, and every remedy it was
+        // offered was a no-op there.
+        const evdiBackendActive = this.config.platform === 'linux' && backend === 'evdi';
         const hermesKmsBackendActive = this.config.platform === 'linux' && backend === 'hermes_kms';
 
         if (evdiBackendActive && evdiInfo.diagnostic && evdiInfo.diagnostic !== 'ready') {

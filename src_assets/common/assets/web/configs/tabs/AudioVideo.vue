@@ -447,6 +447,7 @@ const validateFallbackMode = (event) => {
       <select id="virtual_display_backend" class="form-select" v-model="config.virtual_display_backend">
         <option value="evdi">{{ $t('config.virtual_display_backend_evdi') }}</option>
         <option value="hermes_kms">{{ $t('config.virtual_display_backend_hermes_kms') }}</option>
+        <option value="none">{{ $t('config.virtual_display_backend_none') }}</option>
       </select>
       <div class="form-text">{{ $t('config.virtual_display_backend_desc') }}</div>
     </div>
@@ -535,7 +536,7 @@ const validateFallbackMode = (event) => {
     </div>
     <div class="form-text" v-if="platform === 'windows' && vdisplay">Please ensure SudoVDA driver is installed to the latest version and enabled properly.</div>
 
-    <section class="border-top pt-3 mt-4" v-if="platform === 'linux' && config.virtual_display_backend !== 'hermes_kms'">
+    <section class="border-top pt-3 mt-4" v-if="platform === 'linux' && config.virtual_display_backend === 'evdi'">
       <div class="d-flex align-items-center justify-content-between mb-3">
         <h3 class="h6 mb-0">{{ $t('config.evdi_status_title') }}</h3>
         <button type="button" class="btn btn-outline-secondary btn-sm" :disabled="evdiInfoLoading" @click="refreshEvdiInfo" :title="$t('config.evdi_refresh')">
@@ -695,11 +696,11 @@ const validateFallbackMode = (event) => {
       <div v-if="clipboardMessage" class="small mt-2" :class="clipboardInstallError ? 'text-danger' : 'text-success'">{{ clipboardMessage }}</div>
     </section>
 
-    <div v-if="platform === 'linux' && config.virtual_display_backend !== 'hermes_kms' && config.isolated_virtual_display_option && !evdiInfo.exclusiveLayoutSupported" class="alert alert-warning mt-3">
+    <div v-if="platform === 'linux' && config.virtual_display_backend === 'evdi' && config.isolated_virtual_display_option && !evdiInfo.exclusiveLayoutSupported" class="alert alert-warning mt-3">
       <i class="fa-solid fa-triangle-exclamation me-2"></i>{{ $t('config.evdi_exclusive_layout_unavailable') }}
     </div>
 
-    <div class="alert alert-warning" v-if="platform === 'linux' && config.virtual_display_backend !== 'hermes_kms' && evdiState !== 'ready'">
+    <div class="alert alert-warning" v-if="platform === 'linux' && config.virtual_display_backend === 'evdi' && evdiState !== 'ready'">
       <div class="d-flex gap-2 align-items-center mb-2">
         <i class="fa-solid fa-xl fa-triangle-exclamation"></i>
         <strong>{{ $t(evdiGuide.title) }}</strong>

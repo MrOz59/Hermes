@@ -1261,7 +1261,14 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Selects which Linux virtual-display driver Hermes uses for new virtual-display sessions: <code>evdi</code> (stable default) or <code>hermes_kms</code> (zero-copy, experimental).
+            Selects which Linux virtual-display driver Hermes uses for new virtual-display sessions:
+            <code>evdi</code> (stable default), <code>hermes_kms</code> (zero-copy, experimental), or
+            <code>none</code>.
+            <br><br>
+            <code>none</code> is for a host that has no virtual-display device and does not want one,
+            because the output it streams already exists - a headless compositor session is the usual
+            case. It also stops Hermes reporting readiness problems for a driver that host never uses.
+            <code>headless</code> is accepted as an older spelling of <code>none</code>.
         </td>
     </tr>
     <tr>

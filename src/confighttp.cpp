@@ -1310,7 +1310,7 @@ namespace confighttp {
       }},
       {"features", {
         {"virtual_display", true},
-        {"virtual_display_backend", {"evdi", "hermes_kms"}},
+        {"virtual_display_backend", {"evdi", "hermes_kms", "none"}},
         {"hermes_kms_multi_output", {
           {"supported", true},
           {"experimental", true},
@@ -2071,6 +2071,23 @@ namespace confighttp {
     }
   }
 
+#ifdef __linux__
+  /**
+   * @brief Whether Hermes is running inside a container.
+   *
+   * Both runtimes leave a marker in the image and systemd sets $container for
+   * anything it starts inside one. This is not a security boundary: it only
+   * decides whether offering to install a kernel module can possibly help.
+   */
+  bool running_in_container() {
+    if (const char *marker = std::getenv("container"); marker && marker[0]) {
+      return true;
+    }
+    std::error_code ec;
+    return std::filesystem::exists("/run/.containerenv", ec) || std::filesystem::exists("/.dockerenv", ec);
+  }
+#endif
+
   /**
    * Start EVDI installation only after the user explicitly confirms it in the UI.
    * pkexec owns the privilege prompt, so Apollo never handles an admin password.
@@ -2089,6 +2106,24 @@ namespace confighttp {
       ss << request->content.rdbuf();
       if (!nlohmann::json::parse(ss).value("confirm", false)) {
         bad_request(response, request, "EVDI installation requires explicit confirmation");
+        return;
+      }
+
+      // Installing EVDI can only help a host that is going to use EVDI. Under
+      // any other backend the package is installed, the module is loaded, and
+      // nothing that follows reads either of them.
+      if (config::video.virtual_display_backend != "evdi") {
+        bad_request(response, request, "EVDI is not the configured virtual-display backend; installing it would change nothing.");
+        return;
+      }
+
+      // A container has no polkit authority to ask, so pkexec exits non-zero and
+      // the user is told the installation "failed or was cancelled" - for a
+      // command that could not have worked. Even granted the privilege it would
+      // install the module into the container, where it would match no kernel
+      // and drive no display: the module belongs to the host.
+      if (running_in_container()) {
+        bad_request(response, request, "Hermes is running in a container. Install EVDI on the host - a module installed in the container matches no kernel and drives no display.");
         return;
       }
 

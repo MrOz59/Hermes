@@ -130,6 +130,26 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   are now counted across reinits, the diagnosis is logged once instead of forty
   times a second, and a run of them ends the capture with what went wrong
   ([#29]).
+- An unrecognized value in `hermes.conf` is no longer discarded in silence.
+  Restricted keys kept their default and said nothing, so the config file stated
+  one thing while every consumer behaved according to another - a typo, or a
+  value written by a different version, was indistinguishable from never having
+  set the key. The value, the key and the accepted alternatives are now logged.
+- Hosts with no virtual-display device are no longer judged as broken EVDI hosts.
+  `virtual_display_backend` accepts `none` (and reads the container image's
+  `headless` as the same thing), and the readiness gates ask whether EVDI is
+  selected rather than whether Hermes-KMS is not. A container install previously
+  read as "EVDI backend, library missing, device unconfigured", which raised a
+  home-page warning, offered an installer that could not run, and pointed at a
+  `modprobe` that changes nothing there ([#29]).
+- The EVDI installer is no longer offered where it cannot work. `/api/evdi/install`
+  now refuses when EVDI is not the configured backend, and inside a container,
+  where there is no polkit authority to ask and where a module installed in the
+  container would match no kernel and drive no display ([#29]).
+- The EVDI setup button rendered as the raw string `config.evdi_setup_button`.
+  The key lived in the `apps` section of the locale files while the UI read it
+  from `config`; the `apps` section's whole copy of the EVDI strings was dead and
+  is gone ([#29]).
 - The Wayland capture path no longer leaks a file descriptor per reinit.
   `gbm_create_device()` borrows the fd rather than adopting it, so destroying the
   device left it open - once per capture object, and a failing capture built a

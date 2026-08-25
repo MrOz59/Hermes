@@ -14,6 +14,30 @@ if(${SUNSHINE_ENABLE_CUDA})
     include(CheckLanguage)
     check_language(CUDA)
 
+    if(NOT CMAKE_CUDA_COMPILER)
+        # Coming up empty usually means the environment never exported the
+        # toolkit rather than that there is none: Arch installs nvcc as
+        # /opt/cuda/bin/nvcc and only puts it on PATH from
+        # /etc/profile.d/cuda.sh, which a build environment that is not a login
+        # shell never sources. Look where the distros actually install it, then
+        # let CheckLanguage judge again, so a toolkit that really is missing
+        # still reports as missing.
+        FIND_CUDA_TOOLKIT(SUNSHINE_CUDA_COMPILER SUNSHINE_CUDA_HOST_COMPILER)
+        if(SUNSHINE_CUDA_COMPILER)
+            message(STATUS "Found a CUDA compiler outside PATH: ${SUNSHINE_CUDA_COMPILER}")
+            set(ENV{CUDACXX} "${SUNSHINE_CUDA_COMPILER}")
+            if(SUNSHINE_CUDA_HOST_COMPILER)
+                message(STATUS "CUDA host compiler: ${SUNSHINE_CUDA_HOST_COMPILER}")
+                set(ENV{CUDAHOSTCXX} "${SUNSHINE_CUDA_HOST_COMPILER}")
+            endif()
+
+            # Drop the failed result, cached and local, or the check is skipped.
+            unset(CMAKE_CUDA_COMPILER)
+            unset(CMAKE_CUDA_COMPILER CACHE)
+            check_language(CUDA)
+        endif()
+    endif()
+
     if(CMAKE_CUDA_COMPILER)
         set(CUDA_FOUND ON)
         enable_language(CUDA)
@@ -63,6 +87,9 @@ if(${SUNSHINE_ENABLE_CUDA})
     elseif(${CUDA_FAIL_ON_MISSING})
         message(FATAL_ERROR
                 "CUDA not found.
+                Point the build at a toolkit with '-DCMAKE_CUDA_COMPILER=/path/to/nvcc', adding
+                '-DCMAKE_CUDA_HOST_COMPILER=/path/to/g++-<version>' if your GCC is newer than the toolkit
+                supports. CMakeFiles/CMakeConfigureLog.yaml records why the CUDA check failed.
                 If this is intentional, set '-DSUNSHINE_ENABLE_CUDA=OFF' or '-DCUDA_FAIL_ON_MISSING=OFF'"
         )
     endif()

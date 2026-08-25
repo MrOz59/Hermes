@@ -32,6 +32,15 @@ Sunshine requires CUDA Toolkit for NVFBC capture. There are two caveats to CUDA:
 > To install older versions, select the appropriate run file based on your desired CUDA version and architecture
 > according to [CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive)
 
+The build looks for `nvcc` on `PATH` and then in the usual install locations
+(`/opt/cuda`, `/usr/local/cuda` and their versioned siblings, plus `CUDA_PATH`,
+`CUDA_HOME` and `CUDAToolkit_ROOT`), so a distro that keeps the toolkit outside
+`/usr` and only exports it from a login shell — Arch does — configures without
+extra flags. For a toolkit installed anywhere else, pass
+`-DCMAKE_CUDA_COMPILER=/path/to/nvcc`, adding
+`-DCMAKE_CUDA_HOST_COMPILER=/path/to/g++-<version>` if your GCC is newer than
+that toolkit supports.
+
 #### macOS
 You can either use [Homebrew](https://brew.sh) or [MacPorts](https://www.macports.org) to install dependencies.
 

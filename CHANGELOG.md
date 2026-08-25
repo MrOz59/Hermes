@@ -107,6 +107,20 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   is fixed in 0.3.2, and the reporter confirmed video; the RDNA3-specific tester
   request is therefore retired ([#23]).
 
+### Fixed
+- Configuring with CUDA enabled no longer reports "CUDA not found" on a machine
+  that has the toolkit installed. Arch keeps nvcc in `/opt/cuda/bin` and puts it
+  on `PATH` from `/etc/profile.d/cuda.sh`, which a build environment that is not
+  a login shell never sources, so `check_language(CUDA)` searched `PATH` alone
+  and missed a toolkit sitting right there. The configure step now also looks in
+  `/opt/cuda`, `/usr/local/cuda`, their versioned siblings and `CUDA_HOME`, and
+  for a toolkit that still rejects a GCC newer than it supports it picks the
+  newest `g++-<major>` that toolkit accepts - then puts the same
+  `check_language` check to the question again, so a toolkit that really is
+  absent is still reported as absent. When the failure is genuine, the error now
+  names the flags that aim the build at a toolkit and the log that records what
+  the check tripped over ([#28]).
+
 ## [0.5.1] - 2026-08-22
 
 ### Added
@@ -463,6 +477,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#22]: https://github.com/MrOz59/Hermes/issues/22
 [#23]: https://github.com/MrOz59/Hermes/issues/23
 [#25]: https://github.com/MrOz59/Hermes/issues/25
+[#28]: https://github.com/MrOz59/Hermes/issues/28
 
 ## [0.4.0] - 2026-07-02
 

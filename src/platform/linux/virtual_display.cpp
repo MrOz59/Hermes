@@ -49,6 +49,7 @@
 #include <xf86drmMode.h>
 
 // local includes
+#include "card_broker.h"
 #include "misc.h"
 #include "src/config.h"
 #include "src/logging.h"
@@ -1331,12 +1332,60 @@ namespace VDISPLAY {
       return false;
     }
 
+    /**
+     * Ask the broker for a card of its own and claim its output.
+     *
+     * This is the difference between a pool fixed at module load and a virtual
+     * display per session: with no broker the answer to an exhausted pool is
+     * "no device is free", and with one it is a new card on a private seat.
+     * The wait afterwards is real work, not politeness - the card exists the
+     * moment configfs says so, but its render node belongs to root until udev
+     * runs 92-hermes-kms-access.rules over the card's access_uid. Re-enumerating
+     * is that wait: open_devices() only reports nodes it could open.
+     */
+    static bool claim_broker_card(device_t &out, uint32_t width, uint32_t height, uint32_t refresh_hz,
+                                  uint64_t &session_id, std::string &broker_card) {
+      const auto card = card_broker::create();
+      if (!card) {
+        return false;
+      }
+
+      const int card_index = card_index_from_path(card->card_path);
+      constexpr unsigned int attempts = 30;  // ~3s, generous for a udev rule.
+      for (unsigned int attempt = 0; attempt < attempts; ++attempt) {
+        auto devices = open_devices(false);
+        for (auto &device : devices) {
+          if (device.card_index == card_index &&
+              claim_available_output(device, width, height, refresh_hz, session_id, false)) {
+            out = device;
+            device.fd = -1;
+            for (auto &remaining : devices) {
+              close_device(remaining);
+            }
+            broker_card = card->name;
+            return true;
+          }
+        }
+        for (auto &device : devices) {
+          close_device(device);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds {100});
+      }
+
+      BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] The broker created " << card->name
+                       << " but its render node never became usable; check that the driver's "
+                          "92-hermes-kms-access.rules is installed.";
+      card_broker::remove(card->name);
+      return false;
+    }
+
     static bool claim_available_device_output(
       device_t &out,
       uint32_t width,
       uint32_t height,
       uint32_t refresh_hz,
-      uint64_t &session_id
+      uint64_t &session_id,
+      std::string &broker_card
     ) {
       auto devices = open_devices(true);
       for (auto &device : devices) {
@@ -1363,7 +1412,12 @@ namespace VDISPLAY {
         return true;
       }
 
-      BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] No independent DRM device/output is free for a new session.";
+      if (card_broker::available()) {
+        return claim_broker_card(out, width, height, refresh_hz, session_id, broker_card);
+      }
+
+      BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] No independent DRM device/output is free for a new "
+                          "session, and no card broker is installed to create one.";
       return false;
     }
 
@@ -1438,6 +1492,7 @@ namespace VDISPLAY {
     bool using_evdi;       // true while an EVDI display is connected
     bool using_hermes_kms; // true while a Hermes-KMS output owner fd is held
     bool hermes_kms_session_lifecycle; // driver can revoke this session's bindings (uapi >= 13)
+    std::string broker_card; // configfs card the broker made for this display, empty when pooled
     bool using_hyprland_headless; // true while Hyprland owns a headless output for this display
     std::string connector_name;
     uint64_t session_id;
@@ -4334,6 +4389,12 @@ namespace VDISPLAY {
         }
       }
 
+      // Cards outlive the process that asked for one. This Hermes owns none
+      // yet, so anything still standing in its name is from a run that died.
+      if (card_broker::available()) {
+        card_broker::sweep();
+      }
+
       driver_status = DRIVER_STATUS::OK;
       device_open = true;
       BOOST_LOG(info) << "[VDISPLAY/Hermes-KMS] Hermes-KMS available - experimental zero-copy virtual display supported"
@@ -4546,6 +4607,7 @@ namespace VDISPLAY {
     vdinfo.using_evdi = false;
     vdinfo.using_hermes_kms = false;
     vdinfo.hermes_kms_session_lifecycle = false;
+    vdinfo.broker_card.clear();
     vdinfo.using_hyprland_headless = false;
     vdinfo.session_id = 0;
     vdinfo.session_token = {};
@@ -4602,7 +4664,8 @@ namespace VDISPLAY {
           width,
           height,
           fps_hz,
-          session_id
+          session_id,
+          vdinfo.broker_card
         );
       } else if (hermes_kms::open_device(device, true)) {
         claimed = hermes_kms::claim_available_output(
@@ -4623,6 +4686,12 @@ namespace VDISPLAY {
                      )) {
         hermes_kms::set_output(device.fd, false, 0, 0, 0, session_id, false);
         claimed = false;
+      }
+      if (!claimed && !vdinfo.broker_card.empty()) {
+        // The card was created for this display and this display is not
+        // happening; leaving it would hold a private seat for nothing.
+        card_broker::remove(vdinfo.broker_card);
+        vdinfo.broker_card.clear();
       }
 
       if (claimed) {
@@ -4823,6 +4892,10 @@ namespace VDISPLAY {
 
     if (vdinfo.drm_fd >= 0) {
       ::close(vdinfo.drm_fd);
+    }
+    if (!vdinfo.broker_card.empty()) {
+      // After the fd is closed, so the card is idle when it is unplugged.
+      card_broker::remove(vdinfo.broker_card);
     }
 
     virtual_displays.erase(it);

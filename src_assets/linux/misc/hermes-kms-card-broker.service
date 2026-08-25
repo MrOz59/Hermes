@@ -1,0 +1,43 @@
+[Unit]
+Description=Hermes-KMS card broker
+Documentation=https://github.com/MrOz59/Hermes
+Requires=hermes-kms-card-broker.socket
+After=hermes-kms-card-broker.socket
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/hermes-kms-card-broker
+Restart=on-failure
+RestartSec=1s
+UMask=0077
+
+# Creating a DRM card is a write to configfs and nothing else, so everything
+# that is not that is closed off.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+# configfs is a kernel tunable filesystem, so it has to be writable here.
+ProtectKernelTunables=no
+ReadWritePaths=/sys/kernel/config/hermes-kms /run/hermes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ProcSubset=pid
+# It reads no user data and needs no capability beyond writing configfs, which
+# is root's by ownership rather than by capability.
+CapabilityBoundingSet=

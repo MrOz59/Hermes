@@ -1,0 +1,20 @@
+[Unit]
+Description=Hermes-KMS card broker socket
+Documentation=https://github.com/MrOz59/Hermes
+# The broker manages cards through the driver's configfs group, which only
+# exists once the module is loaded. Starting earlier is harmless - the service
+# refuses and exits, and the socket stays ready for the next connection.
+After=systemd-udevd.service
+
+[Socket]
+ListenStream=/run/hermes/card-broker.sock
+# Anyone may connect; the broker answers only uids listed in
+# /etc/hermes/card-broker.allow, which only root can write. Authorization has
+# to be the peer's uid rather than the socket's mode, because that is what the
+# card's access_uid is set from.
+SocketMode=0666
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

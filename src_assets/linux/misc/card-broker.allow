@@ -1,0 +1,11 @@
+# Users allowed to ask hermes-kms-card-broker for a virtual display card.
+#
+# One user name or numeric uid per line; '#' starts a comment. The file is read
+# on every request, so adding or removing a line takes effect immediately - no
+# restart, no logout.
+#
+# A listed user can create up to four cards, each on its own private DRM seat,
+# and can remove only the cards it created. Listing a user is the whole of the
+# authorization: keep this file root-owned and mode 0644.
+#
+# hermes

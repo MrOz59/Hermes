@@ -53,6 +53,9 @@ elseif(UNIX)  # Linux
     option(SUNSHINE_CONFIGURE_FLATPAK_MAN
             "Configure manifest file required for Flatpak build. Recommended to use with SUNSHINE_CONFIGURE_ONLY" OFF)
 
+    option(SUNSHINE_BUILD_CARD_BROKER
+            "Build the privileged Hermes-KMS card broker." ON)
+
     # Linux capture methods
     option(SUNSHINE_ENABLE_CUDA
             "Enable cuda specific code." ON)

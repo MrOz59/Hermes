@@ -21,6 +21,15 @@ install(PROGRAMS "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-gamescope-laun
 install(PROGRAMS "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-monitor-recovery"
         DESTINATION "bin")
 
+if(SUNSHINE_BUILD_CARD_BROKER)
+    install(TARGETS hermes-kms-card-broker DESTINATION "bin")
+    # The allow file is the administrator's, so it ships as an example rather
+    # than as a configuration file a package upgrade would argue with.
+    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/card-broker.allow"
+            DESTINATION "${SUNSHINE_ASSETS_DIR}"
+            RENAME "card-broker.allow.example")
+endif()
+
 if(${SUNSHINE_BUILD_APPIMAGE} OR ${SUNSHINE_BUILD_FLATPAK})
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.rules"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/udev/rules.d")
@@ -28,6 +37,11 @@ if(${SUNSHINE_BUILD_APPIMAGE} OR ${SUNSHINE_BUILD_FLATPAK})
             DESTINATION "${SUNSHINE_ASSETS_DIR}/modules-load.d")
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/sunshine.service"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/systemd/user")
+    if(SUNSHINE_BUILD_CARD_BROKER)
+        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-kms-card-broker.socket"
+                "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-kms-card-broker.service"
+                DESTINATION "${SUNSHINE_ASSETS_DIR}/systemd/system")
+    endif()
 else()
     find_package(Systemd)
     find_package(Udev)
@@ -41,6 +55,14 @@ else()
                 DESTINATION "${SYSTEMD_USER_UNIT_INSTALL_DIR}")
         install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.conf"
                 DESTINATION "${SYSTEMD_MODULES_LOAD_DIR}")
+        # A system unit, unlike sunshine.service: it runs as root because
+        # configfs is root's, and is socket-activated so it is not running
+        # while nobody is asking for a card.
+        if(SUNSHINE_BUILD_CARD_BROKER)
+            install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-kms-card-broker.socket"
+                    "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-kms-card-broker.service"
+                    DESTINATION "${SYSTEMD_SYSTEM_UNIT_INSTALL_DIR}")
+        endif()
     endif()
 endif()
 

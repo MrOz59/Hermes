@@ -129,6 +129,12 @@ if(LIBDRM_FOUND AND LIBCAP_FOUND)
     list(APPEND SUNSHINE_DEFINITIONS EGL_NO_X11=1)
 endif()
 
+# The card broker's client half is always built: it is a few hundred bytes of
+# socket code, and whether a broker is there to answer is a runtime question.
+list(APPEND PLATFORM_TARGET_FILES
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/card_broker.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/card_broker.cpp")
+
 # evdev
 include(dependencies/libevdev_Sunshine)
 

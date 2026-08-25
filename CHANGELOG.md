@@ -33,6 +33,21 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   maximum to 8K or lower it under what a client asks for - so the failure log
   names the requested mode and the range around it instead of leaving `EINVAL`
   to be guessed at.
+- A virtual display no longer has to come from a pool sized before anyone
+  connected. Hermes-KMS gained runtime card creation through configfs, which is
+  root's, so Hermes ships `hermes-kms-card-broker`: a socket-activated root
+  service that creates a card on a private DRM seat when asked and removes it
+  when the display goes away. With it installed, an exhausted session pool is
+  answered with a new card instead of a refusal; without it, nothing changes.
+  Authorization is the peer's uid from `SO_PEERCRED` against
+  `/etc/hermes/card-broker.allow`, which only root can write - not the socket's
+  mode, because the uid is also what the card's `access_uid` is set from, and
+  that is what gives the render node to that user and no one else. The broker
+  allocates the session index rather than accepting one, since the driver's
+  udev rules turn that index into the seat and the seatd instance that owns it,
+  and two cards sharing an index would share a seat. A card can only be removed
+  by the uid that created it, cards left behind by a Hermes that died are swept
+  at the next start, and one user may hold four at a time.
 - Virtual displays now work on Hyprland, through Hyprland's own headless output
   rather than a virtual DRM device. Hermes asks the compositor to create one over
   its control socket, and Hyprland renders it on the primary GPU - so aquamarine

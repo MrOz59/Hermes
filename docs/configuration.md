@@ -1357,7 +1357,21 @@ editing the `conf` file in a text editor. Use the examples as reference.
             @code{}
             initial_enabled=0 devices=2 outputs=1
             sudo systemctl enable --now hermes-kms-seatd@1.service hermes-kms-seatd@2.service
-            @endcode</td>
+            @endcode
+            A driver with UAPI 12 or newer can create cards at runtime instead,
+            so the pool no longer has to be sized in advance. That is what the
+            packaged card broker is for: with it enabled, an exhausted pool is
+            answered by a new card on a private seat rather than by a refusal.
+            @code{}
+            echo hermes | sudo tee /etc/hermes/card-broker.allow
+            sudo systemctl enable --now hermes-kms-card-broker.socket
+            @endcode
+            The broker runs as root because the driver's configfs group is
+            root's; it answers only the users listed in that file, allocates the
+            session index itself (the index is what becomes the private seat, so
+            it cannot be a client's choice), and lets a user remove only the
+            cards it created. Cards are removed when their display is torn down,
+            and any left by a Hermes that died are swept at the next start.</td>
     </tr>
 </table>
 

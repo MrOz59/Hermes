@@ -92,6 +92,27 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   new `announcements` option, which also stops the outbound request.
 
 ### Changed
+- The container image no longer needs `SYS_ADMIN` to stream the desktop. The
+  image sets file capabilities on `sway` and `hermes` for Steam's
+  pressure-vessel sandbox, and the effective bit on `sway` is not advisory:
+  `execve()` of a file whose permitted set holds a capability the process cannot
+  receive fails with `EPERM`, so under rootless Podman sway did not lose a
+  privilege, it did not start - and Hermes came up on a host that looked like it
+  had no display at all. The entrypoint now drops those file capabilities when
+  the bounding set has no `SYS_ADMIN` to give. Steam still needs the grant, and
+  the README no longer claims otherwise ([#29]).
+- The container entrypoint writes the detected encode GPU to `adapter_name`, so
+  capture and VAAPI both use it. Both fallbacks were wrong on a hybrid host:
+  VAAPI assumed `/dev/dri/renderD128` and capture took the first node that
+  opened ([#29]).
+- The container image's base is fully qualified (`docker.io/cachyos/cachyos`).
+  Podman enforces short-name resolution and a non-interactive build cannot
+  prompt for a registry, so an unqualified name simply failed to build there
+  ([#29]).
+- `packaging/container/README.md` documents the Podman and Quadlet path, rootless
+  host device permissions (including the `uhid` module and `uaccess` rule that
+  DualSense support needs), hybrid-GPU node selection, and why the headless
+  deployment raises no virtual-display warning ([#29]).
 - A nightly build now carries the commit it was built from in its own version:
   `0.5.1+abc1234` rather than a bare `0.5.1` indistinguishable from the release.
   The boot log, `/api/config` and the home page all show it, so a report from a

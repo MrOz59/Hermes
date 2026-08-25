@@ -17,7 +17,9 @@
 # X11-only applications.
 ##############################################################################
 
-ARG BASE_IMAGE=cachyos/cachyos:latest
+# Fully qualified on purpose: Podman enforces short-name resolution and, with no
+# TTY to prompt on, a non-interactive build of an unqualified name simply fails.
+ARG BASE_IMAGE=docker.io/cachyos/cachyos:latest
 
 FROM ${BASE_IMAGE} AS runtime
 

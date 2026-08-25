@@ -48,6 +48,43 @@ fi
 mkdir -p /config /config/sway.d /run/hermes "${XDG_RUNTIME_DIR}"
 chmod 700 "${XDG_RUNTIME_DIR}"
 
+# --- capabilities -----------------------------------------------------------
+# The image sets file capabilities on sway (cap_sys_admin+ep) and hermes
+# (cap_sys_admin+p), for Steam's pressure-vessel sandbox. The effective bit on
+# sway is not a preference: execve() of a file whose permitted set holds a
+# capability the process cannot receive fails outright with EPERM, so under any
+# runtime that does not grant SYS_ADMIN - rootless Podman by default - sway never
+# starts, no Wayland socket appears, and Hermes comes up on a host that looks
+# like it has no display at all, every encoder probe failing. The capability is
+# out of reach in that case either way, so the file capability buys nothing and
+# costs the whole session. Drop it and let sway run without.
+reconcile_file_capabilities() {
+    local bnd
+    bnd="$(awk '/^CapBnd:/ {print $2}' /proc/self/status 2>/dev/null || true)"
+    [ -n "${bnd}" ] || return 0
+
+    # CAP_SYS_ADMIN is capability 21.
+    if (( 0x${bnd} & (1 << 21) )); then
+        return 0
+    fi
+
+    log "SYS_ADMIN is not in this container's bounding set; dropping the file capabilities that need it"
+    local dropped=0
+    for binary in /usr/bin/sway /usr/bin/hermes; do
+        [ -e "${binary}" ] || continue
+        if setcap -r "${binary}" 2>/dev/null; then
+            dropped=1
+        fi
+    done
+    if [ "${dropped}" = "0" ]; then
+        warn "could not drop them (no setcap, or a read-only image); sway will fail to exec with 'Operation not permitted'"
+        warn "grant the capability instead: --cap-add=SYS_ADMIN, or AddCapability=SYS_ADMIN in a Quadlet unit"
+    else
+        warn "Steam's pressure-vessel sandbox needs SYS_ADMIN and will not work; desktop streaming is unaffected"
+    fi
+}
+reconcile_file_capabilities
+
 # --- system dbus (needed by avahi) -----------------------------------------
 start_dbus() {
     dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null || true
@@ -612,11 +649,25 @@ seed_config() {
     ensure_conf_key address_family both
     ensure_conf_key upnp enabled
     ensure_conf_key system_tray disabled
+    # Name the GPU explicitly. Both of Hermes' fallbacks are wrong on a hybrid
+    # host: VAAPI defaults to /dev/dri/renderD128, and capture takes the first
+    # render node that opens - and node numbers follow module load order, so on a
+    # laptop whose discrete card loads first that is the GPU nothing renders on.
+    # detect_devices already worked out which node is the encode GPU; the guess
+    # is only ever needed where nobody said.
+    if [ -n "${RENDER_NODE}" ]; then
+        ensure_conf_key adapter_name "${RENDER_NODE}"
+    fi
     if [ "${KMS_ZEROCOPY}" = "true" ]; then
         set_conf_key virtual_display_backend hermes_kms
         set_conf_key headless_mode enabled
     else
-        set_conf_key virtual_display_backend headless
+        # "none" is the value Hermes actually parses. This wrote "headless" for a
+        # while, which no version ever accepted: it was dropped on load, the
+        # default EVDI backend stayed in place, and the whole install was then
+        # judged - and warned about - as a broken EVDI host that had never wanted
+        # EVDI in the first place.
+        set_conf_key virtual_display_backend none
         set_conf_key headless_mode disabled
     fi
     # Audio: let Hermes fully own its loopback sinks. It creates

@@ -1840,6 +1840,19 @@ namespace confighttp {
           {"last_update_ns", km.last_update_ns},
           {"last_wait_duration_ns", km.last_wait_duration_ns},
         };
+        // Session-capability lifecycle, only from a driver that reports it
+        // (UAPI 13+); omitted rather than zeroed on older ones so absence is
+        // unambiguous. `bound_fds` counts the descriptor this read binds.
+        if (km.session_lifecycle) {
+          runtime["hermes_kms"]["session"] = {
+            {"bound_fds", km.bound_fd_count},
+            {"binds", km.bind_count},
+            {"binds_rejected", km.bind_reject_count},
+            {"unbinds", km.unbind_count},
+            {"bindings_revoked", km.binding_revoke_count},
+            {"cross_session_buffer_exports", km.cross_session_buffer_export_count},
+          };
+        }
       } else {
         runtime["hermes_kms"] = nullptr;
       }

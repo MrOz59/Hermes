@@ -12,6 +12,21 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- Hermes speaks the Hermes-KMS UAPI v13 surface. A v11 driver is still the
+  floor and behaves exactly as before; a newer one lights up three things.
+  Session bindings are revoked before the output is disabled, so a capture
+  worker blocked in `WAIT_FRAME` is cut loose at once with `EACCES` instead of
+  finding out at its next timeout, and a bind already in flight with the token
+  Hermes is about to forget can no longer land in between. The diagnostics
+  endpoint gained the session's binding counters - `bound_fds`, `binds`,
+  `binds_rejected`, `unbinds`, `bindings_revoked` and
+  `cross_session_buffer_exports` - which is how a leaked capability becomes
+  visible: one capture worker plus the descriptor that reads the counters is
+  two bound fds, and anything beyond that was handed out by someone else. And a
+  driver that creates cards at runtime through configfs no longer reshuffles
+  the pool between two enumerations, because `device_index` is neither dense
+  nor stable there; session cards are ordered by the session index their
+  private seat and broker are named after, which is stable by construction.
 - Virtual displays now work on Hyprland, through Hyprland's own headless output
   rather than a virtual DRM device. Hermes asks the compositor to create one over
   its control socket, and Hyprland renders it on the primary GPU - so aquamarine
@@ -202,6 +217,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   says which behaviour it wants (`CMP0205`). Hermes asks for the contents, so a
   filesystem that refuses the symlink gets working shaders rather than an empty
   directory named after them.
+- The session-seat remediation names the file `make install-udev` actually
+  writes. The driver moved that rule from `70-` to
+  `72-hermes-kms-session-seats.rules` so systemd's own `70-uaccess.rules`, which
+  sorts after any `70-hermes-*` name, stops undoing its `TAG-="uaccess"` before
+  the uaccess builtin runs. Anyone following the old message was looking for a
+  file that is no longer installed.
 
 ## [0.5.1] - 2026-08-22
 

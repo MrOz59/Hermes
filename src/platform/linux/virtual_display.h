@@ -143,6 +143,22 @@ namespace VDISPLAY {
     uint64_t hotplug_event_count = 0;  ///< Hotplug uevents emitted.
     uint64_t last_update_ns = 0;  ///< Timestamp of the last framebuffer update.
     uint64_t last_wait_duration_ns = 0;  ///< Duration of the last frame wait.
+    /// True when the driver reports the session-capability lifecycle counters
+    /// below (uapi >= 13); they read as zero on older drivers, which is why
+    /// they are reported only when this is set.
+    bool session_lifecycle = false;
+    /// Descriptors bound to the live session, including the short-lived one
+    /// this snapshot binds to read the counters. Streaming with a single
+    /// capture worker therefore reads 2; more than that is a leaked capability.
+    uint64_t bound_fd_count = 0;
+    uint64_t bind_count = 0;  ///< Bindings granted over the output's lifetime.
+    uint64_t bind_reject_count = 0;  ///< Binds refused: bad token, wrong session, revoked.
+    uint64_t unbind_count = 0;  ///< Bindings given up by their holder.
+    uint64_t binding_revoke_count = 0;  ///< Bindings dropped by an owner's revocation.
+    /// Frames exported while the same buffer was another session's scanout.
+    /// Legitimate when a compositor mirrors one buffer onto two outputs, but
+    /// those consumers are not isolated from each other.
+    uint64_t cross_session_buffer_export_count = 0;
   };
 
   /**
@@ -386,7 +402,7 @@ namespace VDISPLAY {
    *
    * Isolation has two halves and they are installed separately: Hermes' own
    * udev rules place a session's input devices on a private seat, while the
-   * driver's `70-hermes-kms-session-seats.rules` does the same for its DRM
+   * driver's `72-hermes-kms-session-seats.rules` does the same for its DRM
    * cards. With only the first installed a session still starts, still gets its
    * own input, and shares the host compositor's screen - and every check Hermes
    * performs today passes. This is the missing check: a card with no ID_SEAT is

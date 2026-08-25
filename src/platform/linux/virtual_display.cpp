@@ -435,6 +435,8 @@ namespace VDISPLAY {
     constexpr uint32_t multi_device_uapi_version = 9;
     constexpr uint32_t session_device_uapi_version = 10;
     constexpr uint32_t session_access_uapi_version = 11;
+    constexpr uint32_t dynamic_devices_uapi_version = 12;
+    constexpr uint32_t session_lifecycle_uapi_version = 13;
     constexpr size_t name_len = 32;
 
     constexpr uint64_t cap_virtual_output = 1ULL << 0;
@@ -449,6 +451,13 @@ namespace VDISPLAY {
     constexpr uint64_t cap_multi_device = 1ULL << 12;
     constexpr uint64_t cap_session_token = 1ULL << 14;
     constexpr uint64_t cap_cursor_capture = 1ULL << 15;
+    // Cards come and go at runtime through the driver's configfs group, so
+    // device_index is neither dense nor stable; a card is identified by its
+    // role and session index instead.
+    constexpr uint64_t cap_dynamic_devices = 1ULL << 16;
+    // SESSION_ACCESS takes ROTATE_TOKEN and REVOKE_BINDINGS, GET_STATUS reports
+    // bound_fd_count, and GET_METRICS reports the binding counters.
+    constexpr uint64_t cap_session_lifecycle = 1ULL << 17;
     constexpr uint64_t cap_zero_copy_target = 1ULL << 33;
     constexpr uint64_t cap_sync_file = 1ULL << 35;
 
@@ -507,7 +516,10 @@ namespace VDISPLAY {
       uint64_t session_id;
       int32_t owner_pid;
       uint32_t reserved0;
-      uint64_t reserved[6];
+      /// Descriptors bound to this output's live session besides the owner's
+      /// own (uapi >= 13); reset to zero by a revocation or a new session.
+      uint64_t bound_fd_count;
+      uint64_t reserved[5];
     };
 
     struct identity_t {
@@ -669,7 +681,14 @@ namespace VDISPLAY {
       uint64_t last_sync_file_export_ns;
       uint64_t vblank_count;
       uint64_t vblank_overrun_count;
-      uint64_t reserved[14];
+      // Session-capability lifecycle (uapi >= 13), taken from reserved slots,
+      // so the structure keeps its size.
+      uint64_t bind_count;
+      uint64_t bind_reject_count;
+      uint64_t unbind_count;
+      uint64_t binding_revoke_count;
+      uint64_t cross_session_buffer_export_count;
+      uint64_t reserved[9];
     };
 
     struct session_access_t {
@@ -702,8 +721,14 @@ namespace VDISPLAY {
 
     constexpr uint32_t session_access_get_token = 1U;
     constexpr uint32_t session_access_bind = 2U;
+    // ROTATE_TOKEN is part of the uapi but unused here: the capture worker
+    // re-binds from the stored token whenever it reinitialises, so rotating
+    // behind its back would fail a bind that is already under way.
+    constexpr uint32_t session_access_rotate_token [[maybe_unused]] = 4U;
+    constexpr uint32_t session_access_revoke_bindings = 5U;
     constexpr uint32_t session_access_result_bound = 1U << 0;
     constexpr uint32_t session_access_result_token_valid = 1U << 1;
+    constexpr uint32_t session_access_result_revoked = 1U << 2;
 
     constexpr unsigned long ioctl_get_version = DRM_IOR(DRM_COMMAND_BASE + 0x00, version_t);
     constexpr unsigned long ioctl_get_caps = DRM_IOR(DRM_COMMAND_BASE + 0x01, caps_t);
@@ -720,7 +745,10 @@ namespace VDISPLAY {
 
     static_assert(sizeof(status_t) == 208);
     static_assert(offsetof(status_t, framebuffer_modifier) == 136);
+    static_assert(offsetof(status_t, bound_fd_count) == 160);
     static_assert(sizeof(metrics_t) == 312);
+    static_assert(offsetof(metrics_t, bind_count) == 200);
+    static_assert(offsetof(metrics_t, cross_session_buffer_export_count) == 232);
     static_assert(sizeof(session_access_t) == 72);
 
     struct device_t {
@@ -949,10 +977,23 @@ namespace VDISPLAY {
         }
       }
 
-      std::sort(devices.begin(), devices.end(), [](const auto &left, const auto &right) {
-        if (left.version.uapi_version >= multi_device_uapi_version &&
-            right.version.uapi_version >= multi_device_uapi_version &&
-            left.identity.device_index != right.identity.device_index) {
+      // A driver that creates and removes cards at runtime hands out
+      // device_index values that are neither dense nor stable across a card
+      // being recreated, so ordering by it would reshuffle the pool between two
+      // enumerations. Session cards are then ordered by the session index their
+      // seat and private broker are named after, which is stable by
+      // construction, and the host card (session_index 0) still comes first.
+      const bool dynamic_devices = std::any_of(devices.begin(), devices.end(), [](const auto &device) {
+        return (device.caps.flags & cap_dynamic_devices) != 0;
+      });
+      std::sort(devices.begin(), devices.end(), [dynamic_devices](const auto &left, const auto &right) {
+        if (dynamic_devices) {
+          if (left.identity.session_index != right.identity.session_index) {
+            return left.identity.session_index < right.identity.session_index;
+          }
+        } else if (left.version.uapi_version >= multi_device_uapi_version &&
+                   right.version.uapi_version >= multi_device_uapi_version &&
+                   left.identity.device_index != right.identity.device_index) {
           return left.identity.device_index < right.identity.device_index;
         }
         return left.card_index < right.card_index;
@@ -1005,6 +1046,11 @@ namespace VDISPLAY {
       uint32_t session_device_count {0};
       bool multi_output_capable {false};
       bool multi_device_capable {false};
+      /// Cards can be created and removed at runtime, so `device_count` is a
+      /// live count rather than the pool size fixed at module load.
+      bool dynamic_devices {false};
+      /// An owner can revoke a session's bindings without ending the stream.
+      bool session_lifecycle {false};
       std::string driver_version;
     };
 
@@ -1054,6 +1100,12 @@ namespace VDISPLAY {
           out.multi_device_capable =
             candidate.version.uapi_version >= multi_device_uapi_version &&
             (candidate.caps.flags & cap_multi_device);
+          out.dynamic_devices =
+            candidate.version.uapi_version >= dynamic_devices_uapi_version &&
+            (candidate.caps.flags & cap_dynamic_devices);
+          out.session_lifecycle =
+            candidate.version.uapi_version >= session_lifecycle_uapi_version &&
+            (candidate.caps.flags & cap_session_lifecycle);
           out.device_count =
             candidate.version.uapi_version >= multi_device_uapi_version &&
               candidate.identity.device_count ?
@@ -1125,13 +1177,19 @@ namespace VDISPLAY {
       return ::ioctl(fd, ioctl_get_status, &status) == 0;
     }
 
-    static bool get_session_token(int fd, uint32_t output_index, uint64_t session_id,
-                                  std::array<uint64_t, 2> &token) {
+    /**
+     * GET_TOKEN, ROTATE_TOKEN and REVOKE_BINDINGS take the same shape: they are
+     * owner-only, act on the output the fd already selected, and answer with the
+     * token that is valid from now on. `required_result` names the extra flag the
+     * operation must report beyond a valid token.
+     */
+    static bool owner_token_operation(int fd, uint32_t operation, uint32_t output_index,
+                                      uint64_t session_id, std::array<uint64_t, 2> &token,
+                                      uint32_t required_result, const char *description) {
       session_access_t request {};
-      request.operation = session_access_get_token;
+      request.operation = operation;
       if (::ioctl(fd, ioctl_session_access, &request) != 0) {
-        BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Could not obtain the generic session capability: "
-                         << std::strerror(errno);
+        BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] " << description << ": " << std::strerror(errno);
         forget_secret(&request, sizeof(request));
         token.fill(0);
         return false;
@@ -1139,6 +1197,7 @@ namespace VDISPLAY {
 
       token = {request.token[0], request.token[1]};
       const bool valid = (request.result_flags & session_access_result_token_valid) &&
+                         (request.result_flags & required_result) == required_result &&
                          request.session_id == session_id && request.output_index == output_index &&
                          (token[0] || token[1]);
       forget_secret(&request, sizeof(request));
@@ -1146,6 +1205,25 @@ namespace VDISPLAY {
         token.fill(0);
       }
       return valid;
+    }
+
+    static bool get_session_token(int fd, uint32_t output_index, uint64_t session_id,
+                                  std::array<uint64_t, 2> &token) {
+      return owner_token_operation(fd, session_access_get_token, output_index, session_id, token, 0,
+                                   "Could not obtain the generic session capability");
+    }
+
+    /**
+     * Invalidate every binding at once. Bound descriptors fail their next
+     * protected ioctl with EACCES and blocked waits are woken to the same error,
+     * while ownership, the session id and the scanout survive; the token is
+     * rotated as part of the operation. Requires uapi >= 13.
+     */
+    static bool revoke_session_bindings(int fd, uint32_t output_index, uint64_t session_id,
+                                        std::array<uint64_t, 2> &token) {
+      return owner_token_operation(fd, session_access_revoke_bindings, output_index, session_id, token,
+                                   session_access_result_revoked,
+                                   "Could not revoke the session's bindings");
     }
 
     static bool bind_session(int fd, uint32_t output_index, uint64_t session_id,
@@ -1329,6 +1407,7 @@ namespace VDISPLAY {
     bool active;
     bool using_evdi;       // true while an EVDI display is connected
     bool using_hermes_kms; // true while a Hermes-KMS output owner fd is held
+    bool hermes_kms_session_lifecycle; // driver can revoke this session's bindings (uapi >= 13)
     bool using_hyprland_headless; // true while Hyprland owns a headless output for this display
     std::string connector_name;
     uint64_t session_id;
@@ -1723,8 +1802,9 @@ namespace VDISPLAY {
         "No Hermes-KMS card carries a private DRM seat, so the host compositor claims the session "
         "cards and a session would share the host's screen. Input isolation is installed "
         "separately and may already be working, which is what makes this failure quiet.",
-        "Install the driver's 70-hermes-kms-session-seats.rules (make install-udev) and reload "
-        "udev, then re-plug or reload the hermes-kms module."
+        "Install the driver's session-seat rule with 'make install-udev' - it lands as "
+        "72-hermes-kms-session-seats.rules, 70- in driver builds before it moved - then reload "
+        "udev and re-plug or reload the hermes-kms module."
       );
     } else {
       add(feature_e::isolated_sessions, readiness_e::ready, "Hermes-KMS session cards carry private DRM seats.");
@@ -4435,6 +4515,7 @@ namespace VDISPLAY {
     vdinfo.active = true;
     vdinfo.using_evdi = false;
     vdinfo.using_hermes_kms = false;
+    vdinfo.hermes_kms_session_lifecycle = false;
     vdinfo.using_hyprland_headless = false;
     vdinfo.session_id = 0;
     vdinfo.session_token = {};
@@ -4532,6 +4613,8 @@ namespace VDISPLAY {
         vdinfo.session_id = session_id;
         vdinfo.session_token = session_token;
         vdinfo.using_hermes_kms = true;
+        vdinfo.hermes_kms_session_lifecycle =
+          (device.caps.flags & hermes_kms::cap_session_lifecycle) != 0;
         vdinfo.connector_name = hermes_kms::cstr(device.identity.connector_name);
         display_name = hermes_kms::cstr(device.identity.output_name);
         if (display_name.empty()) {
@@ -4679,6 +4762,24 @@ namespace VDISPLAY {
       evdi.close(vdinfo.handle);
     }
     if (vdinfo.using_hermes_kms && vdinfo.drm_fd >= 0) {
+      // Cut every consumer loose before the output goes down. Disabling ends
+      // the session too, but a worker blocked in WAIT_FRAME only learns that
+      // when its wait returns, and a bind already in flight with the token we
+      // are about to forget can still land in between. REVOKE_BINDINGS fails
+      // both immediately with EACCES, and rotates the token as it goes.
+      if (vdinfo.hermes_kms_session_lifecycle && vdinfo.output_index >= 0) {
+        std::array<uint64_t, 2> rotated {};
+        const bool revoked = hermes_kms::revoke_session_bindings(
+          vdinfo.drm_fd,
+          static_cast<uint32_t>(vdinfo.output_index),
+          vdinfo.session_id,
+          rotated
+        );
+        hermes_kms::forget_secret(rotated.data(), sizeof(rotated));
+        BOOST_LOG(debug) << "[VDISPLAY/Hermes-KMS] Session " << vdinfo.session_id
+                         << (revoked ? " bindings revoked before disable." :
+                                       " bindings could not be revoked; the disable ends them.");
+      }
       hermes_kms::set_output(vdinfo.drm_fd, false, 0, 0, 0, vdinfo.session_id);
     }
     // A headless output outlives the session that asked for it - Hyprland keeps
@@ -5302,7 +5403,8 @@ namespace VDISPLAY {
       if (vdinfo.name == displayName &&
           vdinfo.using_hermes_kms &&
           vdinfo.session_index > 0) {
-        // Must match Hermes-KMS' 70-hermes-kms-session-seats.rules.
+        // Must match Hermes-KMS' 72-hermes-kms-session-seats.rules (70- in
+        // driver builds before the rule moved after systemd's uaccess tagging).
         return "hermes-kms-" + std::to_string(vdinfo.session_index);
       }
     }
@@ -5389,6 +5491,22 @@ namespace VDISPLAY {
     out.hotplug_event_count = metrics.hotplug_event_count;
     out.last_update_ns = metrics.last_update_ns;
     out.last_wait_duration_ns = metrics.last_wait_duration_ns;
+
+    if (device.caps.flags & hermes_kms::cap_session_lifecycle) {
+      out.session_lifecycle = true;
+      out.bind_count = metrics.bind_count;
+      out.bind_reject_count = metrics.bind_reject_count;
+      out.unbind_count = metrics.unbind_count;
+      out.binding_revoke_count = metrics.binding_revoke_count;
+      out.cross_session_buffer_export_count = metrics.cross_session_buffer_export_count;
+
+      // BIND selected this output atomically, so the status describes the
+      // session just read rather than whatever the fd looked at before.
+      hermes_kms::status_t status {};
+      if (hermes_kms::get_status(device.fd, status)) {
+        out.bound_fd_count = status.bound_fd_count;
+      }
+    }
     return out;
   }
 

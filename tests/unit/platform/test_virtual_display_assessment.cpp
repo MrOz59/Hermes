@@ -150,7 +150,7 @@ TEST(SessionAssessment, IsolationWithoutTheDrmSeatRuleIsUnavailableNotReady) {
 
   const auto isolated = reportFor(facts, VDISPLAY::feature_e::isolated_sessions);
   EXPECT_EQ(isolated.readiness, VDISPLAY::readiness_e::unavailable);
-  EXPECT_NE(isolated.remediation.find("70-hermes-kms-session-seats.rules"), std::string::npos)
+  EXPECT_NE(isolated.remediation.find("72-hermes-kms-session-seats.rules"), std::string::npos)
     << "the fix must name the rule to install: " << isolated.remediation;
 
   // Nothing else may be dragged down with it: the host session still works.

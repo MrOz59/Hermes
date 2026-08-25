@@ -27,6 +27,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   the pool between two enumerations, because `device_index` is neither dense
   nor stable there; session cards are ordered by the session index their
   private seat and broker are named after, which is stable by construction.
+- A virtual output the driver refuses to enable now says what the driver would
+  have accepted. `GET_CAPS` carries the mode envelope, which is compiled in on
+  older drivers and configurable from UAPI v13 - an administrator can raise the
+  maximum to 8K or lower it under what a client asks for - so the failure log
+  names the requested mode and the range around it instead of leaving `EINVAL`
+  to be guessed at.
 - Virtual displays now work on Hyprland, through Hyprland's own headless output
   rather than a virtual DRM device. Hermes asks the compositor to create one over
   its control socket, and Hyprland renders it on the primary GPU - so aquamarine

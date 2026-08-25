@@ -1250,6 +1250,34 @@ namespace VDISPLAY {
       return bound;
     }
 
+    /**
+     * Explain a mode the driver's envelope cannot contain, or an empty string
+     * when it can. GET_CAPS reports compiled-in limits on older drivers and the
+     * configured ones from uapi v13, where an administrator can raise the
+     * maximum to 8K or lower it below what a client asks for - so a refused
+     * SET_OUTPUT is worth spelling out rather than leaving as EINVAL.
+     */
+    static std::string mode_outside_envelope(const caps_t &caps, uint32_t width, uint32_t height,
+                                             uint32_t refresh_hz) {
+      const bool too_small = (caps.min_width && width < caps.min_width) ||
+                             (caps.min_height && height < caps.min_height);
+      const bool too_large = (caps.max_width && width > caps.max_width) ||
+                             (caps.max_height && height > caps.max_height);
+      const bool too_fast = caps.max_refresh_hz && refresh_hz > caps.max_refresh_hz;
+      if (!too_small && !too_large && !too_fast) {
+        return {};
+      }
+
+      std::string reason = " The driver accepts " + std::to_string(caps.min_width) + 'x' +
+                           std::to_string(caps.min_height) + " to " + std::to_string(caps.max_width) +
+                           'x' + std::to_string(caps.max_height) + " up to " +
+                           std::to_string(caps.max_refresh_hz) + " Hz";
+      reason += too_fast && !too_small && !too_large ?
+                  ", so the refresh rate is out of range." :
+                  ", so the requested mode is out of range.";
+      return reason;
+    }
+
     static bool claim_available_output(device_t &device, uint32_t width, uint32_t height,
                                        uint32_t refresh_hz, uint64_t &session_id,
                                        bool log_failure = true) {
@@ -1284,7 +1312,9 @@ namespace VDISPLAY {
             continue;
           }
           BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Could not enable output " << (index + 1)
-                           << ": " << std::strerror(errno);
+                           << " at " << width << 'x' << height << '@' << refresh_hz << ": "
+                           << std::strerror(errno)
+                           << mode_outside_envelope(device.caps, width, height, refresh_hz);
           continue;
         }
 

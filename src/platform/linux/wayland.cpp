@@ -4,7 +4,11 @@
  */
 // standard includes
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <string>
@@ -24,6 +28,7 @@
 
 // local includes
 #include "graphics.h"
+#include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/round_robin.h"
@@ -559,40 +564,171 @@ namespace wl {
     BOOST_LOG(info) << "Delete: "sv << id;
   }
 
-  // Initialize GBM
+  // A capture path that cannot allocate a buffer fails every frame, and every
+  // failure is reported by a different object (see dmabuf_capture_exhausted()),
+  // so both the giving-up decision and the log throttling have to be kept here.
+  static std::atomic<unsigned> gbm_failure_streak {0};
+  static std::atomic<std::int64_t> last_gbm_failure_ns {0};
+
+  // Long enough to ride out a compositor that is still bringing an output up,
+  // short enough that nobody watches a black screen for a second while we count.
+  static constexpr unsigned gbm_failure_limit = 10;
+
+  // A reinit retries within a frame time or two, so a failure arriving after a
+  // pause this long is not part of the same run. Without the gap the streak
+  // would be a lifetime tally: a user who fixed their configuration and started
+  // a new stream would be refused on the first frame, on the strength of a run
+  // that ended minutes ago.
+  static constexpr std::int64_t gbm_failure_gap_ns = 5'000'000'000;
+
+  static void note_gbm_failure() {
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch()
+    )
+                       .count();
+    const auto previous = last_gbm_failure_ns.exchange(now, std::memory_order_relaxed);
+
+    if (previous != 0 && now - previous > gbm_failure_gap_ns) {
+      gbm_failure_streak.store(1, std::memory_order_relaxed);
+      return;
+    }
+    gbm_failure_streak.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  static void clear_gbm_failures() {
+    gbm_failure_streak.store(0, std::memory_order_relaxed);
+    last_gbm_failure_ns.store(0, std::memory_order_relaxed);
+  }
+
+  // The first failure of a streak carries the diagnosis; the rest are the same
+  // sentence at frame rate, which is how the original report ended up with tens
+  // of thousands of identical lines and no explanation among them.
+  static bool should_log_gbm_failure() {
+    return gbm_failure_streak.load(std::memory_order_relaxed) <= 1;
+  }
+
+  bool dmabuf_capture_exhausted() {
+    return gbm_failure_streak.load(std::memory_order_relaxed) >= gbm_failure_limit;
+  }
+
+  /**
+   * @brief Open a render node, and prove GBM can actually allocate on it.
+   *
+   * Opening a render node says nothing about whether buffers can come from it.
+   * Mesa loads a driver for whatever the node turns out to be, and when there is
+   * none to load - a proprietary-NVIDIA node has no nouveau behind it - it falls
+   * back to kms_swrast without complaint. kms_swrast allocates through
+   * DRM_IOCTL_MODE_CREATE_DUMB, which render nodes refuse with EACCES, so the
+   * device looks healthy right up to the moment the first buffer is asked for.
+   * Asking for a throwaway buffer is what separates the two cases.
+   */
+  static gbm_device *open_usable_gbm_device(const char *node, int &out_fd) {
+    const int fd = open(node, O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+      BOOST_LOG(debug) << "GBM: cannot open "sv << node << ": "sv << std::strerror(errno);
+      return nullptr;
+    }
+
+    gbm_device *device = gbm_create_device(fd);
+    if (!device) {
+      BOOST_LOG(debug) << "GBM: "sv << node << " has no GBM device"sv;
+      close(fd);
+      return nullptr;
+    }
+
+    // Screencopy buffers are ordinary render targets, so the probe asks for the
+    // smallest buffer of the same kind rather than a frame-sized one.
+    gbm_bo *probe = gbm_bo_create(device, 64, 64, GBM_FORMAT_XRGB8888, GBM_BO_USE_RENDERING);
+    if (!probe) {
+      BOOST_LOG(debug) << "GBM: "sv << node << " opened but cannot allocate buffers"sv;
+      gbm_device_destroy(device);
+      close(fd);
+      return nullptr;
+    }
+    gbm_bo_destroy(probe);
+
+    out_fd = fd;
+    return device;
+  }
+
+  /**
+   * @brief Pick the render node the capture buffers will be allocated on.
+   *
+   * These buffers are handed to the compositor to copy the screen into, so they
+   * have to come from the GPU the compositor renders on. "The first render node
+   * that opens" is not that GPU on any machine with two of them: renderD128 and
+   * renderD129 are handed out in module load order, so on a hybrid laptop the
+   * first node is as likely as not the discrete card the compositor never
+   * touches. Opening it succeeds, every frame after it fails, and what reaches
+   * the user is a black stream with working audio and input - the encoders all
+   * probe green, because an encoder probe never touches this path.
+   *
+   * The node is therefore taken, in order, from what the user configured, from
+   * what the wlroots compositor was told to render on, and finally from a scan
+   * that keeps the first device able to produce a buffer.
+   */
   bool dmabuf_t::init_gbm() {
     if (gbm_device) {
       return true;
     }
 
-    // Find render node
+    if (!config::video.adapter_name.empty()) {
+      const auto &node = config::video.adapter_name;
+      gbm_device = open_usable_gbm_device(node.c_str(), drm_fd);
+      if (!gbm_device) {
+        BOOST_LOG(error) << "Configured adapter_name "sv << node
+                         << " cannot allocate capture buffers. Point it at the render node the "sv
+                         << "compositor renders on, or clear it to let Hermes search."sv;
+        return false;
+      }
+      BOOST_LOG(info) << "GBM capture device: "sv << node << " (adapter_name)"sv;
+      return true;
+    }
+
+    // A wlroots compositor renders the captured output on this node whenever the
+    // session bothered to name one, which makes it the right answer before any
+    // guessing - notably in the container image, whose entrypoint points sway at
+    // the encode GPU precisely because the first node is the wrong one. It stays
+    // a hint: a value that cannot allocate falls through to the scan.
+    if (const char *wlr_node = std::getenv("WLR_RENDER_DRM_DEVICE"); wlr_node && wlr_node[0]) {
+      gbm_device = open_usable_gbm_device(wlr_node, drm_fd);
+      if (gbm_device) {
+        BOOST_LOG(info) << "GBM capture device: "sv << wlr_node << " (WLR_RENDER_DRM_DEVICE)"sv;
+        return true;
+      }
+      BOOST_LOG(warning) << "WLR_RENDER_DRM_DEVICE names "sv << wlr_node
+                         << ", which cannot allocate capture buffers; searching the other render nodes."sv;
+    }
+
     drmDevice *devices[16];
-    int n = drmGetDevices2(0, devices, 16);
+    const int n = drmGetDevices2(0, devices, 16);
     if (n <= 0) {
       BOOST_LOG(error) << "No DRM devices found"sv;
       return false;
     }
 
-    int drm_fd = -1;
-    for (int i = 0; i < n; i++) {
-      if (devices[i]->available_nodes & (1 << DRM_NODE_RENDER)) {
-        drm_fd = open(devices[i]->nodes[DRM_NODE_RENDER], O_RDWR);
-        if (drm_fd >= 0) {
-          break;
-        }
+    std::string rejected;
+    for (int i = 0; i < n && !gbm_device; i++) {
+      if (!(devices[i]->available_nodes & (1 << DRM_NODE_RENDER))) {
+        continue;
+      }
+      const char *node = devices[i]->nodes[DRM_NODE_RENDER];
+      if (!node) {
+        continue;
+      }
+      gbm_device = open_usable_gbm_device(node, drm_fd);
+      if (gbm_device) {
+        BOOST_LOG(info) << "GBM capture device: "sv << node;
+      } else {
+        rejected += rejected.empty() ? node : ", "s + node;
       }
     }
     drmFreeDevices(devices, n);
 
-    if (drm_fd < 0) {
-      BOOST_LOG(error) << "Failed to open DRM render node"sv;
-      return false;
-    }
-
-    gbm_device = gbm_create_device(drm_fd);
     if (!gbm_device) {
-      close(drm_fd);
-      BOOST_LOG(error) << "Failed to create GBM device"sv;
+      BOOST_LOG(error) << "No render node can allocate capture buffers"sv
+                       << (rejected.empty() ? ""s : " (tried "s + rejected + ")"s)
+                       << ". Set adapter_name to the render node the compositor renders on."sv;
       return false;
     }
 
@@ -663,9 +799,16 @@ namespace wl {
     }
 
     if (gbm_device) {
-      // We should close the DRM FD, but it's owned by GBM
       gbm_device_destroy(gbm_device);
       gbm_device = nullptr;
+    }
+
+    // gbm_create_device() borrows the fd rather than adopting it, so destroying
+    // the device leaves it open. Every reinit built a new dmabuf_t, so a capture
+    // path that kept failing leaked one descriptor per retry.
+    if (drm_fd >= 0) {
+      close(drm_fd);
+      drm_fd = -1;
     }
   }
 
@@ -710,7 +853,7 @@ namespace wl {
   // DMA-BUF creation helper
   void dmabuf_t::create_and_copy_dmabuf(zwlr_screencopy_frame_v1 *frame) {
     if (!init_gbm()) {
-      BOOST_LOG(error) << "Failed to initialize GBM"sv;
+      note_gbm_failure();
       zwlr_screencopy_frame_v1_destroy(frame);
       status = REINIT;
       return;
@@ -719,7 +862,13 @@ namespace wl {
     // Create GBM buffer
     current_bo = gbm_bo_create(gbm_device, dmabuf_info.width, dmabuf_info.height, dmabuf_info.format, GBM_BO_USE_RENDERING);
     if (!current_bo) {
-      BOOST_LOG(error) << "Failed to create GBM buffer"sv;
+      note_gbm_failure();
+      if (should_log_gbm_failure()) {
+        BOOST_LOG(error) << "Failed to allocate a "sv << dmabuf_info.width << 'x' << dmabuf_info.height
+                         << " capture buffer in format "sv << dmabuf_info.format
+                         << ". The render node this was allocated on is not the one the compositor "sv
+                         << "renders on, or does not support the format it asked for."sv;
+      }
       zwlr_screencopy_frame_v1_destroy(frame);
       status = REINIT;
       return;
@@ -771,12 +920,22 @@ namespace wl {
       // Create and start copy
       create_and_copy_dmabuf(frame);
     } else if (shm_info.supported) {
-      // SHM fallback would go here
-      BOOST_LOG(warning) << "SHM capture not implemented"sv;
+      // Retrying will not grow a code path that was never written, so this is
+      // counted as a failure rather than left to spin: the compositor offered
+      // only the shared-memory buffer, and Hermes has no capture for it.
+      note_gbm_failure();
+      if (should_log_gbm_failure()) {
+        BOOST_LOG(error) << "The compositor offers screencopy only as a shared-memory buffer, "sv
+                         << "which this capture backend does not implement. Capture needs "sv
+                         << "zwp_linux_dmabuf_v1 on this output."sv;
+      }
       zwlr_screencopy_frame_v1_destroy(frame);
       status = REINIT;
     } else {
-      BOOST_LOG(error) << "No supported buffer types"sv;
+      note_gbm_failure();
+      if (should_log_gbm_failure()) {
+        BOOST_LOG(error) << "The compositor offered no buffer type for this frame."sv;
+      }
       zwlr_screencopy_frame_v1_destroy(frame);
       status = REINIT;
     }
@@ -806,7 +965,11 @@ namespace wl {
     auto frame = static_cast<zwlr_screencopy_frame_v1 *>(data);
     auto self = static_cast<dmabuf_t *>(zwlr_screencopy_frame_v1_get_user_data(frame));
 
-    BOOST_LOG(error) << "Failed to create buffer from params"sv;
+    note_gbm_failure();
+    if (should_log_gbm_failure()) {
+      BOOST_LOG(error) << "The compositor refused the capture buffer. It was allocated on a device "sv
+                       << "the compositor cannot import from."sv;
+    }
     self->cleanup_gbm();
 
     zwlr_screencopy_frame_v1_destroy(frame);
@@ -821,6 +984,9 @@ namespace wl {
     std::uint32_t tv_nsec
   ) {
     BOOST_LOG(debug) << "Frame ready"sv;
+
+    // A frame arrived, so whatever went wrong before was transient.
+    clear_gbm_failures();
 
     // Frame is ready for use, GBM buffer now contains screen content
     current_frame->destroy();

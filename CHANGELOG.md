@@ -108,6 +108,32 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- Wayland capture no longer streams a black screen on a machine with two GPUs.
+  The capture buffers handed to the compositor were allocated on the first render
+  node that happened to open, and node numbers follow module load order - so on a
+  hybrid laptop that is as likely as not the discrete card the compositor never
+  renders on. Opening it succeeded; every frame after it failed with
+  `DRM_IOCTL_MODE_CREATE_DUMB: Permission denied`, because Mesa had quietly
+  fallen back to `kms_swrast` on a node no driver would claim. What reached the
+  client was a stream with working audio, working input and no picture, while
+  every encoder probe reported success - a probe encodes a synthetic frame and
+  never touches capture. Hermes now takes the node from `adapter_name` if it is
+  set, then from `WLR_RENDER_DRM_DEVICE` if the session named one, and otherwise
+  scans every render node and keeps the first that can actually produce a buffer
+  ([#29]).
+- A Wayland capture path that cannot work now stops with the reason instead of
+  retrying forever. Each failed frame ended the capture in `reinit`, which built
+  a fresh capture object that considered itself the first to fail, so the same
+  error repeated at frame rate for the whole session with no accumulating
+  evidence anywhere - and since audio and input do not run through capture, the
+  symptom was an interactive black screen rather than a failure. Buffer failures
+  are now counted across reinits, the diagnosis is logged once instead of forty
+  times a second, and a run of them ends the capture with what went wrong
+  ([#29]).
+- The Wayland capture path no longer leaks a file descriptor per reinit.
+  `gbm_create_device()` borrows the fd rather than adopting it, so destroying the
+  device left it open - once per capture object, and a failing capture built a
+  new one every frame.
 - Configuring with CUDA enabled no longer reports "CUDA not found" on a machine
   that has the toolkit installed. Arch keeps nvcc in `/opt/cuda/bin` and puts it
   on `PATH` from `/etc/profile.d/cuda.sh`, which a build environment that is not
@@ -493,6 +519,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#23]: https://github.com/MrOz59/Hermes/issues/23
 [#25]: https://github.com/MrOz59/Hermes/issues/25
 [#28]: https://github.com/MrOz59/Hermes/issues/28
+[#29]: https://github.com/MrOz59/Hermes/issues/29
 
 ## [0.4.0] - 2026-07-02
 

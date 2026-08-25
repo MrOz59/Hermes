@@ -145,6 +145,20 @@ namespace wl {
         current_frame->sd.width != width ||
         current_frame->sd.height != height
       ) {
+        // Reinit rebuilds this display and tries the same path again, which is
+        // right for a compositor that is still settling and wrong for a machine
+        // whose capture path cannot work at all. In the second case the retries
+        // never end, and because audio and input do not run through capture,
+        // what the client gets is an interactive black screen - a failure with
+        // no symptom to report. Once the failures have run long enough to rule
+        // out bad luck, end the capture with the reason instead.
+        if (wl::dmabuf_capture_exhausted()) {
+          BOOST_LOG(error) << "Wayland capture has failed on every frame and is being stopped. "sv
+                           << "Streaming would have continued as a black screen. See the errors "sv
+                           << "above; on a machine with more than one GPU, set adapter_name to the "sv
+                           << "render node the compositor renders on."sv;
+          return platf::capture_e::error;
+        }
         return platf::capture_e::reinit;
       }
 

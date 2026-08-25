@@ -93,6 +93,9 @@ namespace wl {
     } dmabuf_info;
 
     struct gbm_device *gbm_device {nullptr};
+    // gbm_create_device() borrows the fd, it does not adopt it, so the device
+    // cannot be the only thing holding on to it.
+    int drm_fd {-1};
     struct gbm_bo *current_bo {nullptr};
     struct wl_buffer *current_wl_buffer {nullptr};
     bool y_invert {false};
@@ -239,6 +242,21 @@ namespace wl {
    * is safe to call from diagnostics without disturbing a running stream.
    */
   session_protocols_t probe_protocols();
+
+  /**
+   * @brief Whether the dmabuf capture path has failed too often to be retried.
+   *
+   * A frame that cannot get a buffer ends the capture in capture_e::reinit, and
+   * the reinit builds a fresh display_t around a fresh dmabuf_t - so a counter
+   * kept on the object restarts at zero on every retry and never learns that
+   * the same failure has been happening all session. That is how a capture path
+   * that cannot work stays invisible: the same error forty times a second, each
+   * one reported by a new object that believes it is the first, while the
+   * encoders keep encoding the untouched black buffers. The streak therefore
+   * lives beside the objects rather than inside them, and once it is long
+   * enough the caller is expected to give up loudly instead of retrying.
+   */
+  bool dmabuf_capture_exhausted();
 
   int init();
 }  // namespace wl

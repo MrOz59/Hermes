@@ -120,6 +120,21 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   absent is still reported as absent. When the failure is genuine, the error now
   names the flags that aim the build at a toolkit and the log that records what
   the check tripped over ([#28]).
+- nvcc no longer warns `incompatible redefinition for option 'std'` on every
+  CUDA source. `CMAKE_CUDA_STANDARD` was set after `add_executable`, too late to
+  initialise the target's `CUDA_STANDARD`, so CMake derived `-std=c++23` from
+  `CXX_STANDARD` and the build then appended a literal `-std=c++17` of its own -
+  two conflicting flags on one command line, with nvcc keeping the last. The
+  default now precedes the target and the literal flag is gone, so the standard
+  is stated exactly once. The CUDA sources still compile as C++17, which is what
+  the trailing flag was already selecting; `-DCMAKE_CUDA_STANDARD=` still
+  overrides it.
+- The shaders directory is now copied whole when the build tree cannot symlink
+  it. `file(CREATE_LINK ... COPY_ON_ERROR)` on a directory created an empty one
+  under CMake 4.2 and below; 4.3 copies the contents and warns until a project
+  says which behaviour it wants (`CMP0205`). Hermes asks for the contents, so a
+  filesystem that refuses the symlink gets working shaders rather than an empty
+  directory named after them.
 
 ## [0.5.1] - 2026-08-22
 

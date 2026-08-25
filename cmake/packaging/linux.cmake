@@ -8,6 +8,11 @@ file(COPY "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/assets/"
         DESTINATION "${CMAKE_BINARY_DIR}/assets"
         PATTERN "shaders" EXCLUDE)
 # use symbolic link for shaders directory
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.3.0")
+    # Copy the shaders themselves when the link cannot be made, not just an
+    # empty directory named after them
+    cmake_policy(SET CMP0205 NEW)
+endif()
 file(CREATE_LINK "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/assets/shaders"
         "${CMAKE_BINARY_DIR}/assets/shaders" COPY_ON_ERROR SYMBOLIC)
 

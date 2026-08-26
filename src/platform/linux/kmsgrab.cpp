@@ -2082,15 +2082,22 @@ namespace platf {
 
       // Open the render node of a real GPU (not the Hermes virtual device),
       // used to import the captured DMA-BUFs and run the encoder.
-      static bool is_usable_encode_node(int fd, std::string_view node) {
+      //
+      // The auto-scan walks every render node on the machine and is meant to
+      // reject some of them, the Hermes node above all; only an adapter the
+      // user named explicitly deserves an error, the rest is the search
+      // talking to itself.
+      static bool is_usable_encode_node(int fd, std::string_view node, bool log_failures) {
         version_t version {drmGetVersion(fd)};
         if (!version || !version->name) {
-          BOOST_LOG(error) << "Hermes-KMS capture: could not identify DRM adapter "sv << node;
+          BOOST_LOG(log_failures ? error : debug)
+            << "Hermes-KMS capture: could not identify DRM adapter "sv << node;
           return false;
         }
         if (std::string_view {version->name} == "hermes-kms"sv) {
-          BOOST_LOG(error) << "Hermes-KMS capture: adapter "sv << node
-                           << " is the capture-only Hermes render node, not an encoding GPU."sv;
+          BOOST_LOG(log_failures ? error : debug)
+            << "Hermes-KMS capture: adapter "sv << node
+            << " is the capture-only Hermes render node, not an encoding GPU."sv;
           return false;
         }
         return true;
@@ -2105,7 +2112,7 @@ namespace platf {
                              << node << ": "sv << strerror(errno);
             return -1;
           }
-          if (!is_usable_encode_node(candidate, node)) {
+          if (!is_usable_encode_node(candidate, node, true)) {
             ::close(candidate);
             return -1;
           }
@@ -2131,7 +2138,7 @@ namespace platf {
           if (candidate < 0) {
             continue;
           }
-          if (!is_usable_encode_node(candidate, node)) {
+          if (!is_usable_encode_node(candidate, node, false)) {
             ::close(candidate);
             continue;
           }

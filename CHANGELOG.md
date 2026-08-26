@@ -126,7 +126,6 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   edits and publishes it, validating first because the Web UI drops entries it
   cannot parse without saying so. Users can turn the whole thing off with the
   new `announcements` option, which also stops the outbound request.
-
 ### Changed
 - The container image no longer needs `SYS_ADMIN` to stream the desktop. The
   image sets file capabilities on `sway` and `hermes` for Steam's
@@ -244,7 +243,24 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   sorts after any `70-hermes-*` name, stops undoing its `TAG-="uaccess"` before
   the uaccess builtin runs. Anyone following the old message was looking for a
   file that is no longer installed.
-
+- Every Hermes-KMS card past the first one is visible again. The primary card
+  behind a render node was resolved with `drmGetDevice2()`, and libdrm tells two
+  platform devices apart by their MODALIAS - which is `platform:hermes-kms` for
+  all of them. `drmFoldDuplicatedDevices()` therefore folded the whole pool into
+  one device and answered `-ENODEV` for every node but the first it happened to
+  enumerate, so `hermes-kms.1` and up were dropped during enumeration with
+  "Could not resolve the primary card". Isolated sessions found no session card
+  to claim and fell back to the host card, and a card the broker had just
+  created never appeared, failing after its three-second wait with a complaint
+  about `92-hermes-kms-access.rules` that had nothing to do with it. The lookup
+  now reads the character device's own `/sys/dev/char/<maj>:<min>/device/drm`,
+  which names exactly one card and cannot confuse two devices for each other.
+- Starting a Hermes-KMS session no longer logs the encoding GPU search as a
+  string of errors. The search walks every render node on the machine and is
+  meant to reject the Hermes one - it exports DMA-BUFs and does not encode - but
+  said so at error level each time it did, three or four times per session,
+  immediately before reporting the capture ready. A rejected candidate is now a
+  debug line; an adapter named explicitly in `adapter_name` still fails loudly.
 ## [0.5.1] - 2026-08-22
 
 ### Added

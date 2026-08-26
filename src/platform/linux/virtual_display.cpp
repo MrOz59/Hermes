@@ -42,6 +42,8 @@
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/un.h>
 #include <sys/utsname.h>
 #include <unistd.h>
@@ -815,22 +817,47 @@ namespace VDISPLAY {
       return matches;
     }
 
+    /**
+     * Resolve the primary card index behind an open DRM node.
+     *
+     * This reads sysfs rather than asking libdrm on purpose. drmGetDevice2()
+     * tells two platform devices apart by their MODALIAS, and every card this
+     * driver registers reports the same "platform:hermes-kms"; libdrm folds the
+     * whole pool into a single device and then answers -ENODEV for every node
+     * but the first one it happened to enumerate. That makes the session cards
+     * invisible, which in turn makes isolated sessions and broker-created cards
+     * unreachable. The character device's own sysfs directory names exactly one
+     * card and has no such ambiguity.
+     */
     static int primary_card_index(int fd) {
       if (fd < 0) {
         return -1;
       }
 
-      drmDevicePtr dev = nullptr;
-      if (drmGetDevice2(fd, 0, &dev) != 0 || !dev) {
+      struct stat node {};
+      if (::fstat(fd, &node) != 0 || !S_ISCHR(node.st_mode)) {
         return -1;
       }
 
-      int index = -1;
-      if ((dev->available_nodes & (1 << DRM_NODE_PRIMARY)) && dev->nodes[DRM_NODE_PRIMARY]) {
-        index = card_index_from_path(dev->nodes[DRM_NODE_PRIMARY]);
+      char drm_dir[64];
+      std::snprintf(
+        drm_dir,
+        sizeof(drm_dir),
+        "/sys/dev/char/%u:%u/device/drm",
+        static_cast<unsigned>(major(node.st_rdev)),
+        static_cast<unsigned>(minor(node.st_rdev))
+      );
+
+      // The directory also holds the render node and the connector entries;
+      // card_index_from_path() accepts only a bare "card<N>".
+      std::error_code ec;
+      for (const auto &entry : fs::directory_iterator {drm_dir, ec}) {
+        const int index = card_index_from_path(entry.path());
+        if (index >= 0) {
+          return index;
+        }
       }
-      drmFreeDevice(&dev);
-      return index;
+      return -1;
     }
 
     static void close_device(device_t &device) {
@@ -5508,6 +5535,13 @@ namespace VDISPLAY {
           vdinfo.session_index > 0) {
         // Must match Hermes-KMS' 72-hermes-kms-session-seats.rules (70- in
         // driver builds before the rule moved after systemd's uaccess tagging).
+        //
+        // The name deliberately does not start with "seat". systemd-logind
+        // only registers seats whose names do, and a seat it registers is one
+        // a multi-seat display manager offers a login on: naming these
+        // seathermes<N> made SDDM start a greeter on each, which tore down the
+        // host's own desktop session. These seats are for compositors Hermes
+        // starts, not for anyone to log in to.
         return "hermes-kms-" + std::to_string(vdinfo.session_index);
       }
     }

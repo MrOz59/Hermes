@@ -164,6 +164,18 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- Turning on isolated sessions no longer empties the Audio/Video settings page.
+  Its warning names the per-device unit as `hermes-kms-seatd@N.service`, and
+  vue-i18n reads a bare `@` in a message as the start of a linked translation
+  key; `N.service` is not one, so compiling the message threw "Invalid linked
+  format" the moment the alert first rendered and Vue tore the whole tab down,
+  leaving the Save button alone on an empty page. The `@` is now escaped as the
+  literal vue-i18n renders verbatim, so the unit name reads exactly as before.
+  A sweep of the other 10,211 strings for the same class of breakage found one
+  more: `apps.loading` in Portuguese had been mangled to `Carregandochar@@0`
+  somewhere in the translation pipeline, which would have blanked the
+  Applications page for anyone running that locale. It reads `Carregando...`
+  again.
 - Wayland capture no longer streams a black screen on a machine with two GPUs.
   The capture buffers handed to the compositor were allocated on the first render
   node that happened to open, and node numbers follow module load order - so on a

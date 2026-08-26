@@ -71,7 +71,7 @@
     "global_prep_name": "Comandos de Preparação Global",
     "image": "Imagem:",
     "image_desc": "Caminho da aplicação icon/imagem/imagem que será enviado para o cliente. Imagem deve ser um arquivo PNG. Se não estiver definido, Hermes irá enviar a imagem da caixa padrão.",
-    "loading": "Carregandochar@@0",
+    "loading": "Carregando...",
     "name": "Nome",
     "output_desc": "O arquivo onde a saída do comando é armazenada, se não for especificado, a saída é ignorada",
     "output_name": "Saída",

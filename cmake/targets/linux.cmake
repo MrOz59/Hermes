@@ -11,3 +11,15 @@ if(SUNSHINE_BUILD_CARD_BROKER)
             CXX_STANDARD_REQUIRED ON)
     target_compile_options(hermes-kms-card-broker PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 endif()
+
+# The session broker creates the Unix account a client's isolated session runs
+# as, which is the boundary the whole mode rests on. Like the card broker it is
+# a separate program on purpose: it runs as root, and the less it shares with
+# the streaming host the smaller the surface that root is reachable through.
+if(SUNSHINE_BUILD_SESSION_BROKER)
+    add_executable(hermes-session-broker "${CMAKE_SOURCE_DIR}/tools/hermes-session-broker.cpp")
+    set_target_properties(hermes-session-broker PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED ON)
+    target_compile_options(hermes-session-broker PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+endif()

@@ -1,0 +1,44 @@
+[Unit]
+Description=Hermes session account broker
+Documentation=https://github.com/MrOz59/Hermes
+Requires=hermes-session-broker.socket
+After=hermes-session-broker.socket
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/hermes-session-broker
+Restart=on-failure
+RestartSec=1s
+UMask=0077
+
+# This service creates user accounts, so it is confined harder than its
+# privilege suggests rather than softer. It reaches exactly three trees: the
+# account databases, the session homes it owns, and its own runtime lock.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/etc /var/lib/hermes /run/hermes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ProcSubset=pid
+# useradd needs to own the home it creates and to take the account-database
+# locks. Nothing here needs to change a uid, so the capabilities that would
+# let it become somebody are not in the set.
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE

@@ -5,6 +5,7 @@
 # SYSTEMD_USER_UNIT_INSTALL_DIR - the systemd system unit install directory
 # SYSTEMD_SYSTEM_UNIT_INSTALL_DIR - the systemd user unit install directory
 # SYSTEMD_MODULES_LOAD_DIR - the systemd modules-load.d directory
+# SYSTEMD_SYSUSERS_DIR - the systemd sysusers.d directory
 
 IF (NOT WIN32)
 
@@ -29,7 +30,13 @@ IF (NOT WIN32)
             OUTPUT_STRIP_TRAILING_WHITESPACE
             OUTPUT_VARIABLE SYSTEMD_MODULES_LOAD_DIR)
 
-        mark_as_advanced(SYSTEMD_USER_UNIT_INSTALL_DIR SYSTEMD_SYSTEM_UNIT_INSTALL_DIR SYSTEMD_MODULES_LOAD_DIR)
+        execute_process(COMMAND ${PKG_CONFIG_EXECUTABLE}
+            --variable=sysusers_dir systemd
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            OUTPUT_VARIABLE SYSTEMD_SYSUSERS_DIR)
+
+        mark_as_advanced(SYSTEMD_USER_UNIT_INSTALL_DIR SYSTEMD_SYSTEM_UNIT_INSTALL_DIR SYSTEMD_MODULES_LOAD_DIR
+            SYSTEMD_SYSUSERS_DIR)
 
     endif ()
 

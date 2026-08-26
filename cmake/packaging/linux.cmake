@@ -30,6 +30,20 @@ if(SUNSHINE_BUILD_CARD_BROKER)
             RENAME "card-broker.allow.example")
 endif()
 
+if(SUNSHINE_BUILD_SESSION_BROKER)
+    install(TARGETS hermes-session-broker DESTINATION "bin")
+    # Same reasoning as the card broker's: shipping this as a live config file
+    # would let a package update widen who may ask for accounts.
+    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/session-broker.allow"
+            DESTINATION "${SUNSHINE_ASSETS_DIR}"
+            RENAME "session-broker.allow.example")
+endif()
+
+# Isolated sessions run as their own user, in the hermes-session group. The
+# polkit rule below is what keeps that from being an escalation: a session on a
+# local seat is "active and local" to polkit, a category a stock desktop grants
+# well over a hundred passwordless actions. Both files install together on
+# purpose - the group must exist before the rule that references it is live.
 # Session compositor profiles. weston is the one Hermes ships and tests; the
 # example alongside it documents the format for anyone swapping in another.
 # A profile of the same name under ~/.config/hermes/session-compositors/ wins,
@@ -42,11 +56,20 @@ if(${SUNSHINE_BUILD_APPIMAGE} OR ${SUNSHINE_BUILD_FLATPAK})
             DESTINATION "${SUNSHINE_ASSETS_DIR}/udev/rules.d")
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.conf"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/modules-load.d")
+    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/10-hermes-session-deny.rules"
+            DESTINATION "${SUNSHINE_ASSETS_DIR}/polkit-1/rules.d")
+    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-sysusers.conf"
+            DESTINATION "${SUNSHINE_ASSETS_DIR}/sysusers.d" RENAME "hermes.conf")
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/sunshine.service"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/systemd/user")
     if(SUNSHINE_BUILD_CARD_BROKER)
         install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-kms-card-broker.socket"
                 "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-kms-card-broker.service"
+                DESTINATION "${SUNSHINE_ASSETS_DIR}/systemd/system")
+    endif()
+    if(SUNSHINE_BUILD_SESSION_BROKER)
+        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-session-broker.socket"
+                "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-session-broker.service"
                 DESTINATION "${SUNSHINE_ASSETS_DIR}/systemd/system")
     endif()
 else()
@@ -57,7 +80,16 @@ else()
         install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.rules"
                 DESTINATION "${UDEV_RULES_INSTALL_DIR}")
     endif()
+    # polkit has no pkg-config variable for its rules directory; unlike the
+    # actions directory it is always <datadir>/polkit-1/rules.d.
+    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/10-hermes-session-deny.rules"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/polkit-1/rules.d")
+
     if(SYSTEMD_FOUND)
+        if(SYSTEMD_SYSUSERS_DIR)
+            install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-sysusers.conf"
+                    DESTINATION "${SYSTEMD_SYSUSERS_DIR}" RENAME "hermes.conf")
+        endif()
         install(FILES "${CMAKE_CURRENT_BINARY_DIR}/sunshine.service"
                 DESTINATION "${SYSTEMD_USER_UNIT_INSTALL_DIR}")
         install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.conf"
@@ -68,6 +100,13 @@ else()
         if(SUNSHINE_BUILD_CARD_BROKER)
             install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-kms-card-broker.socket"
                     "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-kms-card-broker.service"
+                    DESTINATION "${SYSTEMD_SYSTEM_UNIT_INSTALL_DIR}")
+        endif()
+        # Also root, also socket-activated, and for the same reason: the
+        # account databases are root's.
+        if(SUNSHINE_BUILD_SESSION_BROKER)
+            install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-session-broker.socket"
+                    "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-session-broker.service"
                     DESTINATION "${SYSTEMD_SYSTEM_UNIT_INSTALL_DIR}")
         endif()
     endif()

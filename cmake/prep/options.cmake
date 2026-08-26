@@ -56,6 +56,9 @@ elseif(UNIX)  # Linux
     option(SUNSHINE_BUILD_CARD_BROKER
             "Build the privileged Hermes-KMS card broker." ON)
 
+    option(SUNSHINE_BUILD_SESSION_BROKER
+            "Build the privileged per-client session account broker." ON)
+
     # Linux capture methods
     option(SUNSHINE_ENABLE_CUDA
             "Enable cuda specific code." ON)

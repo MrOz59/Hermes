@@ -1,0 +1,26 @@
+// Hermes isolated sessions: refuse every polkit action.
+//
+// An isolated session is a real logind session on a local seat. That is what
+// lets its compositor take the seat and what gives the client a user of its
+// own - but it also makes polkit classify the session as active and local,
+// the category meant for a person sitting at the machine. On a stock desktop
+// that category is granted well over a hundred actions with no password,
+// including login1.power-off, login1.reboot, udisks2.filesystem-mount and
+// udisks2.encrypted-unlock. A remote client is not sitting at the machine and
+// has no business with any of them.
+//
+// Denied outright rather than escalated to a password prompt: there is nobody
+// at the far end who could be asked for an administrator password, and an
+// authentication dialog rendered inside a streamed session is a phishing
+// surface rather than a control.
+//
+// This takes nothing the session needs. Per-user Flatpak installs, Steam and
+// games do not go through polkit. What it removes is mounting disks, altering
+// the network, and powering off the host that other people may be streaming
+// from.
+polkit.addRule(function(subject, action) {
+    if (subject.isInGroup("hermes-session")) {
+        polkit.log("hermes: denied " + action.id + " to session user " + subject.user);
+        return polkit.Result.NO;
+    }
+});

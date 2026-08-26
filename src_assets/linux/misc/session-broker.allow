@@ -1,0 +1,9 @@
+# Users allowed to ask the Hermes session broker for client accounts.
+#
+# One name or numeric uid per line; '#' starts a comment. The uid is taken
+# from the kernel through SO_PEERCRED, so an entry here grants exactly the
+# account that runs Hermes and nobody who can merely reach the socket.
+#
+# Grant this to the user Hermes runs as. Everything that user can then ask for
+# is bounded by the broker's four requests - it cannot name an account, choose
+# a uid, or reach outside the session home root.

@@ -149,6 +149,36 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   weston therefore composites in software, on llvmpipe. A compositor that takes
   a render node separately does not inherit that limit, because a render node
   carries no seat assignment; the `{render_node}` placeholder exists for that.
+- An isolated session can be given a Unix account of its own.
+  `hermes-session-broker` is a small root service, socket-activated like the
+  card broker and authorized the same way - the peer's uid from `SO_PEERCRED`
+  against a root-owned allow file - that maps a paired client to an account and
+  creates it on first use. Separate uids are the only isolation on Linux the
+  kernel actually enforces; everything softer is a convention a determined
+  client walks around. Accounts are never removed implicitly, because a save
+  game outliving an accidental unpair is worth more than a tidy passwd file,
+  and `--max-sessions` bounds how many may exist - eight by default, matching
+  the driver's seat pool.
+
+  The account name is derived, never received: a client-supplied identifier is
+  validated to hex and dashes, used only as a lookup key, and never reaches a
+  path, an account name or a command line. No shell is involved anywhere in the
+  broker. The account has no shell of its own, no sudo, and is in none of
+  `wheel`, `video`, `input` or `render`; its GPU access comes from the
+  Hermes-KMS card's per-card `access_uid`. Its home is `0700` under a root that
+  is traversable but not listable, so one session cannot enumerate the others.
+
+  It is in `hermes-session`, and the polkit rule shipped beside it refuses that
+  group every action. That rule is not optional hardening: a session on a local
+  seat counts as "active and local" to polkit, a category a stock desktop hands
+  well over a hundred passwordless actions - powering the host off, mounting its
+  disks, unlocking encrypted volumes. The broker refuses to create an account at
+  all while the group is missing, so an account cannot come to exist on a
+  machine where the rule is not yet in place.
+
+  Provisioning is all this does so far; starting a session as that account is
+  not wired up yet.
+
 ### Changed
 - The container image no longer needs `SYS_ADMIN` to stream the desktop. The
   image sets file capabilities on `sway` and `hermes` for Steam's
@@ -187,31 +217,6 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
-- An isolated session now actually starts its compositor. The weston and
-  gamescope command lines were assembled with every interpolated value passed
-  through a shell-quoting helper, but `run_command()` hands the string straight
-  to boost::process, which splits on whitespace and never interprets shell
-  syntax - so nothing ever stripped those quotes and weston was launched with
-  `--log='/run/user/1000/hermes/sessions/hermes-s1/weston.log'`, apostrophes
-  and all. It failed to open a path that does not exist, exited about six
-  milliseconds in, and the control loop saw no process running and tore the
-  session down before the client sent its first ping, which is why every
-  attempt ended in `handshake_failed` followed by `Initial Ping Timeout`. The
-  quoting is gone; the values interpolated there are generated identifiers and
-  a path under `XDG_RUNTIME_DIR`, none of which carry whitespace.
-
-- Turning on isolated sessions no longer empties the Audio/Video settings page.
-  Its warning names the per-device unit as `hermes-kms-seatd@N.service`, and
-  vue-i18n reads a bare `@` in a message as the start of a linked translation
-  key; `N.service` is not one, so compiling the message threw "Invalid linked
-  format" the moment the alert first rendered and Vue tore the whole tab down,
-  leaving the Save button alone on an empty page. The `@` is now escaped as the
-  literal vue-i18n renders verbatim, so the unit name reads exactly as before.
-  A sweep of the other 10,211 strings for the same class of breakage found one
-  more: `apps.loading` in Portuguese had been mangled to `Carregandochar@@0`
-  somewhere in the translation pipeline, which would have blanked the
-  Applications page for anyone running that locale. It reads `Carregando...`
-  again.
 - Wayland capture no longer streams a black screen on a machine with two GPUs.
   The capture buffers handed to the compositor were allocated on the first render
   node that happened to open, and node numbers follow module load order - so on a
@@ -309,6 +314,31 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   said so at error level each time it did, three or four times per session,
   immediately before reporting the capture ready. A rejected candidate is now a
   debug line; an adapter named explicitly in `adapter_name` still fails loudly.
+- Turning on isolated sessions no longer empties the Audio/Video settings page.
+  Its warning names the per-device unit as `hermes-kms-seatd@N.service`, and
+  vue-i18n reads a bare `@` in a message as the start of a linked translation
+  key; `N.service` is not one, so compiling the message threw "Invalid linked
+  format" the moment the alert first rendered and Vue tore the whole tab down,
+  leaving the Save button alone on an empty page. The `@` is now escaped as the
+  literal vue-i18n renders verbatim, so the unit name reads exactly as before.
+  A sweep of the other 10,211 strings for the same class of breakage found one
+  more: `apps.loading` in Portuguese had been mangled to `Carregandochar@@0`
+  somewhere in the translation pipeline, which would have blanked the
+  Applications page for anyone running that locale. It reads `Carregando...`
+  again.
+- An isolated session now actually starts its compositor. The weston and
+  gamescope command lines were assembled with every interpolated value passed
+  through a shell-quoting helper, but `run_command()` hands the string straight
+  to boost::process, which splits on whitespace and never interprets shell
+  syntax - so nothing ever stripped those quotes and weston was launched with
+  `--log='/run/user/1000/hermes/sessions/hermes-s1/weston.log'`, apostrophes
+  and all. It failed to open a path that does not exist, exited about six
+  milliseconds in, and the control loop saw no process running and tore the
+  session down before the client sent its first ping, which is why every
+  attempt ended in `handshake_failed` followed by `Initial Ping Timeout`. The
+  quoting is gone; the values interpolated there are generated identifiers and
+  a path under `XDG_RUNTIME_DIR`, none of which carry whitespace.
+
 ## [0.5.1] - 2026-08-22
 
 ### Added

@@ -126,6 +126,29 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   edits and publishes it, validating first because the Web UI drops entries it
   cannot parse without saying so. Users can turn the whole thing off with the
   new `announcements` option, which also stops the outbound request.
+- The compositor an isolated session runs is no longer weston by name in the
+  source. `hermes_kms_session_compositor` selects a profile file - the command
+  line, the environment it needs, and whether Hermes names its Wayland socket or
+  discovers it afterwards - read from `~/.config/hermes/session-compositors/`
+  before the profiles Hermes ships, so trying one out never needs root. Only the
+  command line ever differed between compositors: the readiness wait polls the
+  Hermes-KMS driver rather than the compositor, and one that names its own
+  socket was already found by the code that handles gamescope. So a different
+  compositor is a file, not a patch. `weston` is the profile Hermes ships and
+  tests; a `labwc.conf.example` beside it documents the format and is supported
+  by nobody.
+
+  Two things are worth knowing before swapping one in. The readiness wait proves
+  less than its name suggests - the driver reports the configured mode as soon
+  as the output exists, so it clears before any frame is drawn, and a compositor
+  that fails to start is caught by the process-exited check beside it rather
+  than by the wait. And weston accepts KMS nodes only, for both its display and
+  its rendering device (`--drm-device=renderD128` is refused with "is not a KMS
+  device"), while the only KMS node backed by a real GPU belongs to seat0 -
+  which a session on a private seat cannot open. An isolated session under
+  weston therefore composites in software, on llvmpipe. A compositor that takes
+  a render node separately does not inherit that limit, because a render node
+  carries no seat assignment; the `{render_node}` placeholder exists for that.
 ### Changed
 - The container image no longer needs `SYS_ADMIN` to stream the desktop. The
   image sets file capabilities on `sway` and `hermes` for Steam's
@@ -164,6 +187,19 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- An isolated session now actually starts its compositor. The weston and
+  gamescope command lines were assembled with every interpolated value passed
+  through a shell-quoting helper, but `run_command()` hands the string straight
+  to boost::process, which splits on whitespace and never interprets shell
+  syntax - so nothing ever stripped those quotes and weston was launched with
+  `--log='/run/user/1000/hermes/sessions/hermes-s1/weston.log'`, apostrophes
+  and all. It failed to open a path that does not exist, exited about six
+  milliseconds in, and the control loop saw no process running and tore the
+  session down before the client sent its first ping, which is why every
+  attempt ended in `handshake_failed` followed by `Initial Ping Timeout`. The
+  quoting is gone; the values interpolated there are generated identifiers and
+  a path under `XDG_RUNTIME_DIR`, none of which carry whitespace.
+
 - Turning on isolated sessions no longer empties the Audio/Video settings page.
   Its warning names the per-device unit as `hermes-kms-seatd@N.service`, and
   vue-i18n reads a bare `@` in a message as the start of a linked translation

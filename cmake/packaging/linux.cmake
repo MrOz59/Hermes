@@ -30,6 +30,13 @@ if(SUNSHINE_BUILD_CARD_BROKER)
             RENAME "card-broker.allow.example")
 endif()
 
+# Session compositor profiles. weston is the one Hermes ships and tests; the
+# example alongside it documents the format for anyone swapping in another.
+# A profile of the same name under ~/.config/hermes/session-compositors/ wins,
+# so trying one out never needs root.
+install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/session-compositors/"
+        DESTINATION "${SUNSHINE_ASSETS_DIR}/session-compositors")
+
 if(${SUNSHINE_BUILD_APPIMAGE} OR ${SUNSHINE_BUILD_FLATPAK})
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.rules"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/udev/rules.d")

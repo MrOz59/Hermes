@@ -1,0 +1,49 @@
+# Written into each isolated session's own runtime directory, with
+# {placeholders} expanded. See weston.conf for the list.
+
+[core]
+idle-time=0
+require-input=false
+
+# WORKAROUND, and it should stop being needed.
+#
+# The compositor is left to pick its own mode here - nothing plays the role
+# kscreen-doctor plays for a shared desktop session. That only works if the
+# connector advertises one preferred mode, and hermes-kms up to 0.5.0 advertises
+# two: the first detailed timing of its synthetic EDID, plus the exact mode the
+# client asked for. Userspace picks whichever sorts first, which is the larger
+# EDID timing, so a client asking for 854x480 got a 1080p session.
+#
+# Naming the mode here sidesteps the ambiguity. Once the driver clears
+# DRM_MODE_TYPE_PREFERRED from the EDID modes before marking its own, this
+# section is redundant - harmless, but redundant.
+[output]
+name={connector}
+mode={width}x{height}@{refresh}
+
+# The weston shell has no application menu - a panel with launchers is the only
+# affordance it offers, and without them a session comes up as an empty desktop
+# with nothing to click. Icons must be PNG; weston does not render SVG, which
+# rules out most of a modern icon theme, so these fall back to the ones weston
+# ships. A launcher whose `path` is not installed simply does nothing, so
+# listing a few costs nothing on a machine that lacks them.
+[shell]
+panel-position=top
+background-image=/usr/share/weston/background.png
+locking=false
+
+[launcher]
+icon=/usr/share/weston/icon_window.png
+path=/usr/bin/konsole
+
+[launcher]
+icon=/usr/share/weston/terminal.png
+path=/usr/lib/weston/weston-terminal
+
+[launcher]
+icon=/usr/share/weston/home.png
+path=/usr/bin/dolphin
+
+[launcher]
+icon=/usr/share/icons/hicolor/48x48/apps/firefox.png
+path=/usr/bin/firefox

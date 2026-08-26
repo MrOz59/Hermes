@@ -1403,6 +1403,42 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### hermes_kms_session_compositor
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Which compositor an experimental isolated session starts on its
+            private DRM seat. The name selects a profile file, looked up first
+            in <code>~/.config/hermes/session-compositors/</code> and then in
+            the profiles Hermes ships; a profile declares the command line, any
+            environment it needs, and whether it is told its Wayland socket name
+            or names its own.
+            @note{<code>weston</code> is the only profile Hermes ships and
+            tests. Dropping in a profile for another compositor needs no code
+            change and is supported by nobody but you.}
+            @note{weston takes KMS nodes only for both its display and its
+            rendering device, and the sole KMS node backed by a real GPU belongs
+            to seat0, so an isolated session under weston composites in
+            software. A compositor that accepts a render node separately - which
+            carries no seat assignment - does not have that limit.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            weston
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            hermes_kms_session_compositor = weston
+            @endcode</td>
+    </tr>
+</table>
+
 ### fallback_mode
 
 <table>

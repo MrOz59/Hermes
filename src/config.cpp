@@ -502,6 +502,7 @@ namespace config {
     false,  // hermes_kms_multi_output
     false,  // hermes_kms_isolated_sessions
     "auto"s,  // gamescope_backend
+    "weston"s,  // hermes_kms_session_compositor
 
     {
       video_t::dd_t::config_option_e::disabled,  // configuration_option
@@ -1232,6 +1233,9 @@ namespace config {
                             "management will remain disabled.";
     }
     string_restricted_f(vars, "gamescope_backend", video.gamescope_backend, {"auto"sv, "wayland"sv, "sdl"sv, "drm"sv});
+    // Deliberately unrestricted: weston is the profile Hermes ships and tests,
+    // and any other name is a profile the administrator dropped in themselves.
+    string_f(vars, "hermes_kms_session_compositor", video.hermes_kms_session_compositor);
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);
     generic_f(vars, "dd_resolution_option", video.dd.resolution_option, dd::resolution_option_from_view);

@@ -557,6 +557,8 @@
         "virtual_display_backend_none": "None -- stream an existing output",
         "gamescope_backend": "Gamescope Backend",
         "gamescope_backend_desc": "Backend used when launching a desktop app through Gamescope. \"auto\" nests Gamescope in the current Wayland compositor; wayland/sdl/drm force a specific backend. Ignored in a standalone Gamescope session (SteamOS Game Mode), where the app runs directly.",
+        "hermes_kms_session_compositor": "Session compositor",
+        "hermes_kms_session_compositor_desc": "Which compositor an isolated session starts on its private DRM seat. The name selects a profile file, taken first from ~/.config/hermes/session-compositors/ and then from the profiles Hermes ships. weston is the only one shipped and tested; any other profile is yours to maintain.",
         "dd_manual_resolution": "Manual Resolution",
         "dd_manual_resolution_desc": "Resolution to request when the display-device resolution option is set to manual (e.g. 1920x1080).",
         "dd_manual_refresh_rate": "Manual Refresh Rate",

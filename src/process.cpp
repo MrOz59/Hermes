@@ -12,11 +12,21 @@
 #include <atomic>
 #include <cctype>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+#ifndef _WIN32
+  #include <fcntl.h>
+  #include <unistd.h>
+  #include <xf86drm.h>
+#endif
 
 // lib includes
 #include <boost/algorithm/string.hpp>
@@ -86,6 +96,8 @@ namespace proc {
       std::string runtime_dir;
       std::string wayland_display;
       std::string drm_device_path;
+      std::string compositor_name;
+      bool discover_socket {false};
       std::string display_name;
       uuid_util::uuid_t display_guid {};
       boost::process::v1::environment env;
@@ -101,18 +113,12 @@ namespace proc {
     std::unordered_map<std::string, std::shared_ptr<std::atomic_bool>>
       isolated_launching_clients;
 
-    std::string shell_quote(std::string_view value) {
-      std::string quoted {"'"};
-      for (const char ch : value) {
-        if (ch == '\'') {
-          quoted += "'\\''";
-        } else {
-          quoted += ch;
-        }
-      }
-      quoted += '\'';
-      return quoted;
-    }
+    // NOTE: the isolated-session command below is handed to run_command(),
+    // which passes the string straight to boost::process. That splits on
+    // whitespace and never interprets shell syntax, so quoting an argument
+    // only buries the quotes in argv. Every value interpolated there is a
+    // generated identifier (a card basename, a seat id, a Wayland socket
+    // name) or a path under XDG_RUNTIME_DIR, none of which carry whitespace.
 
     std::string isolated_runtime_root() {
       if (const char *xdg_runtime_dir = std::getenv("XDG_RUNTIME_DIR");
@@ -126,6 +132,176 @@ namespace proc {
 
     std::string card_basename(const std::string &device_path) {
       return std::filesystem::path {device_path}.filename().string();
+    }
+
+    /**
+     * How to start one compositor on a session's private seat.
+     *
+     * Nothing around the launch is compositor-specific: the readiness wait polls
+     * the Hermes-KMS driver rather than the compositor, and one that names its
+     * own Wayland socket is found with discover_wayland_socket(). So the only
+     * thing that differs between compositors is the command line - which is
+     * what this describes, and why a new one needs no code.
+     *
+     * Note the readiness wait is weaker than its name suggests: the driver
+     * reports the configured mode as soon as the output exists, so it clears on
+     * the first poll, before any frame is drawn. What actually catches a
+     * compositor that cannot start is the process-exited check beside it, and
+     * only while the wait is still running.
+     */
+    struct compositor_profile_t {
+      std::string name;
+      std::string required_binary;
+      std::string command;
+      std::vector<std::pair<std::string, std::string>> env;
+      // Some compositors take settings only through a config file. The
+      // template is read from beside the profile and written, expanded, into
+      // the session's own runtime directory.
+      std::string config_template;
+      std::string config_target;
+      std::filesystem::path profile_dir;
+      // Compositors that take a socket name are told one; the rest pick their
+      // own and are discovered afterwards.
+      bool discover_socket = false;
+    };
+
+    /**
+     * Profile lookup order: the user's own directory wins, so a shipped
+     * profile can be overridden without editing a root-owned file.
+     */
+    std::vector<std::filesystem::path> compositor_profile_paths(const std::string &name) {
+      const auto file = name + ".conf";
+      return {
+        std::filesystem::path {platf::appdata()} / "session-compositors" / file,
+        std::filesystem::path {SUNSHINE_ASSETS_DIR} / "session-compositors" / file,
+      };
+    }
+
+    std::vector<std::pair<std::string, std::string>> parse_profile_env(const std::string &value) {
+      std::vector<std::pair<std::string, std::string>> env;
+      std::stringstream stream {value};
+      std::string entry;
+      while (std::getline(stream, entry, ',')) {
+        const auto begin = entry.find_first_not_of(" \t");
+        if (begin == std::string::npos) {
+          continue;
+        }
+        const auto end = entry.find_last_not_of(" \t");
+        entry = entry.substr(begin, end - begin + 1);
+        const auto split = entry.find('=');
+        if (split == std::string::npos || split == 0) {
+          continue;
+        }
+        env.emplace_back(entry.substr(0, split), entry.substr(split + 1));
+      }
+      return env;
+    }
+
+    std::optional<compositor_profile_t> load_compositor_profile(const std::string &name) {
+      if (name.empty() || name.find('/') != std::string::npos || name == ".." ) {
+        BOOST_LOG(error) << "[IsolatedSession] Invalid session compositor name: " << name;
+        return std::nullopt;
+      }
+
+      for (const auto &path : compositor_profile_paths(name)) {
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(path, ec)) {
+          continue;
+        }
+
+        const auto vars = config::parse_config(file_handler::read_file(path.string().c_str()));
+        const auto value = [&vars](const std::string &key) -> std::string {
+          const auto it = vars.find(key);
+          return it == vars.end() ? std::string {} : it->second;
+        };
+
+        compositor_profile_t profile;
+        profile.name = name;
+        profile.command = value("command");
+        if (profile.command.empty()) {
+          BOOST_LOG(error) << "[IsolatedSession] Session compositor profile " << path
+                           << " has no command.";
+          return std::nullopt;
+        }
+        profile.required_binary = value("requires");
+        profile.discover_socket = value("socket") == "discovered";
+        profile.env = parse_profile_env(value("env"));
+        profile.config_template = value("config-template");
+        profile.config_target = value("config-target");
+        profile.profile_dir = path.parent_path();
+        if (profile.config_template.empty() != profile.config_target.empty()) {
+          BOOST_LOG(error) << "[IsolatedSession] Session compositor profile " << path
+                           << " sets only one of config-template and config-target.";
+          return std::nullopt;
+        }
+
+        BOOST_LOG(debug) << "[IsolatedSession] Loaded session compositor profile " << path;
+        return profile;
+      }
+
+      BOOST_LOG(error) << "[IsolatedSession] No session compositor profile named \"" << name
+                       << "\" under " << (std::filesystem::path {platf::appdata()} / "session-compositors")
+                       << " or " << (std::filesystem::path {SUNSHINE_ASSETS_DIR} / "session-compositors")
+                       << '.';
+      return std::nullopt;
+    }
+
+    /**
+     * Expand {placeholders} in a profile string.
+     *
+     * Values are substituted verbatim: run_command() splits the result on
+     * whitespace without any shell involved, so quoting one would only bury the
+     * quotes in argv. Every value here is a generated identifier or a path
+     * under XDG_RUNTIME_DIR.
+     */
+    std::string expand_profile_template(
+      std::string text,
+      const std::vector<std::pair<std::string, std::string>> &values
+    ) {
+      for (const auto &[key, value] : values) {
+        const std::string token = "{" + key + "}";
+        for (auto pos = text.find(token); pos != std::string::npos; pos = text.find(token, pos + value.size())) {
+          text.replace(pos, token.size(), value);
+        }
+      }
+      return text;
+    }
+
+    /**
+     * The render node of a real GPU, for compositors that can render on one
+     * device and scan out on another. The Hermes-KMS card is display-only: a
+     * compositor that renders on it falls back to software, and one that
+     * cannot fall back does not start at all.
+     */
+    std::string real_render_node_path() {
+      std::error_code ec;
+      std::filesystem::directory_iterator dir {"/dev/dri", ec};
+      if (ec) {
+        return {};
+      }
+      std::vector<std::string> nodes;
+      for (const auto &entry : dir) {
+        const auto name = entry.path().filename().string();
+        if (!name.starts_with("renderD")) {
+          continue;
+        }
+        const int fd = ::open(entry.path().c_str(), O_RDWR | O_CLOEXEC);
+        if (fd < 0) {
+          continue;
+        }
+        drmVersionPtr version = drmGetVersion(fd);
+        const bool usable = version && version->name &&
+                            std::string_view {version->name} != "hermes-kms";
+        if (version) {
+          drmFreeVersion(version);
+        }
+        ::close(fd);
+        if (usable) {
+          nodes.emplace_back(entry.path().string());
+        }
+      }
+      std::sort(nodes.begin(), nodes.end());
+      return nodes.empty() ? std::string {} : nodes.front();
     }
 
     std::string discover_wayland_socket(const std::string &runtime_dir) {
@@ -765,26 +941,94 @@ namespace proc {
         width,
         height,
         refresh_hz,
-        connector.empty() ? std::string {} : " -O " + shell_quote(connector),
+        connector.empty() ? std::string {} : " -O " + connector,
         app.cmd
       );
     } else {
-      if (boost::process::v1::search_path("weston").empty()) {
-        BOOST_LOG(error) << "[IsolatedSession] Desktop profile requires weston.";
+      const auto profile = load_compositor_profile(config::video.hermes_kms_session_compositor);
+      if (!profile) {
+        return -1;
+      }
+      if (!profile->required_binary.empty() &&
+          boost::process::v1::search_path(profile->required_binary).empty()) {
+        BOOST_LOG(error) << "[IsolatedSession] Session compositor \"" << profile->name
+                         << "\" requires " << profile->required_binary << ", which is not in PATH.";
         return -1;
       }
 
-      const auto weston_log =
-        (std::filesystem::path {runtime->runtime_dir} / "weston.log").string();
-      launch_command = std::format(
-        "weston --backend=drm --drm-device={} "
-        "--seat={} --continue-without-input --socket={} --xwayland --shell=desktop "
-        "--idle-time=0 --log={}",
-        shell_quote(card_basename(runtime->drm_device_path)),
-        shell_quote(runtime->seat_id),
-        shell_quote(runtime->wayland_display),
-        shell_quote(weston_log)
-      );
+      // A compositor that names its own socket is discovered after scanout;
+      // until then nothing may be launched into it. Clearing the environment
+      // matters as much as clearing the field: populate_session_environment()
+      // has already written a WAYLAND_DISPLAY, and wlroots reads that as "nest
+      // yourself inside this compositor" - so it picks its Wayland backend,
+      // fails to connect to a socket that will never exist, and exits before
+      // it ever looks at the DRM device it was given.
+      if (profile->discover_socket) {
+        runtime->wayland_display.clear();
+        // Erased, not emptied. wlroots picks its backend by asking whether
+        // these are set at all - getenv() != NULL - so leaving an empty
+        // WAYLAND_DISPLAY or DISPLAY behind makes it try to nest inside a
+        // parent compositor or an X server, fail to connect to something that
+        // was never there, and exit before it looks at the DRM device it was
+        // handed. populate_session_environment() sets both, so both have to go.
+        for (const auto *name : {"WAYLAND_DISPLAY", "WAYLAND_SOCKET",
+                                 "_WAYLAND_DISPLAY", "DISPLAY",
+                                 "HERMES_WAYLAND_DISPLAY"}) {
+          runtime->env.erase(name);
+        }
+      }
+
+      const std::vector<std::pair<std::string, std::string>> values {
+        {"card", card_basename(runtime->drm_device_path)},
+        {"card_path", runtime->drm_device_path},
+        {"seat", runtime->seat_id},
+        {"socket", runtime->wayland_display},
+        {"log", (std::filesystem::path {runtime->runtime_dir} / "compositor.log").string()},
+        {"runtime_dir", runtime->runtime_dir},
+        {"render_node", real_render_node_path()},
+        {"width", std::to_string(width)},
+        {"height", std::to_string(height)},
+        {"refresh", std::to_string(refresh_hz)},
+        {"connector", connector},
+        {"config", expand_profile_template(profile->config_target, {{"runtime_dir", runtime->runtime_dir}})},
+      };
+
+      // A profile that needs a config file gets one written into the session's
+      // own runtime directory, so two sessions never share it.
+      if (!profile->config_template.empty()) {
+        const auto source = profile->profile_dir / profile->config_template;
+        std::error_code template_ec;
+        if (!std::filesystem::is_regular_file(source, template_ec)) {
+          BOOST_LOG(error) << "[IsolatedSession] Session compositor profile \"" << profile->name
+                           << "\" names a config template that is missing: " << source;
+          return -1;
+        }
+        const auto target = expand_profile_template(profile->config_target, values);
+        std::ofstream out {target, std::ios::trunc};
+        if (!out) {
+          BOOST_LOG(error) << "[IsolatedSession] Could not write compositor config " << target;
+          return -1;
+        }
+        out << expand_profile_template(file_handler::read_file(source.string().c_str()), values);
+        if (!out) {
+          BOOST_LOG(error) << "[IsolatedSession] Could not write compositor config " << target;
+          return -1;
+        }
+        out.close();
+        BOOST_LOG(debug) << "[IsolatedSession] Wrote compositor config " << target
+                         << " from " << source;
+      }
+
+      for (const auto &[key, value] : profile->env) {
+        runtime->env[key] = expand_profile_template(value, values);
+      }
+      // The socket the profile was given is also what clients must connect to.
+      if (!runtime->wayland_display.empty()) {
+        runtime->env["WAYLAND_DISPLAY"] = runtime->wayland_display;
+      }
+      launch_command = expand_profile_template(profile->command, values);
+      runtime->compositor_name = profile->name;
+      runtime->discover_socket = profile->discover_socket;
     }
 
     auto working_dir = app.working_dir.empty() ?
@@ -853,16 +1097,44 @@ namespace proc {
                          << active_height << ". Capture will follow scanout.";
     }
 
-    if (runtime->profile == "application") {
-      const auto compositor_socket = discover_wayland_socket(runtime->runtime_dir);
+    if (runtime->profile == "application" || runtime->discover_socket) {
+      // The scanout wait above clears on its first poll - the driver reports
+      // the configured mode as soon as the output exists, whether or not
+      // anything has drawn - so by itself it says nothing about the compositor
+      // being up. A compositor that names its own socket has not usually
+      // created it yet at that point, and launching into a session with no
+      // WAYLAND_DISPLAY leaves the client to die on its own. Wait for the
+      // socket, which is a signal the compositor actually produces.
+      std::string compositor_socket;
+      for (int attempt = 0; attempt < 100; ++attempt) {
+        if (launch_was_cancelled()) {
+          return 503;
+        }
+        if (!runtime->process.running()) {
+          BOOST_LOG(error) << "[IsolatedSession] "
+                           << (runtime->compositor_name.empty() ? "Gamescope" : runtime->compositor_name)
+                           << " exited before it created a Wayland socket (code="
+                           << runtime->process.native_exit_code() << ").";
+          return 503;
+        }
+        compositor_socket = discover_wayland_socket(runtime->runtime_dir);
+        if (!compositor_socket.empty()) {
+          break;
+        }
+        std::this_thread::sleep_for(50ms);
+      }
+
       if (!compositor_socket.empty()) {
         runtime->wayland_display = compositor_socket;
         runtime->env["WAYLAND_DISPLAY"] = compositor_socket;
         runtime->env["HERMES_WAYLAND_DISPLAY"] = compositor_socket;
+        BOOST_LOG(debug) << "[IsolatedSession] Discovered Wayland socket " << compositor_socket;
       } else {
-        BOOST_LOG(warning) << "[IsolatedSession] Gamescope scanout is ready but its "
-                              "Wayland socket was not discovered; detached Wayland "
-                              "commands may need GAMESCOPE_WAYLAND_DISPLAY.";
+        BOOST_LOG(error) << "[IsolatedSession] "
+                         << (runtime->compositor_name.empty() ? "Gamescope" : runtime->compositor_name)
+                         << " never created a Wayland socket in " << runtime->runtime_dir
+                         << "; nothing can be launched into this session.";
+        return 503;
       }
     }
 

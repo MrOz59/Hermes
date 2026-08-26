@@ -93,6 +93,7 @@ namespace config {
     bool hermes_kms_multi_output;
     bool hermes_kms_isolated_sessions;
     std::string gamescope_backend;
+    std::string hermes_kms_session_compositor;
 
     struct dd_t {
       struct workarounds_t {

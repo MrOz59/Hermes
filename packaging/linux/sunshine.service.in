@@ -9,27 +9,19 @@ PartOf=graphical-session.target
 Wants=graphical-session.target
 
 [Service]
-# Import the graphical session's environment into the systemd user manager so
-# this service (and every game/app it launches) inherits the display, Wayland
-# socket, runtime dir, audio (PipeWire/PulseAudio), and session bus. Without
-# this, a user service started at login often has none of these and capture or
-# app launch (Steam/Lutris) silently fails. The leading '-' keeps startup from
-# failing if a given variable is not set in this session type.
-ExecStartPre=-/usr/bin/systemctl --user import-environment \
-  DISPLAY \
-  WAYLAND_DISPLAY \
-  XAUTHORITY \
-  XDG_RUNTIME_DIR \
-  XDG_SESSION_TYPE \
-  XDG_SESSION_ID \
-  XDG_SESSION_CLASS \
-  XDG_SEAT \
-  XDG_CURRENT_DESKTOP \
-  DBUS_SESSION_BUS_ADDRESS \
-  PULSE_SERVER \
-  PIPEWIRE_RUNTIME_DIR
-# Give the compositor a moment to finish exporting the session environment
-# before we launch.
+# There is deliberately no `systemctl --user import-environment` here. Run as
+# ExecStartPre, that command copies variables from its own environment into the
+# user manager - and its own environment already is the manager's, because
+# systemd started it. It can only ever re-import what is present, never bring in
+# DISPLAY, WAYLAND_DISPLAY or PULSE_SERVER, which is the entire class of problem
+# it looked like it solved. It ran for months finding nothing.
+#
+# A session that wants Hermes to see its environment has to publish it into the
+# manager itself. KDE and GNOME do; gamescope-session does not, so in Game Mode
+# Hermes reports "no window system" and captures through Hermes-KMS instead,
+# which needs none of those variables.
+
+# Give the compositor a moment to finish coming up before we launch.
 ExecStartPre=/bin/sleep 5
 @SUNSHINE_SERVICE_START_COMMAND@
 @SUNSHINE_SERVICE_STOP_COMMAND@
@@ -38,4 +30,12 @@ Restart=on-failure
 RestartSec=5s
 
 [Install]
-WantedBy=xdg-desktop-autostart.target
+# Two targets, because no single one is reached by every session type.
+# xdg-desktop-autostart.target is what KDE and GNOME activate. gamescope-session
+# - SteamOS and CachyOS Game Mode - never activates it at all, so a unit
+# installed only there is reported `enabled` and is never started: the user
+# manager does not so much as mention it in the boot journal. What that session
+# does reach is graphical-session.target, along with every other session type,
+# which is why it is listed first. The XDG target stays because dropping it
+# would trade one session's breakage for another's.
+WantedBy=graphical-session.target xdg-desktop-autostart.target

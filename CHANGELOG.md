@@ -346,6 +346,23 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- Hermes never started in SteamOS/CachyOS Game Mode. The user unit was
+  installed only into `xdg-desktop-autostart.target`, which KDE and GNOME
+  activate and `gamescope-session` does not - so on a machine that boots
+  straight into Game Mode the service was reported `enabled` and stayed
+  `inactive (dead)`, with the user manager never mentioning it in the boot
+  journal at all. It is now also wanted by `graphical-session.target`, which
+  every session type reaches, Game Mode included. A `systemctl --user restart
+  hermes` had always worked, which is what made this look like a startup-timing
+  or environment problem rather than a unit that nothing was pulling in
+  ([#2]).
+
+  The `ExecStartPre` that ran `systemctl --user import-environment` goes with
+  it. Run from inside the unit, that command copies variables out of its own
+  environment - which systemd had already set to the user manager's - so it
+  could only ever re-import what was present and never bring in the
+  `DISPLAY`/`WAYLAND_DISPLAY`/`PULSE_SERVER` it was added for. It had been
+  finding nothing since the day it landed, and said so in the journal.
 - Per-session input tagging never reached udev, so isolated sessions were not
   actually isolated by input. Hermes names every virtual device it creates for
   a session with that session's tag, in `device_phys`, and the udev rules match
@@ -836,6 +853,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 - Clean clones can fetch the pinned FFmpeg build dependencies again after the
   former upstream `dist` revision became unreachable.
 
+[#2]: https://github.com/MrOz59/Hermes/issues/2
 [#6]: https://github.com/MrOz59/Hermes/issues/6
 [#8]: https://github.com/MrOz59/Hermes/issues/8
 [#9]: https://github.com/MrOz59/Hermes/issues/9

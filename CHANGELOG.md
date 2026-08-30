@@ -346,6 +346,20 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- Per-session input tagging never reached udev, so isolated sessions were not
+  actually isolated by input. Hermes names every virtual device it creates for
+  a session with that session's tag, in `device_phys`, and the udev rules match
+  on it to put one client's keyboard, mouse and gamepad on that client's seat.
+  But inputtino only honoured `device_phys` on the uhid DualSense path: every
+  uinput device it made ignored the field, because `phys` reaches the kernel
+  only through `UI_SET_PHYS` on the uinput descriptor before `UI_DEV_CREATE`,
+  and `LIBEVDEV_UINPUT_OPEN_MANAGED` leaves no window for that ioctl. Every
+  session's devices therefore looked alike to udev, which had nothing to match
+  on and left them all on seat0.
+
+  The submodule now points at a fork carrying the fix, which opens
+  `/dev/uinput` itself when a definition asks for a phys and closes it with the
+  device. A definition with no phys keeps the managed path exactly as it was.
 - Installing Hermes no longer breaks polkit for everyone on the host. The
   isolated-session deny rule declared its callback as
   `function(subject, action)`, but polkit calls rules as `(action, subject)` -

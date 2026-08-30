@@ -157,17 +157,25 @@ namespace audio {
       return;
     }
 
+    // A session that owns a sink takes it and considers nothing else. Every
+    // priority below is a sink the whole machine shares, which is the one thing
+    // an isolated session must not record.
+    std::string session_sink = config.session_sink;
+
     // Order of priority:
     // 1. Virtual sink
     // 2. Audio sink
     // 3. Host
     std::string *sink = &ref->sink.host;
-    if (!config::audio.sink.empty()) {
+    if (!session_sink.empty()) {
+      sink = &session_sink;
+    } else if (!config::audio.sink.empty()) {
       sink = &config::audio.sink;
     }
 
     // Prefer the virtual sink if host playback is disabled or there's no other sink
-    if (ref->sink.null && (!config.flags[config_t::HOST_AUDIO] || sink->empty())) {
+    if (session_sink.empty() && ref->sink.null &&
+        (!config.flags[config_t::HOST_AUDIO] || sink->empty())) {
       auto &null = *ref->sink.null;
       switch (stream.channelCount) {
         case 2:
@@ -184,8 +192,13 @@ namespace audio {
 
     BOOST_LOG(info) << "Selected audio sink: "sv << *sink;
 
-    // Only the first to start a session may change the default sink
-    if (!ref->sink_flag->exchange(true, std::memory_order_acquire)) {
+    // Only the first to start a session may change the default sink, and an
+    // isolated session is never that one. Moving the host's default is how the
+    // host's own audio is made to reach a stream; doing it for a session that
+    // is somebody else's would put the host - and every other session - into
+    // that client's ears, and take the audio away from whoever was streaming
+    // before.
+    if (session_sink.empty() && !ref->sink_flag->exchange(true, std::memory_order_acquire)) {
       // If the selected sink is different than the current one, change sinks.
       ref->restore_sink = ref->sink.host != *sink;
       if (ref->restore_sink) {
@@ -196,7 +209,13 @@ namespace audio {
     }
 
     auto frame_size = config.packetDuration * stream.sampleRate / 1000;
-    auto mic = control->microphone(stream.mapping, stream.channelCount, stream.sampleRate, frame_size);
+    auto open_microphone = [&]() {
+      return session_sink.empty() ?
+               control->microphone(stream.mapping, stream.channelCount, stream.sampleRate, frame_size) :
+               control->microphone_from(session_sink, stream.mapping, stream.channelCount, stream.sampleRate, frame_size);
+    };
+
+    auto mic = open_microphone();
     if (!mic) {
       return;
     }
@@ -234,7 +253,7 @@ namespace audio {
             BOOST_LOG(info) << "Reinitializing audio capture"sv;
             mic.reset();
             do {
-              mic = control->microphone(stream.mapping, stream.channelCount, stream.sampleRate, frame_size);
+              mic = open_microphone();
               if (!mic) {
                 BOOST_LOG(warning) << "Couldn't re-initialize audio input"sv;
               }
@@ -253,6 +272,27 @@ namespace audio {
   audio_ctx_ref_t get_audio_ctx_ref() {
     static auto control_shared {safe::make_shared<audio_ctx_t>(start_audio_control, stop_audio_control)};
     return control_shared.ref();
+  }
+
+  bool create_session_sink(const std::string &name, int channels) {
+    auto ref = get_audio_ctx_ref();
+    if (!ref || !ref->control) {
+      return false;
+    }
+
+    // The layout comes from the same table capture uses, so the sink is made
+    // with the channel map that will later be recorded from it. Quality picks
+    // the bitrate and nothing about the layout, so either row will do.
+    const auto &stream = stream_configs[map_stream(channels, false)];
+    return ref->control->create_session_sink(name, stream.mapping, stream.channelCount);
+  }
+
+  void remove_session_sink(const std::string &name) {
+    auto ref = get_audio_ctx_ref();
+    if (!ref || !ref->control) {
+      return;
+    }
+    ref->control->remove_session_sink(name);
   }
 
   bool is_audio_ctx_sink_available(const audio_ctx_t &ctx) {

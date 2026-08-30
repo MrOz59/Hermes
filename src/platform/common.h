@@ -559,6 +559,23 @@ namespace platf {
     virtual std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size) = 0;
 
     /**
+     * @brief Record a named sink's monitor, whatever the current sink is.
+     *
+     * microphone() picks its source from state the whole process shares - the
+     * configured sink, the last one swapped to, the default - which is right
+     * while there is one session and wrong once there are several. A session
+     * sink is not negotiable: the session it belongs to must be recorded from
+     * it and from nothing else.
+     *
+     * The default below is never reached in practice, because a session sink is
+     * only ever named after create_session_sink() agreed to make one, and a
+     * platform without virtual sinks refuses that.
+     */
+    virtual std::unique_ptr<mic_t> microphone_from([[maybe_unused]] const std::string &sink, const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size) {
+      return microphone(mapping, channels, sample_rate, frame_size);
+    }
+
+    /**
      * @brief Check if the audio sink is available in the system.
      * @param sink Sink to be checked.
      * @returns True if available, false otherwise.
@@ -566,6 +583,35 @@ namespace platf {
     virtual bool is_sink_available(const std::string &sink) = 0;
 
     virtual std::optional<sink_t> sink_info() = 0;
+
+    /**
+     * @brief Create a sink that belongs to one isolated session alone.
+     *
+     * The sinks behind sink_info() are the server's: there is one set of them,
+     * and capture reaches them by making one of them the host's default, which
+     * is what puts everything the host plays into the stream. That is right for
+     * a session that is the host's desktop and wrong for a session that is
+     * somebody else's - it hands one client the host's audio and every other
+     * client's along with it.
+     *
+     * A session sink is named for the session, is never made anyone's default,
+     * and is captured by name. Nothing is asked to move: the session's own
+     * applications are pointed at it when they start.
+     *
+     * @return false where the platform has no virtual sinks to create, which
+     *         leaves the caller with the shared behaviour it had before.
+     */
+    virtual bool create_session_sink([[maybe_unused]] const std::string &name,
+                                     [[maybe_unused]] const std::uint8_t *mapping,
+                                     [[maybe_unused]] int channels) {
+      return false;
+    }
+
+    /**
+     * @brief Remove a sink created by create_session_sink(). Removing one that
+     *        is already gone is not an error.
+     */
+    virtual void remove_session_sink([[maybe_unused]] const std::string &name) {}
 
     virtual ~audio_control_t() = default;
   };

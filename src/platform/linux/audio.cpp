@@ -292,6 +292,74 @@ namespace platf {
         return 0;
       }
 
+      /**
+       * @brief The module index behind a sink, or PA_INVALID_INDEX for none.
+       *
+       * Sinks are removed by module, not by name, and a session sink's module
+       * index is not known here - it may have been loaded by an earlier run of
+       * Hermes that a client is now reconnecting to. Looking it up keeps
+       * removal honest across a restart.
+       */
+      std::uint32_t find_sink_module(const std::string &name) {
+        auto alarm = safe::make_alarm<int>();
+        std::uint32_t module = PA_INVALID_INDEX;
+
+        cb_t<pa_sink_info *> f = [&](ctx_t::pointer ctx, const pa_sink_info *sink_info, int eol) {
+          if (!sink_info) {
+            if (!eol) {
+              BOOST_LOG(error) << "Couldn't get pulseaudio sink info: "sv << pa_strerror(pa_context_errno(ctx));
+              alarm->ring(-1);
+              return;
+            }
+            alarm->ring(0);
+            return;
+          }
+
+          if (sink_info->name && name == sink_info->name) {
+            module = sink_info->owner_module;
+          }
+        };
+
+        op_t op {pa_context_get_sink_info_list(ctx.get(), cb<pa_sink_info *>, &f)};
+        if (!op) {
+          BOOST_LOG(error) << "Couldn't create sink info operation: "sv << pa_strerror(pa_context_errno(ctx.get()));
+          return PA_INVALID_INDEX;
+        }
+
+        alarm->wait();
+        return *alarm->status() ? PA_INVALID_INDEX : module;
+      }
+
+      bool create_session_sink(const std::string &name, const std::uint8_t *mapping, int channels) override {
+        // One that is already there counts as created. A client reconnecting to
+        // a session whose sink outlived it should be given that sink back
+        // rather than a second one under a name that is already taken.
+        if (find_sink_module(name) != PA_INVALID_INDEX) {
+          BOOST_LOG(debug) << "Reusing existing session sink ["sv << name << ']';
+          return true;
+        }
+
+        const auto module = static_cast<std::uint32_t>(load_null(name.c_str(), mapping, channels));
+        if (module == PA_INVALID_INDEX) {
+          BOOST_LOG(warning) << "Couldn't create session sink ["sv << name << "]: "sv
+                             << pa_strerror(pa_context_errno(ctx.get()));
+          return false;
+        }
+
+        BOOST_LOG(info) << "Created session sink ["sv << name << "] with "sv << channels << " channel(s)"sv;
+        return true;
+      }
+
+      void remove_session_sink(const std::string &name) override {
+        const auto module = find_sink_module(name);
+        if (module == PA_INVALID_INDEX) {
+          return;
+        }
+        if (unload_null(module) == 0) {
+          BOOST_LOG(debug) << "Removed session sink ["sv << name << ']';
+        }
+      }
+
       std::optional<sink_t> sink_info() override {
         constexpr auto stereo = "sink-sunshine-stereo";
         constexpr auto surround51 = "sink-sunshine-surround51";
@@ -457,6 +525,13 @@ namespace platf {
         }
 
         return ::platf::microphone(mapping, channels, sample_rate, frame_size, get_monitor_name(sink_name));
+      }
+
+      std::unique_ptr<mic_t> microphone_from(const std::string &sink, const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size) override {
+        // None of the priority above applies: the caller named the sink, and
+        // the configured sink, the last swap and the default are all the wrong
+        // answer for a session that owns one of its own.
+        return ::platf::microphone(mapping, channels, sample_rate, frame_size, get_monitor_name(sink));
       }
 
       bool is_sink_available(const std::string &sink) override {

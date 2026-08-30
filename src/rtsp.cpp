@@ -1082,6 +1082,11 @@ namespace rtsp_stream {
 
     std::int64_t configuredBitrateKbps;
     config.audio.flags[audio::config_t::HOST_AUDIO] = session.host_audio;
+    // An isolated session records the sink that was made for it at launch,
+    // rather than whichever one the machine currently defaults to. Empty for
+    // every session that shares the host's desktop, which leaves their capture
+    // exactly as it was.
+    config.audio.session_sink = proc::proc.isolated_audio_sink(session.id);
     try {
       config.audio.channels = util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
       config.audio.mask = util::from_view(args.at("x-nv-audio.surround.channelMask"sv));

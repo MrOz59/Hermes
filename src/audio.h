@@ -10,6 +10,7 @@
 #include "utility.h"
 
 #include <bitset>
+#include <string>
 
 namespace audio {
   enum stream_config_e : int {
@@ -61,6 +62,19 @@ namespace audio {
     uint64_t __padding;
 
     bool input_only;
+
+    /**
+     * The sink this session records, when it has one of its own.
+     *
+     * Empty for every session that shares the host's desktop, which is what
+     * leaves their behaviour exactly as it was: capture follows the configured
+     * sink, the virtual sink or the host's default, and the first stream to
+     * start moves the host's default onto whichever it picked. That is how the
+     * host's own audio reaches a stream, and it is also why it reaches every
+     * stream. An isolated session names its own sink here instead, and then
+     * neither the default nor any other session's audio is involved.
+     */
+    std::string session_sink;
   };
 
   struct audio_ctx_t {
@@ -78,6 +92,22 @@ namespace audio {
   using audio_ctx_ref_t = safe::shared_t<audio_ctx_t>::ptr_t;
 
   void capture(safe::mail_t mail, config_t config, void *channel_data);
+
+  /**
+   * @brief Create the sink an isolated session records, and its own alone.
+   *
+   * Named after the session rather than after a channel layout, because there
+   * is one per session and its layout is whatever that client negotiated.
+   * Nothing is made anyone's default. Returns false where the platform has no
+   * virtual sinks, which leaves the caller to fall back to the shared ones.
+   */
+  bool create_session_sink(const std::string &name, int channels);
+
+  /**
+   * @brief Remove a sink made by create_session_sink(). Removing one that is
+   *        already gone is not an error.
+   */
+  void remove_session_sink(const std::string &name);
 
   /**
    * @brief Get the reference to the audio context.

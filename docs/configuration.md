@@ -1386,8 +1386,18 @@ editing the `conf` file in a text editor. Use the examples as reference.
             <code>/run/hermes-kms-seatd/N/seatd.sock</code>.
             If <code>hermes_kms_multi_output</code> is also set, independent
             sessions take precedence and the shared-desktop mode is ignored.
-            @warning{Per-session audio, a full Plasma desktop, and simultaneous
-            real clients are not validated. The private seat brokers are not a
+            Audio follows the same split. A session that shares the Hermes
+            user gets a sink of its own, named after the session; its
+            applications play into it, capture records it by name, and the
+            host's default sink is never moved - so the client hears its own
+            session and not the machine. A session that has a Unix account of
+            its own does not yet: it gets an audio server of its own along with
+            its user manager, which Hermes cannot reach through a
+            <code>0700</code> runtime directory, so that case still hears the
+            host's audio and says so in the log.
+            @warning{Audio is not yet isolated for sessions that have a Unix
+            account of their own - those clients hear the host. A full Plasma
+            desktop and simultaneous real clients are not validated. The private seat brokers are not a
             security boundary between mutually untrusted local users. Remote
             Input is rejected because it has no video session from which to
             determine a target seat. Keep this disabled outside testing.}

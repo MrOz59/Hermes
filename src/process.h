@@ -14,6 +14,7 @@
 
 // standard includes
 #include <optional>
+#include <string>
 #include <unordered_map>
 
 // lib includes
@@ -169,6 +170,12 @@ namespace proc {
 
     /** Copy the environment belonging to an isolated runtime, or the base env. */
     boost::process::v1::environment get_session_env(uint32_t launch_session_id);
+
+    /**
+     * @brief The sink an isolated session plays into, or empty for one that
+     *        shares the host's.
+     */
+    std::string isolated_audio_sink(uint32_t launch_session_id);
 
     /** Reattach launch metadata to a still-running client runtime. */
     bool prepare_isolated_resume(

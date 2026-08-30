@@ -149,6 +149,34 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   weston therefore composites in software, on llvmpipe. A compositor that takes
   a render node separately does not inherit that limit, because a render node
   carries no seat assignment; the `{render_node}` placeholder exists for that.
+- An isolated session no longer streams the host's audio to its client. Capture
+  had one source for the whole machine, and the way the host's own sound reached
+  a stream was by moving the host's default sink onto the sink being recorded -
+  right for a session that is the host's desktop, and wrong for a session that
+  is somebody else's. A client heard whatever was playing on the machine,
+  including its owner's, and a second client would have taken that default away
+  from the first.
+
+  Each isolated session now gets a sink of its own, named after the session and
+  made with the channel layout that client asked for at launch. Its applications
+  are pointed at it when they start, capture records it by name, and the host's
+  default sink is never touched - so what the client hears is its own session,
+  what the host hears is the host, and neither is the other's. Sessions that
+  share the host's desktop are untouched: with no session sink named, every
+  decision in capture is the one it made before, down to which sink it selects
+  and whether it moves the default.
+
+  Two things had to be repaired to get there. A session's applications were not
+  reaching an audio server at all: the session's `XDG_RUNTIME_DIR` is rewritten
+  to a private directory, and that is also where a PulseAudio or PipeWire client
+  looks for its server, so they were failing to connect rather than playing
+  anywhere. The host's sockets are now named explicitly. And a session that has
+  a Unix user of its own is deliberately left out of this for now - it gets an
+  audio server of its own along with its user manager, one Hermes cannot reach
+  through a `0700` runtime directory, so a sink made on the host's server would
+  be one that session never plays into and capturing it would hand the client
+  silence. That case still hears the host, and says so in the log.
+
 - An isolated session now actually runs as its own Unix user, where before it
   was a session in name only. It had a seat, a card, a Wayland socket and input
   devices of its own, but it ran under the uid Hermes runs under - so it read

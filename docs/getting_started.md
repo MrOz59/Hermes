@@ -398,10 +398,13 @@ systemctl --user enable sunshine
 
 **Session environment**
 
-The service runs in your user session and inherits the graphical session
+The service runs in your user session and takes the graphical session
 environment (`DISPLAY`/`WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, the audio socket,
-and the session bus). It imports these from the systemd user manager on start,
-which works on most desktops because the compositor exports them at login.
+and the session bus) from the systemd user manager. It cannot import them
+itself: a service can only read the environment it was started with, so
+whatever the manager does not already hold is not reachable from inside the
+unit. On most desktops the compositor publishes them at login and there is
+nothing to do.
 
 If capture, audio, or launching apps (Steam/Lutris) fails when started as a
 service but works when you run `sunshine` from a terminal, your desktop is
@@ -415,6 +418,47 @@ systemctl --user restart sunshine
 
 To make this persistent, add the same `import-environment` line to your
 compositor's startup (e.g. an autostart script) so it runs at every login.
+
+#### SteamOS and Game Mode
+
+A machine that boots straight into Game Mode - SteamOS, or CachyOS with
+`gamescope-session` - runs no desktop, so there is nowhere to open the web UI
+and no keyboard to type into it. Two things make Hermes usable there.
+
+**It starts by itself.** `gamescope-session` reaches `graphical-session.target`
+like every other session type, and the unit is installed into it, so enabling
+the service is enough:
+
+```bash
+systemctl --user enable --now hermes
+```
+
+Hermes reports `no window system` in that session and captures through
+Hermes-KMS instead. That is expected: `gamescope-session` publishes nothing to
+the systemd user manager, and the KMS backend needs none of it. Set
+`capture = kms` if it is not already.
+
+**The console handles what needs a person.** `hermes-gamemode` is a
+controller-driven window for the two things that cannot be done from a client:
+entering the PIN for a new device, and restarting the service. Add it to Steam
+once, from Desktop Mode:
+
+1. Switch to Desktop Mode.
+2. In Steam, *Games* → *Add a Non-Steam Game to My Library* → *Browse*.
+3. Pick **Hermes (Game Mode)** from the application list, or
+   `/usr/bin/hermes-gamemode` directly.
+4. Return to Game Mode. It is in the library under *Non-Steam*.
+
+Launch it like a game. The D-pad moves between the buttons, `A` presses, and
+`B` goes back; if your controller layout sends a mouse instead, the buttons are
+sized to be hit with a thumbstick. When a device is waiting to pair, the console
+says so on its own and offers a numeric keypad for the four digits - no
+on-screen keyboard, and nothing to type a password into. It authenticates
+through a token Hermes writes into your runtime directory at `0600`, which is
+why it never asks you to log in.
+
+The console is not required for streaming; it is only needed when somebody has
+to act on the host itself.
 
 ### macOS
 The first time you start Sunshine, you will be asked to grant access to screen recording and your microphone.

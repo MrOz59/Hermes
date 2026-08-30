@@ -20,6 +20,7 @@ elseif(UNIX)
     else()
         configure_file(packaging/linux/${PROJECT_FQDN}.desktop ${PROJECT_FQDN}.desktop @ONLY)
         configure_file(packaging/linux/${PROJECT_FQDN}.terminal.desktop ${PROJECT_FQDN}.terminal.desktop @ONLY)
+        configure_file(packaging/linux/${PROJECT_FQDN}.GameMode.desktop ${PROJECT_FQDN}.GameMode.desktop @ONLY)
     endif()
 
     # configure metadata file

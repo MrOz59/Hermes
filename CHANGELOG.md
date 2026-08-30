@@ -12,6 +12,40 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- A console for Game Mode, `hermes-gamemode`, added to Steam as a non-Steam
+  shortcut and launched from the library like a game. A machine that boots
+  straight into Game Mode has no desktop to open the web UI on and no keyboard
+  to type a password into, and the two things Hermes occasionally needs from
+  the person who owns it - the PIN for a new device, and a restart - were
+  reachable only by leaving Game Mode for a desktop, which is the one thing an
+  appliance should never ask.
+
+  It is a window, so it is a separate program from the streaming host: a
+  service has no business owning a window, and a console that crashes must not
+  take a stream down with it. It costs no new dependency - Qt is already
+  required by the tray and libcurl by the host.
+
+  Everything is a large button in a single column or a single grid, so the
+  D-pad moves between controls and `A` presses, and the same layout is usable
+  when Steam Input presents the controller as a mouse instead. Nothing here
+  opens a gamepad device, so it needs no permissions and behaves identically
+  once a keyboard is plugged in. When a device is waiting to pair the console
+  notices on its own and offers a numeric keypad for the four digits, rather
+  than expecting somebody to go looking for the pairing screen.
+
+  It authenticates with a token Hermes now publishes at
+  `$XDG_RUNTIME_DIR/hermes/local-api.token`, mode `0600`, created private
+  before it is written and removed at shutdown. A process that can read it
+  already runs as the user who owns Hermes' credentials file, config and
+  process, so the token grants nothing that was not already available - it
+  removes a password prompt, not a boundary. Requests carrying it are still
+  subject to the same origin check as any other, and the token is never
+  accepted over anything but the existing HTTPS listener.
+
+  `GET /api/gamemode/status` answers the whole screen in one call, including
+  `pending_pair`, which is true only while a client's request is parked waiting
+  for its PIN.
+
 - Hermes speaks the Hermes-KMS UAPI v13 surface. A v11 driver is still the
   floor and behaves exactly as before; a newer one lights up three things.
   Session bindings are revoked before the output is disabled, so a capture

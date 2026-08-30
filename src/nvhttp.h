@@ -213,6 +213,17 @@ namespace nvhttp {
   void clientpairingsecret(pair_session_t &sess, boost::property_tree::ptree &tree, const std::string &client_pairing_secret);
 
   /**
+   * @brief The client whose pairing request is waiting for a PIN, if any.
+   *
+   * Empty whenever nothing is pending. The window is narrow on purpose: it
+   * opens when a client's request parks itself waiting for four digits and
+   * closes the moment any are submitted, so a caller polling this is asking
+   * "does somebody need to type a PIN right now", not "has anyone ever tried
+   * to pair".
+   */
+  std::optional<std::string> pending_pair_client();
+
+  /**
    * @brief Compare the user supplied pin to the Moonlight pin.
    * @param pin The user supplied pin.
    * @param name The user supplied name.

@@ -16,6 +16,13 @@
 #include <numeric>
 #include <algorithm>
 #include <atomic>
+#ifdef __linux__
+  #include <cerrno>
+  #include <cstring>
+  #include <fcntl.h>
+  #include <sys/stat.h>
+  #include <unistd.h>
+#endif
 
 // lib includes
 #include <boost/algorithm/string.hpp>
@@ -168,6 +175,116 @@ namespace confighttp {
   // SESSION COOKIE
   std::string sessionCookie;
   static std::chrono::time_point<std::chrono::steady_clock> cookie_creation_time;
+
+#ifdef __linux__
+  /**
+   * @brief A bearer token any local process of this user may present.
+   *
+   * The Game Mode console has no keyboard to log in with, and a controller is
+   * the wrong instrument for a password. It does not need one: it runs as the
+   * same user as Hermes, on the same machine, and that user can already read
+   * Hermes' credentials file, write its config and ptrace the process. A token
+   * readable only by that uid therefore grants nothing that was not already
+   * available - it is a convenience over a boundary that does not exist, not a
+   * hole in one that does.
+   *
+   * It lives in the runtime directory, which is tmpfs and mode 0700, so it is
+   * gone at reboot and unreadable by other users. It is not a substitute for
+   * logging in from a browser: a request carrying it still has to come from an
+   * address the web UI accepts, and it is never handed out over HTTP.
+   */
+  std::string localApiToken;
+  std::filesystem::path localApiTokenPath;
+
+  std::filesystem::path local_api_token_path() {
+    const char *runtime_dir = std::getenv("XDG_RUNTIME_DIR");
+    if (!runtime_dir || !*runtime_dir) {
+      return {};
+    }
+    return std::filesystem::path {runtime_dir} / "hermes" / "local-api.token";
+  }
+
+  /** Compare in constant time, so a wrong token cannot be found byte by byte. */
+  bool token_matches(std::string_view presented, std::string_view expected) {
+    if (expected.empty() || presented.size() != expected.size()) {
+      return false;
+    }
+    unsigned char difference = 0;
+    for (size_t index = 0; index < expected.size(); ++index) {
+      difference |= static_cast<unsigned char>(presented[index] ^ expected[index]);
+    }
+    return difference == 0;
+  }
+
+  void write_local_api_token() {
+    localApiTokenPath = local_api_token_path();
+    if (localApiTokenPath.empty()) {
+      BOOST_LOG(debug) << "No XDG_RUNTIME_DIR; the local API token is not published."sv;
+      return;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(localApiTokenPath.parent_path(), ec);
+    if (ec) {
+      BOOST_LOG(warning) << "Could not create "sv << localApiTokenPath.parent_path().string()
+                         << ": "sv << ec.message();
+      localApiTokenPath.clear();
+      return;
+    }
+
+    localApiToken = crypto::rand_alphabet(64);
+
+    // Created private and only then written: a token that is briefly
+    // world-readable is a token that leaked, however short the window.
+    const int fd = ::open(localApiTokenPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, S_IRUSR | S_IWUSR);
+    if (fd < 0) {
+      BOOST_LOG(warning) << "Could not write "sv << localApiTokenPath.string() << ": "sv << std::strerror(errno);
+      localApiToken.clear();
+      localApiTokenPath.clear();
+      return;
+    }
+    const auto written = ::write(fd, localApiToken.data(), localApiToken.size());
+    ::close(fd);
+    if (written != static_cast<ssize_t>(localApiToken.size())) {
+      BOOST_LOG(warning) << "Short write publishing the local API token"sv;
+      std::filesystem::remove(localApiTokenPath, ec);
+      localApiToken.clear();
+      localApiTokenPath.clear();
+      return;
+    }
+
+    BOOST_LOG(info) << "Local API token published at "sv << localApiTokenPath.string()
+                    << " for the Game Mode console."sv;
+  }
+
+  void remove_local_api_token() {
+    if (localApiTokenPath.empty()) {
+      return;
+    }
+    std::error_code ec;
+    std::filesystem::remove(localApiTokenPath, ec);
+    localApiToken.clear();
+    localApiTokenPath.clear();
+  }
+
+  /** Whether the request carries the local token in an Authorization header. */
+  bool has_local_api_token(req_https_t request) {
+    if (localApiToken.empty()) {
+      return false;
+    }
+    const auto header = request->header.find("authorization");
+    if (header == request->header.end()) {
+      return false;
+    }
+    constexpr std::string_view prefix = "Bearer ";
+    std::string_view value {header->second};
+    if (value.size() <= prefix.size() ||
+        !boost::algorithm::iequals(value.substr(0, prefix.size()), prefix)) {
+      return false;
+    }
+    return token_matches(value.substr(prefix.size()), localApiToken);
+  }
+#endif
 
   // 0 = idle, 1 = running, 2 = succeeded, 3 = failed/cancelled.
   static std::atomic<int> evdi_install_status {0};
@@ -449,6 +566,15 @@ namespace confighttp {
         send_unauthorized(response, request);
       }
     });
+#ifdef __linux__
+    // Checked after the origin and the first-run redirect, never before: the
+    // token is a way for a local process to skip typing a password it already
+    // effectively holds, not a way around either of those.
+    if (has_local_api_token(request)) {
+      fg.disable();
+      return true;
+    }
+#endif
     if (sessionCookie.empty())
       return false;
     // Check for expiry
@@ -2325,6 +2451,51 @@ printf "evdi\\n" > /etc/modules-load.d/evdi.conf')EVDI";
   }
 
   /**
+   * @brief Everything the Game Mode console shows on one screen, in one call.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * A console driven with a thumbstick polls; three round trips per poll to
+   * assemble one screen is three times the work and three chances to render a
+   * half-updated view. What it needs is small and fits in one object: is Hermes
+   * up, does anybody need a PIN typed right now, how many devices are paired,
+   * and is anything streaming.
+   *
+   * `pending_pair` is the field the console exists for. It is true only while a
+   * client's request is parked waiting for four digits, so the console can put
+   * the pairing screen in front of the user at the moment it is useful instead
+   * of asking them to go looking for it.
+   */
+  void getGameModeStatus(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json output_tree;
+    output_tree["version"] = PROJECT_VERSION;
+    output_tree["version_commit"] = PROJECT_VERSION_COMMIT;
+    output_tree["hostname"] = config::nvhttp.sunshine_name;
+
+    const auto clients = nvhttp::get_all_clients();
+    output_tree["paired_clients"] = clients.is_array() ? clients.size() : 0;
+
+    if (const auto pending = nvhttp::pending_pair_client(); pending) {
+      output_tree["pending_pair"] = true;
+      output_tree["pending_pair_name"] = *pending;
+    } else {
+      output_tree["pending_pair"] = false;
+    }
+
+    output_tree["streaming_sessions"] = rtsp_stream::session_count();
+    output_tree["isolated_sessions"] = proc::proc.list_isolated().size();
+
+    output_tree["status"] = true;
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief End one isolated session.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -2892,6 +3063,10 @@ fi')CLIP";
    */
   void start() {
     auto shutdown_event = mail::man->event<bool>(mail::shutdown);
+#ifdef __linux__
+    write_local_api_token();
+    auto token_guard = util::fail_guard(remove_local_api_token);
+#endif
     auto port_https = net::map_port(PORT_HTTPS);
     auto address_family = net::af_from_enum_string(config::sunshine.address_family);
     https_server_t server { config::nvhttp.cert, config::nvhttp.pkey };
@@ -2976,6 +3151,7 @@ fi')CLIP";
     server.resource["^/api/clients/update$"]["POST"] = updateClient;
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/clients/disconnect$"]["POST"] = disconnect;
+    server.resource["^/api/gamemode/status$"]["GET"] = getGameModeStatus;
     server.resource["^/api/sessions/list$"]["GET"] = getSessions;
     server.resource["^/api/sessions/terminate$"]["POST"] = terminateSession;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;

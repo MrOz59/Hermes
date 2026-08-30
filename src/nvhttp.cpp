@@ -162,6 +162,32 @@ namespace nvhttp {
   client_t client_root;
   std::atomic<uint32_t> session_id_counter;
 
+  /**
+   * @brief The client whose pairing request is waiting for a PIN, if any.
+   *
+   * Tracked beside `map_id_sess` rather than read out of it: the map lives on
+   * the nvhttp threads with no lock of its own, and this is read from the web
+   * server's threads. A separate guarded copy is the difference between one
+   * more unsynchronised reader and none.
+   *
+   * "Waiting for a PIN" is narrower than "has a pair session": it begins when
+   * the request parks itself on `async_insert_pin.response` and ends the moment
+   * a PIN is submitted, because that is exactly the window in which somebody
+   * has to go and type four digits.
+   */
+  std::mutex pending_pair_mutex;
+  std::optional<std::string> pending_pair_name;
+
+  void set_pending_pair(const std::string &name) {
+    std::lock_guard lock {pending_pair_mutex};
+    pending_pair_name = name;
+  }
+
+  void clear_pending_pair() {
+    std::lock_guard lock {pending_pair_mutex};
+    pending_pair_name.reset();
+  }
+
   struct pending_hestia_session_prepare_t {
     hestia_session_prepare_t prepare;
     std::chrono::steady_clock::time_point expires_at;
@@ -495,6 +521,7 @@ namespace nvhttp {
   }
 
   void remove_session(const pair_session_t &sess) {
+    clear_pending_pair();
     map_id_sess.erase(sess.client.uniqueID);
   }
 
@@ -661,6 +688,7 @@ namespace nvhttp {
       named_cert_p->always_use_virtual_display = false;
 
       if (auto it = map_id_sess.find(client.uniqueID); it != std::end(map_id_sess)) {
+        clear_pending_pair();
         map_id_sess.erase(it);
       }
 
@@ -818,6 +846,7 @@ namespace nvhttp {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
           system_tray::update_tray_require_pin();
 #endif
+          set_pending_pair(ptr->second.client.name);
           ptr->second.async_insert_pin.response = std::move(response);
 
           fg.disable();
@@ -853,6 +882,11 @@ namespace nvhttp {
     }
   }
 
+  std::optional<std::string> pending_pair_client() {
+    std::lock_guard lock {pending_pair_mutex};
+    return pending_pair_name;
+  }
+
   bool pin(std::string pin, std::string name) {
     pt::ptree tree;
     if (map_id_sess.empty()) {
@@ -879,6 +913,9 @@ namespace nvhttp {
     }
 
     auto &sess = std::begin(map_id_sess)->second;
+    // Somebody typed the four digits, so nothing is waiting for them any more -
+    // whether or not they were the right four.
+    clear_pending_pair();
     getservercert(sess, tree, pin);
 
     if (!name.empty()) {
@@ -1969,6 +2006,7 @@ namespace nvhttp {
     // Wait for any event
     shutdown_event->view();
 
+    clear_pending_pair();
     map_id_sess.clear();
 
     https_server.stop();

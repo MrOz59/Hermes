@@ -1,0 +1,13 @@
+[Desktop Entry]
+# The entry that gets added to Steam as a non-Steam shortcut, so Hermes can be
+# paired and restarted from the couch. Adding it has to be done once from
+# Desktop Mode - Game Mode has no way to add a shortcut to itself - after which
+# it lives in the Steam library like any other title.
+Categories=RemoteAccess;Network;
+Comment=Pair a device or restart Hermes from Game Mode, with a controller
+Exec=/usr/bin/hermes-gamemode
+Icon=@SUNSHINE_DESKTOP_ICON@
+Keywords=gamestream;stream;moonlight;remote play;gamescope;steam deck;
+Name=@PROJECT_NAME@ (Game Mode)
+Type=Application
+Version=1.0

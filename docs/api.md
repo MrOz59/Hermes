@@ -57,6 +57,9 @@ basic authentication with the admin username and password.
 ## POST /api/restart
 @copydoc confighttp::restart()
 
+## GET /api/gamemode/status
+@copydoc confighttp::getGameModeStatus()
+
 ## GET /api/sessions/list
 @copydoc confighttp::getSessions()
 

@@ -59,6 +59,9 @@ elseif(UNIX)  # Linux
     option(SUNSHINE_BUILD_SESSION_BROKER
             "Build the privileged per-client session account broker." ON)
 
+    option(SUNSHINE_BUILD_GAMEMODE_CONSOLE
+            "Build the controller-driven console for SteamOS/Gamescope Game Mode." ON)
+
     # Linux capture methods
     option(SUNSHINE_ENABLE_CUDA
             "Enable cuda specific code." ON)

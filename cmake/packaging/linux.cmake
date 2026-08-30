@@ -255,6 +255,14 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_FQDN}.desktop"
 if(NOT ${SUNSHINE_BUILD_APPIMAGE} AND NOT ${SUNSHINE_BUILD_FLATPAK})
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_FQDN}.terminal.desktop"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications")
+    # Shipped as a visible entry rather than NoDisplay, because being findable
+    # in an application list is the whole path by which it reaches Steam: a
+    # non-Steam shortcut is added by browsing for it once from Desktop Mode.
+    if(SUNSHINE_BUILD_GAMEMODE_CONSOLE)
+        install(TARGETS hermes-gamemode DESTINATION "bin")
+        install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_FQDN}.GameMode.desktop"
+                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications")
+    endif()
 endif()
 
 # metadata file

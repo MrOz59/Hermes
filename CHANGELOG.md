@@ -149,6 +149,28 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   weston therefore composites in software, on llvmpipe. A compositor that takes
   a render node separately does not inherit that limit, because a render node
   carries no seat assignment; the `{render_node}` placeholder exists for that.
+- The host can see the isolated sessions running on it, and end one. There was
+  no answer to "what is running on this machine": the client list is who may
+  connect, and the streaming session list is who is connected, while an isolated
+  session is neither - it outlives the stream that started it so a client can
+  come back to the desktop it left, which is also how one comes to be running
+  with nobody attached and no way to notice. `GET /api/sessions/list` reports
+  each one with what is needed to tell them apart and to decide about them:
+  whose it is, what it is running, the compositor and seat it is on, whether it
+  runs as the Hermes user or as an account of its own, whether it is still
+  alive, whether anyone is attached, and for how long it has been up.
+  `POST /api/sessions/terminate` ends one by client uuid, stopping the stream
+  first so the client is told the session ended rather than being left holding a
+  stream into a desktop being torn down under it. Ending a session unpairs
+  nothing and deletes nothing - the client may connect again and get the same
+  session, with its files, back.
+
+  The clients page grew a panel for this, refreshed on its own because a
+  session's state and its uptime both move with nobody touching the page. It is
+  hidden where the platform never runs one rather than showing an empty list
+  forever, and ending a session asks first, since it takes somebody's desktop
+  and anything unsaved in it.
+
 - An isolated session no longer streams the host's audio to its client. Capture
   had one source for the whole machine, and the way the host's own sound reached
   a stream was by moving the host's default sink onto the sink being recorded -

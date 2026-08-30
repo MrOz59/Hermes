@@ -2259,6 +2259,131 @@ printf "evdi\\n" > /etc/modules-load.d/evdi.conf')EVDI";
     send_response(response, output_tree);
   }
 
+  /**
+   * @brief List the isolated sessions this server is holding.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * Not the same list as /api/clients/list, which is who may connect, nor the
+   * same as who is streaming: an isolated session outlives the stream that
+   * started it, so that a client can come back to the desktop it left. That is
+   * also how one can be left running with nobody attached, which is the case
+   * this list exists to make visible.
+   */
+  void getSessions(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json output_tree;
+    nlohmann::json sessions = nlohmann::json::array();
+    for (const auto &session : proc::proc.list_isolated()) {
+      nlohmann::json entry;
+      entry["id"] = session.launch_session_id;
+      entry["uuid"] = session.client_uuid;
+      entry["client_name"] = session.client_name;
+      entry["app_id"] = session.app_id;
+      entry["app_name"] = session.app_name;
+      entry["profile"] = session.profile;
+      entry["compositor"] = session.compositor;
+      entry["seat"] = session.seat;
+      entry["display"] = session.display;
+      entry["running"] = session.running;
+      entry["uptime_seconds"] = session.uptime_seconds;
+      // Absent rather than empty where the session has none, so the UI can tell
+      // "runs as the Hermes user" from "runs as hermes-s01" without comparing
+      // against a magic empty string.
+      if (!session.account_user.empty()) {
+        entry["account_user"] = session.account_user;
+        entry["account_uid"] = session.account_uid;
+      }
+      if (!session.unit.empty()) {
+        entry["unit"] = session.unit;
+      }
+      if (!session.audio_sink.empty()) {
+        entry["audio_sink"] = session.audio_sink;
+      }
+      // Whether anybody is attached right now, which is the difference between
+      // ending somebody's session and reclaiming an abandoned one.
+      entry["streaming"] = rtsp_stream::find_session(session.client_uuid) != nullptr;
+      sessions.push_back(std::move(entry));
+    }
+
+    output_tree["sessions"] = std::move(sessions);
+    // So the UI can tell "nothing is running" from "this platform never runs
+    // one", and hide the panel entirely in the second case rather than showing
+    // an empty list forever.
+#ifdef __linux__
+    output_tree["supported"] = true;
+#else
+    output_tree["supported"] = false;
+#endif
+    output_tree["status"] = true;
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief End one isolated session.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * The body for the POST request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "uuid": "<client uuid>"
+   * }
+   * @endcode
+   *
+   * The stream is stopped first where there is one, so the client is told the
+   * session ended rather than being left holding a stream into a desktop that
+   * is being torn down underneath it. Ending a session does not unpair the
+   * client and does not remove its account or its files: it may connect again
+   * and get the same session back.
+   */
+  void terminateSession(resp_https_t response, req_https_t request) {
+    if (!validateContentType(response, request, "application/json") || !authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      std::stringstream ss;
+      ss << request->content.rdbuf();
+      nlohmann::json input_tree = nlohmann::json::parse(ss.str());
+      nlohmann::json output_tree;
+
+      const std::string uuid = input_tree.value("uuid", "");
+      if (uuid.empty()) {
+        bad_request(response, request, "A client uuid is required.");
+        return;
+      }
+
+      const auto sessions = proc::proc.list_isolated();
+      const bool known = std::ranges::any_of(sessions, [&](const auto &session) {
+        return session.client_uuid == uuid;
+      });
+      if (!known) {
+        output_tree["status"] = false;
+        output_tree["error"] = "No isolated session belongs to that client.";
+        send_response(response, output_tree);
+        return;
+      }
+
+      nvhttp::find_and_stop_session(uuid, true);
+      proc::proc.terminate_isolated_client(uuid);
+
+      BOOST_LOG(info) << "Isolated session for client ["sv << uuid << "] was ended from the web UI."sv;
+      output_tree["status"] = true;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "Terminate session: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
   void getClipboardStatus(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
       return;
@@ -2851,6 +2976,8 @@ fi')CLIP";
     server.resource["^/api/clients/update$"]["POST"] = updateClient;
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/clients/disconnect$"]["POST"] = disconnect;
+    server.resource["^/api/sessions/list$"]["GET"] = getSessions;
+    server.resource["^/api/sessions/terminate$"]["POST"] = terminateSession;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
     server.resource["^/images/apollo.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-apollo-45.png$"]["GET"] = getApolloLogoImage;

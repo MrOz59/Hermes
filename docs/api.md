@@ -57,6 +57,12 @@ basic authentication with the admin username and password.
 ## POST /api/restart
 @copydoc confighttp::restart()
 
+## GET /api/sessions/list
+@copydoc confighttp::getSessions()
+
+## POST /api/sessions/terminate
+@copydoc confighttp::terminateSession()
+
 <div class="section_buttons">
 
 | Previous                                    |                                  Next |

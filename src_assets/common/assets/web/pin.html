@@ -205,6 +205,51 @@
         <div class="list-group-item p-3 text-center"><em>{{ $t('pin.unpair_single_no_devices') }}</em></div>
       </ul>
     </div>
+    <!-- Isolated sessions -->
+    <div class="card my-4 align-self-stretch" v-if="sessionsSupported">
+      <div class="card-body">
+        <div class="p-2">
+          <div class="d-flex justify-content-end align-items-center">
+            <h2 id="sessions" class="me-auto">{{ $t('pin.sessions') }}</h2>
+            <button class="btn btn-secondary" @click="refreshSessions">
+              <i class="fas fa-rotate"></i>
+            </button>
+          </div>
+          <br />
+          <p class="mb-0">{{ $t('pin.sessions_desc') }}</p>
+        </div>
+      </div>
+      <ul class="list-group list-group-flush list-group-item-light" v-if="sessions.length > 0">
+        <div v-for="session in sessions" :key="session.id" class="list-group-item d-flex align-items-center flex-wrap">
+          <div class="p-2 flex-grow-1">
+            <div class="d-flex align-items-center flex-wrap">
+              <span class="badge me-2" :class="session.running ? 'bg-success' : 'bg-secondary'">
+                {{ session.running ? $t('pin.sessions_running') : $t('pin.sessions_stopped') }}
+              </span>
+              <span class="badge me-2" :class="session.streaming ? 'bg-primary' : 'bg-warning text-dark'">
+                {{ session.streaming ? $t('pin.sessions_attached') : $t('pin.sessions_detached') }}
+              </span>
+              <b class="me-2">{{ session.client_name || $t('pin.unpair_single_unknown') }}</b>
+              <span class="text-body-secondary">{{ session.app_name }}</span>
+            </div>
+            <small class="text-body-secondary">
+              {{ session.account_user
+                   ? $t('pin.sessions_as_user', { user: session.account_user, uid: session.account_uid })
+                   : $t('pin.sessions_as_host') }}
+              &middot; {{ session.profile }}<template v-if="session.compositor"> / {{ session.compositor }}</template>
+              <template v-if="session.seat"> &middot; {{ session.seat }}</template>
+              &middot; {{ formatUptime(session.uptime_seconds) }}
+            </small>
+          </div>
+          <button class="me-2 btn btn-danger" :disabled="endingSession === session.uuid" @click="endSession(session)">
+            <i class="fas fa-power-off"></i>
+          </button>
+        </div>
+      </ul>
+      <ul v-else class="list-group list-group-flush list-group-item-light">
+        <div class="list-group-item p-3 text-center"><em>{{ $t('pin.sessions_none') }}</em></div>
+      </ul>
+    </div>
   </div>
 </body>
 
@@ -368,6 +413,10 @@
       hostName: '',
       permissionGroups,
       clients: [],
+      sessions: [],
+      sessionsSupported: false,
+      endingSession: null,
+      sessionTimer: null,
       showApplyMessage: false,
       unpairAllPressed: false,
       unpairAllStatus: null
@@ -396,6 +445,16 @@
     },
     created() {
       this.refreshClients();
+      this.refreshSessions();
+    },
+    mounted() {
+      // A session's state and its uptime both move without anybody touching
+      // this page, so the list refreshes itself rather than going stale behind
+      // a reload the reader has no reason to think they need.
+      this.sessionTimer = setInterval(() => this.refreshSessions(), 5000);
+    },
+    beforeUnmount() {
+      clearInterval(this.sessionTimer);
     },
     methods: {
       switchTab(currentTab) {
@@ -682,6 +741,58 @@
           this.showApplyMessage = true;
           this.refreshClients();
         });
+      },
+      formatUptime(seconds) {
+        const total = Math.max(0, Math.floor(seconds || 0));
+        const hours = Math.floor(total / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        if (minutes > 0) return `${minutes}m`;
+        return `${total}s`;
+      },
+      refreshSessions() {
+        fetch("./api/sessions/list", { credentials: 'include' })
+          .then((response) => response.json())
+          .then((response) => {
+            this.sessionsSupported = !!response.supported;
+            this.sessions = response.sessions || [];
+          })
+          .catch((e) => {
+            console.error(e);
+          });
+      },
+      endSession(session) {
+        const name = session.client_name || this.i18n.t('pin.unpair_single_unknown');
+        // Confirmed because this is not recoverable from the client's side: it
+        // ends somebody's desktop, and anything unsaved in it goes with it.
+        if (!confirm(this.i18n.t('pin.sessions_end_confirm', { name }))) {
+          return;
+        }
+        this.endingSession = session.uuid;
+        fetch("./api/sessions/terminate", {
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          method: 'POST',
+          body: JSON.stringify({ uuid: session.uuid })
+        })
+          .then((r) => r.json())
+          .then((r) => {
+            if (!r.status) {
+              alert(this.i18n.t('pin.sessions_end_error') + (r.error || ''));
+            }
+          })
+          .catch((e) => {
+            alert(this.i18n.t('pin.sessions_end_error') + e);
+          })
+          .finally(() => {
+            this.endingSession = null;
+            setTimeout(() => {
+              this.refreshSessions();
+              this.refreshClients();
+            }, 1000);
+          });
       },
       refreshClients() {
         if (currentEditingClient) {

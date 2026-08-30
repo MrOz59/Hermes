@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 // lib includes
 #include <boost/process/v1/child.hpp>
@@ -160,6 +161,37 @@ namespace proc {
 
     /** Stop every experimental isolated runtime. */
     void terminate_all_isolated();
+
+    /**
+     * @brief One live isolated session, as the host needs to see it.
+     *
+     * A session outlives the stream that started it - that is what lets a
+     * client reconnect to the desktop it left - so "who is streaming" is not
+     * the same question as "what is running on this machine", and the second
+     * one had no answer until now. Enough is reported here to tell one session
+     * from another and to decide which to end: whose it is, what it is running,
+     * where it is running, and whether it still is.
+     */
+    struct isolated_session_t {
+      uint32_t launch_session_id {};
+      std::string client_uuid;
+      std::string client_name;
+      std::string app_id;
+      std::string app_name;
+      std::string profile;  ///< "desktop" or "application".
+      std::string compositor;
+      std::string seat;
+      std::string display;
+      std::string account_user;  ///< Empty where the session runs as the Hermes user.
+      uint32_t account_uid {};
+      std::string unit;  ///< The systemd unit, where the session has one.
+      std::string audio_sink;  ///< Empty where the session shares the host's audio.
+      bool running {};  ///< False for one whose compositor has died but was not reaped.
+      int64_t uptime_seconds {};
+    };
+
+    /** Every isolated session this server currently holds. */
+    std::vector<isolated_session_t> list_isolated();
 
     /** Return the app exposed to a particular client in isolated mode. */
     int running_for_client(const std::string &client_uuid);

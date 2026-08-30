@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -105,6 +106,7 @@ namespace proc {
       std::optional<platf::session_broker::account_t> account;
       std::string unit;
       std::string audio_sink;
+      std::chrono::steady_clock::time_point started_at {std::chrono::steady_clock::now()};
       std::string wayland_display;
       std::string drm_device_path;
       std::string compositor_name;
@@ -1661,6 +1663,55 @@ namespace proc {
     }
 #endif
     return _env;
+  }
+
+  std::vector<proc_t::isolated_session_t> proc_t::list_isolated() {
+    std::vector<isolated_session_t> sessions;
+#ifndef _WIN32
+    std::vector<std::shared_ptr<isolated_runtime_t>> runtimes;
+    {
+      std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+      runtimes.reserve(isolated_runtimes.size());
+      for (const auto &[id, runtime] : isolated_runtimes) {
+        if (runtime) {
+          runtimes.push_back(runtime);
+        }
+      }
+    }
+
+    // Liveness is asked for outside the lock. Where the session is a systemd
+    // unit the answer comes from the broker over a socket, and holding the
+    // registry lock across that would stall every launch and teardown behind a
+    // round trip.
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto &runtime : runtimes) {
+      isolated_session_t session;
+      session.launch_session_id = runtime->launch_session_id;
+      session.client_uuid = runtime->client_uuid;
+      session.client_name = runtime->client_name;
+      session.app_id = runtime->app.id;
+      session.app_name = runtime->app.name;
+      session.profile = runtime->profile;
+      session.compositor = runtime->compositor_name;
+      session.seat = runtime->seat_id;
+      session.display = runtime->display_name;
+      if (runtime->account) {
+        session.account_user = runtime->account->user;
+        session.account_uid = runtime->account->uid;
+      }
+      session.unit = runtime->unit;
+      session.audio_sink = runtime->audio_sink;
+      session.running = isolated_runtime_running(runtime);
+      session.uptime_seconds =
+        std::chrono::duration_cast<std::chrono::seconds>(now - runtime->started_at).count();
+      sessions.push_back(std::move(session));
+    }
+
+    std::ranges::sort(sessions, [](const auto &left, const auto &right) {
+      return left.launch_session_id < right.launch_session_id;
+    });
+#endif
+    return sessions;
   }
 
   std::string proc_t::isolated_audio_sink(uint32_t launch_session_id) {

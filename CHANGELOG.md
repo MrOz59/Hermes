@@ -217,6 +217,17 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- Installing Hermes no longer breaks polkit for everyone on the host. The
+  isolated-session deny rule declared its callback as
+  `function(subject, action)`, but polkit calls rules as `(action, subject)` -
+  so what the rule read as the subject was the action object, which has no
+  `isInGroup`, and every authorization check on the machine died on the same
+  `TypeError`. A rule that throws fails the check outright, which overrides even
+  an action the policy grants unconditionally: the person actually sitting at
+  the keyboard, in no Hermes session and in no `hermes-session` group, lost
+  NetworkManager's `network-control` and got "Not authorized to control
+  networking" when activating a connection. The rule had also never denied
+  anything, because it threw before reaching the group test.
 - Wayland capture no longer streams a black screen on a machine with two GPUs.
   The capture buffers handed to the compositor were allocated on the first render
   node that happened to open, and node numbers follow module load order - so on a

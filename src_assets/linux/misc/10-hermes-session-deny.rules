@@ -18,7 +18,7 @@
 // games do not go through polkit. What it removes is mounting disks, altering
 // the network, and powering off the host that other people may be streaming
 // from.
-polkit.addRule(function(subject, action) {
+polkit.addRule(function(action, subject) {
     if (subject.isInGroup("hermes-session")) {
         polkit.log("hermes: denied " + action.id + " to session user " + subject.user);
         return polkit.Result.NO;

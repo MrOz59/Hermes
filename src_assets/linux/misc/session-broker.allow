@@ -5,5 +5,8 @@
 # account that runs Hermes and nobody who can merely reach the socket.
 #
 # Grant this to the user Hermes runs as. Everything that user can then ask for
-# is bounded by the broker's four requests - it cannot name an account, choose
-# a uid, or reach outside the session home root.
+# is bounded by the broker's requests: it cannot name an account, choose a uid,
+# or reach outside the session home root. START does let it choose the command
+# a session runs, which is not an escalation - the command runs as the session
+# account, which holds strictly less than the Hermes user already does - but it
+# is the reason this file lists the Hermes user and nobody else.

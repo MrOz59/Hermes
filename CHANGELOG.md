@@ -149,6 +149,43 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   weston therefore composites in software, on llvmpipe. A compositor that takes
   a render node separately does not inherit that limit, because a render node
   carries no seat assignment; the `{render_node}` placeholder exists for that.
+- An isolated session now actually runs as its own Unix user, where before it
+  was a session in name only. It had a seat, a card, a Wayland socket and input
+  devices of its own, but it ran under the uid Hermes runs under - so it read
+  and wrote the host user's home, keys and profiles, which is the isolation that
+  matters. With the session broker installed, Hermes asks it for the client's
+  account and starts the session under that uid; with no broker, nothing changes
+  and the session runs as before. A broker that is installed but will not hand
+  out an account fails the launch rather than falling back to the host user,
+  because a silent fallback is the one outcome installing it was meant to
+  prevent.
+
+  The environment stops carrying the host's session with it. It is copied from
+  the Hermes process, and a copy carries the address of the host's session bus:
+  an application that registers as a unique instance found the host's copy of
+  itself already on that bus and handed the window to it, which is why a
+  terminal opened in an isolated session appeared on the host desktop while a
+  browser opened in the session. That address is also how a session would reach
+  the host's clipboard, notifications and wallet. It goes, along with the host's
+  audio server, credentials and identity, and systemd supplies the session's own
+  in their place.
+
+  One runtime directory became two. The session's belongs to its uid and Hermes
+  cannot write it; the generated compositor config stays in Hermes' own, which
+  the session can only read. Two consequences follow. Hermes can no longer list
+  the session's directory to find the Wayland socket the compositor made, so the
+  broker lists it and returns the name - `SOCKET` - and a compositor's log now
+  goes to the journal rather than to a file Hermes owns, under
+  `journalctl -u hermes-session-N`. Whether the session is alive is a question
+  for systemd too, since there is no child process left to ask: `STATUS` reports
+  the unit's state, and a unit that is still starting counts as running rather
+  than as one that already died.
+
+  What runs inside the session - the desktop application, the detached commands
+  - runs there as well, each as a unit bound to the session's with `PartOf`, so
+  stopping the session still takes all of it down the way terminating the
+  process group used to.
+
 - An isolated session can be given a Unix account of its own.
   `hermes-session-broker` is a small root service, socket-activated like the
   card broker and authorized the same way - the peer's uid from `SO_PEERCRED`
@@ -176,8 +213,50 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   all while the group is missing, so an account cannot come to exist on a
   machine where the rule is not yet in place.
 
-  Provisioning is all this does so far; starting a session as that account is
-  not wired up yet.
+  Provisioning is no longer all it does: `START` runs a session under that
+  account and `STOP` ends it. Hermes runs as the person whose machine it
+  streams, so it cannot become anybody - the broker can, and asks systemd for a
+  transient unit with `User=` set to the session account rather than forking one
+  itself. That distinction is the whole design. A process this broker forked
+  would inherit the confinement the broker is under, which forbids a network,
+  forbids writable-executable memory and hides `/home`; no desktop survives
+  that, and a child cannot shed a namespace or a seccomp filter. A unit PID 1
+  starts is confined by its own settings instead, gets a cgroup and a lifetime
+  of its own, and is reaped by systemd - so a broker restart is not a dropped
+  desktop. `systemd-run` is asked rather than the bus method called by hand, for
+  the reason `useradd` is asked rather than `/etc/passwd` written.
+
+  The session gets a runtime directory and a user manager - and so a session
+  bus, a Wayland socket and a PipeWire socket - from lingering, which `START`
+  enables and `STOP` turns back off, because otherwise every client that ever
+  streamed would leave a manager running on the host for good. It does not get a
+  logind session or a PAM stack, because its compositor takes its seat through
+  seatd. `START` is the one request that carries more than a line: a command and
+  an environment do not fit on one, and splitting them on whitespace is a
+  quoting bug waiting to happen, so it is a block of `ARG` and `ENV` lines each
+  used whole, ended by `END`. `XDG_RUNTIME_DIR` is set by the broker after the
+  caller's environment, so it always matches the uid it belongs to.
+
+  `scripts/session-broker-test.sh` exercises all of this against real accounts
+  and real units in a disposable virtme-ng guest, because none of it can be
+  faked: what is worth asserting - a home nobody else can read, a unit running
+  under another uid, lingering that goes away again, a polkit rule that denies
+  that uid and throws for nobody - only exists on a machine where it really
+  happened.
+
+  The map from client to account is the broker's only memory, so it is treated
+  as the record it is. A line that does not parse fails the whole read instead
+  of being skipped: skipping it is silent data loss with somebody's saves as the
+  blast radius, because the next write persists the file without that line and
+  the client it belonged to comes back, matches nothing, and is handed a fresh
+  account while its old home sits unreferenced. Writes are fsynced before the
+  rename and the directory after it, so a crash cannot leave a map that is
+  present, empty and authoritative. `PURGE` removes the account first and the
+  mapping second - the other order loses a slot for good when `userdel` fails,
+  because the account survives with nothing pointing at it and the slot search
+  skips every name already in passwd - and `ENSURE` recreates an account the map
+  claims but passwd does not, so neither half of an interrupted purge strands a
+  client.
 
 ### Changed
 - The container image no longer needs `SYS_ADMIN` to stream the desktop. The

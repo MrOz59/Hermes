@@ -62,6 +62,7 @@
   // _SH constants for _wfsopen()
   #include <share.h>
 #else
+  #include "platform/linux/session_broker.h"
   #include "platform/linux/virtual_display.h"
   #include <sys/stat.h>
   #include <unistd.h>
@@ -94,6 +95,14 @@ namespace proc {
       std::string seat_id;
       std::string seatd_socket;
       std::string runtime_dir;
+      // Where Hermes writes what the session only reads - a generated
+      // compositor config, chiefly. It is the same directory as runtime_dir
+      // until the session gets a uid of its own, at which point the two have to
+      // part: runtime_dir becomes the session's, which Hermes cannot write, and
+      // this stays Hermes', which the session cannot write.
+      std::string assets_dir;
+      std::optional<platf::session_broker::account_t> account;
+      std::string unit;
       std::string wayland_display;
       std::string drm_device_path;
       std::string compositor_name;
@@ -132,6 +141,26 @@ namespace proc {
 
     std::string card_basename(const std::string &device_path) {
       return std::filesystem::path {device_path}.filename().string();
+    }
+
+    /**
+     * @brief Split a launch command into an argument vector.
+     *
+     * On whitespace and nothing else, which is what run_command() has always
+     * done with the same string - boost::process never interpreted shell syntax
+     * here, so this changes where the split happens, not what it produces. The
+     * note above this block is what makes it safe: every value interpolated
+     * into these commands is a generated identifier or a path under a directory
+     * Hermes named, and none of them carry whitespace.
+     */
+    std::vector<std::string> split_command(const std::string &command) {
+      std::vector<std::string> arguments;
+      std::istringstream stream {command};
+      std::string word;
+      while (stream >> word) {
+        arguments.emplace_back(word);
+      }
+      return arguments;
     }
 
     /**
@@ -320,11 +349,104 @@ namespace proc {
       return candidates.empty() ? std::string {} : candidates.front();
     }
 
+    /**
+     * @brief Start one command inside a session, wherever that session lives.
+     *
+     * Both halves used to be the same call, because everything ran as Hermes
+     * and everything was a child. A session with an account of its own is
+     * neither, so what runs inside it goes through the broker as a unit bound
+     * to the session's - which is also what makes it die with the session, the
+     * job the process group used to do.
+     */
+    bool launch_into_session(
+      const std::shared_ptr<isolated_runtime_t> &runtime,
+      const ctx_t &app,
+      const std::string &command,
+      const std::string &scope,
+      std::error_code &ec
+    ) {
+      if (runtime->account) {
+        const auto arguments = split_command(command);
+        if (arguments.empty()) {
+          return false;
+        }
+        std::vector<std::string> environment;
+        for (const auto &entry : runtime->env) {
+          environment.emplace_back(entry.get_name() + "=" + entry.to_string());
+        }
+        return platf::session_broker::start(
+                 runtime->client_uuid,
+                 arguments,
+                 environment,
+                 scope
+               )
+          .has_value();
+      }
+
+      auto working_dir = app.working_dir.empty() ?
+                           find_working_directory(command, runtime->env) :
+                           boost::filesystem::path {app.working_dir};
+      auto child = platf::run_command(
+        app.elevated,
+        true,
+        command,
+        working_dir,
+        runtime->env,
+        runtime->pipe.get(),
+        ec,
+        &runtime->process_group
+      );
+      if (ec) {
+        return false;
+      }
+      child.detach();
+      return true;
+    }
+
     std::string choose_isolated_profile(const ctx_t &app) {
       if (app.session_type == "application" || app.session_type == "desktop") {
         return app.session_type;
       }
       return app.cmd.empty() ? "desktop" : "application";
+    }
+
+    /**
+     * @brief Drop every pointer back at the host's own session.
+     *
+     * The session's environment starts as a copy of the Hermes process's, which
+     * is the desktop's, and a copy carries the addresses of everything that
+     * desktop owns. The session bus is the one that bites: an application that
+     * registers as a unique instance finds the host's copy of itself already on
+     * that bus and hands the window to it, which is why a terminal opened in an
+     * isolated session appears on the host while a browser opens in the
+     * session. The same address is also how the session would reach the host's
+     * clipboard, notifications and wallet.
+     *
+     * The audio and identity variables go for the same reason. What replaces
+     * them is not set here: a session with a uid of its own gets a runtime
+     * directory, a user manager and so a bus of its own from systemd, and HOME,
+     * USER, LOGNAME and SHELL from its passwd entry.
+     */
+    void erase_host_session_environment(boost::process::v1::environment &env) {
+      for (const auto *name : {
+             // The host's session bus, and the two variables that would let a
+             // client find it again after the first is gone.
+             "DBUS_SESSION_BUS_ADDRESS", "DBUS_SESSION_BUS_PID",
+             "DBUS_STARTER_ADDRESS", "DBUS_STARTER_BUS_TYPE",
+             // The host's audio server.
+             "PULSE_SERVER", "PULSE_COOKIE", "PIPEWIRE_REMOTE",
+             // Who the process is, and where its files are.
+             "HOME", "USER", "LOGNAME", "SHELL", "XDG_RUNTIME_DIR",
+             "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
+             // Credentials the host user holds and the session has no claim to.
+             "SSH_AUTH_SOCK", "GPG_AGENT_INFO", "XAUTHORITY",
+             // Leftovers that make a desktop believe it is already inside one.
+             "XDG_SESSION_ID", "XDG_SESSION_DESKTOP", "DESKTOP_SESSION",
+             "KDE_FULL_SESSION", "KDE_SESSION_UID", "KDE_SESSION_VERSION",
+             "GNOME_DESKTOP_SESSION_ID",
+           }) {
+        env.erase(name);
+      }
     }
 
     void populate_session_environment(
@@ -339,7 +461,13 @@ namespace proc {
       char fps_buffer[16] {};
       std::snprintf(fps_buffer, sizeof(fps_buffer), "%.3f", static_cast<double>(fps_millihz) / 1000.0);
 
-      env["XDG_RUNTIME_DIR"] = runtime.runtime_dir;
+      if (runtime.account) {
+        // The broker sets XDG_RUNTIME_DIR to the one systemd made for that uid,
+        // and setting it here would only be a chance to disagree with it.
+        erase_host_session_environment(env);
+      } else {
+        env["XDG_RUNTIME_DIR"] = runtime.runtime_dir;
+      }
       env["XDG_SESSION_TYPE"] = "wayland";
       env["XDG_SESSION_CLASS"] = "user";
       env["XDG_SEAT"] = runtime.seat_id;
@@ -395,7 +523,16 @@ namespace proc {
     }
 
     bool isolated_runtime_running(const std::shared_ptr<isolated_runtime_t> &runtime) {
-      return runtime && runtime->process.valid() && runtime->process.running();
+      if (!runtime) {
+        return false;
+      }
+      // A session with an account of its own is a systemd unit rather than a
+      // child of this process, so there is no handle here to ask and systemd is
+      // the only thing that knows.
+      if (!runtime->unit.empty()) {
+        return platf::session_broker::active(runtime->client_uuid);
+      }
+      return runtime->process.valid() && runtime->process.running();
     }
 
     void stop_isolated_runtime(const std::shared_ptr<isolated_runtime_t> &runtime) {
@@ -405,13 +542,21 @@ namespace proc {
 
       BOOST_LOG(info) << "[IsolatedSession] Stopping " << runtime->runtime_id
                       << " for client " << runtime->client_name;
-      terminate_process_group(
-        runtime->process,
-        runtime->process_group,
-        runtime->app.exit_timeout
-      );
-      runtime->process = boost::process::v1::child {};
-      runtime->process_group = boost::process::v1::group {};
+      if (!runtime->unit.empty()) {
+        // Stopping the unit takes the whole session with it: systemd kills the
+        // cgroup, so a game that outlived its compositor goes too, which a
+        // process group could only manage for children that stayed in it.
+        platf::session_broker::stop(runtime->client_uuid);
+        runtime->unit.clear();
+      } else {
+        terminate_process_group(
+          runtime->process,
+          runtime->process_group,
+          runtime->app.exit_timeout
+        );
+        runtime->process = boost::process::v1::child {};
+        runtime->process_group = boost::process::v1::group {};
+      }
       runtime->env["APOLLO_APP_STATUS"] = "TERMINATING";
       runtime->env["HERMES_APP_STATUS"] = "TERMINATING";
 
@@ -446,11 +591,14 @@ namespace proc {
       if (!runtime->display_name.empty()) {
         VDISPLAY::removeVirtualDisplay(runtime->display_guid);
       }
+      // The assets directory, never runtime_dir: once the session has an
+      // account those are different places, and runtime_dir is then the
+      // session user's own /run/user, which belongs to systemd and not to us.
       std::error_code remove_ec;
-      std::filesystem::remove_all(runtime->runtime_dir, remove_ec);
+      std::filesystem::remove_all(runtime->assets_dir, remove_ec);
       if (remove_ec) {
         BOOST_LOG(debug) << "[IsolatedSession] Could not remove runtime directory "
-                         << runtime->runtime_dir << ": " << remove_ec.message();
+                         << runtime->assets_dir << ": " << remove_ec.message();
       }
     }
 
@@ -792,14 +940,39 @@ namespace proc {
     runtime->profile = choose_isolated_profile(app);
     runtime->runtime_id = "hermes-s" + std::to_string(launch_session->id);
     runtime->wayland_display = "wayland-" + runtime->runtime_id;
-    runtime->runtime_dir =
+    runtime->assets_dir =
       (std::filesystem::path {isolated_runtime_root()} / runtime->runtime_id).string();
+    runtime->runtime_dir = runtime->assets_dir;
+
+    // With a broker present the session gets a uid of its own, and the single
+    // runtime directory has to become two: the session's, which systemd made
+    // for that uid and Hermes cannot write, and this one, which Hermes writes
+    // the generated compositor config into and the session only reads.
+    if (platf::session_broker::available()) {
+      runtime->account = platf::session_broker::ensure(runtime->client_uuid);
+      if (!runtime->account) {
+        // Falling back to the host user here would quietly hand this client the
+        // host's files, which is the one thing installing the broker was meant
+        // to prevent. A refusal is the safe direction.
+        BOOST_LOG(error) << "[IsolatedSession] The session broker is running but would not "
+                            "provide an account for this client. Refusing to start the "
+                            "session as the host user.";
+        return 503;
+      }
+      runtime->runtime_dir = "/run/user/" + std::to_string(runtime->account->uid);
+    }
 
     std::error_code dir_ec;
-    std::filesystem::create_directories(runtime->runtime_dir, dir_ec);
-    if (dir_ec || ::chmod(runtime->runtime_dir.c_str(), S_IRWXU) != 0) {
+    std::filesystem::create_directories(runtime->assets_dir, dir_ec);
+    // Traversable and readable when the session is somebody else, because that
+    // is the only way it can read the config written here; it holds nothing
+    // secret. Private otherwise, the way it always was.
+    const auto assets_mode = runtime->account ?
+                               static_cast<mode_t>(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) :
+                               static_cast<mode_t>(S_IRWXU);
+    if (dir_ec || ::chmod(runtime->assets_dir.c_str(), assets_mode) != 0) {
       BOOST_LOG(error) << "[IsolatedSession] Could not create private runtime directory "
-                       << runtime->runtime_dir << ": "
+                       << runtime->assets_dir << ": "
                        << (dir_ec ? dir_ec.message() : std::strerror(errno));
       return -1;
     }
@@ -978,6 +1151,15 @@ namespace proc {
         }
       }
 
+      // Expanded against the assets directory, not the session's runtime
+      // directory: Hermes writes this file and the session only reads it, and
+      // once the session has a uid of its own those are two different places.
+      // Profiles go on saying {runtime_dir} and never learn the difference.
+      const auto config_path = expand_profile_template(
+        profile->config_target,
+        {{"runtime_dir", runtime->assets_dir}}
+      );
+
       const std::vector<std::pair<std::string, std::string>> values {
         {"card", card_basename(runtime->drm_device_path)},
         {"card_path", runtime->drm_device_path},
@@ -990,7 +1172,7 @@ namespace proc {
         {"height", std::to_string(height)},
         {"refresh", std::to_string(refresh_hz)},
         {"connector", connector},
-        {"config", expand_profile_template(profile->config_target, {{"runtime_dir", runtime->runtime_dir}})},
+        {"config", config_path},
       };
 
       // A profile that needs a config file gets one written into the session's
@@ -1003,7 +1185,7 @@ namespace proc {
                            << "\" names a config template that is missing: " << source;
           return -1;
         }
-        const auto target = expand_profile_template(profile->config_target, values);
+        const auto &target = config_path;
         std::ofstream out {target, std::ios::trunc};
         if (!out) {
           BOOST_LOG(error) << "[IsolatedSession] Could not write compositor config " << target;
@@ -1015,6 +1197,12 @@ namespace proc {
           return -1;
         }
         out.close();
+        // The session reads this as another user once it has an account, so it
+        // is readable rather than private. It is generated from a template that
+        // ships with Hermes and holds nothing the session may not see.
+        if (runtime->account) {
+          ::chmod(target.c_str(), S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+        }
         BOOST_LOG(debug) << "[IsolatedSession] Wrote compositor config " << target
                          << " from " << source;
       }
@@ -1040,20 +1228,52 @@ namespace proc {
                     << " on seat " << runtime->seat_id
                     << " on " << runtime->drm_device_path
                     << " for " << runtime->display_name;
-    runtime->process = platf::run_command(
-      app.elevated,
-      true,
-      launch_command,
-      working_dir,
-      runtime->env,
-      runtime->pipe.get(),
-      launch_ec,
-      &runtime->process_group
-    );
-    if (launch_ec) {
-      BOOST_LOG(error) << "[IsolatedSession] Could not start compositor: "
-                       << launch_ec.message();
-      return -1;
+    if (runtime->account) {
+      // The session cannot be a child of Hermes, because it runs as a uid
+      // Hermes may not assume. The broker asks systemd for a transient unit
+      // instead - which is also what gives the session a cgroup, a lifetime and
+      // a runtime directory that are its own rather than borrowed.
+      const auto arguments = split_command(launch_command);
+      if (arguments.empty()) {
+        BOOST_LOG(error) << "[IsolatedSession] The session compositor command is empty.";
+        return -1;
+      }
+
+      std::vector<std::string> environment;
+      for (const auto &entry : runtime->env) {
+        environment.emplace_back(entry.get_name() + "=" + entry.to_string());
+      }
+
+      const auto unit = platf::session_broker::start(
+        runtime->client_uuid,
+        arguments,
+        environment
+      );
+      if (!unit) {
+        BOOST_LOG(error) << "[IsolatedSession] The broker would not start the session for "
+                         << runtime->account->user << '.';
+        return -1;
+      }
+      runtime->unit = *unit;
+      BOOST_LOG(info) << "[IsolatedSession] Session " << runtime->runtime_id << " runs as "
+                      << runtime->account->user << " (uid " << runtime->account->uid
+                      << ") in " << runtime->unit << "; its log is in the journal.";
+    } else {
+      runtime->process = platf::run_command(
+        app.elevated,
+        true,
+        launch_command,
+        working_dir,
+        runtime->env,
+        runtime->pipe.get(),
+        launch_ec,
+        &runtime->process_group
+      );
+      if (launch_ec) {
+        BOOST_LOG(error) << "[IsolatedSession] Could not start compositor: "
+                         << launch_ec.message();
+        return -1;
+      }
     }
 
     bool scanout_ready = false;
@@ -1063,9 +1283,15 @@ namespace proc {
       if (launch_was_cancelled()) {
         return 503;
       }
-      if (!runtime->process.running()) {
-        BOOST_LOG(error) << "[IsolatedSession] Compositor exited before scanout became ready"
-                         << " (code=" << runtime->process.native_exit_code() << ").";
+      if (!isolated_runtime_running(runtime)) {
+        if (runtime->account) {
+          BOOST_LOG(error) << "[IsolatedSession] The session unit " << runtime->unit
+                           << " stopped before scanout became ready. What the compositor "
+                              "said is in the journal: journalctl -u " << runtime->unit;
+        } else {
+          BOOST_LOG(error) << "[IsolatedSession] Compositor exited before scanout became ready"
+                           << " (code=" << runtime->process.native_exit_code() << ").";
+        }
         return 503;
       }
 
@@ -1110,14 +1336,22 @@ namespace proc {
         if (launch_was_cancelled()) {
           return 503;
         }
-        if (!runtime->process.running()) {
+        if (!isolated_runtime_running(runtime)) {
           BOOST_LOG(error) << "[IsolatedSession] "
                            << (runtime->compositor_name.empty() ? "Gamescope" : runtime->compositor_name)
-                           << " exited before it created a Wayland socket (code="
-                           << runtime->process.native_exit_code() << ").";
+                           << " exited before it created a Wayland socket"
+                           << (runtime->account ?
+                                 "; see journalctl -u " + runtime->unit :
+                                 " (code=" + std::to_string(runtime->process.native_exit_code()) + ")")
+                           << '.';
           return 503;
         }
-        compositor_socket = discover_wayland_socket(runtime->runtime_dir);
+        // The session's runtime directory is 0700 and somebody else's once it
+        // has an account, so the broker does the listing and returns the name.
+        compositor_socket = runtime->account ?
+                              platf::session_broker::wayland_socket(runtime->client_uuid)
+                                .value_or(std::string {}) :
+                              discover_wayland_socket(runtime->runtime_dir);
         if (!compositor_socket.empty()) {
           break;
         }
@@ -1140,27 +1374,13 @@ namespace proc {
 
     if (runtime->profile == "desktop" && !app.cmd.empty()) {
       std::error_code app_ec;
-      auto app_working_dir = app.working_dir.empty() ?
-                               find_working_directory(app.cmd, runtime->env) :
-                               boost::filesystem::path {app.working_dir};
       BOOST_LOG(info) << "[IsolatedSession] Starting desktop application: ["
                       << app.cmd << ']';
-      auto desktop_app = platf::run_command(
-        app.elevated,
-        true,
-        app.cmd,
-        app_working_dir,
-        runtime->env,
-        runtime->pipe.get(),
-        app_ec,
-        &runtime->process_group
-      );
-      if (app_ec) {
-        BOOST_LOG(error) << "[IsolatedSession] Could not start desktop application: "
-                         << app_ec.message();
+      if (!launch_into_session(runtime, app, app.cmd, "app", app_ec)) {
+        BOOST_LOG(error) << "[IsolatedSession] Could not start desktop application"
+                         << (app_ec ? ": " + app_ec.message() : std::string {"."});
         return -1;
       }
-      desktop_app.detach();
     }
     if (launch_was_cancelled()) {
       return 503;
@@ -1168,26 +1388,13 @@ namespace proc {
 
     runtime->env["APOLLO_APP_STATUS"] = "RUNNING";
     runtime->env["HERMES_APP_STATUS"] = "RUNNING";
-    for (const auto &command : app.detached) {
+    for (size_t index = 0; index < app.detached.size(); ++index) {
       std::error_code ec;
-      auto detached_working_dir = app.working_dir.empty() ?
-                                    find_working_directory(command, runtime->env) :
-                                    boost::filesystem::path {app.working_dir};
-      auto child = platf::run_command(
-        app.elevated,
-        true,
-        command,
-        detached_working_dir,
-        runtime->env,
-        runtime->pipe.get(),
-        ec,
-        nullptr
-      );
-      if (ec) {
-        BOOST_LOG(warning) << "[IsolatedSession] Detached command failed to start: "
-                           << ec.message();
-      } else {
-        child.detach();
+      // One scope per command, because each becomes a unit and two units
+      // cannot share a name.
+      if (!launch_into_session(runtime, app, app.detached[index], "d" + std::to_string(index), ec)) {
+        BOOST_LOG(warning) << "[IsolatedSession] Detached command failed to start"
+                           << (ec ? ": " + ec.message() : std::string {"."});
       }
     }
 

@@ -327,9 +327,12 @@ When `hermes_kms_isolated_sessions` is enabled, each application can select a
   `desktop`;
 - `application`: start only the configured application inside a DRM Gamescope
   session, without a desktop panel;
-- `desktop`: start a Weston desktop session with its shell, panel, and Xwayland;
-  when `cmd` is set, Hermes launches it after the desktop socket and scanout
-  are ready and keeps it in that session's process group.
+- `desktop`: start a desktop session with the session compositor chosen by
+  `hermes_kms_session_compositor`; when `cmd` is set, Hermes launches it after
+  the desktop socket and scanout are ready, and ties it to the session so that
+  ending the session ends it too - as a member of the session's process group
+  where the session runs as the Hermes user, or as a unit bound to the
+  session's where the session broker gave it a user of its own.
 
 The `desktop` profile is currently a reference Weston desktop, not a complete
 Plasma session. To use the shared host session, disable

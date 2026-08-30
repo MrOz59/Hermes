@@ -11,12 +11,25 @@
  *
  * Hermes runs as the person whose machine it streams, so it cannot create
  * accounts. This is the small root service that can, reachable over one unix
- * socket, speaking a line protocol with four requests:
+ * socket, speaking a line protocol:
  *
  *     ENSURE <client-uuid>  -> OK <user> <uid> <home>
  *     LOOKUP <client-uuid>  -> OK <user> <uid> <home>
  *     LIST                  -> OK <client-uuid>=<user>...
  *     PURGE <client-uuid>   -> OK
+ *     START <client-uuid>   -> OK <unit>
+ *       ARG <word>...         one line each, taken literally
+ *       ENV <KEY>=<VALUE>...  one line each, taken literally
+ *       SCOPE <suffix>        optional; a second unit beside the session's
+ *       END
+ *     STOP  <client-uuid>   -> OK
+ *     STATUS <client-uuid>  -> OK <systemd ActiveState> <unit>
+ *     SOCKET <client-uuid>  -> OK <wayland socket name>
+ *
+ * START is the only request that carries more than a line, because a session's
+ * command and environment do not fit on one and splitting them on whitespace
+ * would be a quoting bug waiting to happen. Every ARG and ENV line is used
+ * whole.
  *
  * ENSURE is idempotent: a client that comes back gets the account it had, which
  * is what makes its files still be there. Nothing is ever removed implicitly -
@@ -27,6 +40,23 @@
  * Authorization is the peer's uid from SO_PEERCRED - filled in by the kernel,
  * so a client cannot claim to be someone else - checked against an allow file
  * only root can write.
+ *
+ * START does not run the session itself. It asks systemd for a transient unit
+ * with `User=` set to the session account, which is the difference between a
+ * session that merely runs as somebody else and one that is actually contained:
+ * a unit started by PID 1 gets its own cgroup, its own sandboxing and its own
+ * lifetime, where a process this broker forked would instead inherit this
+ * unit's - a network namespace with no network, a `MemoryDenyWriteExecute` that
+ * stops Wine from ever JITting, a hidden /home. The session outliving this
+ * broker is a feature too: systemd reaps it, so a broker restart is not a
+ * dropped desktop.
+ *
+ * `systemd-run` is asked rather than the bus method called directly, for the
+ * same reason useradd is asked rather than /etc/passwd written: it already
+ * owns the correct call, and reimplementing it is a class of bug worth not
+ * owning. The session needs `/run/user/<uid>` and a user manager to have a
+ * session bus at all, which is what lingering gets it; it does not need a
+ * logind session, because its compositor takes the seat through seatd.
  *
  * The account name is derived here, never received. A client-supplied UUID is
  * hostile input: it is validated to hex and dashes, used only as a lookup key,
@@ -132,6 +162,55 @@ namespace {
     });
   }
 
+  /**
+   * @brief Whether an ENV line is an assignment systemd will accept.
+   *
+   * The caller is the trusted Hermes user, so this is not a privilege boundary;
+   * it is a boundary against a malformed environment reaching `systemd-run` as
+   * something that parses as an option instead. A name that cannot start with
+   * `-` and a mandatory `=` are enough for that.
+   */
+  bool valid_env_assignment(std::string_view line) {
+    const auto equals = line.find('=');
+    if (equals == std::string_view::npos || equals == 0 || line.size() > 4096) {
+      return false;
+    }
+    const auto name = line.substr(0, equals);
+    if (std::isdigit(static_cast<unsigned char>(name.front()))) {
+      return false;
+    }
+    return std::ranges::all_of(name, [](unsigned char ch) {
+      return std::isalnum(ch) || ch == '_';
+    });
+  }
+
+  /**
+   * @brief The unit name a session account's service takes.
+   *
+   * Derived from the account, which is itself derived from a slot, so a unit
+   * name is a fixed shape no caller ever chooses.
+   */
+  std::string unit_for_account(const std::string &account) {
+    return "hermes-session-" + account.substr(8) + ".service";
+  }
+
+  /**
+   * @brief A second unit beside the session's, for what runs inside it.
+   *
+   * A desktop application is started after the compositor and has to be a unit
+   * of its own, because the session's name is taken. It is bound to the
+   * session's with PartOf, so stopping the session stops it too - which is what
+   * the process group used to do back when everything was a child of Hermes.
+   */
+  bool valid_scope(std::string_view scope) {
+    if (scope.empty() || scope.size() > 16) {
+      return false;
+    }
+    return std::ranges::all_of(scope, [](unsigned char ch) {
+      return std::islower(ch) || std::isdigit(ch);
+    });
+  }
+
   std::string account_for_slot(int slot) {
     char name[32] {};
     std::snprintf(name, sizeof(name), "hermes-s%02d", slot);
@@ -147,12 +226,19 @@ namespace {
    * The map is the broker's only memory. It is read fresh per request rather
    * than cached: the file is root-only, and re-reading means an administrator
    * editing it does not have to restart anything.
+   *
+   * A line that does not parse fails the whole read. Dropping it instead is
+   * silent data loss with somebody's save games as the blast radius: the next
+   * write persists the file without that line, so the client it belonged to
+   * comes back, matches nothing, and is handed a fresh account while its home
+   * sits unreferenced on disk. The file is root's, so a line that does not
+   * parse is damage, and damage is worth refusing to act on.
    */
-  std::vector<mapping_t> read_mappings(const options_t &options) {
+  std::optional<std::vector<mapping_t>> read_mappings(const options_t &options) {
     std::vector<mapping_t> mappings;
     std::ifstream stream {options.state_file};
     if (!stream) {
-      return mappings;
+      return mappings;  // No file yet is an empty map, not damage.
     }
 
     std::string line;
@@ -164,14 +250,13 @@ namespace {
       }
       const auto split = entry.find(' ');
       if (split == std::string::npos) {
-        continue;
+        return std::nullopt;
       }
       mapping_t mapping {trim(entry.substr(0, split)), trim(entry.substr(split + 1))};
-      // A line that does not survive validation is dropped rather than
-      // repaired: the file is root's, so a bad line is damage, not input.
-      if (valid_client_id(mapping.client_id) && valid_account_name(mapping.account)) {
-        mappings.emplace_back(std::move(mapping));
+      if (!valid_client_id(mapping.client_id) || !valid_account_name(mapping.account)) {
+        return std::nullopt;
       }
+      mappings.emplace_back(std::move(mapping));
     }
     return mappings;
   }
@@ -181,7 +266,10 @@ namespace {
     fs::create_directories(fs::path {options.state_file}.parent_path(), ec);
 
     // Written through a temporary and renamed, so a crash cannot leave the
-    // broker with a half-written idea of who owns which account.
+    // broker with a half-written idea of who owns which account. The rename is
+    // only half of that guarantee: without the fsync below, the rename can
+    // reach the disk before the bytes do, and the crash that follows leaves a
+    // map that is present, empty and authoritative.
     const auto temporary = options.state_file + ".new";
     {
       std::ofstream stream {temporary, std::ios::trunc};
@@ -200,10 +288,24 @@ namespace {
       ::unlink(temporary.c_str());
       return false;
     }
+    if (const int fd = ::open(temporary.c_str(), O_RDONLY | O_CLOEXEC); fd >= 0) {
+      const bool durable = ::fsync(fd) == 0;
+      ::close(fd);
+      if (!durable) {
+        ::unlink(temporary.c_str());
+        return false;
+      }
+    }
     fs::rename(temporary, options.state_file, ec);
     if (ec) {
       ::unlink(temporary.c_str());
       return false;
+    }
+    // And the directory entry itself, so the rename survives the same crash.
+    const auto directory = fs::path {options.state_file}.parent_path();
+    if (const int fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC); fd >= 0) {
+      ::fsync(fd);
+      ::close(fd);
     }
     return true;
   }
@@ -231,6 +333,59 @@ namespace {
       ::execv(raw[0], raw.data());
       ::_exit(127);
     }
+
+    int status = 0;
+    while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  }
+
+  /**
+   * @brief Run a command and collect its standard output.
+   *
+   * Only `systemctl show` needs this, and it needs it because the question it
+   * answers - what state is this unit in - has more than two answers. Asking
+   * `is-active` instead would collapse them into a yes/no and report a unit
+   * that is still starting as one that is not running at all, which for a
+   * compositor is the difference between "wait" and "it died".
+   */
+  bool run_capture(const std::vector<std::string> &argv, std::string &output) {
+    int pipe_fds[2] {};
+    if (::pipe(pipe_fds) != 0) {
+      return false;
+    }
+
+    std::vector<char *> raw;
+    raw.reserve(argv.size() + 1);
+    for (const auto &argument : argv) {
+      raw.push_back(const_cast<char *>(argument.c_str()));
+    }
+    raw.push_back(nullptr);
+
+    const pid_t child = ::fork();
+    if (child < 0) {
+      ::close(pipe_fds[0]);
+      ::close(pipe_fds[1]);
+      return false;
+    }
+    if (child == 0) {
+      ::close(pipe_fds[0]);
+      ::dup2(pipe_fds[1], STDOUT_FILENO);
+      ::close(pipe_fds[1]);
+      ::execv(raw[0], raw.data());
+      ::_exit(127);
+    }
+
+    ::close(pipe_fds[1]);
+    std::array<char, 512> buffer {};
+    for (;;) {
+      const auto count = ::read(pipe_fds[0], buffer.data(), buffer.size());
+      if (count <= 0) {
+        break;
+      }
+      output.append(buffer.data(), static_cast<size_t>(count));
+    }
+    ::close(pipe_fds[0]);
 
     int status = 0;
     while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
@@ -321,14 +476,30 @@ namespace {
 
   std::string handle_ensure(const options_t &options, const std::string &client_id) {
     auto mappings = read_mappings(options);
-    const auto existing = std::ranges::find_if(mappings, [&](const auto &mapping) {
+    if (!mappings) {
+      return "ERR state the account map is damaged; refusing to act on it";
+    }
+    const auto existing = std::ranges::find_if(*mappings, [&](const auto &mapping) {
       return mapping.client_id == client_id;
     });
-    if (existing != mappings.end()) {
+    if (existing != mappings->end()) {
+      // A mapping whose account has gone - a purge that got as far as userdel,
+      // an administrator tidying passwd by hand - would otherwise strand this
+      // client for good: it matches a name that cannot be resolved, so it never
+      // reaches the provisioning below and every reply is an error. Recreate it
+      // under the name it already holds, which is also the slot it already
+      // occupies, rather than leaking a second one.
+      if (::getpwnam(existing->account.c_str()) == nullptr) {
+        std::fprintf(stderr, "recreating %s, which the map claims but passwd does not\n",
+                     existing->account.c_str());
+        if (const auto failure = provision(options, existing->account); failure) {
+          return "ERR provision " + *failure;
+        }
+      }
       return reply_for(options, existing->account);
     }
 
-    if (static_cast<int>(mappings.size()) >= options.max_sessions) {
+    if (static_cast<int>(mappings->size()) >= options.max_sessions) {
       return "ERR limit the configured maximum number of session accounts is in use";
     }
 
@@ -337,7 +508,7 @@ namespace {
     int slot = 1;
     for (; slot <= options.max_sessions; ++slot) {
       const auto candidate = account_for_slot(slot);
-      const bool mapped = std::ranges::any_of(mappings, [&](const auto &mapping) {
+      const bool mapped = std::ranges::any_of(*mappings, [&](const auto &mapping) {
         return mapping.account == candidate;
       });
       // An account that exists without a mapping is left alone: it may be
@@ -357,8 +528,8 @@ namespace {
       return "ERR provision " + *failure;
     }
 
-    mappings.push_back({client_id, name});
-    if (!write_mappings(options, mappings)) {
+    mappings->push_back({client_id, name});
+    if (!write_mappings(options, *mappings)) {
       // The account exists but is unrecorded. Say so rather than report
       // success: a caller that retries would otherwise get a second account
       // for the same client.
@@ -369,10 +540,13 @@ namespace {
 
   std::string handle_purge(const options_t &options, const std::string &client_id) {
     auto mappings = read_mappings(options);
-    const auto existing = std::ranges::find_if(mappings, [&](const auto &mapping) {
+    if (!mappings) {
+      return "ERR state the account map is damaged; refusing to act on it";
+    }
+    const auto existing = std::ranges::find_if(*mappings, [&](const auto &mapping) {
       return mapping.client_id == client_id;
     });
-    if (existing == mappings.end()) {
+    if (existing == mappings->end()) {
       return "ERR notfound no account is mapped to that client";
     }
 
@@ -382,33 +556,260 @@ namespace {
       return "ERR provision userdel was not found";
     }
 
-    // The mapping goes first. If the removal then fails halfway, the client
-    // gets a fresh account on its next ENSURE instead of being handed a
-    // half-deleted one.
-    mappings.erase(existing);
-    if (!write_mappings(options, mappings)) {
-      return "ERR state the mapping could not be updated";
+    // The account goes first and the mapping second. The other order loses a
+    // slot for good on a failed userdel: the account survives with nothing
+    // pointing at it, and the slot search below skips every name that already
+    // exists in passwd, so nobody is ever given that one again. This way a
+    // failed removal changes nothing, and a failed map write leaves a mapping
+    // that ENSURE knows how to repair. The lookup makes a repeat purge a
+    // no-op rather than an error out of userdel.
+    if (::getpwnam(account.c_str()) != nullptr && !run({userdel, "--remove", account})) {
+      return "ERR provision userdel failed; nothing was changed";
     }
-    if (!run({userdel, "--remove", account})) {
-      return "ERR provision userdel failed; the mapping was removed";
+    mappings->erase(existing);
+    if (!write_mappings(options, *mappings)) {
+      return "ERR state the account was removed but the mapping could not be updated";
     }
     return "OK";
   }
 
-  std::string handle_request(const options_t &options, const std::string &request) {
+  /**
+   * @brief Ask systemd for a transient unit running `argv` as the client's account.
+   *
+   * The unit, not this process, is what contains the session: PID 1 starts it,
+   * so it gets a cgroup and a sandbox of its own rather than inheriting the
+   * confinement this broker is under - which forbids a network, forbids
+   * writable-executable memory, and hides /home, none of which a desktop
+   * survives.
+   *
+   * Lingering comes first because a session with no `/run/user/<uid>` has
+   * nowhere to put a session bus, a Wayland socket or a PipeWire socket, and
+   * systemd only creates it for a user with a manager running. The compositor's
+   * seat does not come from here - it takes that through seatd - so no logind
+   * session and no PAM stack is involved.
+   */
+  std::string handle_start(
+    const options_t &options,
+    const std::string &client_id,
+    const std::vector<std::string> &arguments,
+    const std::vector<std::string> &environment,
+    const std::string &scope
+  ) {
+    if (arguments.empty()) {
+      return "ERR request START needs at least one ARG";
+    }
+    if (!arguments.front().starts_with('/')) {
+      return "ERR request the first ARG must be an absolute path";
+    }
+
+    const auto mappings = read_mappings(options);
+    if (!mappings) {
+      return "ERR state the account map is damaged; refusing to act on it";
+    }
+    const auto existing = std::ranges::find_if(*mappings, [&](const auto &mapping) {
+      return mapping.client_id == client_id;
+    });
+    if (existing == mappings->end()) {
+      return "ERR notfound no account is mapped to that client; ENSURE it first";
+    }
+    const auto *account = ::getpwnam(existing->account.c_str());
+    if (account == nullptr) {
+      return "ERR state the mapped account no longer exists";
+    }
+
+    const auto systemd_run = locate({"/usr/bin/systemd-run", "/bin/systemd-run"});
+    if (systemd_run.empty()) {
+      return "ERR provision systemd-run was not found";
+    }
+    const auto loginctl = locate({"/usr/bin/loginctl", "/bin/loginctl"});
+    if (loginctl.empty()) {
+      return "ERR provision loginctl was not found";
+    }
+    if (!run({loginctl, "enable-linger", existing->account})) {
+      return "ERR provision lingering could not be enabled for the session account";
+    }
+
+    const auto uid = std::to_string(static_cast<unsigned>(account->pw_uid));
+    const auto session_unit = unit_for_account(existing->account);
+    const auto unit = scope.empty() ?
+                        session_unit :
+                        session_unit.substr(0, session_unit.size() - 8) + '-' + scope + ".service";
+    std::vector<std::string> argv {
+      systemd_run,
+      "--quiet",
+      // Without --collect a session that exits non-zero stays behind in the
+      // failed state, and the next START of the same slot collides with it.
+      "--collect",
+      "--unit=" + unit,
+      "--uid=" + existing->account,
+      "--description=Hermes isolated session for " + existing->account,
+      "--property=WorkingDirectory=" + std::string {account->pw_dir},
+    };
+    if (!scope.empty()) {
+      // Bound to the session rather than merely started after it: stopping the
+      // session has to take this with it, the way terminating the process group
+      // used to when everything was a child of Hermes.
+      argv.push_back("--property=PartOf=" + session_unit);
+      argv.push_back("--property=After=" + session_unit);
+    }
+    // The caller's environment goes on first so the three values below win. A
+    // session whose XDG_RUNTIME_DIR did not match its uid would find the
+    // directory unwritable and fail in a way that reads like a compositor bug.
+    for (const auto &assignment : environment) {
+      argv.push_back("--setenv=" + assignment);
+    }
+    argv.push_back("--setenv=XDG_RUNTIME_DIR=/run/user/" + uid);
+    // HOME, USER, LOGNAME and SHELL come from the passwd entry, because systemd
+    // sets those itself for a unit with User=.
+    argv.emplace_back("--");
+    argv.insert(argv.end(), arguments.begin(), arguments.end());
+
+    if (!run(argv)) {
+      std::fprintf(stderr, "systemd-run refused to start %s\n", unit.c_str());
+      return "ERR provision systemd-run refused to start the session";
+    }
+    return "OK " + unit;
+  }
+
+  /**
+   * @brief Whether the client's session unit is running.
+   *
+   * Hermes used to answer this by asking the child process it had forked. A
+   * unit has no such handle on this side, and systemd is the only thing that
+   * knows, so the question comes here rather than being guessed at from a pid
+   * file or a socket that may outlive its owner.
+   */
+  std::string handle_status(const options_t &options, const std::string &client_id) {
+    const auto mappings = read_mappings(options);
+    if (!mappings) {
+      return "ERR state the account map is damaged; refusing to act on it";
+    }
+    const auto existing = std::ranges::find_if(*mappings, [&](const auto &mapping) {
+      return mapping.client_id == client_id;
+    });
+    if (existing == mappings->end()) {
+      return "ERR notfound no account is mapped to that client";
+    }
+
+    const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
+    if (systemctl.empty()) {
+      return "ERR provision systemctl was not found";
+    }
+    const auto unit = unit_for_account(existing->account);
+    std::string state;
+    if (!run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state)) {
+      return "ERR provision the session unit's state could not be read";
+    }
+    state = trim(state);
+    // systemd answers `inactive` for a unit it has never heard of, which is
+    // the right answer to this question: nothing of that name is running.
+    return "OK " + (state.empty() ? std::string {"inactive"} : state) + ' ' + unit;
+  }
+
+  /**
+   * @brief The Wayland socket a session's compositor created, if it has yet.
+   *
+   * Hermes used to find this by listing the session's runtime directory. Once
+   * the session belongs to another user that directory is 0700 and somebody
+   * else's, so the listing has to happen here - the one place that can read it -
+   * and only the name comes back. A name is all Hermes needs: what connects to
+   * the socket is launched into the session, not run by Hermes.
+   */
+  std::string handle_socket(const options_t &options, const std::string &client_id) {
+    const auto mappings = read_mappings(options);
+    if (!mappings) {
+      return "ERR state the account map is damaged; refusing to act on it";
+    }
+    const auto existing = std::ranges::find_if(*mappings, [&](const auto &mapping) {
+      return mapping.client_id == client_id;
+    });
+    if (existing == mappings->end()) {
+      return "ERR notfound no account is mapped to that client";
+    }
+    const auto *account = ::getpwnam(existing->account.c_str());
+    if (account == nullptr) {
+      return "ERR state the mapped account no longer exists";
+    }
+
+    const auto runtime_dir = "/run/user/" + std::to_string(static_cast<unsigned>(account->pw_uid));
+    std::vector<std::string> candidates;
+    std::error_code ec;
+    for (fs::directory_iterator it {runtime_dir, ec}, end; !ec && it != end; it.increment(ec)) {
+      const auto name = it->path().filename().string();
+      if ((name.starts_with("gamescope-") || name.starts_with("wayland-")) &&
+          fs::is_socket(it->symlink_status(ec))) {
+        candidates.emplace_back(name);
+      }
+    }
+    if (candidates.empty()) {
+      return "ERR notfound the session has not created a Wayland socket";
+    }
+    std::ranges::sort(candidates);
+    return "OK " + candidates.front();
+  }
+
+  std::string handle_stop(const options_t &options, const std::string &client_id) {
+    const auto mappings = read_mappings(options);
+    if (!mappings) {
+      return "ERR state the account map is damaged; refusing to act on it";
+    }
+    const auto existing = std::ranges::find_if(*mappings, [&](const auto &mapping) {
+      return mapping.client_id == client_id;
+    });
+    if (existing == mappings->end()) {
+      return "ERR notfound no account is mapped to that client";
+    }
+
+    const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
+    if (systemctl.empty()) {
+      return "ERR provision systemctl was not found";
+    }
+    // Asked for first, because `systemctl stop` fails on a unit it cannot find
+    // and a stopped session's unit is gone - `--collect` removes it. A second
+    // STOP, or one for a session that ended on its own, is a request for a
+    // state that already holds, so it skips the stop instead of reporting a
+    // failure to reach it.
+    const auto unit = unit_for_account(existing->account);
+    std::string state;
+    run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state);
+    state = trim(state);
+    if (!state.empty() && state != "inactive") {
+      if (!run({systemctl, "stop", unit})) {
+        return "ERR provision the session unit could not be stopped";
+      }
+    }
+
+    // Lingering is what START turned on to get the account a runtime directory
+    // and a user manager, and it survives reboots. Left on, every client that
+    // ever streamed would keep a manager and a session bus running on the host
+    // forever. The account and its home are untouched - only the machinery of a
+    // session that is over goes - so the next START brings it all back.
+    if (const auto loginctl = locate({"/usr/bin/loginctl", "/bin/loginctl"}); !loginctl.empty()) {
+      run({loginctl, "disable-linger", existing->account});
+    }
+    return "OK";
+  }
+
+  std::string handle_request(const options_t &options, const std::vector<std::string> &lines) {
+    const auto &request = lines.front();
     const auto split = request.find(' ');
     const auto verb = trim(split == std::string::npos ? request : request.substr(0, split));
     const auto argument = split == std::string::npos ? std::string {} : trim(request.substr(split + 1));
 
     if (verb == "LIST") {
+      const auto mappings = read_mappings(options);
+      if (!mappings) {
+        return "ERR state the account map is damaged; refusing to act on it";
+      }
       std::string reply {"OK"};
-      for (const auto &mapping : read_mappings(options)) {
+      for (const auto &mapping : *mappings) {
         reply += ' ' + mapping.client_id + '=' + mapping.account;
       }
       return reply;
     }
 
-    if (verb != "ENSURE" && verb != "LOOKUP" && verb != "PURGE") {
+    if (verb != "ENSURE" && verb != "LOOKUP" && verb != "PURGE" && verb != "START" &&
+        verb != "STOP" && verb != "STATUS" && verb != "SOCKET") {
       return "ERR request unknown verb";
     }
     if (!valid_client_id(argument)) {
@@ -421,12 +822,60 @@ namespace {
     if (verb == "PURGE") {
       return handle_purge(options, argument);
     }
+    if (verb == "STOP") {
+      return handle_stop(options, argument);
+    }
+    if (verb == "STATUS") {
+      return handle_status(options, argument);
+    }
+    if (verb == "SOCKET") {
+      return handle_socket(options, argument);
+    }
+    if (verb == "START") {
+      std::vector<std::string> arguments;
+      std::vector<std::string> environment;
+      std::string scope;
+      for (size_t index = 1; index < lines.size(); ++index) {
+        const auto &line = lines[index];
+        if (line == "END") {
+          break;
+        }
+        if (line.starts_with("SCOPE ")) {
+          scope = line.substr(6);
+          if (!valid_scope(scope)) {
+            return "ERR request the SCOPE is not a short lowercase word";
+          }
+          continue;
+        }
+        if (line.starts_with("ARG ")) {
+          if (arguments.size() >= 256) {
+            return "ERR request too many ARG lines";
+          }
+          arguments.emplace_back(line.substr(4));
+        } else if (line.starts_with("ENV ")) {
+          if (environment.size() >= 512) {
+            return "ERR request too many ENV lines";
+          }
+          const auto assignment = line.substr(4);
+          if (!valid_env_assignment(assignment)) {
+            return "ERR request an ENV line is not a NAME=VALUE assignment";
+          }
+          environment.emplace_back(assignment);
+        } else {
+          return "ERR request a START block takes only ARG, ENV, SCOPE and END lines";
+        }
+      }
+      return handle_start(options, argument, arguments, environment, scope);
+    }
 
     const auto mappings = read_mappings(options);
-    const auto existing = std::ranges::find_if(mappings, [&](const auto &mapping) {
+    if (!mappings) {
+      return "ERR state the account map is damaged; refusing to act on it";
+    }
+    const auto existing = std::ranges::find_if(*mappings, [&](const auto &mapping) {
       return mapping.client_id == argument;
     });
-    if (existing == mappings.end()) {
+    if (existing == mappings->end()) {
       return "ERR notfound no account is mapped to that client";
     }
     return reply_for(options, existing->account);
@@ -474,20 +923,76 @@ namespace {
     return false;
   }
 
-  std::optional<std::string> read_request(int fd) {
-    std::string request;
-    std::array<char, 512> buffer {};
-    while (request.size() < 4096) {
-      const auto count = ::read(fd, buffer.data(), buffer.size());
+  /**
+   * @brief Whether everything the caller means to send has arrived.
+   *
+   * Every request but START is one line. START carries a command and an
+   * environment, so it is a block terminated by a line that is exactly `END` -
+   * which is also what stops a caller that opens a connection and says nothing
+   * from being read forever.
+   */
+  bool request_is_complete(const std::string &buffer) {
+    const auto first = buffer.find('\n');
+    if (first == std::string::npos) {
+      return false;
+    }
+    if (!trim(buffer.substr(0, first)).starts_with("START")) {
+      return true;
+    }
+    for (size_t start = 0; start < buffer.size();) {
+      const auto end = buffer.find('\n', start);
+      if (end == std::string::npos) {
+        return false;
+      }
+      if (trim(buffer.substr(start, end - start)) == "END") {
+        return true;
+      }
+      start = end + 1;
+    }
+    return false;
+  }
+
+  std::optional<std::vector<std::string>> read_request(int fd) {
+    // Large enough for a desktop's environment, small enough that a caller
+    // cannot make the broker hold a request it will never finish sending.
+    constexpr size_t request_ceiling = 64 * 1024;
+
+    std::string buffer;
+    std::array<char, 4096> chunk {};
+    while (buffer.size() < request_ceiling && !request_is_complete(buffer)) {
+      const auto count = ::read(fd, chunk.data(), chunk.size());
       if (count <= 0) {
         break;
       }
-      request.append(buffer.data(), static_cast<size_t>(count));
-      if (const auto newline = request.find('\n'); newline != std::string::npos) {
-        return request.substr(0, newline);
-      }
+      buffer.append(chunk.data(), static_cast<size_t>(count));
     }
-    return request.empty() ? std::nullopt : std::optional {request};
+    if (!request_is_complete(buffer)) {
+      return std::nullopt;
+    }
+
+    std::vector<std::string> lines;
+    for (size_t start = 0; start < buffer.size();) {
+      const auto end = buffer.find('\n', start);
+      if (end == std::string::npos) {
+        break;
+      }
+      // The verb line is trimmed, the same way the completeness check above
+      // reads it. Every line after it loses only a trailing carriage return, so
+      // an ARG or ENV value arrives exactly as it was sent - leading spaces in
+      // a path or a value included.
+      auto line = buffer.substr(start, end - start);
+      if (lines.empty()) {
+        line = trim(line);
+      } else if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      lines.push_back(std::move(line));
+      if (lines.back() == "END" || !lines.front().starts_with("START")) {
+        break;
+      }
+      start = end + 1;
+    }
+    return lines.empty() ? std::nullopt : std::optional {lines};
   }
 
   void write_reply(int fd, const std::string &reply) {
@@ -517,7 +1022,7 @@ namespace {
 
     const auto request = read_request(connection);
     if (!request) {
-      write_reply(connection, "ERR request no request was received");
+      write_reply(connection, "ERR request no complete request was received");
       return;
     }
 
@@ -533,6 +1038,22 @@ namespace {
     }
 
     write_reply(connection, reply);
+  }
+
+  /**
+   * @brief Keep a descriptor out of the tools this broker execs.
+   *
+   * useradd and userdel inherit whatever is open at fork. systemd hands its
+   * listener over without FD_CLOEXEC by design - the service has to survive its
+   * own exec - and accept() copies that omission onto every connection. Neither
+   * has any business in a child: a useradd that hung would hold the listening
+   * socket open past the broker's own life, and hold a caller's connection open
+   * with it.
+   */
+  void keep_from_children(int fd) {
+    if (const int flags = ::fcntl(fd, F_GETFD); flags >= 0) {
+      ::fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+    }
   }
 
   int inherited_listen_fd() {
@@ -586,6 +1107,7 @@ int main(int argc, char *argv[]) {
     std::fprintf(stderr, "this service expects a socket-activated listener from systemd\n");
     return 1;
   }
+  keep_from_children(listener);
 
   for (;;) {
     const int connection = ::accept(listener, nullptr, nullptr);
@@ -596,6 +1118,7 @@ int main(int argc, char *argv[]) {
       std::fprintf(stderr, "accept failed: %s\n", std::strerror(errno));
       return 1;
     }
+    keep_from_children(connection);
     serve(options, connection);
     ::close(connection);
   }

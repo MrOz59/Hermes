@@ -16,10 +16,21 @@ UMask=0077
 # This service creates user accounts, so it is confined harder than its
 # privilege suggests rather than softer. It reaches exactly three trees: the
 # account databases, the session homes it owns, and its own runtime lock.
+#
+# None of this reaches the sessions it starts. Those are transient units that
+# PID 1 starts on request, so they are confined by their own settings and not
+# by these - which is the point of asking systemd rather than forking here: a
+# desktop does not survive PrivateNetwork, MemoryDenyWriteExecute or a hidden
+# /home, and a forked child could not have shed any of them.
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateNetwork=yes
-ProtectHome=yes
+# read-only rather than yes: ProtectHome=yes hides /run/user along with /home
+# and /root, and /run/user/<uid> is where a session's compositor puts its
+# Wayland socket - which this broker has to list, because the session's runtime
+# directory is 0700 and the unprivileged Hermes cannot read it. Nothing here
+# writes to any of those three.
+ProtectHome=read-only
 ProtectSystem=strict
 ReadWritePaths=/etc /var/lib/hermes /run/hermes
 ProtectClock=yes

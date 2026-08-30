@@ -1321,13 +1321,65 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Description</td>
         <td colspan="2">
             Enables the highly experimental independent-session prototype.
-            One Hermes server allocates an independent Hermes-KMS DRM card and
-            starts a private compositor, application process tree, capture
-            pipeline, runtime directory, and tagged virtual input set for each
-            Moonlight client. Application profiles use Gamescope; desktop
-            profiles use the Weston desktop shell. Requires the development
-            Hermes-KMS UAPI 9 driver and its session-seat udev rule,
-            <code>gamescope</code>, <code>weston</code>, and one packaged
+            One Hermes server gives each Moonlight client a session of its own
+            rather than sharing the host's desktop.
+
+            <b>What every isolated session gets.</b> Its own Hermes-KMS DRM card
+            on its own private DRM seat, its own compositor, its own Wayland
+            socket, its own capture pipeline, and its own set of virtual input
+            devices, tagged so that one client's keyboard and mouse cannot enter
+            another client's desktop. Application profiles use Gamescope;
+            desktop profiles use a session compositor chosen with
+            <code>hermes_kms_session_compositor</code>. This half is what
+            separates what each client <i>sees and controls</i>, and it does not
+            depend on the session broker.
+
+            <b>How far that goes depends on the session broker.</b> Separating
+            what each client can <i>reach</i> - files, credentials, the host's
+            desktop services - takes a separate Unix user, which is the only
+            boundary the Linux kernel actually enforces. Hermes runs as an
+            ordinary user and cannot create accounts or become anybody, so that
+            half is done by <code>hermes-session-broker</code>, a small root
+            service, and it is optional.
+
+            <b>Without the session broker</b>, everything in the session runs
+            under the same uid Hermes runs under. The client's compositor and
+            applications therefore share the Hermes user's home directory, its
+            configuration, its SSH and GPG keys, its browser and game-store
+            profiles, and its D-Bus session bus - which also means an
+            application that registers as a unique instance may hand its window
+            to the copy already running on the host desktop rather than opening
+            it in the session. This mode isolates displays and input. It does
+            not isolate files, and is only appropriate where every client is
+            already trusted with the host account.
+
+            <b>With the session broker</b>, each paired client is given a Unix
+            account of its own - <code>hermes-s01</code> upwards, derived from a
+            slot and never from anything the client sent - and the session runs
+            as that user in a transient systemd unit. The account has a private
+            <code>0700</code> home under
+            <code>/var/lib/hermes/sessions</code>, kept across reconnections so
+            saves and settings survive; a runtime directory, user manager and
+            session bus of its own; no shell and no sudo; and membership in none
+            of <code>wheel</code>, <code>video</code>, <code>input</code> or
+            <code>render</code>. Its GPU access comes from its own card's
+            per-card <code>access_uid</code>. It is in the
+            <code>hermes-session</code> group, which the shipped polkit rule
+            refuses every action to - without that rule a session on a local
+            seat would count as "active and local" to polkit and be handed over
+            a hundred passwordless actions, including powering the host off and
+            mounting its disks. The session's log goes to the journal, under
+            <code>journalctl -u hermes-session-N</code>.
+
+            If the broker is installed but will not provide an account - the
+            Hermes user is not in its allow file, or every configured slot is in
+            use - the launch fails instead of falling back to the host user,
+            because a silent fallback is the one outcome installing it was meant
+            to prevent.
+
+            Requires a Hermes-KMS driver speaking UAPI 11 or newer and its
+            session-seat udev rule, <code>gamescope</code>, the chosen session
+            compositor, and one packaged
             <code>hermes-kms-seatd@N.service</code> private broker per device.
             The Hermes user must be a member of the <code>seat</code> group.
             Hermes maps device N to
@@ -1335,7 +1387,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             If <code>hermes_kms_multi_output</code> is also set, independent
             sessions take precedence and the shared-desktop mode is ignored.
             @warning{Per-session audio, a full Plasma desktop, and simultaneous
-            real clients are not validated. The private brokers are not a
+            real clients are not validated. The private seat brokers are not a
             security boundary between mutually untrusted local users. Remote
             Input is rejected because it has no video session from which to
             determine a target seat. Keep this disabled outside testing.}
@@ -1371,7 +1423,30 @@ editing the `conf` file in a text editor. Use the examples as reference.
             session index itself (the index is what becomes the private seat, so
             it cannot be a client's choice), and lets a user remove only the
             cards it created. Cards are removed when their display is torn down,
-            and any left by a Hermes that died are swept at the next start.</td>
+            and any left by a Hermes that died are swept at the next start.
+
+            To give each client a Unix account of its own, enable the session
+            broker as well. Without this, sessions are isolated by display and
+            input but still run as the Hermes user:
+            @code{}
+            echo hermes | sudo tee /etc/hermes/session-broker.allow
+            sudo systemctl enable --now hermes-session-broker.socket
+            @endcode
+            Both brokers are authorized the same way and neither uses polkit:
+            the caller's uid comes from the kernel through
+            <code>SO_PEERCRED</code>, so it cannot be claimed in a request, and
+            it is checked against a file only root can write. The session broker
+            additionally refuses to create an account at all while the
+            <code>hermes-session</code> group is missing, so an account cannot
+            come to exist on a machine where the polkit rule that confines it is
+            not yet installed. Accounts are never removed implicitly - a client
+            that unpairs keeps its account and its home, because a save game
+            outliving an accidental unpair is worth more than a tidy passwd
+            file. Removing one is a deliberate act:
+            @code{}
+            sudo systemctl stop hermes-session-broker.socket
+            sudo userdel --remove hermes-s01
+            @endcode</td>
     </tr>
 </table>
 

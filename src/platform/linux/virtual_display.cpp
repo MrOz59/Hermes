@@ -4206,6 +4206,23 @@ namespace VDISPLAY {
       return driver_status;
     }
 
+    if (backend == VirtualDisplayBackend::HYPRLAND_HEADLESS) {
+      evdi_available = false;
+      unload_evdi_library();
+      if (!hyprland::available()) {
+        BOOST_LOG(warning) << "[VDISPLAY] The session is Hyprland but its control socket is not reachable. "
+                            "Hermes reads HYPRLAND_INSTANCE_SIGNATURE from its own environment, so a "
+                            "service started outside the session will not find it.";
+        driver_status = DRIVER_STATUS::NOT_SUPPORTED;
+        return driver_status;
+      }
+
+      driver_status = DRIVER_STATUS::OK;
+      device_open = true;
+      BOOST_LOG(info) << "[VDISPLAY] Hyprland headless output backend available - virtual displays supported.";
+      return driver_status;
+    }
+
     // Try to load EVDI library
     evdi_available = load_evdi_library();
 

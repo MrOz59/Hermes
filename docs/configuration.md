@@ -1320,6 +1320,16 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
+            @warning{Not recommended right now. This prototype is being
+            re-evaluated and will change in ways that are not backwards
+            compatible - do not build a setup on it yet. What is known to be
+            broken or unfinished: a session composites in software rather than
+            on the GPU (see <code>hermes_kms_session_compositor</code>); nothing
+            bounds what a session may consume, so one client can starve the
+            host; a session that was given a Unix account of its own still hears
+            the host's audio; and Remote Input is disabled. A full Plasma
+            desktop and simultaneous real clients have not been validated.}
+
             Enables the highly experimental independent-session prototype.
             One Hermes server gives each Moonlight client a session of its own
             rather than sharing the host's desktop.
@@ -1500,14 +1510,25 @@ editing the `conf` file in a text editor. Use the examples as reference.
             the profiles Hermes ships; a profile declares the command line, any
             environment it needs, and whether it is told its Wayland socket name
             or names its own.
-            @note{<code>weston</code> is the only profile Hermes ships and
-            tests. Dropping in a profile for another compositor needs no code
-            change and is supported by nobody but you.}
-            @note{weston takes KMS nodes only for both its display and its
+            @note{Hermes ships <code>weston</code> and <code>labwc</code>.
+            Dropping in a profile for a third compositor needs no code change
+            and is supported by nobody but you.}
+            @note{<code>weston</code> remains the profile to use with
+            Hermes-KMS. It takes KMS nodes only, for both its display and its
             rendering device, and the sole KMS node backed by a real GPU belongs
-            to seat0, so an isolated session under weston composites in
-            software. A compositor that accepts a render node separately - which
-            carries no seat assignment - does not have that limit.}
+            to seat0 - which a session on a private seat cannot open - so a
+            session under weston composites in software. wlroots takes the two
+            separately, which is what <code>labwc</code> is for; but it
+            allocates an output's scanout buffers on the display device's own
+            render node, and Hermes-KMS's is capture-only with no Mesa driver
+            behind it, so every swapchain fails. Use <code>labwc</code> only
+            with a KMS device whose render node Mesa can drive.}
+            @note{The <code>labwc</code> profile sets the mode the client asked
+            for with <code>wlr-randr</code>, which is a separate package. It is
+            best-effort: without it the session still starts, but keeps whatever
+            mode wlroots preferred, which on a Hermes-KMS card up to 0.5.0 is
+            the larger of the two modes the driver marks preferred rather than
+            the one that was asked for.}
         </td>
     </tr>
     <tr>

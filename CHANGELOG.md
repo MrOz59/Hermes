@@ -11,7 +11,123 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+### Notice
+
+- **Independent client sessions are being re-evaluated and are not recommended.**
+  The prototype behind `hermes_kms_isolated_sessions` will change in ways that
+  are not backwards compatible; a setup built on it now is likely to need
+  rebuilding. What is known to be broken or unfinished, beyond the experimental
+  label it already carried: a session composites in software rather than on the
+  GPU, because neither compositor Hermes ships a profile for can be given a
+  render node separately from its display device on a Hermes-KMS card; nothing
+  bounds what a session may consume, so one client can starve the host; a
+  session that was given a Unix account of its own still hears the host's audio;
+  and Remote Input is disabled. A full desktop and simultaneous real clients
+  have not been validated. The pieces below still landed and are still worth
+  having - they are what the re-evaluation is being done on top of - but the
+  feature as a whole is not ready to be used.
+
+### Security
+- The Game Mode console's bearer token is now rejected for WAN peers even when
+  normal Web UI password/cookie logins are configured to allow WAN access. The
+  token remains valid from this machine and private/local networks.
+
 ### Added
+- A session compositor profile for labwc, which does not yet help a Hermes-KMS
+  session and says so. Hermes shipped one profile, weston, and weston
+  takes KMS nodes only - for its display device and for its rendering device
+  both. The sole KMS node backed by a real GPU belongs to seat0, which is the
+  one seat a session on a private DRM seat cannot open, so every isolated
+  session composited on llvmpipe. That was documented as a limitation because
+  weston has no way to express the split; wlroots does. It takes the display
+  device and the render device separately, and a render node carries no seat
+  assignment, so the session scans out on its own Hermes-KMS card and renders on
+  the real GPU. `hermes_kms_session_compositor = labwc` selects it.
+
+  What made it a profile rather than a patch was already there; two things were
+  missing. wlroots opens DRM devices through libseat, whose logind backend
+  resolves the calling process's own logind session - and a session started as a
+  transient unit has none, on a seat that is not seat0 in any case. The profile
+  asks for libseat's noop backend, which opens the path directly; the permission
+  to do so is the per-card `access_uid` the driver already sets to the session's
+  account, and DRM master follows from being the first to open a card nobody
+  else holds.
+
+  And labwc reads a directory rather than a file, so a profile can now name a
+  file inside one - the directory is created, made traversable by the session
+  account, and reaches the command line as `{config_dir}`. What Hermes writes
+  into it is labwc's `autostart`, which pins the mode the client asked for with
+  `wlr-randr`. That is the same workaround weston.ini carries and for the same
+  reason: Hermes-KMS up to 0.5.0 marks two modes preferred, so a client asking
+  for 1280x720 gets a 1080p session unless the mode is named. It is best-effort
+  and `wlr-randr` is not in `requires` - a session that comes up at the wrong
+  resolution is worth having, and one that refuses to start because a helper is
+  missing is not.
+
+  What a guest run then showed is that the blocker moves rather than lifts.
+  labwc does open the private-seat card - `LIBSEAT_BACKEND=noop` answers the
+  seat question - and does accept the render split, and does run the generated
+  autostart. It then fails every swapchain, because wlroots allocates an
+  output's scanout buffers through GBM on the *display device's own* render
+  node: the kernel pairs `/dev/dri/cardN` with a `renderDN` of the same driver,
+  and Hermes-KMS's is capture-only with no Mesa driver behind it, so Mesa falls
+  back to kms_swrast and allocates with `DRM_IOCTL_MODE_CREATE_DUMB`, which the
+  kernel refuses on any render node. weston never meets this because it
+  allocates dumb buffers on the card node, where they are permitted - which is
+  the same reason it ends up on llvmpipe.
+
+  So the profile ships as what it is: correct for a KMS device whose render node
+  Mesa can drive, and documented at the top of the file as not that for
+  Hermes-KMS. `weston` stays the profile to use there, and closing this needs a
+  driver that exposes a render node Mesa can drive, or none at all - not
+  anything in Hermes. The `labwc.conf.example` that described the route nobody
+  had taken is gone; taking it is what found the wall at the end of it.
+
+  The render node handed to a session compositor is now chosen the way the
+  capture path chooses one, rather than by a second heuristic that was wrong in
+  the same way. "The first node that is not ours" follows module load order, so
+  on a hybrid machine it is as likely as not a card whose driver Mesa cannot
+  load - which opens like any other and fails only at the first allocation, by
+  which point the compositor is up and the session is black. A candidate now has
+  to survive allocating a throwaway buffer before it is believed, and
+  `adapter_name` is honoured first, so a machine where the search still guesses
+  wrong has somewhere to say so.
+
+- Hermes speaks `ext-image-copy-capture`, the protocol that replaced
+  wlr-screencopy. A session is capturable only through a protocol its
+  compositor implements, and wlr-screencopy is a wlroots protocol: Hyprland,
+  labwc and sway offer it, and the compositors that never did - GNOME among
+  them - had no capture path here at all. The new backend is what those
+  sessions are captured through.
+
+  Nothing that works today moves. Where a compositor offers both, screencopy
+  stays the default, because every deployment on it is on that path already and
+  a working stream is not worth trading for a newer protocol.
+  `HERMES_WAYLAND_CAPTURE=icc` or `=screencopy` forces one, which is how the
+  other gets tested on a session that offers both.
+
+  The two are asked for a frame differently, and the difference shows in the
+  logs. Screencopy negotiates a buffer per frame; an image-copy-capture session
+  negotiates once - size, format and the modifier list - and then hands out
+  frames, so a frame arrives only when the output is next presented. A desktop
+  with nothing moving on it therefore produces no frame, which reaches the
+  encoder as a timeout and re-sends the previous one, exactly as an idle
+  screencopy capture does.
+
+  Two things the protocol gives that screencopy could not. The compositor names
+  the DRM device it renders on, which is the question `init_gbm()` otherwise has
+  to guess the answer to on a machine with two GPUs - it is taken as the answer,
+  after the same allocation probe every other candidate gets, so a compositor
+  that names a device nothing can allocate on still falls through to the search.
+  And it offers format modifiers, which on AMD means the buffer that comes back
+  can have more than one plane; every plane is shared, because a compositor
+  handed only the first plane of a compressed buffer fails the frame with no
+  reason attached and nothing to say a plane was missing.
+
+  The protocol sequence follows Dregu's draft for upstream Sunshine
+  (LizardByte/Sunshine#4788), credited in the source beside the three places
+  this departs from it. Reported in #29.
+
 - A console for Game Mode, `hermes-gamemode`, added to Steam as a non-Steam
   shortcut and launched from the library like a game. A machine that boots
   straight into Game Mode has no desktop to open the web UI on and no keyboard

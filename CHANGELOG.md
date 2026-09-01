@@ -496,6 +496,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- A Hyprland session was told its virtual displays were unsupported by a
+  backend it never needed. Everything on the Hyprland path was wired -
+  `selected_backend()` returns `HYPRLAND_HEADLESS`, `createVirtualDisplay()`
+  creates the headless output - except `openVDisplayDevice()`, which handled
+  the `none` and Hermes-KMS backends and then fell through to EVDI. A host
+  without libevdi installed therefore reported "EVDI is unavailable" and
+  disabled virtual-display sessions, on a compositor whose headless outputs
+  need no DRM device at all. It now recognises the backend, checks that
+  Hyprland's control socket is reachable, and reports itself ready without
+  touching EVDI. Contributed by @RZhyvitskyi in #32.
 - Hermes never started in SteamOS/CachyOS Game Mode. The user unit was
   installed only into `xdg-desktop-autostart.target`, which KDE and GNOME
   activate and `gamescope-session` does not - so on a machine that boots

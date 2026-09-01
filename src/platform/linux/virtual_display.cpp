@@ -431,6 +431,22 @@ namespace VDISPLAY {
       }
       return true;
     }
+    /**
+     * @brief Say once, and in one place, that Hyprland's control socket is out of reach.
+     *
+     * Two callers check availability - the readiness path and the create path -
+     * so a session whose socket cannot be reached reported the same three
+     * sentences twice. The wording is the part worth keeping identical: it is
+     * the one message that names the actual cause, which is almost always a
+     * service started outside the session rather than a broken compositor.
+     */
+    static void log_unreachable(bool fatal) {
+      BOOST_LOG(fatal ? error : warning)
+        << "[VDISPLAY] The session is Hyprland but its control socket is not reachable. "
+           "Hermes reads HYPRLAND_INSTANCE_SIGNATURE from its own environment, so a "
+           "service started outside the session will not find it.";
+    }
+
   }  // namespace hyprland
 
   namespace hermes_kms {
@@ -4433,9 +4449,7 @@ namespace VDISPLAY {
       evdi_available = false;
       unload_evdi_library();
       if (!hyprland::available()) {
-        BOOST_LOG(warning) << "[VDISPLAY] The session is Hyprland but its control socket is not reachable. "
-                            "Hermes reads HYPRLAND_INSTANCE_SIGNATURE from its own environment, so a "
-                            "service started outside the session will not find it.";
+        hyprland::log_unreachable(false);
         driver_status = DRIVER_STATUS::NOT_SUPPORTED;
         return driver_status;
       }
@@ -4674,9 +4688,7 @@ namespace VDISPLAY {
     // drives for every wlr session.
     if (backend == VirtualDisplayBackend::HYPRLAND_HEADLESS) {
       if (!hyprland::available()) {
-        BOOST_LOG(error) << "[VDISPLAY] The session is Hyprland but its control socket is not reachable. "
-                            "Hermes reads HYPRLAND_INSTANCE_SIGNATURE from its own environment, so a "
-                            "service started outside the session will not find it.";
+        hyprland::log_unreachable(true);
         return "";
       }
 

@@ -496,13 +496,17 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
-- "Always create Virtual Display" now says what it does not do. It creates a
-  display; where a window opens is the compositor's decision, and with the
-  physical monitors still on KWin puts the app on the primary one - so an app
-  set to always get a virtual display kept appearing on the main monitor, which
-  reads as the option not working. The description now points at "Use the
-  Virtual Display exclusively", which is the switch that actually gives the app
-  the virtual display to itself. Reported in #31.
+- "Always create Virtual Display" now says what it does not do, and the Steam
+  Big Picture example says why it cannot help there at all. The option creates a
+  display; where a window opens is the compositor's decision, and Hermes never
+  asks it to put anything anywhere. The shipped `Steam Big Picture` entry is a
+  sharper case still: `steam://open/bigpicture` is a URL handed to the Steam
+  already running on the desktop, so it asks that process to change modes and
+  starts nothing - the window cannot land on a display it was never launched on.
+  The entry that does what people are reaching for is `Gamescope Steam Session`,
+  which runs Steam inside a Gamescope compositor of its own at the client's
+  resolution and ships with the virtual display already on. Both are now
+  documented, on the option and in the app examples. Reported in #31.
 - The Brazilian Portuguese strings for the independent-session option were
   overwritten with English in the previous commit; translated properly.
 - A crash report is now something that can be answered. The Arch package

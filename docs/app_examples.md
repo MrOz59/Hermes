@@ -25,6 +25,18 @@ and applications to Sunshine.
 > Steam is launched as a detached command because Steam starts with a process that self updates itself and the original
 > process is killed.
 
+> [!IMPORTANT]
+> This entry does not put Steam on a virtual display, and turning on "Always create Virtual Display" for it will not
+> change that. `steam://open/bigpicture` is a URL handed to the Steam that is *already running* on your desktop: it asks
+> that process to switch modes, so the window stays wherever that Steam already was — normally your main monitor. No new
+> process is started and nothing is placed on the virtual display.
+>
+> On Linux, use the **Gamescope Steam Session** entry instead when you want Steam on the virtual display. It runs
+> `hermes-gamescope-launch`, which starts Steam Big Picture inside a Gamescope compositor of its own at the resolution
+> the client asked for, and it ships with the virtual display already enabled.
+>
+> Keeping this entry is still useful for the opposite case: reaching the Steam on the host's own desktop.
+
 @tabs{
   @tab{Linux | <!-- -->
     \| Field                        \| Value                                                \|

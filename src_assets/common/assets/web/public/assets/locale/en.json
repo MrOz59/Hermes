@@ -123,7 +123,7 @@
         "use_app_identity": "Use App Identity",
         "use_app_identity_desc": "Use the app's own identity while creating virtual displays instead of client's. This is useful when you want display configuration for each APP separately.",
         "virtual_display": "Always create Virtual Display",
-        "virtual_display_desc": "Create a virtual display every time this app is launched, whether or not the client asked for one. This is the usual way to turn virtual displays on — the backend under Configuration → Audio/Video only picks which driver serves the request. Make sure that driver is installed and enabled.",
+        "virtual_display_desc": "Create a virtual display every time this app is launched, whether or not the client asked for one. This is the usual way to turn virtual displays on — the backend under Configuration → Audio/Video only picks which driver serves the request. Make sure that driver is installed and enabled. Note that this creates the display; it does not decide where windows open. With your physical monitors still on, the compositor will usually put the app on your main one — turn on \"Use the Virtual Display exclusively\" if the app should have the virtual display to itself.",
         "virtual_display_primary": "Enforce Virtual Display Primary",
         "virtual_display_primary_desc": "Automatically set the virtual display as primary display when the app starts. Virtual display will always be set to primary when client requests to use virtual display. (Recommended to keep on) [Broken on Windows 11 24H2]",
         "wait_all": "Continue streaming until all app processes exit",

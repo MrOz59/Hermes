@@ -496,6 +496,15 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- "Always create Virtual Display" now says what it does not do. It creates a
+  display; where a window opens is the compositor's decision, and with the
+  physical monitors still on KWin puts the app on the primary one - so an app
+  set to always get a virtual display kept appearing on the main monitor, which
+  reads as the option not working. The description now points at "Use the
+  Virtual Display exclusively", which is the switch that actually gives the app
+  the virtual display to itself. Reported in #31.
+- The Brazilian Portuguese strings for the independent-session option were
+  overwritten with English in the previous commit; translated properly.
 - A crash report is now something that can be answered. The Arch package
   suppressed its own `-debug` package and the workflow filtered it out of the
   upload, so the only binary anyone could install was stripped - and the two

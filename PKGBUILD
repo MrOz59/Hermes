@@ -67,11 +67,17 @@ replaces=('hermes<0.5.0')
 # or conflicts are declared for those packages; the binaries and unit names are
 # all distinct.
 
-# Do not emit a separate hermes-streaming-debug package. The CI container's
-# makepkg.conf has `debug` enabled by default, which would otherwise produce
-# and publish a stray hermes-streaming-debug-*.pkg.tar.zst alongside the real
-# package.
-options=('!debug')
+# Keep the separate hermes-streaming-debug package. The main binary is still
+# stripped, so nothing about the shipped package changes; what changes is that
+# the symbols exist somewhere. Without them a user's crash report is a list of
+# raw offsets into a stripped binary, which is exactly where the first two
+# SIGSEGV reports stopped: the stack was there, and nothing could be said about
+# what was on it. A debug package the reporter can install alongside turns
+# `coredumpctl gdb` into an answer.
+#
+# Nothing is emitted unless the build environment asks for it: this relies on
+# `debug` being in makepkg.conf's OPTIONS, which the CI container has and a
+# plain local `makepkg` usually does not.
 
 source=()
 sha256sums=()

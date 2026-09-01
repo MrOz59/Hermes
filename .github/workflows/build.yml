@@ -307,11 +307,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hermes-streaming-arch-pkg
-          # The main package only; exclude any -debug package (also suppressed
-          # via options=('!debug') in the PKGBUILD).
+          # Both the package and its symbols. The -debug package is what makes a
+          # user's coredump readable; publishing only the stripped binary is why
+          # the crash reports so far could not be resolved past raw offsets.
           path: |
             *.pkg.tar.zst
-            !*-debug-*.pkg.tar.zst
           retention-days: 30
           if-no-files-found: error
 

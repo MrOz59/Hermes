@@ -496,6 +496,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- A crash report is now something that can be answered. The Arch package
+  suppressed its own `-debug` package and the workflow filtered it out of the
+  upload, so the only binary anyone could install was stripped - and the two
+  SIGSEGV reports received so far arrived as lists of raw offsets that nothing
+  could resolve, not even with the exact release binary in hand. The shipped
+  package is unchanged and still stripped; the symbols now exist beside it, so
+  `coredumpctl gdb` on a reporter's machine produces a stack with names on it.
 - A Hyprland session was told its virtual displays were unsupported by a
   backend it never needed. Everything on the Hyprland path was wired -
   `selected_backend()` returns `HYPRLAND_HEADLESS`, `createVirtualDisplay()`

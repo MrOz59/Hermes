@@ -6,6 +6,19 @@
 
 #include <src/confighttp.h>
 
+TEST(GameModeLocalTokenOriginTest, AllowsOnlyPcAndLanAddresses) {
+  EXPECT_TRUE(confighttp::local_api_token_origin_allowed("127.0.0.1"));
+  EXPECT_TRUE(confighttp::local_api_token_origin_allowed("::1"));
+  EXPECT_TRUE(confighttp::local_api_token_origin_allowed("192.168.1.25"));
+  EXPECT_TRUE(confighttp::local_api_token_origin_allowed("10.23.45.67"));
+  EXPECT_TRUE(confighttp::local_api_token_origin_allowed("fd12:3456:789a::1"));
+  EXPECT_TRUE(confighttp::local_api_token_origin_allowed("fe80::1"));
+
+  EXPECT_FALSE(confighttp::local_api_token_origin_allowed("8.8.8.8"));
+  EXPECT_FALSE(confighttp::local_api_token_origin_allowed("2001:4860:4860::8888"));
+  EXPECT_FALSE(confighttp::local_api_token_origin_allowed("not-an-address"));
+}
+
 // The preflight aggregation reads platform-derived state (encoder probe result,
 // virtual-display backend, session environment), so initialize the platform.
 struct PreflightTest: PlatformTestSuite {};

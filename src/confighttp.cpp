@@ -64,6 +64,16 @@ namespace confighttp {
   // Defined later; declared here so the web-UI metrics handler can reuse it.
   nlohmann::json hestia_runtime_status_json();
 
+  bool local_api_token_origin_allowed(std::string_view address) {
+    try {
+      return net::from_address(address) <= net::LAN;
+    } catch (const std::exception &) {
+      // Authentication policy must fail closed if it is ever handed an address
+      // that the network classifier cannot parse.
+      return false;
+    }
+  }
+
   class HestiaHTTPSServer: public SimpleWeb::ServerBase<SimpleWeb::HTTPS> {
   public:
     HestiaHTTPSServer(const std::string &certification_file, const std::string &private_key_file):
@@ -190,8 +200,10 @@ namespace confighttp {
    *
    * It lives in the runtime directory, which is tmpfs and mode 0700, so it is
    * gone at reboot and unreadable by other users. It is not a substitute for
-   * logging in from a browser: a request carrying it still has to come from an
-   * address the web UI accepts, and it is never handed out over HTTP.
+   * logging in from a browser: a request carrying it still has to come from this
+   * machine or a private/local network, and it is never handed out over HTTP.
+   * WAN token authentication stays disabled even when password/cookie login is
+   * explicitly enabled from WAN.
    */
   std::string localApiToken;
   std::filesystem::path localApiTokenPath;
@@ -282,7 +294,17 @@ namespace confighttp {
         !boost::algorithm::iequals(value.substr(0, prefix.size()), prefix)) {
       return false;
     }
-    return token_matches(value.substr(prefix.size()), localApiToken);
+    if (!token_matches(value.substr(prefix.size()), localApiToken)) {
+      return false;
+    }
+
+    const auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    if (!local_api_token_origin_allowed(address)) {
+      BOOST_LOG(warning) << "Web UI: ["sv << address
+                         << "] -- rejected Game Mode token from WAN"sv;
+      return false;
+    }
+    return true;
   }
 #endif
 

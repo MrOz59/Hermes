@@ -8,6 +8,7 @@
 #include <functional>
 #include <chrono>
 #include <string>
+#include <string_view>
 
 // lib includes
 #include <nlohmann/json.hpp>
@@ -31,6 +32,13 @@ namespace confighttp {
    *         such as a software-encoding fallback, do not block).
    */
   nlohmann::json hestia_preflight_json();
+
+  /**
+   * @brief Whether an address may authenticate with the Game Mode local token.
+   * @details The token is capped at this machine and private/local networks even
+   *          when normal Web UI logins are configured to accept WAN clients.
+   */
+  bool local_api_token_origin_allowed(std::string_view address);
 }  // namespace confighttp
 
 // mime types map

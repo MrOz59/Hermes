@@ -416,7 +416,7 @@ namespace {
         grid->addWidget(key, (digit - 1) / 3, (digit - 1) % 3);
       }
 
-      auto *backspace = make_button("<", "key");
+      auto *backspace = make_button(QString::fromUtf8("\u232b"), "key");
       connect(backspace, &QPushButton::clicked, this, [this] {
         if (!entered_.isEmpty()) {
           entered_.chop(1);
@@ -469,9 +469,12 @@ namespace {
     }
 
     void render_digits() {
+      // Filled slots show the digit, empty ones a low line rather than a dot:
+      // four dots floating in the middle of a panel do not read as "four
+      // places, two of them used" from across a room.
       QString shown;
       for (int index = 0; index < 4; ++index) {
-        shown += index < entered_.size() ? entered_.at(index) : QChar(0x2022);
+        shown += index < entered_.size() ? entered_.at(index) : QChar('_');
       }
       digits_label_->setText(shown);
     }
@@ -536,7 +539,9 @@ namespace {
     void refresh() {
       const auto result = api_.get("/api/gamemode/status");
       if (!result.ok) {
-        status_label_->setText("● Not reachable");
+        status_label_->setText(
+          QStringLiteral("<span style=\"color:#e05252\">\u25cf</span> Not reachable")
+        );
         host_label_->setText("Hermes is not answering on port " + QString::number(port_));
         message_label_->setText(QString::fromStdString(result.error));
         pending_ = false;
@@ -553,9 +558,13 @@ namespace {
 
       const auto paired = body.value("paired_clients", 0);
       const auto streaming = body.value("streaming_sessions", 0);
+      // Rich text for the dot alone. Only fixed strings and counts are
+      // interpolated here; the hostname and version go into a plain label,
+      // where markup in a name cannot reach.
       status_label_->setText(
-        "● Running  ·  " + QString::number(paired) + (paired == 1 ? " device" : " devices") +
-        "  ·  " + (streaming > 0 ? QString::number(streaming) + " streaming" : QString {"nothing streaming"})
+        QStringLiteral("<span style=\"color:#48bb78\">\u25cf</span> Running  &middot;  ") +
+        QString::number(paired) + (paired == 1 ? " device" : " devices") + "  &middot;  " +
+        (streaming > 0 ? QString::number(streaming) + " streaming" : QString {"nothing streaming"})
       );
 
       pending_ = body.value("pending_pair", false);
@@ -707,8 +716,6 @@ int main(int argc, char *argv[]) {
   QApplication app(argc, argv);
   curl_global_init(CURL_GLOBAL_DEFAULT);
 
-  // Full screen, because gamescope gives a non-Steam app the whole output and a
-  // window decorated for a desktop that is not there only wastes it.
   const auto token = read_local_api_token();
   QWidget *window = nullptr;
   if (token) {
@@ -717,7 +724,19 @@ int main(int argc, char *argv[]) {
   } else {
     window = new NotRunning;
   }
-  window->showFullScreen();
+
+  // Full screen by default, because gamescope gives a non-Steam app the whole
+  // output and a window decorated for a desktop that is not there only wastes
+  // it. `--windowed` is for the other case: running the same console on a
+  // desktop, where a window that cannot be moved or dismissed with a mouse is
+  // the wrong shape for helping somebody troubleshoot.
+  const QStringList arguments = QApplication::arguments();
+  if (arguments.contains("--windowed")) {
+    window->resize(900, 720);
+    window->show();
+  } else {
+    window->showFullScreen();
+  }
 
   const int code = app.exec();
   curl_global_cleanup();

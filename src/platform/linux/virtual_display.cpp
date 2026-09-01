@@ -1385,10 +1385,16 @@ namespace VDISPLAY {
      * moment configfs says so, but its render node belongs to root until udev
      * runs 92-hermes-kms-access.rules over the card's access_uid. Re-enumerating
      * is that wait: open_devices() only reports nodes it could open.
+     *
+     * `card_owner_uid` is who the card must belong to: the session account
+     * whose compositor will run on it, when there is one. A card made for the
+     * host user instead is one an isolated session could never open - the
+     * access_uid is what udev hands the device nodes to.
      */
     static bool claim_broker_card(device_t &out, uint32_t width, uint32_t height, uint32_t refresh_hz,
-                                  uint64_t &session_id, std::string &broker_card) {
-      const auto card = card_broker::create();
+                                  uint64_t &session_id, std::string &broker_card,
+                                  std::optional<uid_t> card_owner_uid) {
+      const auto card = card_broker::create(card_owner_uid);
       if (!card) {
         return false;
       }
@@ -1428,7 +1434,8 @@ namespace VDISPLAY {
       uint32_t height,
       uint32_t refresh_hz,
       uint64_t &session_id,
-      std::string &broker_card
+      std::string &broker_card,
+      std::optional<uid_t> card_owner_uid
     ) {
       auto devices = open_devices(true);
       for (auto &device : devices) {
@@ -1456,7 +1463,7 @@ namespace VDISPLAY {
       }
 
       if (card_broker::available()) {
-        return claim_broker_card(out, width, height, refresh_hz, session_id, broker_card);
+        return claim_broker_card(out, width, height, refresh_hz, session_id, broker_card, card_owner_uid);
       }
 
       BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] No independent DRM device/output is free for a new "
@@ -4619,7 +4626,8 @@ namespace VDISPLAY {
     uint32_t width,
     uint32_t height,
     uint32_t fps,
-    const uuid_util::uuid_t &guid
+    const uuid_util::uuid_t &guid,
+    std::optional<uid_t> session_owner_uid
   ) {
     std::lock_guard<std::mutex> lock(vdisplay_mutex);
 
@@ -4721,7 +4729,8 @@ namespace VDISPLAY {
           height,
           fps_hz,
           session_id,
-          vdinfo.broker_card
+          vdinfo.broker_card,
+          session_owner_uid
         );
       } else if (hermes_kms::open_device(device, true)) {
         claimed = hermes_kms::claim_available_output(

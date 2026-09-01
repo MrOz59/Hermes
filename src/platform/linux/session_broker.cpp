@@ -6,10 +6,13 @@
 
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
 
+#include <fcntl.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -24,6 +27,79 @@ namespace platf::session_broker {
 
     constexpr const char *default_socket_path = "/run/hermes/session-broker.sock";
     constexpr size_t max_reply_bytes = 4096;
+
+    // The whole conversation - connect, request, reply - shares one deadline.
+    // It is generous on purpose: the broker accepts serially and an ENSURE may
+    // have to wait out another client's slow connection and then create an
+    // account. A broker that cannot answer within it is one that must not
+    // hang the launch (and, through the liveness poll, the session machinery)
+    // behind it.
+    constexpr auto broker_timeout = std::chrono::seconds(15);
+
+    /**
+     * @brief Wait until `fd` is ready for `events` or the deadline passes.
+     *
+     * True when the descriptor is ready (or hung up, which the read or write
+     * that follows reports precisely); false when the deadline passed first.
+     */
+    bool wait_ready(int fd, short events, std::chrono::steady_clock::time_point deadline) {
+      for (;;) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - std::chrono::steady_clock::now());
+        if (remaining.count() <= 0) {
+          return false;
+        }
+        pollfd descriptor {fd, events, 0};
+        const int ready = ::poll(&descriptor, 1, static_cast<int>(remaining.count()));
+        if (ready > 0) {
+          return (descriptor.revents & (events | POLLERR | POLLHUP | POLLNVAL)) != 0;
+        }
+        if (ready == 0) {
+          return false;
+        }
+        if (errno != EINTR) {
+          return false;
+        }
+      }
+    }
+
+    /**
+     * @brief connect() with a deadline.
+     *
+     * A full listen backlog makes connect block indefinitely; with the
+     * broker stalled that would freeze the caller in the one place the
+     * deadline cannot otherwise reach.
+     */
+    bool connect_with_timeout(int fd, const sockaddr *address, socklen_t length,
+                              std::chrono::steady_clock::time_point deadline) {
+      const int flags = ::fcntl(fd, F_GETFL, 0);
+      if (flags >= 0) {
+        ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+      }
+
+      int result = ::connect(fd, address, length);
+      if (result != 0 && (errno == EINPROGRESS || errno == EAGAIN)) {
+        if (!wait_ready(fd, POLLOUT, deadline)) {
+          result = -1;
+          errno = ETIMEDOUT;
+        } else {
+          int socket_error = 0;
+          socklen_t error_length = sizeof(socket_error);
+          if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &error_length) != 0 ||
+              socket_error != 0) {
+            errno = socket_error != 0 ? socket_error : errno;
+            result = -1;
+          } else {
+            result = 0;
+          }
+        }
+      }
+
+      if (flags >= 0) {
+        ::fcntl(fd, F_SETFL, flags);  // Restore blocking mode.
+      }
+      return result == 0;
+    }
 
     std::string socket_path() {
       // Overridable so the suite can point at a broker of its own rather than
@@ -62,7 +138,8 @@ namespace platf::session_broker {
         ::close(fd);
       });
 
-      if (::connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) {
+      const auto deadline = std::chrono::steady_clock::now() + broker_timeout;
+      if (!connect_with_timeout(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address), deadline)) {
         BOOST_LOG(debug) << "[session-broker] No broker at " << path << ": " << std::strerror(errno);
         return std::nullopt;
       }
@@ -72,6 +149,10 @@ namespace platf::session_broker {
       // get away with one write.
       size_t offset = 0;
       while (offset < request.size()) {
+        if (!wait_ready(fd, POLLOUT, deadline)) {
+          BOOST_LOG(error) << "[session-broker] Timed out sending the request to the broker.";
+          return std::nullopt;
+        }
         const ssize_t count = ::write(fd, request.data() + offset, request.size() - offset);
         if (count <= 0) {
           BOOST_LOG(error) << "[session-broker] Could not send the request: " << std::strerror(errno);
@@ -84,6 +165,10 @@ namespace platf::session_broker {
       std::string reply;
       std::array<char, 512> buffer {};
       while (reply.size() < max_reply_bytes) {
+        if (!wait_ready(fd, POLLIN, deadline)) {
+          BOOST_LOG(error) << "[session-broker] Timed out waiting for the broker's reply.";
+          return std::nullopt;
+        }
         const ssize_t count = ::read(fd, buffer.data(), buffer.size());
         if (count < 0) {
           BOOST_LOG(error) << "[session-broker] Could not read the reply: " << std::strerror(errno);

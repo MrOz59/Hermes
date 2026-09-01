@@ -25,10 +25,13 @@
 
 // standard includes
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 // lib includes
 #include <curl/curl.h>
@@ -37,6 +40,7 @@
 #include <QApplication>
 #include <QDesktopServices>
 #include <QFrame>
+#include <QFutureWatcher>
 #include <QGridLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -44,10 +48,12 @@
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QStyle>
+#include <QThreadPool>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QtConcurrent/QtConcurrent>
 
 namespace {
 
@@ -78,6 +84,40 @@ namespace {
       return std::nullopt;
     }
     return token;
+  }
+
+  /**
+   * @brief The user unit that runs Hermes on this machine.
+   *
+   * The CMake build installs sunshine.service; the Arch packaging renames it
+   * to hermes.service so it can sit beside an apollo/sunshine install. A
+   * restart has to name the unit that is actually there, so the usual unit
+   * directories are checked and the first candidate found wins.
+   */
+  std::string hermes_unit_name() {
+    std::vector<std::filesystem::path> directories;
+    if (const char *xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg) {
+      directories.emplace_back(std::string {xdg} + "/systemd/user");
+    }
+    if (const char *home = std::getenv("HOME"); home && *home) {
+      directories.emplace_back(std::string {home} + "/.config/systemd/user");
+      directories.emplace_back(std::string {home} + "/.local/share/systemd/user");
+    }
+    directories.emplace_back("/etc/systemd/user");
+    directories.emplace_back("/usr/local/lib/systemd/user");
+    directories.emplace_back("/usr/lib/systemd/user");
+
+    for (const char *candidate : {"hermes", "sunshine"}) {
+      for (const auto &directory : directories) {
+        std::error_code error;
+        if (std::filesystem::exists(directory / (std::string {candidate} + ".service"), error)) {
+          return candidate;
+        }
+      }
+    }
+    // Neither unit is visible (a container, a distribution that moved it);
+    // the canonical name is still the best guess.
+    return "sunshine";
   }
 
   /**
@@ -127,7 +167,12 @@ namespace {
   }
 
   /**
-   * @brief One request to the local Hermes, authenticated with the token.
+   * @brief One request to the local Hermes, authenticated with a token.
+   *
+   * The token is an argument, not a member: Hermes publishes a new one every
+   * time it starts, so a token held for the console's whole life goes stale
+   * the moment anybody presses "Restart Hermes". Taking it per request lets
+   * the caller re-read the file when it needs to.
    *
    * TLS verification is off because the only peer is this machine's own Hermes
    * behind a certificate it signed itself, and the token - not the certificate -
@@ -145,21 +190,21 @@ namespace {
 
   class Api {
   public:
-    Api(std::string token, int port):
-        token_ {std::move(token)},
+    explicit Api(int port):
         base_ {"https://localhost:" + std::to_string(port)} {
     }
 
-    ApiResult get(const std::string &path) const {
-      return request(path, std::nullopt);
+    ApiResult get(const std::string &path, const std::string &token) const {
+      return request(path, std::nullopt, token);
     }
 
-    ApiResult post(const std::string &path, const nlohmann::json &payload) const {
-      return request(path, payload.dump());
+    ApiResult post(const std::string &path, const nlohmann::json &payload, const std::string &token) const {
+      return request(path, payload.dump(), token);
     }
 
   private:
-    ApiResult request(const std::string &path, const std::optional<std::string> &payload) const {
+    ApiResult request(const std::string &path, const std::optional<std::string> &payload,
+                      const std::string &token) const {
       ApiResult result;
 
       CURL *curl = curl_easy_init();
@@ -170,7 +215,7 @@ namespace {
 
       std::string response;
       const std::string url = base_ + path;
-      const std::string authorization = "Authorization: Bearer " + token_;
+      const std::string authorization = "Authorization: Bearer " + token;
 
       curl_slist *headers = nullptr;
       headers = curl_slist_append(headers, authorization.c_str());
@@ -211,7 +256,6 @@ namespace {
       return result;
     }
 
-    std::string token_;
     std::string base_;
   };
 
@@ -296,6 +340,15 @@ namespace {
       // whole reason this polls rather than refreshing on keypress.
       connect(poll_, &QTimer::timeout, this, [this] {
         refresh();
+      });
+      // Results arrive through signals connected to this window, which is
+      // also what keeps a late answer from touching a destroyed console: the
+      // connection dies with the receiver.
+      connect(&status_watcher_, &QFutureWatcher<ApiResult>::finished, this, [this] {
+        apply_status(status_watcher_.result());
+      });
+      connect(&pin_watcher_, &QFutureWatcher<ApiResult>::finished, this, [this] {
+        apply_pin_result(pin_watcher_.result());
       });
       poll_->start(POLL_INTERVAL_MS);
       refresh();
@@ -484,7 +537,28 @@ namespace {
         pair_message_->setText("The PIN is four digits.");
         return;
       }
-      const auto result = api_.post("/api/pin", {{"pin", entered_.toStdString()}, {"name", pending_name_}});
+      if (pin_watcher_.isRunning()) {
+        return;
+      }
+      pair_message_->setText("Checking...");
+
+      const std::string pin = entered_.toStdString();
+      const std::string name = pending_name_;
+      // Read at submit time rather than held: the pair screen can be open
+      // across a restart, and the token from before it is already gone.
+      const std::string token = read_local_api_token().value_or(std::string {});
+      pin_watcher_.setFuture(QtConcurrent::run([api = api_, pin, name, token]() {
+        ApiResult result = api.post("/api/pin", {{"pin", pin}, {"name", name}}, token);
+        if (result.status == 401) {
+          if (const auto fresh = read_local_api_token()) {
+            result = api.post("/api/pin", {{"pin", pin}, {"name", name}}, *fresh);
+          }
+        }
+        return result;
+      }));
+    }
+
+    void apply_pin_result(ApiResult result) {
       const bool accepted = result.ok && result.body.value("status", false);
       if (accepted) {
         pair_message_->setText("Paired. The device can connect now.");
@@ -511,8 +585,10 @@ namespace {
     void restart_service() {
       message_label_->setText("Restarting...");
       // The service is the user manager's, and so is this console: no
-      // privilege is involved and nothing has to be asked of polkit.
-      QProcess::startDetached("systemctl", {"--user", "restart", "hermes"});
+      // privilege is involved and nothing has to be asked of polkit. The unit
+      // is named as installed - hermes on Arch, sunshine everywhere else -
+      // because a restart of a unit that does not exist is a silent nothing.
+      QProcess::startDetached("systemctl", {"--user", "restart", QString::fromStdString(hermes_unit_name())});
       QTimer::singleShot(2500, this, [this] {
         refresh();
       });
@@ -536,8 +612,44 @@ namespace {
 
     // -- polling --------------------------------------------------------------
 
+    /**
+     * @brief The GUI thread must never block on the network.
+     *
+     * A stale token or a stopped Hermes turns every request into a
+     * seconds-long timeout, and on the GUI thread that is a console that
+     * stops drawing. Requests run through QtConcurrent's pool instead; the
+     * Api holds nothing but a URL, so a copy is all the worker needs, and the
+     * answer comes back through the watcher signals connected in the
+     * constructor.
+     */
     void refresh() {
-      const auto result = api_.get("/api/gamemode/status");
+      if (status_watcher_.isRunning()) {
+        // The previous request is still out and its answer will land shortly;
+        // the timer outruns the request, not the other way around.
+        return;
+      }
+
+      // The token is re-read here rather than held from startup: Hermes
+      // publishes a new one every time it starts, and the whole reason this
+      // screen has a "Restart Hermes" button is that restarting is normal.
+      // Reading it fresh keeps that button from permanently 401-ing the very
+      // console that pressed it.
+      const std::string token = read_local_api_token().value_or(std::string {});
+      status_watcher_.setFuture(QtConcurrent::run([api = api_, token]() {
+        ApiResult result = api.get("/api/gamemode/status", token);
+        // The restart race in the other direction: Hermes came up again
+        // between the read above and this request. One retry with the token
+        // as it is now covers it.
+        if (result.status == 401) {
+          if (const auto fresh = read_local_api_token()) {
+            result = api.get("/api/gamemode/status", *fresh);
+          }
+        }
+        return result;
+      }));
+    }
+
+    void apply_status(ApiResult result) {
       if (!result.ok) {
         status_label_->setText(
           QStringLiteral("<span style=\"color:#e05252\">\u25cf</span> Not reachable")
@@ -624,6 +736,11 @@ namespace {
     Api api_;
     int port_ {};
 
+    // One request in flight at a time per watcher: the poll timer outruns a
+    // slow request, and a second one would only pile timeouts on top of it.
+    QFutureWatcher<ApiResult> status_watcher_;
+    QFutureWatcher<ApiResult> pin_watcher_;
+
     QTimer *poll_ {};
     QStackedWidget *stack_ {};
     QLabel *host_label_ {};
@@ -668,7 +785,10 @@ namespace {
 
       auto *start = make_button("Start Hermes");
       connect(start, &QPushButton::clicked, this, [this] {
-        QProcess::startDetached("systemctl", {"--user", "restart", "hermes"});
+        // The unit is named as installed - hermes on Arch, sunshine elsewhere
+        // - because a restart of a unit that does not exist is a silent
+        // nothing.
+        QProcess::startDetached("systemctl", {"--user", "restart", QString::fromStdString(hermes_unit_name())});
         // Relaunching is the honest way back: the token has to be read at
         // startup, and re-reading it here would mean rebuilding the whole
         // console around a token that may still not exist.
@@ -720,7 +840,7 @@ int main(int argc, char *argv[]) {
   QWidget *window = nullptr;
   if (token) {
     const int port = web_ui_port();
-    window = new Console(Api {*token, port}, port);
+    window = new Console(Api {port}, port);
   } else {
     window = new NotRunning;
   }
@@ -739,6 +859,9 @@ int main(int argc, char *argv[]) {
   }
 
   const int code = app.exec();
+  // A request may still be in flight when the window goes; wait it out before
+  // tearing libcurl down underneath it.
+  QThreadPool::globalInstance()->waitForDone();
   curl_global_cleanup();
   return code;
 }

@@ -13,8 +13,11 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
+
+#include <sys/types.h>
 
 // local includes
 #include "src/uuid.h"
@@ -223,6 +226,9 @@ namespace VDISPLAY {
    * @param height The height of the virtual display.
    * @param fps The refresh rate of the virtual display (in mHz).
    * @param guid The GUID for the virtual display.
+   * @param session_owner_uid When set, a Hermes-KMS card the broker creates
+   *        for this display belongs to this uid (an isolated session's
+   *        account) rather than to Hermes itself.
    * @return The name of the created virtual display, or empty string on failure.
    */
   std::string createVirtualDisplay(
@@ -231,7 +237,8 @@ namespace VDISPLAY {
     uint32_t width,
     uint32_t height,
     uint32_t fps,
-    const uuid_util::uuid_t &guid
+    const uuid_util::uuid_t &guid,
+    std::optional<uid_t> session_owner_uid = std::nullopt
   );
 
   /**

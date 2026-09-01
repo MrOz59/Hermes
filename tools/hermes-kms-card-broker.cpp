@@ -10,15 +10,24 @@
  * socket, speaking a line protocol with four requests and no state of its own.
  *
  *     CREATE                -> OK <name> <card> <render_node>
+ *     CREATE <uid>          -> card owned by that Hermes session account
  *     REMOVE <name>         -> OK
  *     LIST                  -> OK <name>...
  *     SWEEP                 -> OK <removed-count>
  *
  * Authorization is the peer's uid, taken from SO_PEERCRED (which the kernel
  * fills in, so it cannot be spoofed) and checked against an allow file that
- * only root can write. A card is named hermes-u<uid>-<index> and the broker
- * touches nothing else: a request can only ever remove a card the same uid
- * created, and never a statically configured one.
+ * only root can write. A card is named hermes-u<peer-uid>-<index> - so a
+ * request can only ever remove a card the same uid created, and never a
+ * statically configured one - while its access_uid is the uid the card
+ * actually belongs to: the caller's own for a bare CREATE, or, for
+ * `CREATE <uid>`, a Hermes session account's. That form is what an isolated
+ * session needs: the session's compositor runs as hermes-sNN, and the
+ * driver's udev rules hand the card's device nodes to its access_uid, so a
+ * card created with the host user's uid is one the session can never open.
+ * The gate is the hermes-session group: an account outside it cannot be
+ * named, which keeps a caller in the allow file from minting cards for
+ * arbitrary users.
  *
  * The session index is allocated here rather than requested, because it is not
  * a private number. The driver's udev rules turn it into the private DRM seat
@@ -33,6 +42,7 @@
 #include <array>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -44,6 +54,8 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <grp.h>
+#include <poll.h>
 #include <pwd.h>
 #include <signal.h>
 #include <sys/file.h>
@@ -62,6 +74,12 @@ namespace {
   constexpr const char *default_platform_root = "/sys/devices/platform";
   constexpr const char *default_lock_file = "/run/hermes/card-broker.lock";
 
+  // The group every isolated session account is created in, by the sysusers
+  // file that creates the group. `CREATE <uid>` may only name an account in
+  // it: any wider gate would let a caller in the allow file hand cards to
+  // arbitrary users.
+  constexpr const char *session_group = "hermes-session";
+
   // The driver maps session indices 1..8 onto private seats; there is no ninth
   // seat rule, so a ninth card would land on seat0 with the host compositor.
   constexpr unsigned int max_session_index = 8;
@@ -72,10 +90,45 @@ namespace {
   // Where systemd puts the first socket it passes down.
   constexpr int SD_LISTEN_FDS_START = 3;
 
+  // How long one connection may take over its socket. The broker accepts
+  // serially, so a client that connects and says nothing stalls every client
+  // behind it; this deadline is what turns that stall from forever into a
+  // bounded wait, on both the request and the reply half of the conversation.
+  constexpr auto socket_timeout = std::chrono::seconds(10);
+
   volatile sig_atomic_t stopping = 0;
 
   void stop_handler(int) {
     stopping = 1;
+  }
+
+  /**
+   * @brief Wait until `fd` is ready for `events` or the deadline passes.
+   *
+   * True when the descriptor is ready (or hung up, which the read or write
+   * that follows reports precisely); false when the deadline passed first.
+   * Every read and write on a connection goes through this gate, so no peer
+   * can hold the broker by simply never sending or never reading.
+   */
+  bool wait_ready(int fd, short events, std::chrono::steady_clock::time_point deadline) {
+    for (;;) {
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now());
+      if (remaining.count() <= 0) {
+        return false;
+      }
+      pollfd descriptor {fd, events, 0};
+      const int ready = ::poll(&descriptor, 1, static_cast<int>(remaining.count()));
+      if (ready > 0) {
+        return (descriptor.revents & (events | POLLERR | POLLHUP | POLLNVAL)) != 0;
+      }
+      if (ready == 0) {
+        return false;
+      }
+      if (errno != EINTR) {
+        return false;
+      }
+    }
   }
 
   struct options_t {
@@ -122,8 +175,14 @@ namespace {
   /**
    * @brief Session indices already spoken for, from every Hermes-KMS card the
    *        kernel knows about, statically configured or created here.
+   *
+   * Nothing when sysfs could not be read at all. That is deliberately not an
+   * empty result: a seat the broker failed to see is not a seat it may hand
+   * out, because two cards sharing an index share a seat - handing one out is
+   * exactly the collision the pool exists to prevent. Allocation refuses to
+   * guess.
    */
-  std::vector<bool> used_session_indices(const options_t &options) {
+  std::optional<std::vector<bool>> used_session_indices(const options_t &options) {
     std::vector<bool> used(max_session_index + 1, false);
     std::error_code error;
     for (const auto &entry : fs::directory_iterator(options.platform_root, error)) {
@@ -139,6 +198,9 @@ namespace {
       if (value >= 1 && value <= max_session_index) {
         used[value] = true;
       }
+    }
+    if (error) {
+      return std::nullopt;
     }
     return used;
   }
@@ -156,6 +218,34 @@ namespace {
     const auto suffix = name.substr(prefix.size());
     return !suffix.empty() &&
            std::all_of(suffix.begin(), suffix.end(), [](unsigned char c) { return std::isdigit(c); });
+  }
+
+  /**
+   * @brief Whether `uid` is a Hermes session account.
+   *
+   * The gate on `CREATE <uid>`: the account must exist and be in the
+   * hermes-session group, either as its primary group or as a member. An
+   * account outside it is refused, because creating a card for one would be
+   * handing its GPU access to whoever the caller names.
+   */
+  bool is_session_account(uid_t uid) {
+    const auto *account = ::getpwuid(uid);
+    if (account == nullptr) {
+      return false;
+    }
+    const auto *group = ::getgrnam(session_group);
+    if (group == nullptr) {
+      return false;
+    }
+    if (account->pw_gid == group->gr_gid) {
+      return true;
+    }
+    for (char **member = group->gr_mem; *member != nullptr; ++member) {
+      if (std::strcmp(*member, account->pw_name) == 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   std::vector<std::string> cards_of(const options_t &options, uid_t uid) {
@@ -180,11 +270,14 @@ namespace {
     return !error;
   }
 
-  std::string create_card(const options_t &options, uid_t uid) {
+  std::string create_card(const options_t &options, uid_t owner, uid_t access_uid) {
     const auto used = used_session_indices(options);
+    if (!used) {
+      return "ERR create could not read the session seats in use from sysfs";
+    }
     unsigned int session_index = 0;
     for (unsigned int candidate = 1; candidate <= max_session_index; ++candidate) {
-      if (!used[candidate]) {
+      if (!(*used)[candidate]) {
         session_index = candidate;
         break;
       }
@@ -193,11 +286,18 @@ namespace {
       return "ERR exhausted every private session seat is in use";
     }
 
-    const auto name = card_name(uid, session_index);
+    // The name keeps the creator's uid, which is what REMOVE and SWEEP are
+    // keyed on; the access_uid is whose the card actually is - the caller's
+    // own, or the session account that will run a compositor on it.
+    const auto name = card_name(owner, session_index);
     const auto dir = fs::path {options.configfs_root} / name;
     std::error_code error;
     if (!fs::create_directory(dir, error)) {
-      return "ERR create could not create the card: " + error.message();
+      // error.message() may be empty for a configfs failure, and an empty
+      // reason is a reply the caller cannot act on; errno names the truth
+      // where the error code does not.
+      const auto reason = error ? error.message() : std::string {std::strerror(errno)};
+      return "ERR create could not create the card: " + (reason.empty() ? "unknown error" : reason);
     }
 
     // Everything an identity needs is settled before the card exists: these are
@@ -206,7 +306,7 @@ namespace {
     const bool configured = write_file(dir / "outputs", "1\n") &&
                             write_file(dir / "role", "session\n") &&
                             write_file(dir / "session_index", std::to_string(session_index) + "\n") &&
-                            write_file(dir / "access_uid", std::to_string(uid) + "\n") &&
+                            write_file(dir / "access_uid", std::to_string(access_uid) + "\n") &&
                             write_file(dir / "enabled", "1\n");
     if (!configured) {
       const auto reason = std::string {std::strerror(errno)};
@@ -244,11 +344,34 @@ namespace {
       return "OK " + std::to_string(removed);
     }
 
-    if (request == "CREATE") {
+    if (request == "CREATE" || request.starts_with("CREATE ")) {
+      // A bare CREATE is the caller's own card, the way it has always been.
+      // `CREATE <uid>` hands the card to a Hermes session account instead,
+      // which is what an isolated session needs: its compositor runs as that
+      // account, and the card's device nodes go to its access_uid.
+      uid_t access_uid = uid;
+      if (request != "CREATE") {
+        const auto argument = trim(request.substr(7));
+        if (argument.empty() || argument.size() > 10 ||
+            !std::ranges::all_of(argument, [](unsigned char ch) {
+              return std::isdigit(ch);
+            })) {
+          return "ERR request CREATE takes a numeric uid";
+        }
+        errno = 0;
+        const auto value = std::strtoul(argument.c_str(), nullptr, 10);
+        if (errno == ERANGE || value == 0 || value > 0xFFFFFFFFUL) {
+          return "ERR request no account has that uid";
+        }
+        if (!is_session_account(static_cast<uid_t>(value))) {
+          return "ERR denied that uid is not a Hermes session account";
+        }
+        access_uid = static_cast<uid_t>(value);
+      }
       if (cards_of(options, uid).size() >= options.max_cards_per_uid) {
         return "ERR limit this user already holds the maximum number of cards";
       }
-      return create_card(options, uid);
+      return create_card(options, uid, access_uid);
     }
 
     constexpr std::string_view remove_prefix = "REMOVE ";
@@ -305,9 +428,15 @@ namespace {
   }
 
   std::optional<std::string> read_request(int fd) {
+    const auto deadline = std::chrono::steady_clock::now() + socket_timeout;
     std::string request;
     std::array<char, 128> buffer {};
     while (request.size() < max_request_bytes) {
+      if (!wait_ready(fd, POLLIN, deadline)) {
+        std::fprintf(stderr, "a connection sent no request within %lld seconds; dropping it\n",
+                     static_cast<long long>(socket_timeout.count()));
+        return std::nullopt;
+      }
       const ssize_t count = ::read(fd, buffer.data(), buffer.size());
       if (count <= 0) {
         return count == 0 && !request.empty() ? std::optional {trim(request)} : std::nullopt;
@@ -322,8 +451,14 @@ namespace {
 
   void write_reply(int fd, const std::string &reply) {
     const auto line = reply + "\n";
+    const auto deadline = std::chrono::steady_clock::now() + socket_timeout;
     size_t offset = 0;
     while (offset < line.size()) {
+      // A peer that stops reading must not hold the broker open either; the
+      // same deadline guards this half of the conversation.
+      if (!wait_ready(fd, POLLOUT, deadline)) {
+        return;
+      }
       const ssize_t count = ::write(fd, line.data() + offset, line.size() - offset);
       if (count <= 0) {
         return;

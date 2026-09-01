@@ -40,9 +40,9 @@ if(SUNSHINE_BUILD_GAMEMODE_CONSOLE)
     # Restoring the variable is narrower than renaming it everywhere it is
     # misused, which is a separate cleanup.
     set(_hermes_saved_module_path "${CMAKE_MODULE_PATH}")
-    find_package(Qt6 QUIET COMPONENTS Widgets)
+    find_package(Qt6 QUIET COMPONENTS Widgets Concurrent)
     if(NOT Qt6_FOUND)
-        find_package(Qt5 QUIET COMPONENTS Widgets)
+        find_package(Qt5 QUIET COMPONENTS Widgets Concurrent)
     endif()
     set(CMAKE_MODULE_PATH "${_hermes_saved_module_path}")
     unset(_hermes_saved_module_path)
@@ -57,9 +57,9 @@ if(SUNSHINE_BUILD_GAMEMODE_CONSOLE)
         target_include_directories(hermes-gamemode SYSTEM PRIVATE ${CURL_INCLUDE_DIRS})
         target_link_directories(hermes-gamemode PRIVATE ${CURL_LIBRARY_DIRS})
         if(Qt6_FOUND)
-            target_link_libraries(hermes-gamemode PRIVATE Qt6::Widgets)
+            target_link_libraries(hermes-gamemode PRIVATE Qt6::Widgets Qt6::Concurrent)
         else()
-            target_link_libraries(hermes-gamemode PRIVATE Qt5::Widgets)
+            target_link_libraries(hermes-gamemode PRIVATE Qt5::Widgets Qt5::Concurrent)
         endif()
         target_link_libraries(hermes-gamemode PRIVATE
                 nlohmann_json::nlohmann_json

@@ -29,7 +29,10 @@
  * START is the only request that carries more than a line, because a session's
  * command and environment do not fit on one and splitting them on whitespace
  * would be a quoting bug waiting to happen. Every ARG and ENV line is used
- * whole.
+ * whole, with one exception: an ENV whose name systemd cannot carry - a bash
+ * exported function being the everyday case - is dropped with a warning to the
+ * journal, because refusing the whole session over one shell artefact would
+ * leave that machine unable to launch isolated sessions at all.
  *
  * ENSURE is idempotent: a client that comes back gets the account it had, which
  * is what makes its files still be there. Nothing is ever removed implicitly -
@@ -77,6 +80,7 @@
 #include <array>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -86,10 +90,12 @@
 #include <string>
 #include <string_view>
 #include <sys/wait.h>
+#include <unordered_map>
 #include <vector>
 
 #include <fcntl.h>
 #include <grp.h>
+#include <poll.h>
 #include <pwd.h>
 #include <signal.h>
 #include <sys/file.h>
@@ -116,6 +122,78 @@ namespace {
   constexpr int session_ceiling = 64;
 
   constexpr int SD_LISTEN_FDS_START = 3;
+
+  // How long one connection may take over its socket. The broker accepts
+  // serially, so a client that connects and says nothing stalls every client
+  // behind it; this deadline is what turns that stall from forever into a
+  // bounded wait. It covers reads and writes alike, and a full request has to
+  // arrive within it - the ceiling below bounds size, this bounds time.
+  constexpr auto socket_timeout = std::chrono::seconds(10);
+
+  // STATUS asks systemd for a unit's state, which is a fork and exec of
+  // `systemctl show`. Callers poll it - the Game Mode console every couple of
+  // seconds, the streaming host while a session is alive - so the answer is
+  // cached briefly. A state is stale after this long at worst, which no caller
+  // can distinguish from a poll that has not happened yet.
+  constexpr auto status_cache_ttl = std::chrono::seconds(2);
+
+  struct status_cache_t {
+    struct entry_t {
+      std::chrono::steady_clock::time_point expires_at;
+      std::string state;
+    };
+
+    // The broker serves one connection at a time, so no lock is needed.
+    std::unordered_map<std::string, entry_t> entries;
+
+    std::optional<std::string> find(const std::string &unit) {
+      const auto it = entries.find(unit);
+      if (it == entries.end()) {
+        return std::nullopt;
+      }
+      if (std::chrono::steady_clock::now() >= it->second.expires_at) {
+        entries.erase(it);
+        return std::nullopt;
+      }
+      return it->second.state;
+    }
+
+    void store(const std::string &unit, std::string state) {
+      entries[unit] = {std::chrono::steady_clock::now() + status_cache_ttl, std::move(state)};
+    }
+  };
+
+  status_cache_t status_cache;
+
+  /**
+   * @brief Wait until `fd` is ready for `events` or the deadline passes.
+   *
+   * True when the descriptor is ready (or hung up, which the read or write
+   * that follows reports precisely); false when the deadline passed first.
+   * This is the whole timeout mechanism: every read and write on a connection
+   * goes through this gate, so no peer can hold the broker by simply never
+   * sending or never reading.
+   */
+  bool wait_ready(int fd, short events, std::chrono::steady_clock::time_point deadline) {
+    for (;;) {
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now());
+      if (remaining.count() <= 0) {
+        return false;
+      }
+      pollfd descriptor {fd, events, 0};
+      const int ready = ::poll(&descriptor, 1, static_cast<int>(remaining.count()));
+      if (ready > 0) {
+        return (descriptor.revents & (events | POLLERR | POLLHUP | POLLNVAL)) != 0;
+      }
+      if (ready == 0) {
+        return false;
+      }
+      if (errno != EINTR) {
+        return false;
+      }
+    }
+  }
 
   struct options_t {
     std::string allow_file {default_allow_file};
@@ -167,8 +245,12 @@ namespace {
    *
    * The caller is the trusted Hermes user, so this is not a privilege boundary;
    * it is a boundary against a malformed environment reaching `systemd-run` as
-   * something that parses as an option instead. A name that cannot start with
-   * `-` and a mandatory `=` are enough for that.
+   * something that parses as an option instead, and against a name systemd
+   * will refuse outright: `--setenv` accepts only the classic alphanumeric
+   * plus-underscore names, so an exported bash function (a `BASH_FUNC_foo%%=`
+   * entry) cannot be carried at all, by anyone. A line that fails this check
+   * is dropped with a warning rather than failing the START - a session must
+   * not be refused because the host's shell exports a function.
    */
   bool valid_env_assignment(std::string_view line) {
     const auto equals = line.find('=');
@@ -538,6 +620,10 @@ namespace {
     return reply_for(options, name);
   }
 
+  // Defined below, beside handle_stop; PURGE needs it first to stop the
+  // session ahead of userdel.
+  std::optional<std::string> stop_session(const options_t &options, const std::string &account);
+
   std::string handle_purge(const options_t &options, const std::string &client_id) {
     auto mappings = read_mappings(options);
     if (!mappings) {
@@ -554,6 +640,15 @@ namespace {
     const auto userdel = locate({"/usr/sbin/userdel", "/usr/bin/userdel"});
     if (userdel.empty()) {
       return "ERR provision userdel was not found";
+    }
+
+    // The session is stopped before the account is removed: userdel refuses
+    // an account with live processes, and a home deleted out from under a
+    // running compositor corrupts the files it is writing. A failure to stop
+    // is not the end - userdel then reports the truth of what is left.
+    if (const auto failure = stop_session(options, existing->account); failure) {
+      std::fprintf(stderr, "could not stop %s before purging it: %s\n",
+                   existing->account.c_str(), failure->c_str());
     }
 
     // The account goes first and the mapping second. The other order loses a
@@ -668,6 +763,9 @@ namespace {
       std::fprintf(stderr, "systemd-run refused to start %s\n", unit.c_str());
       return "ERR provision systemd-run refused to start the session";
     }
+    // The unit is coming up; a STATUS right behind this START must not be
+    // answered from a cache entry that still remembers it as gone.
+    status_cache.store(session_unit, "activating");
     return "OK " + unit;
   }
 
@@ -691,16 +789,26 @@ namespace {
       return "ERR notfound no account is mapped to that client";
     }
 
-    const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
-    if (systemctl.empty()) {
-      return "ERR provision systemctl was not found";
-    }
     const auto unit = unit_for_account(existing->account);
+
+    // STATUS is polled - the Game Mode console every couple of seconds, the
+    // streaming host while a session is alive - and each answer otherwise
+    // costs a fork and exec of `systemctl show`. The state is cached briefly:
+    // nothing systemd knows changes between two polls that close together.
     std::string state;
-    if (!run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state)) {
-      return "ERR provision the session unit's state could not be read";
+    if (const auto cached = status_cache.find(unit); cached) {
+      state = *cached;
+    } else {
+      const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
+      if (systemctl.empty()) {
+        return "ERR provision systemctl was not found";
+      }
+      if (!run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state)) {
+        return "ERR provision the session unit's state could not be read";
+      }
+      state = trim(state);
+      status_cache.store(unit, state);
     }
-    state = trim(state);
     // systemd answers `inactive` for a unit it has never heard of, which is
     // the right answer to this question: nothing of that name is running.
     return "OK " + (state.empty() ? std::string {"inactive"} : state) + ' ' + unit;
@@ -733,11 +841,17 @@ namespace {
 
     const auto runtime_dir = "/run/user/" + std::to_string(static_cast<unsigned>(account->pw_uid));
     std::vector<std::string> candidates;
-    std::error_code ec;
-    for (fs::directory_iterator it {runtime_dir, ec}, end; !ec && it != end; it.increment(ec)) {
+    std::error_code iteration_error;
+    for (fs::directory_iterator it {runtime_dir, iteration_error}, end;
+         !iteration_error && it != end; it.increment(iteration_error)) {
       const auto name = it->path().filename().string();
+      // A status error is this entry's alone and must not end the scan: the
+      // code is local to the iteration, where sharing one with the iterator
+      // would abort the loop on the first unreadable entry and hide every
+      // socket that came after it.
+      std::error_code status_error;
       if ((name.starts_with("gamescope-") || name.starts_with("wayland-")) &&
-          fs::is_socket(it->symlink_status(ec))) {
+          fs::is_socket(it->symlink_status(status_error))) {
         candidates.emplace_back(name);
       }
     }
@@ -746,6 +860,49 @@ namespace {
     }
     std::ranges::sort(candidates);
     return "OK " + candidates.front();
+  }
+
+  /**
+   * @brief Stop the account's session unit and turn lingering off.
+   *
+   * Shared by STOP and by PURGE ahead of userdel: an account whose session is
+   * still running cannot be removed at all - userdel refuses while its
+   * processes exist - and deleting the home out from under a running
+   * compositor would corrupt whatever it is writing.
+   */
+  std::optional<std::string> stop_session(const options_t &options, const std::string &account) {
+    const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
+    if (systemctl.empty()) {
+      return "systemctl was not found";
+    }
+    // Asked for first, because `systemctl stop` fails on a unit it cannot find
+    // and a stopped session's unit is gone - `--collect` removes it. A second
+    // STOP, or one for a session that ended on its own, is a request for a
+    // state that already holds, so it skips the stop instead of reporting a
+    // failure to reach it.
+    const auto unit = unit_for_account(account);
+    std::string state;
+    run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state);
+    state = trim(state);
+    if (!state.empty() && state != "inactive" && state != "failed") {
+      if (!run({systemctl, "stop", unit})) {
+        return "the session unit could not be stopped";
+      }
+      state = "inactive";
+    }
+    // The state the unit is now in is the state a STATUS behind this STOP
+    // must report, not whatever a cache entry from before the stop remembers.
+    status_cache.store(unit, state.empty() ? "inactive" : state);
+
+    // Lingering is what START turned on to get the account a runtime directory
+    // and a user manager, and it survives reboots. Left on, every client that
+    // ever streamed would keep a manager and a session bus running on the host
+    // forever. The account and its home are untouched - only the machinery of a
+    // session that is over goes - so the next START brings it all back.
+    if (const auto loginctl = locate({"/usr/bin/loginctl", "/bin/loginctl"}); !loginctl.empty()) {
+      run({loginctl, "disable-linger", account});
+    }
+    return std::nullopt;
   }
 
   std::string handle_stop(const options_t &options, const std::string &client_id) {
@@ -760,32 +917,8 @@ namespace {
       return "ERR notfound no account is mapped to that client";
     }
 
-    const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
-    if (systemctl.empty()) {
-      return "ERR provision systemctl was not found";
-    }
-    // Asked for first, because `systemctl stop` fails on a unit it cannot find
-    // and a stopped session's unit is gone - `--collect` removes it. A second
-    // STOP, or one for a session that ended on its own, is a request for a
-    // state that already holds, so it skips the stop instead of reporting a
-    // failure to reach it.
-    const auto unit = unit_for_account(existing->account);
-    std::string state;
-    run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state);
-    state = trim(state);
-    if (!state.empty() && state != "inactive") {
-      if (!run({systemctl, "stop", unit})) {
-        return "ERR provision the session unit could not be stopped";
-      }
-    }
-
-    // Lingering is what START turned on to get the account a runtime directory
-    // and a user manager, and it survives reboots. Left on, every client that
-    // ever streamed would keep a manager and a session bus running on the host
-    // forever. The account and its home are untouched - only the machinery of a
-    // session that is over goes - so the next START brings it all back.
-    if (const auto loginctl = locate({"/usr/bin/loginctl", "/bin/loginctl"}); !loginctl.empty()) {
-      run({loginctl, "disable-linger", existing->account});
+    if (const auto failure = stop_session(options, existing->account); failure) {
+      return "ERR provision " + *failure;
     }
     return "OK";
   }
@@ -858,7 +991,13 @@ namespace {
           }
           const auto assignment = line.substr(4);
           if (!valid_env_assignment(assignment)) {
-            return "ERR request an ENV line is not a NAME=VALUE assignment";
+            // One bad line must not take the whole launch down, and the warning
+            // must say which line it was. Only the name is logged - the value
+            // is the caller's data, and a function body is not worth echoing.
+            const auto name = assignment.substr(0, assignment.find('='));
+            std::fprintf(stderr, "dropping ENV line: %.*s is not a name systemd accepts\n",
+                         static_cast<int>(name.size()), name.data());
+            continue;
           }
           environment.emplace_back(assignment);
         } else {
@@ -955,11 +1094,20 @@ namespace {
   std::optional<std::vector<std::string>> read_request(int fd) {
     // Large enough for a desktop's environment, small enough that a caller
     // cannot make the broker hold a request it will never finish sending.
+    // The ceiling bounds size; socket_timeout, the deadline every read below
+    // is gated by, bounds time - the two together are what a request must
+    // fit inside.
     constexpr size_t request_ceiling = 64 * 1024;
 
+    const auto deadline = std::chrono::steady_clock::now() + socket_timeout;
     std::string buffer;
     std::array<char, 4096> chunk {};
     while (buffer.size() < request_ceiling && !request_is_complete(buffer)) {
+      if (!wait_ready(fd, POLLIN, deadline)) {
+        std::fprintf(stderr, "a connection sent no complete request within %lld seconds; dropping it\n",
+                     static_cast<long long>(socket_timeout.count()));
+        return std::nullopt;
+      }
       const auto count = ::read(fd, chunk.data(), chunk.size());
       if (count <= 0) {
         break;
@@ -997,14 +1145,36 @@ namespace {
 
   void write_reply(int fd, const std::string &reply) {
     const auto line = reply + '\n';
+    const auto deadline = std::chrono::steady_clock::now() + socket_timeout;
     size_t offset = 0;
     while (offset < line.size()) {
+      // A peer that stops reading must not hold the broker open either; the
+      // same deadline guards this half of the conversation.
+      if (!wait_ready(fd, POLLOUT, deadline)) {
+        return;
+      }
       const auto count = ::write(fd, line.data() + offset, line.size() - offset);
       if (count <= 0) {
         return;
       }
       offset += static_cast<size_t>(count);
     }
+  }
+
+  /**
+   * @brief Whether the request allocates or frees a session account slot.
+   *
+   * These are the requests the lock file exists for, and the only ones that
+   * serialize on it. Everything else - STATUS in particular, which callers
+   * poll every couple of seconds - is served without it, so a poll never has
+   * to wait behind another client's useradd, and a launch never waits behind
+   * a poll.
+   */
+  bool request_mutates(const std::vector<std::string> &request) {
+    const auto &line = request.front();
+    const auto split = line.find(' ');
+    const auto verb = trim(split == std::string::npos ? line : line.substr(0, split));
+    return verb == "ENSURE" || verb == "PURGE";
   }
 
   void serve(const options_t &options, int connection) {
@@ -1027,10 +1197,15 @@ namespace {
     }
 
     // Slot allocation reads what exists and then creates, so two clients
-    // arriving together could otherwise be given the same account.
-    const int lock_fd = ::open(options.lock_file.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-    if (lock_fd >= 0) {
-      ::flock(lock_fd, LOCK_EX);
+    // arriving together could otherwise be given the same account. The lock
+    // is cross-process (a socket-activated second instance is its own
+    // process), which is why it is a file rather than a local variable.
+    int lock_fd = -1;
+    if (request_mutates(*request)) {
+      lock_fd = ::open(options.lock_file.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+      if (lock_fd >= 0) {
+        ::flock(lock_fd, LOCK_EX);
+      }
     }
     const auto reply = handle_request(options, *request);
     if (lock_fd >= 0) {

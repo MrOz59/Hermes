@@ -7,6 +7,8 @@
 #include <optional>
 #include <string>
 
+#include <sys/types.h>
+
 namespace VDISPLAY::card_broker {
 
   /**
@@ -39,8 +41,15 @@ namespace VDISPLAY::card_broker {
    * would share a seat. Fails when the caller's uid is not in the broker's
    * allow file, when it already holds as many cards as it may, or when every
    * private seat is in use.
+   *
+   * @param session_account_uid When set, the card belongs to that uid - a
+   *        Hermes session account, which the broker verifies - instead of to
+   *        the caller. An isolated session's compositor runs as hermes-sNN,
+   *        and the driver's udev rules hand the card's device nodes to its
+   *        access_uid, so a card made for the host user is one the session
+   *        could never open.
    */
-  std::optional<card_t> create();
+  std::optional<card_t> create(std::optional<uid_t> session_account_uid = std::nullopt);
 
   /**
    * @brief Remove a card this user created. Removal is a hot-unplug, so a

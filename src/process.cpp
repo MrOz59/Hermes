@@ -826,12 +826,14 @@ namespace proc {
   int proc_t::prepare_session_virtual_display(
     std::shared_ptr<rtsp_stream::launch_session_t> launch_session,
     bool apply_scale,
-    const ctx_t *session_app
+    const ctx_t *session_app,
+    std::optional<uid_t> session_owner_uid
   ) {
 #ifdef _WIN32
     (void) launch_session;
     (void) apply_scale;
     (void) session_app;
+    (void) session_owner_uid;
     return 0;
 #else
     if (config::video.virtual_display_backend != "hermes_kms" ||
@@ -912,7 +914,8 @@ namespace proc {
       launch_session->width,
       launch_session->height,
       target_fps,
-      launch_session->display_guid
+      launch_session->display_guid,
+      session_owner_uid
     );
     if (display_name.empty()) {
       return 503;
@@ -1115,10 +1118,16 @@ namespace proc {
       }
     });
 
+    // The account was ensured above, before the display exists, so a card the
+    // broker creates here can be made for it: the session's compositor runs as
+    // that uid, and the card's device nodes follow its access_uid.
     if (const int result = prepare_session_virtual_display(
           launch_session,
           true,
-          &app
+          &app,
+          runtime->account ?
+            std::optional<uid_t> {runtime->account->uid} :
+            std::nullopt
         );
         result != 0) {
       return result;
@@ -1715,19 +1724,40 @@ namespace proc {
 
   bool proc_t::any_running() {
 #ifndef _WIN32
-    std::vector<std::shared_ptr<isolated_runtime_t>> stopped;
-    bool isolated_running = false;
+    // Liveness is asked for outside the lock, the way list_isolated() does it:
+    // where the session is a systemd unit the answer comes from the broker
+    // over a socket, and holding the registry lock across that stalls every
+    // launch and teardown behind a round trip - or, when a broker peer stalls
+    // it, behind a timeout. The runtimes are snapshotted under the lock, the
+    // lock is dropped for the ask, and only entries that still map to the
+    // same runtime afterwards are erased.
+    std::vector<std::shared_ptr<isolated_runtime_t>> runtimes;
     {
       std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
-      for (auto it = isolated_runtimes.begin(); it != isolated_runtimes.end();) {
-        const auto &runtime = it->second;
-        if (isolated_runtime_running(runtime)) {
-          isolated_running = true;
-          ++it;
-          continue;
+      for (const auto &[id, runtime] : isolated_runtimes) {
+        if (runtime) {
+          runtimes.push_back(runtime);
         }
-        stopped.emplace_back(runtime);
-        it = isolated_runtimes.erase(it);
+      }
+    }
+
+    bool isolated_running = false;
+    std::vector<std::shared_ptr<isolated_runtime_t>> stopped;
+    for (const auto &runtime : runtimes) {
+      if (isolated_runtime_running(runtime)) {
+        isolated_running = true;
+      } else {
+        stopped.push_back(runtime);
+      }
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+      for (const auto &runtime : stopped) {
+        const auto it = isolated_runtimes.find(runtime->launch_session_id);
+        if (it != isolated_runtimes.end() && it->second == runtime) {
+          isolated_runtimes.erase(it);
+        }
       }
     }
     for (const auto &runtime : stopped) {
@@ -2326,10 +2356,15 @@ namespace proc {
           const int gamescope_fps = std::max(1, (launch_session->fps ? launch_session->fps : 60000) / 1000);
           // This path is only used when a client explicitly requested Gamescope
           // on a desktop session. The primary session path above has already
-          // created/activated the virtual display, so Gamescope is nested on the
-          // virtual display instead of replacing it. The backend defaults to
-          // wayland (nesting in the desktop compositor); override with the
-          // gamescope_backend setting when a different backend is needed.
+          // created/activated the virtual display, and Gamescope is nested in
+          // the desktop compositor instead of taking a DRM card of its own.
+          // A nested Gamescope is a window like any other: the compositor places
+          // it, normally on the primary monitor, and it only lands on the
+          // virtual display when that output is the one the compositor chooses
+          // (e.g. with the exclusive virtual display option enabled). The
+          // backend defaults to wayland (nesting in the desktop compositor);
+          // override with the gamescope_backend setting when a different
+          // backend is needed.
           const std::string &configured_backend = config::video.gamescope_backend;
           const std::string gamescope_backend = (configured_backend.empty() || configured_backend == "auto") ?
                                                    "wayland" :

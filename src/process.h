@@ -133,12 +133,17 @@ namespace proc {
      * Allocate and activate one experimental Hermes-KMS output for a streaming
      * session. Used for additional clients after the app is already running.
      * @param apply_scale Whether to apply the current app/client scale policy.
+     * @param session_app The app context, when different from the running one.
+     * @param session_owner_uid When set, the uid a broker-created Hermes-KMS
+     *        card for this display belongs to: the isolated session account
+     *        whose compositor will run on it.
      * @return 0 on success, or an HTTP-compatible error code.
      */
     int prepare_session_virtual_display(
       std::shared_ptr<rtsp_stream::launch_session_t> launch_session,
       bool apply_scale = true,
-      const ctx_t *session_app = nullptr
+      const ctx_t *session_app = nullptr,
+      std::optional<uid_t> session_owner_uid = std::nullopt
     );
 
     /**

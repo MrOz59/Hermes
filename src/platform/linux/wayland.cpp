@@ -1150,7 +1150,16 @@ namespace wl {
     ext_image_copy_capture_frame_v1_set_user_data(frame, this);
     ext_image_copy_capture_frame_v1_add_listener(frame, &icc_frame_listener, this);
     icc_create_and_copy_dmabuf(frame);
-    status = WAITING;
+
+    // Only if a frame is genuinely in flight. give_up() clears icc_session.frame
+    // and sets REINIT, and overwriting that with WAITING here hid every
+    // allocation failure: snapshot() saw a timeout instead of a reinit, so the
+    // capture never ended and the streak counter never got the chance to stop
+    // it - which is the permanent black stream this whole mechanism exists to
+    // prevent.
+    if (icc_session.frame) {
+      status = WAITING;
+    }
   }
 
   void dmabuf_t::icc_create_and_copy_dmabuf(ext_image_copy_capture_frame_v1 *frame) {
@@ -1286,13 +1295,34 @@ namespace wl {
     status = REINIT;
   }
 
+  /**
+   * @brief Start a fresh round of session constraints.
+   *
+   * A compositor may renegotiate: it sends the whole set again, then done. The
+   * accumulated formats and the latched preferred format are only valid for the
+   * round they arrived in, so keeping them across rounds means allocating in a
+   * format the compositor has since dropped.
+   */
+  void dmabuf_t::icc_begin_constraints() {
+    if (!icc_session.done) {
+      return;
+    }
+    icc_session.done = false;
+    icc_session.format = 0;
+    icc_session.dmabuf_supported = false;
+    icc_session.modifiers.clear();
+    shm_info.supported = false;
+  }
+
   void dmabuf_t::icc_session_buffer_size(ext_image_copy_capture_session_v1 *session, std::uint32_t width, std::uint32_t height) {
+    icc_begin_constraints();
     icc_session.width = width;
     icc_session.height = height;
     BOOST_LOG(debug) << "Capture session buffer size: "sv << width << 'x' << height;
   }
 
   void dmabuf_t::icc_session_shm_format(ext_image_copy_capture_session_v1 *session, std::uint32_t format) {
+    icc_begin_constraints();
     // Recorded for the same reason the screencopy path records it: to be able to
     // say the compositor offered only shared memory, which nothing here can use.
     shm_info.supported = true;
@@ -1301,6 +1331,7 @@ namespace wl {
   }
 
   void dmabuf_t::icc_session_dmabuf_device(ext_image_copy_capture_session_v1 *session, struct wl_array *device) {
+    icc_begin_constraints();
     // This is the one thing screencopy never tells us: the compositor names the
     // device it renders on, which is the answer init_gbm() otherwise has to
     // guess at. Trust it, but prove it the same way - a named device that cannot
@@ -1346,6 +1377,7 @@ namespace wl {
   }
 
   void dmabuf_t::icc_session_dmabuf_format(ext_image_copy_capture_session_v1 *session, std::uint32_t format, struct wl_array *modifiers) {
+    icc_begin_constraints();
     icc_session.dmabuf_supported = true;
 
     auto &list = icc_session.modifiers[format];
@@ -1367,19 +1399,30 @@ namespace wl {
 
   void dmabuf_t::icc_session_done(ext_image_copy_capture_session_v1 *session) {
     if (!icc_session.session) {
+      note_gbm_failure();
       status = REINIT;
       return;
     }
 
+    // Each of these is a session that will negotiate the same way every time,
+    // so they have to feed the streak: a reinit alone would rebuild the display
+    // forever. The screencopy path counts its equivalent failures for the same
+    // reason.
     if (!icc_session.width || !icc_session.height) {
-      BOOST_LOG(error) << "Capture session negotiated a zero-sized buffer"sv;
+      note_gbm_failure();
+      if (should_log_gbm_failure()) {
+        BOOST_LOG(error) << "Capture session negotiated a zero-sized buffer"sv;
+      }
       status = REINIT;
       return;
     }
 
     if (!icc_session.dmabuf_supported) {
-      BOOST_LOG(error) << "The compositor offers capture only as a shared-memory buffer, "sv
-                       << "which this capture backend does not implement."sv;
+      note_gbm_failure();
+      if (should_log_gbm_failure()) {
+        BOOST_LOG(error) << "The compositor offers capture only as a shared-memory buffer, "sv
+                         << "which this capture backend does not implement."sv;
+      }
       status = REINIT;
       return;
     }
@@ -1454,6 +1497,7 @@ namespace wl {
         BOOST_LOG(warning) << "Capture buffer no longer meets the session's constraints; renegotiating"sv;
       }
       cleanup_gbm();
+      get_next_frame()->destroy();
       status = REINIT;
       return;
     }
@@ -1461,6 +1505,12 @@ namespace wl {
     if (should_log_gbm_failure()) {
       BOOST_LOG(error) << "The compositor failed the capture frame for an unknown reason ("sv << reason << ')';
     }
+    // Every path out of here has to release the buffer the frame was carrying.
+    // The plane descriptors are the expensive half: a multi-plane modifier
+    // buffer holds one fd per plane, and this is the reason a compositor is
+    // most likely to hand back, so leaking here leaks at frame rate.
+    cleanup_gbm();
+    get_next_frame()->destroy();
     status = REINIT;
   }
 

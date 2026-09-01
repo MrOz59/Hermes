@@ -496,6 +496,22 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- Five defects in the ext-image-copy-capture backend, found by reviewing it
+  after it landed rather than before. The worst one disarmed the protection the
+  backend was written around: `icc_capture()` overwrote the reinit that an
+  allocation failure had just set, so a capture that could never produce a frame
+  reported a timeout instead, the failure streak never advanced, and the stream
+  stayed black forever - the exact outcome the streak counter exists to end. Two
+  session-negotiation failures were not counted either, so a compositor offering
+  only shared memory reinitialised without limit. A frame failed for an unknown
+  reason leaked its buffer and one file descriptor per plane, at frame rate, and
+  a multi-plane modifier buffer is the likeliest thing to be failed that way.
+  Session constraints accumulated across renegotiations instead of replacing
+  them, so a format the compositor had dropped could still be allocated. And a
+  reinit raised while arming the first frame was lost to the dispatch loop.
+- A compositor config written into a nested directory could be left
+  untraversable by the session account: only the immediate parent was made
+  readable, while `create_directories()` may have built a whole chain.
 - "Always create Virtual Display" now says what it does not do, and the Steam
   Big Picture example says why it cannot help there at all. The option creates a
   display; where a window opens is the compositor's decision, and Hermes never

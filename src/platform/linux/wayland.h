@@ -118,6 +118,7 @@ namespace wl {
     void cleanup_gbm();
     void create_and_copy_dmabuf(zwlr_screencopy_frame_v1 *frame);
     void icc_create_and_copy_dmabuf(ext_image_copy_capture_frame_v1 *frame);
+    void icc_begin_constraints();
     void icc_destroy_session();
 
     zwp_linux_dmabuf_v1 *dmabuf_interface {nullptr};

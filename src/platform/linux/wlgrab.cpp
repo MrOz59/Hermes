@@ -188,7 +188,14 @@ namespace wl {
             )) {
           return platf::capture_e::error;
         }
+        // Arming can fail outright - a cursor-mode change, or a session that
+        // will not create a frame - and the loop below dispatches before it
+        // looks at the status, so an idle compositor would turn that reinit
+        // into a timeout and lose it.
         dmabuf.icc_capture(cursor);
+        if (dmabuf.status == dmabuf_t::REINIT) {
+          return platf::capture_e::reinit;
+        }
       } else {
         dmabuf.listen(interface.screencopy_manager, interface.dmabuf_interface, output, cursor);
       }

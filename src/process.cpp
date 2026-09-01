@@ -1345,9 +1345,14 @@ namespace proc {
           // A directory created here inherits Hermes' umask, which a service
           // may well have set to 0077 - and a config the session cannot
           // traverse to is the same as no config at all.
-          const auto parent = std::filesystem::path {target}.parent_path();
-          if (parent.string() != runtime->assets_dir) {
-            ::chmod(parent.c_str(), S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+          // Every level, not just the last one. create_directories() can build
+          // a whole chain, and a single untraversable link in it is the same as
+          // no config at all - which is the failure the comment above describes,
+          // reintroduced one directory higher up.
+          for (auto dir = std::filesystem::path {target}.parent_path();
+               !dir.empty() && dir.string() != runtime->assets_dir && dir != dir.root_path();
+               dir = dir.parent_path()) {
+            ::chmod(dir.c_str(), S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
           }
         }
         BOOST_LOG(debug) << "[IsolatedSession] Wrote compositor config " << target

@@ -469,11 +469,26 @@ namespace rtsp_stream {
         return;
       }
 
-      auto func = _map_cmd_cb.find(req->message.request.command);
-      if (func != std::end(_map_cmd_cb)) {
-        func->second(this, sock, session, std::move(req));
-      } else {
-        cmd_not_found(sock, session, std::move(req));
+      std::string command {req->message.request.command};
+      auto func = _map_cmd_cb.find(command);
+
+      // Nothing sits above these handlers but the accept loop, so an exception
+      // escaping one reaches std::terminate and takes the whole host down
+      // without a line in the log - the peer that vanished between accept() and
+      // remote_endpoint(), a bad_alloc, a parse that threw. A client that dies
+      // mid-handshake should cost that client its session and nothing else.
+      try {
+        if (func != std::end(_map_cmd_cb)) {
+          func->second(this, sock, session, std::move(req));
+        } else {
+          cmd_not_found(sock, session, std::move(req));
+        }
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "RTSP ["sv << command << "] from ["sv << session.device_name
+                         << "] failed: "sv << e.what();
+      } catch (...) {
+        BOOST_LOG(error) << "RTSP ["sv << command << "] from ["sv << session.device_name
+                         << "] failed with an unknown exception"sv;
       }
 
       boost::system::error_code ec;

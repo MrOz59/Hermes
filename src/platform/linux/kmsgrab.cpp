@@ -1278,6 +1278,16 @@ namespace platf {
         }
 
         plane_t plane = drmModeGetPlane(card.fd.el, cursor_plane_id);
+        if (!plane) {
+          // Same reasoning as the primary plane in refresh(), except that losing
+          // the cursor plane costs a cursor rather than the stream. Give it up
+          // the way the unusable-format cases below do, instead of asking again
+          // at frame rate for something that is not coming back.
+          BOOST_LOG(error) << "Couldn't get drm cursor plane ["sv << cursor_plane_id << "]: "sv << strerror(errno);
+          cursor_plane_id = -1;
+          captured_cursor.visible = false;
+          return;
+        }
 
         std::optional<std::int32_t> prop_crtc_x;
         std::optional<std::int32_t> prop_crtc_y;
@@ -1465,6 +1475,15 @@ namespace platf {
 
         plane_t plane = drmModeGetPlane(card.fd.el, plane_id);
         frame_timestamp = std::chrono::steady_clock::now();
+
+        if (!plane) {
+          // The plane we captured from is gone, which a reconfigured display can
+          // do at any moment. Every read below goes through this pointer, so
+          // there is nothing to salvage here - re-enumerate instead of dying on
+          // the first dereference.
+          BOOST_LOG(warning) << "Couldn't get drm plane ["sv << plane_id << "]: "sv << strerror(errno);
+          return capture_e::reinit;
+        }
 
         auto fb = card.fb(plane.get());
         if (!fb) {
@@ -2771,30 +2790,61 @@ namespace platf {
 
       auto type = kms::from_view(name.substr(0, index_begin));
 
+      // A connector that drives nothing still carries a type and an index, so
+      // the name Wayland reports can describe a live output on one card and a
+      // disconnected connector on another. Taking the first type/index hit hands
+      // the desktop offset to whichever card was enumerated first, which is how
+      // a descriptor left at 0x0 comes to own the position of a real 2560x1440
+      // output - and the offset the real one needed is then never applied.
+      // Prefer the candidate whose resolution is the one Wayland just gave us,
+      // and keep the bare type/index match, warning as before, as the fallback.
+      kms::monitor_t *chosen = nullptr;
+      kms::monitor_t *fallback = nullptr;
+
       for (auto &card_descriptor : cds) {
         for (auto &[_, monitor_descriptor] : card_descriptor.crtc_to_monitor) {
-          if (monitor_descriptor.index == index && monitor_descriptor.type == type) {
-            monitor_descriptor.viewport.offset_x = monitor->viewport.offset_x;
-            monitor_descriptor.viewport.offset_y = monitor->viewport.offset_y;
+          if (monitor_descriptor.index != index || monitor_descriptor.type != type) {
+            continue;
+          }
 
-            // A sanity check, it's guesswork after all.
-            if (
-              monitor_descriptor.viewport.width != monitor->viewport.width ||
-              monitor_descriptor.viewport.height != monitor->viewport.height
-            ) {
-              BOOST_LOG(warning)
-                << "Mismatch on expected Resolution compared to actual resolution: "sv
-                << monitor_descriptor.viewport.width << 'x' << monitor_descriptor.viewport.height
-                << " vs "sv
-                << monitor->viewport.width << 'x' << monitor->viewport.height;
-            }
+          if (monitor_descriptor.viewport.width == monitor->viewport.width &&
+              monitor_descriptor.viewport.height == monitor->viewport.height) {
+            chosen = &monitor_descriptor;
+            break;
+          }
 
-            BOOST_LOG(info) << "Monitor " << monitor_descriptor.monitor_index << " is "sv << name << ": "sv << monitor->description;
-            goto break_for_loop;
+          if (!fallback) {
+            fallback = &monitor_descriptor;
           }
         }
+
+        if (chosen) {
+          break;
+        }
       }
-    break_for_loop:
+
+      if (!chosen) {
+        chosen = fallback;
+      }
+
+      if (chosen) {
+        chosen->viewport.offset_x = monitor->viewport.offset_x;
+        chosen->viewport.offset_y = monitor->viewport.offset_y;
+
+        // A sanity check, it's guesswork after all.
+        if (
+          chosen->viewport.width != monitor->viewport.width ||
+          chosen->viewport.height != monitor->viewport.height
+        ) {
+          BOOST_LOG(warning)
+            << "Mismatch on expected Resolution compared to actual resolution: "sv
+            << chosen->viewport.width << 'x' << chosen->viewport.height
+            << " vs "sv
+            << monitor->viewport.width << 'x' << monitor->viewport.height;
+        }
+
+        BOOST_LOG(info) << "Monitor " << chosen->monitor_index << " is "sv << name << ": "sv << monitor->description;
+      }
 
       BOOST_LOG(verbose) << "Reduced to name: "sv << name << ": "sv << index;
     }

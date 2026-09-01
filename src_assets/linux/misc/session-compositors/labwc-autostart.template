@@ -1,0 +1,25 @@
+# Written into each isolated session's own config directory, with
+# {placeholders} expanded, and executed as a shell script once labwc is up.
+# See labwc.conf for the placeholder list.
+
+# Pin the mode the client asked for.
+#
+# labwc has no output configuration of its own - its manual points at wlr-randr
+# or kanshi - so this is where the mode is set, and it has to be set rather than
+# left to the compositor. wlroots enables an output at its preferred mode, and
+# Hermes-KMS up to 0.5.0 marks two modes preferred: the first detailed timing of
+# its synthetic EDID, and the mode the client actually asked for. Whichever
+# sorts first wins, which is the larger EDID timing - so a client asking for
+# 1280x720 gets a 1080p session. weston.ini works around the same ambiguity by
+# naming the mode; this is that workaround for wlroots, and it becomes redundant
+# the day the driver stops marking the EDID modes preferred.
+#
+# Best-effort on purpose. wlr-randr is a separate package, and a session that
+# comes up at the wrong resolution is worth having; one that refuses to start
+# because a helper is missing is not. `requires` therefore names only labwc.
+if command -v wlr-randr >/dev/null 2>&1; then
+    wlr-randr --output {connector} --mode {width}x{height}@{refresh} || \
+        echo "labwc autostart: could not set {width}x{height}@{refresh} on {connector}" >&2
+else
+    echo "labwc autostart: wlr-randr is not installed; the session keeps whatever mode labwc chose" >&2
+fi

@@ -27,6 +27,11 @@
   #include <fcntl.h>
   #include <unistd.h>
   #include <xf86drm.h>
+  // For the GBM allocation probe: picking the render node an isolated session
+  // renders on is the same question the capture path answers, so it uses the
+  // same answer rather than a second heuristic. Compiles to "yes" where Wayland
+  // is not built, which leaves the search as it was.
+  #include "platform/linux/wayland.h"
 #endif
 
 // lib includes
@@ -237,18 +242,11 @@ namespace proc {
       return env;
     }
 
-    std::optional<compositor_profile_t> load_compositor_profile(const std::string &name) {
-      if (name.empty() || name.find('/') != std::string::npos || name == ".." ) {
-        BOOST_LOG(error) << "[IsolatedSession] Invalid session compositor name: " << name;
-        return std::nullopt;
-      }
-
-      for (const auto &path : compositor_profile_paths(name)) {
-        std::error_code ec;
-        if (!std::filesystem::is_regular_file(path, ec)) {
-          continue;
-        }
-
+    std::optional<compositor_profile_t> read_compositor_profile(
+      const std::filesystem::path &path,
+      const std::string &name
+    ) {
+      {
         const auto vars = config::parse_config(file_handler::read_file(path.string().c_str()));
         const auto value = [&vars](const std::string &key) -> std::string {
           const auto it = vars.find(key);
@@ -277,6 +275,21 @@ namespace proc {
 
         BOOST_LOG(debug) << "[IsolatedSession] Loaded session compositor profile " << path;
         return profile;
+      }
+    }
+
+    std::optional<compositor_profile_t> load_compositor_profile(const std::string &name) {
+      if (name.empty() || name.find('/') != std::string::npos || name == "..") {
+        BOOST_LOG(error) << "[IsolatedSession] Invalid session compositor name: " << name;
+        return std::nullopt;
+      }
+
+      for (const auto &path : compositor_profile_paths(name)) {
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(path, ec)) {
+          continue;
+        }
+        return read_compositor_profile(path, name);
       }
 
       BOOST_LOG(error) << "[IsolatedSession] No session compositor profile named \"" << name
@@ -313,7 +326,35 @@ namespace proc {
      * compositor that renders on it falls back to software, and one that
      * cannot fall back does not start at all.
      */
+    /**
+     * @brief The render node an isolated session's compositor should draw with.
+     *
+     * "The first node that is not ours" is the same heuristic that put the
+     * capture path on a GPU the compositor never rendered on, and it fails the
+     * same way here: node numbers follow module load order, so on a hybrid
+     * machine the first one is as likely as not a card whose driver Mesa cannot
+     * load. Opening it succeeds either way - Mesa falls back to kms_swrast
+     * without complaint - and only the first allocation fails, by which point
+     * the compositor is up and the session is black.
+     *
+     * So a candidate has to survive allocating a buffer before it is believed,
+     * and adapter_name is honoured first, because a machine where the search
+     * still guesses wrong needs somewhere to say so.
+     */
     std::string real_render_node_path() {
+      const auto usable = [](const std::string &path) {
+        return wl::render_node_can_allocate(path.c_str());
+      };
+
+      if (!config::video.adapter_name.empty()) {
+        const auto &node = config::video.adapter_name;
+        if (usable(node)) {
+          return node;
+        }
+        BOOST_LOG(warning) << "[IsolatedSession] adapter_name " << node
+                           << " cannot allocate buffers; searching the other render nodes.";
+      }
+
       std::error_code ec;
       std::filesystem::directory_iterator dir {"/dev/dri", ec};
       if (ec) {
@@ -330,18 +371,35 @@ namespace proc {
           continue;
         }
         drmVersionPtr version = drmGetVersion(fd);
-        const bool usable = version && version->name &&
-                            std::string_view {version->name} != "hermes-kms";
+        const bool candidate = version && version->name &&
+                               std::string_view {version->name} != "hermes-kms";
         if (version) {
           drmFreeVersion(version);
         }
         ::close(fd);
-        if (usable) {
+        if (candidate) {
           nodes.emplace_back(entry.path().string());
         }
       }
       std::sort(nodes.begin(), nodes.end());
-      return nodes.empty() ? std::string {} : nodes.front();
+
+      for (const auto &node : nodes) {
+        if (usable(node)) {
+          return node;
+        }
+      }
+
+      // Nothing proved itself. The first candidate is still a better answer
+      // than none - it is what this returned before there was a probe, and a
+      // session that fails loudly on it beats one that never starts - but say
+      // so, because this is the shape the black-screen failure takes.
+      if (!nodes.empty()) {
+        BOOST_LOG(warning) << "[IsolatedSession] No render node could allocate a buffer; "
+                           << "falling back to " << nodes.front()
+                           << ". Set adapter_name if the session renders nothing.";
+        return nodes.front();
+      }
+      return {};
     }
 
     std::string discover_wayland_socket(const std::string &runtime_dir) {
@@ -1225,6 +1283,12 @@ namespace proc {
         profile->config_target,
         {{"runtime_dir", runtime->assets_dir}}
       );
+      // Some compositors take a directory rather than a file - labwc is given
+      // one with -C and reads several names out of it - so a profile needs to be
+      // able to name the directory its config was written into.
+      const auto config_dir = config_path.empty() ?
+                                std::string {} :
+                                std::filesystem::path {config_path}.parent_path().string();
 
       const std::vector<std::pair<std::string, std::string>> values {
         {"card", card_basename(runtime->drm_device_path)},
@@ -1239,6 +1303,7 @@ namespace proc {
         {"refresh", std::to_string(refresh_hz)},
         {"connector", connector},
         {"config", config_path},
+        {"config_dir", config_dir},
       };
 
       // A profile that needs a config file gets one written into the session's
@@ -1252,6 +1317,15 @@ namespace proc {
           return -1;
         }
         const auto &target = config_path;
+        // A config-target may name a subdirectory that does not exist yet -
+        // a compositor given a config directory rather than a file expects one.
+        std::error_code dir_ec;
+        std::filesystem::create_directories(std::filesystem::path {target}.parent_path(), dir_ec);
+        if (dir_ec) {
+          BOOST_LOG(error) << "[IsolatedSession] Could not create compositor config directory "
+                           << std::filesystem::path {target}.parent_path() << ": " << dir_ec.message();
+          return -1;
+        }
         std::ofstream out {target, std::ios::trunc};
         if (!out) {
           BOOST_LOG(error) << "[IsolatedSession] Could not write compositor config " << target;
@@ -1268,6 +1342,13 @@ namespace proc {
         // ships with Hermes and holds nothing the session may not see.
         if (runtime->account) {
           ::chmod(target.c_str(), S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+          // A directory created here inherits Hermes' umask, which a service
+          // may well have set to 0077 - and a config the session cannot
+          // traverse to is the same as no config at all.
+          const auto parent = std::filesystem::path {target}.parent_path();
+          if (parent.string() != runtime->assets_dir) {
+            ::chmod(parent.c_str(), S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+          }
         }
         BOOST_LOG(debug) << "[IsolatedSession] Wrote compositor config " << target
                          << " from " << source;
@@ -3382,4 +3463,45 @@ namespace proc {
       proc = std::move(*proc_opt);
     }
   }
+
+#ifdef SUNSHINE_TESTS
+  /**
+   * @brief Load a session compositor profile from an explicit path and expand it.
+   *
+   * Exists so a test can prove the profiles Hermes ships expand to the command
+   * and environment they document, against the real files rather than a copy of
+   * them. Reading the file by path rather than by name keeps the test
+   * independent of where a build happens to install its assets.
+   */
+  bool expand_compositor_profile_for_test(
+    const std::string &path,
+    const std::string &name,
+    const std::vector<std::pair<std::string, std::string>> &values,
+    std::string &command,
+    std::vector<std::pair<std::string, std::string>> &env,
+    std::string &config_template,
+    std::string &config_target,
+    bool &discover_socket,
+    std::string &required_binary
+  ) {
+    const auto profile = read_compositor_profile(std::filesystem::path {path}, name);
+    if (!profile) {
+      return false;
+    }
+
+    command = expand_profile_template(profile->command, values);
+    env.clear();
+    for (const auto &[key, value] : profile->env) {
+      env.emplace_back(key, expand_profile_template(value, values));
+    }
+    config_template = profile->config_template.empty() ?
+                        std::string {} :
+                        (profile->profile_dir / profile->config_template).string();
+    config_target = expand_profile_template(profile->config_target, values);
+    discover_socket = profile->discover_socket;
+    required_binary = profile->required_binary;
+    return true;
+  }
+#endif
+
 }  // namespace proc

@@ -1,0 +1,87 @@
+name: Question or help needed
+description: You are not sure whether something is a bug, or you cannot get a setup to work.
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions are welcome here - this project has no discussions board, so an issue is the right place.
+
+        These answer most questions faster than waiting for a reply:
+
+        - [Getting started](https://github.com/MrOz59/Hermes/blob/main/docs/getting_started.md) - installation, the
+          systemd user service, the session environment, Game Mode.
+        - [Configuration](https://github.com/MrOz59/Hermes/blob/main/docs/configuration.md) - every setting.
+        - [Compatibility](https://github.com/MrOz59/Hermes/blob/main/docs/compatibility.md) - what is verified,
+          what is expected to work, and what is known broken.
+        - [Troubleshooting](https://github.com/MrOz59/Hermes/blob/main/docs/troubleshooting.md) - common failures.
+
+        Please still fill in the system information below. Most questions about streaming cannot be answered without
+        knowing the compositor, the GPU and the backend - the answer is different for each of them.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: What would you like to know?
+      description: Describe what you are trying to achieve, not only the step that failed.
+      placeholder: |
+        I want games to open on the virtual display instead of on my monitor. I enabled the virtual display, but ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried so far?
+      description: Settings you changed, documentation you followed, and what happened each time.
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Host information
+
+        Run this in a terminal **on the machine that runs Hermes**, then paste the whole output below.
+        Nothing is uploaded anywhere - it only prints text for you to copy.
+
+        ```bash
+        {
+          echo "== hermes ==";  hermes --version 2>&1 | grep -i "version:"
+          echo "== os ==";      grep PRETTY_NAME /etc/os-release; uname -r
+          echo "== session =="; echo "desktop=$XDG_CURRENT_DESKTOP session=$XDG_SESSION_TYPE"
+          echo "== gpu ==";     lspci -nnk 2>/dev/null | grep -A3 -E "VGA|3D controller|Display controller"
+          echo "== packages =="
+          pacman -Q 2>/dev/null | grep -Ei "hermes|evdi|^mesa|nvidia-utils|kscreen|gamescope"
+          rpm -qa  2>/dev/null | grep -Ei "hermes|evdi|nvidia-driver"
+          echo "== drivers ==";  dkms status 2>/dev/null; lsmod | grep -E "hermes_kms|evdi"
+          echo "== kms ==";      grep -H . /sys/module/hermes_kms/parameters/* 2>/dev/null
+          echo "== drm ==";      ls -l /dev/dri/ /dev/dri/by-path/ 2>/dev/null
+          echo "== user ==";     id -nG
+          echo "== service ==";  systemctl --user is-enabled hermes; systemctl --user is-active hermes
+        } 2>&1
+        ```
+
+        If you run Hermes from the container image, run the block inside the container and add the output of
+        `podman --version` or `docker --version` from the host.
+
+  - type: textarea
+    id: sysinfo
+    attributes:
+      label: Output of the host information block
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log, if something is failing
+      description: >
+        Web UI -> **Troubleshooting** -> **Logs** (there is a copy button), or `~/.config/hermes/hermes.log`, or
+        `journalctl --user -u hermes -b --no-pager`. Set the log level to `debug` under
+        **Configuration** -> **General** first, and reproduce the problem once more.
+      render: shell
+    validations:
+      required: false

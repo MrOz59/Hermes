@@ -1,0 +1,65 @@
+name: Feature request
+description: Suggest a new capability or an improvement to an existing one.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Good feature requests start from the problem, not from the solution. Describing what you were trying to do,
+        and what stopped you, leaves room for a better answer than the one you had in mind.
+
+        Please check [docs/configuration.md](https://github.com/MrOz59/Hermes/blob/main/docs/configuration.md) first -
+        Hermes has many settings, and what you want may already exist under a name you did not expect.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before requesting
+      options:
+        - label: I searched the open and closed issues and did not find this request.
+          required: true
+        - label: I checked the configuration documentation and this cannot be done with an existing setting.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation you are in and what currently stops you.
+      placeholder: |
+        I stream to two devices in the house. Today the second client takes over the first one's display, so ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Hermes to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried or considered instead?
+      description: Other settings, other tools, manual workarounds - and why they were not enough.
+    validations:
+      required: false
+
+  - type: input
+    id: setup
+    attributes:
+      label: Your setup
+      description: Many features depend on the compositor, the GPU and the client, so say which ones you use.
+      placeholder: CachyOS, KDE Plasma 6.7 Wayland, AMD RX 6700 XT, Artemis on Android
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Would you like to help?
+      options:
+        - label: I can test a patch on my setup
+        - label: I would like to try implementing this myself

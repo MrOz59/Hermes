@@ -26,10 +26,34 @@ please do not add one by hand.
 
 ### Reporting Issues
 
-- Use the GitHub issue tracker to report bugs or request features
-- Before creating a new issue, please search existing issues to avoid duplicates
-- Provide clear, detailed descriptions with steps to reproduce bugs
-- Include relevant system information and logs when applicable
+Issues are opened through the forms at
+[New issue](https://github.com/MrOz59/Hermes/issues/new/choose). Each form asks
+for the three things a report needs to be actionable: the Hermes version, the
+output of one copy-paste block of host information, and a debug-level log.
+
+Please fill those in rather than deleting them. Hermes sits between your kernel,
+your compositor and your GPU driver, and which of the three failed is only
+visible in that data — without it a report cannot be investigated, only guessed
+at, and a guess costs you another round trip before anything can be looked at.
+
+- **Bug report** — streaming, audio, input, pairing, apps, the Web UI.
+- **Virtual display problem** — black screen, the client mirroring the physical
+  monitor, wrong resolution, no output created. Also asks what your compositor
+  reports about its outputs, which is where these failures are decided.
+- **Crash or freeze** — asks for `coredumpctl` output. Install the matching
+  `hermes-streaming-debug` package first, so the backtrace has names on it
+  instead of raw offsets into a stripped binary.
+- **Install, build or packaging problem** — the exact command and its complete
+  output, not only the line that looks like the error.
+- **Compatibility report** — how Hermes behaved on your distribution,
+  compositor and GPU. A report that it simply *works* is as valuable as a
+  failure: it is what moves an entry in `docs/compatibility.md` from "expected
+  to work" to "verified".
+- **Feature request** and **Question** for everything else.
+
+Search the open and closed issues first, and read
+[docs/compatibility.md](../docs/compatibility.md) — your combination may already
+be recorded there as verified, expected to work, or known broken.
 
 ### Code Contributions
 

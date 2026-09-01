@@ -31,9 +31,14 @@ and applications to Sunshine.
 > that process to switch modes, so the window stays wherever that Steam already was — normally your main monitor. No new
 > process is started and nothing is placed on the virtual display.
 >
-> On Linux, use the **Gamescope Steam Session** entry instead when you want Steam on the virtual display. It runs
-> `hermes-gamescope-launch`, which starts Steam Big Picture inside a Gamescope compositor of its own at the resolution
-> the client asked for, and it ships with the virtual display already enabled.
+> On Linux, the **Gamescope Steam Session** entry is the counterpart: `hermes-gamescope-launch` starts Steam Big
+> Picture inside a Gamescope compositor of its own at the resolution the client asked for. With the default
+> (`auto`/`wayland`) backend, though, that Gamescope runs *nested*: it is a fullscreen window of the desktop
+> compositor, and the compositor decides where that window opens — normally the primary monitor, not the virtual
+> display. To make it land on the virtual display, turn on **Use the Virtual Display exclusively** in Audio/Video:
+> Hermes then makes the virtual display primary and disables the physical outputs for the session, so the Gamescope
+> window has nowhere else to open. The physical monitors stay dark while streaming and are restored when the session
+> ends (with crash recovery on startup). Gamescope's own log is at `~/.local/state/hermes/gamescope.log`.
 >
 > Keeping this entry is still useful for the opposite case: reaching the Steam on the host's own desktop.
 

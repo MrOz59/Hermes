@@ -1,0 +1,116 @@
+name: Install, build or packaging problem
+description: makepkg, a package, the container image or a source build fails - or Hermes will not start after installing.
+title: "[Install] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please include the **exact command you ran** and its **complete error output**. A build failure is almost
+        always decided by the last twenty lines before the first error, and those lines cannot be guessed.
+
+        Three traps account for most reports, so check them first:
+
+        - The AUR package named `hermes` is an unrelated PAM authentication project. The streaming package is
+          `hermes-streaming`.
+        - Hermes, Apollo and Sunshine all bind ports 47984, 47989 and 47990. They can be installed side by side, but
+          only one may run at a time; the second one to start exits, which looks like `Failed to fetch` on the
+          login page.
+        - Image-based distributions (Bazzite, Silverblue, SteamOS) keep `/usr` read-only. Use the container image in
+          `packaging/container`; the kernel module still has to exist on the host.
+
+  - type: dropdown
+    id: method
+    attributes:
+      label: What did you try?
+      options:
+        - makepkg from this repository
+        - AUR helper (paru, yay)
+        - Installing a prebuilt package from a CI or nightly build
+        - .deb package
+        - .rpm package
+        - Container image (packaging/container, Podman or Docker)
+        - Building from source with CMake
+        - Something else
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where does it fail?
+      options:
+        - Fetching sources or submodules
+        - Dependency resolution
+        - Compiling
+        - Linking
+        - Packaging or installing
+        - After installing - Hermes does not start
+        - After installing - the Web UI is not reachable
+        - Something else
+    validations:
+      required: true
+
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution and version
+      placeholder: CachyOS (rolling, kernel 7.2.0) / Arch Linux / Bazzite 44 / Ubuntu 24.04 / Fedora 42
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: The exact command you ran
+      render: shell
+      placeholder: |
+        makepkg -sf
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Complete error output
+      description: >
+        Paste the output, or attach the full build log as a file if it is long. Please do not cut it down to the
+        single line you think is the error - the lines before it are usually what explains it.
+      render: shell
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Build environment
+
+        ```bash
+        {
+          echo "== os ==";    grep PRETTY_NAME /etc/os-release; uname -r
+          echo "== tools =="; cmake --version | head -1; gcc --version | head -1; node --version; npm --version
+          echo "== deps ==";  pacman -Q base-devel cmake git git-lfs nodejs npm cuda 2>&1
+          echo "== hermes =="
+          pacman -Q hermes-streaming 2>/dev/null; ls -l /usr/bin/hermes 2>/dev/null
+          echo "== git ==";   git -C . rev-parse --short HEAD 2>/dev/null; git -C . status --short | head -20
+        } 2>&1
+        ```
+
+        For the container image, add `podman --version` or `docker --version`, whether it runs rootless, and
+        whether SELinux is enforcing.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Output of the build environment block
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you already tried?
+      description: Other versions, other branches, a clean checkout, removing the build directory.
+    validations:
+      required: false

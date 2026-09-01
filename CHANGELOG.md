@@ -458,6 +458,30 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   claims but passwd does not, so neither half of an interrupted purge strands a
   client.
 
+- Issue forms under `.github/ISSUE_TEMPLATE`, because the reports arriving
+  without a log or a system description cannot be acted on and the blank issue
+  box asked for neither. There is one form per kind of failure, and each asks
+  only for what that kind actually needs: a bug report and a virtual-display
+  report differ by the compositor's own output list, a crash report by
+  `coredumpctl`, a build failure by the command and its full output.
+
+  What every form shares is a single copy-paste shell block that prints the host
+  in one go - Hermes version and commit, distribution and kernel, desktop and
+  session type, GPU and driver, the Hermes/EVDI/Mesa package versions,
+  `dkms status`, the loaded modules, every `hermes_kms` module parameter, the
+  permissions on `/dev/dri`, the user's groups, and whether the service is
+  enabled and running. Those are the answers that were missing one at a time
+  across the reports so far, and asking for them one at a time is what turned
+  each into a conversation. The log section names all three places a log can be
+  taken from - the Web UI's Troubleshooting page has a copy button, the file is
+  `~/.config/hermes/hermes.log`, and `journalctl --user -u hermes` has it too -
+  says to raise the level to `debug` and reproduce first, and says what a log
+  contains so it can be redacted rather than withheld.
+
+  Blank issues are turned off, so the forms are the way in, and the chooser
+  links out to the compatibility document, the troubleshooting guide, and the
+  Hermes-KMS and Hestia trackers for problems that belong to them.
+
 ### Changed
 - The container image no longer needs `SYS_ADMIN` to stream the desktop. The
   image sets file capabilities on `sway` and `hermes` for Steam's

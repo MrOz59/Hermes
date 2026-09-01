@@ -1,0 +1,152 @@
+name: Compatibility report (it works, or it does not)
+description: Tell us how Hermes behaved on your distribution, compositor and GPU. Reports that it simply works are just as valuable as failures.
+title: "[Compatibility] "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Hermes is developed on CachyOS with KDE Plasma (Wayland) on AMD, because that is the only configuration one
+        maintainer can keep continuously exercised. Everything else is documented in
+        [docs/compatibility.md](https://github.com/MrOz59/Hermes/blob/main/docs/compatibility.md) as *verified*,
+        *expected to work*, *known broken* or *untested*.
+
+        A report like this is what moves an entry from "expected to work" to "verified". **Positive reports are
+        wanted too** - if it worked, say so, and this file becomes true for one more machine.
+
+        Please be precise about versions. A report that says "GNOME" cannot be written into that document; a report
+        that says "GNOME Shell 48.2 on kernel 7.1.8" can.
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works fully
+        - Works, with limitations described below
+        - Does not work
+    validations:
+      required: true
+
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution and kernel
+      placeholder: CachyOS rolling, kernel 7.2.0-1-cachyos
+    validations:
+      required: true
+
+  - type: input
+    id: compositor
+    attributes:
+      label: Compositor, version and session type
+      placeholder: KDE Plasma 6.7.4 (KWin), Wayland
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and graphics driver
+      placeholder: AMD Radeon RX 6700 XT, amdgpu, Mesa 26.2.1 / NVIDIA RTX 4070, driver 610.57.04
+    validations:
+      required: true
+
+  - type: input
+    id: backend
+    attributes:
+      label: Virtual display backend and driver version
+      placeholder: hermes_kms 0.5.0 (DKMS) / evdi 1.15.0 / Hyprland headless output
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: Client, version and stream settings
+      placeholder: Artemis 2.5.3 on Android 15, 1920x1080 at 60 Hz, HEVC, 40 Mbps
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: tested
+    attributes:
+      label: What did you actually test?
+      description: Only tick what you tried yourself.
+      options:
+        - label: Video streaming
+        - label: Audio
+        - label: Mouse and keyboard
+        - label: Controller
+        - label: A virtual display was created and adopted by the compositor
+        - label: The client resolution and refresh rate were honoured
+        - label: Exclusive mode (physical monitors turned off and restored)
+        - label: Launching a game or an app
+        - label: More than one client at the same time
+        - label: HDR
+        - label: Clipboard synchronization
+        - label: The Game Mode console (hermes-gamemode)
+
+  - type: textarea
+    id: what-worked
+    attributes:
+      label: What worked, and what did not
+      description: Be specific about the failures. "Audio stuttered every few seconds under load" is useful; "audio was bad" is not.
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Host information
+
+        Run this in a terminal **on the machine that runs Hermes**, then paste the whole output below.
+        Nothing is uploaded anywhere - it only prints text for you to copy.
+
+        ```bash
+        {
+          echo "== hermes ==";  hermes --version 2>&1 | grep -i "version:"
+          echo "== os ==";      grep PRETTY_NAME /etc/os-release; uname -r
+          echo "== session =="; echo "desktop=$XDG_CURRENT_DESKTOP session=$XDG_SESSION_TYPE"
+          echo "== gpu ==";     lspci -nnk 2>/dev/null | grep -A3 -E "VGA|3D controller|Display controller"
+          echo "== packages =="
+          pacman -Q 2>/dev/null | grep -Ei "hermes|evdi|^mesa|nvidia-utils|kscreen|gamescope"
+          rpm -qa  2>/dev/null | grep -Ei "hermes|evdi|nvidia-driver"
+          echo "== drivers ==";  dkms status 2>/dev/null; lsmod | grep -E "hermes_kms|evdi"
+          echo "== kms ==";      grep -H . /sys/module/hermes_kms/parameters/* 2>/dev/null
+          echo "== drm ==";      ls -l /dev/dri/ /dev/dri/by-path/ 2>/dev/null
+          echo "== user ==";     id -nG
+          echo "== service ==";  systemctl --user is-enabled hermes; systemctl --user is-active hermes
+        } 2>&1
+        ```
+
+        If you run Hermes from the container image, run the block inside the container and add the output of
+        `podman --version` or `docker --version` from the host.
+
+  - type: textarea
+    id: sysinfo
+    attributes:
+      label: Output of the host information block
+      description: This is what makes the report usable as documentation - exact versions rather than names.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log (optional, but very welcome)
+      description: >
+        A debug-level log of one successful session proves the code path was really taken, and a failing one shows
+        where it stopped. See the Web UI under **Troubleshooting** -> **Logs**, or `~/.config/hermes/hermes.log`.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: workarounds
+    attributes:
+      label: Anything you had to change to make it work?
+      description: Extra packages, kernel parameters, udev rules, group memberships, firewall rules, configuration settings.
+    validations:
+      required: false

@@ -1480,6 +1480,11 @@ editing the `conf` file in a text editor. Use the examples as reference.
             <code>auto</code> nests Gamescope in the current Wayland compositor;
             <code>wayland</code>, <code>sdl</code> or <code>drm</code> force a
             specific backend.
+            @note{A nested Gamescope is an ordinary window: the desktop
+            compositor chooses where it opens, normally the primary monitor, and
+            this setting never moves it onto the virtual display. Enable
+            isolated_virtual_display_option to make the virtual display the only
+            output for the duration of the session.}
             @note{Ignored in a standalone Gamescope session (e.g. SteamOS Game
             Mode), where the application runs directly in the existing session.}
         </td>

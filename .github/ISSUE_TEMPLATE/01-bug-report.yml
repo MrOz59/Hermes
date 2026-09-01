@@ -1,0 +1,208 @@
+name: Bug report
+description: Something in Hermes does not work as it should - streaming, audio, input, pairing, apps or the Web UI.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a problem.
+
+        Hermes sits between your kernel, your compositor and your GPU driver, and almost every bug depends on that
+        exact combination. **A report with no log and no system information cannot be investigated** - it can only be
+        guessed at, and guessing wastes your time as much as ours.
+
+        Everything asked below takes about two minutes to copy and paste. Please do not delete the sections.
+
+        Two problems have their own template, because they need different data:
+        a **Virtual display problem** (black screen, mirrored monitor, wrong resolution) and a
+        **Crash or freeze** (Hermes exits, is killed by a signal, or stops responding).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before reporting
+      options:
+        - label: I searched the open and closed issues and did not find this problem.
+          required: true
+        - label: I read [docs/compatibility.md](https://github.com/MrOz59/Hermes/blob/main/docs/compatibility.md) and my setup is not listed there as known broken.
+          required: true
+        - label: Only one of Hermes, Apollo and Sunshine is running on this machine (they all bind the same ports).
+          required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part is affected?
+      options:
+        - Video - capture or encoding
+        - Audio
+        - Input - mouse, keyboard or controller
+        - Pairing, login or Web UI
+        - Launching an app or a game
+        - Session start or session stop
+        - Network, latency or packet loss
+        - Clipboard, HDR or another feature
+        - I am not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the problem in your own words. One clear paragraph is enough.
+      placeholder: |
+        The stream starts normally, but after about ten seconds the picture freezes while the audio keeps playing.
+        Moonlight still reports a connection and my input still moves the mouse on the host.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Number the steps, starting from a freshly started Hermes. Say whether it happens every time, or only
+        sometimes - and if it used to work, say which version was the last good one.
+      placeholder: |
+        1. systemctl --user restart hermes
+        2. Connect from Artemis on Android and start the "Desktop" app
+        3. Wait about ten seconds
+        4. The picture freezes. This happens every time.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Hermes version
+      description: "Output of `hermes --version`. It is also on the first lines of the log."
+      placeholder: 0.5.1+4f39c9e commit 4f39c9eaab73d71362554ec916aac96293634176
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How did you install Hermes?
+      options:
+        - Arch package built from this repository (makepkg)
+        - Arch package from a nightly CI build
+        - AUR helper (paru, yay)
+        - .deb package
+        - .rpm package
+        - Container image (packaging/container, Podman or Docker)
+        - Built from source with CMake
+        - Other or not sure
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: Client app and version
+      description: Which client you stream with, its version, and the device it runs on.
+      placeholder: Artemis 2.5.3 on Android 15 (Xiaomi Pad 6) / Hestia commit abc1234 on Fedora 42 / Moonlight-Qt 6.1.0
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Host information
+
+        Run this in a terminal **on the machine that runs Hermes**, then paste the whole output below.
+        Nothing is uploaded anywhere - it only prints text for you to copy.
+
+        ```bash
+        {
+          echo "== hermes ==";  hermes --version 2>&1 | grep -i "version:"
+          echo "== os ==";      grep PRETTY_NAME /etc/os-release; uname -r
+          echo "== session =="; echo "desktop=$XDG_CURRENT_DESKTOP session=$XDG_SESSION_TYPE"
+          echo "== gpu ==";     lspci -nnk 2>/dev/null | grep -A3 -E "VGA|3D controller|Display controller"
+          echo "== packages =="
+          pacman -Q 2>/dev/null | grep -Ei "hermes|evdi|^mesa|nvidia-utils|kscreen|gamescope"
+          rpm -qa  2>/dev/null | grep -Ei "hermes|evdi|nvidia-driver"
+          echo "== drivers ==";  dkms status 2>/dev/null; lsmod | grep -E "hermes_kms|evdi"
+          echo "== kms ==";      grep -H . /sys/module/hermes_kms/parameters/* 2>/dev/null
+          echo "== drm ==";      ls -l /dev/dri/ /dev/dri/by-path/ 2>/dev/null
+          echo "== user ==";     id -nG
+          echo "== service ==";  systemctl --user is-enabled hermes; systemctl --user is-active hermes
+        } 2>&1
+        ```
+
+        If you run Hermes from the container image, run the block inside the container and add the output of
+        `podman --version` or `docker --version` from the host.
+
+  - type: textarea
+    id: sysinfo
+    attributes:
+      label: Output of the host information block
+      description: Paste the complete output of the command block above.
+      render: shell
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Hermes log
+
+        1. Set the log level to `debug`: Web UI -> **Configuration** -> **General** -> **Log Level** -> `debug`,
+           or `min_log_level = debug` in `~/.config/hermes/hermes.conf`.
+        2. Restart Hermes: `systemctl --user restart hermes` (or restart the process you started by hand).
+        3. Reproduce the problem.
+        4. Take the log from any of these:
+           - Web UI -> **Troubleshooting** -> **Logs** (there is a copy button)
+           - the file `~/.config/hermes/hermes.log`
+           - `journalctl --user -u hermes -b --no-pager`
+
+        Paste the part that covers the whole attempt - from Hermes starting the session to the failure - and not only
+        the last few lines. Keep the first lines of the log: they contain the version and the commit.
+
+        If the log is long, attach it as a file instead (drag and drop it into the text box). Rename it to `.txt`
+        if GitHub refuses the upload.
+
+        A log contains your hostname, local IP addresses, the names of paired clients and the paths of your apps.
+        Remove anything you do not want to be public, but do not remove the error messages.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Hermes log (debug level)
+      description: Paste the log, or say here that you attached it as a file.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: >
+        The settings that matter for this problem, from `~/.config/hermes/hermes.conf`. If you are not sure which
+        ones matter, paste the whole file - it holds no passwords, those live in `hermes_state.json`.
+      render: ini
+      placeholder: |
+        virtual_display_backend = hermes_kms
+        capture = kms
+        encoder = vaapi
+        isolated_virtual_display_option = enabled
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, a video of the artifact, network details, or anything you already tried.
+    validations:
+      required: false

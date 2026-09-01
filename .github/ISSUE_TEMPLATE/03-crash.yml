@@ -1,0 +1,202 @@
+name: Crash or freeze
+description: Hermes exits by itself, is killed by a signal such as SIGSEGV, stops responding, or takes the session down with it.
+title: "[Crash] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A crash report is only useful with a backtrace that has names in it. A stripped binary produces a list of raw
+        offsets, and the first crash reports this project received stopped exactly there - the stack was present, and
+        nothing could be said about what was on it. The steps below turn that into an answer.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before reporting
+      options:
+        - label: I searched the open and closed issues and did not find this crash.
+          required: true
+
+  - type: dropdown
+    id: when
+    attributes:
+      label: When does it crash?
+      options:
+        - At startup, before any client connects
+        - When a client pairs or connects
+        - When a session starts
+        - When a game or app is launched
+        - During streaming
+        - When the session ends or the client disconnects
+        - When Hermes is stopped or restarted
+        - At no particular moment
+    validations:
+      required: true
+
+  - type: input
+    id: signal
+    attributes:
+      label: What message do you see?
+      description: The exact line from the terminal or from systemd.
+      placeholder: terminated by signal SIGSEGV (Address boundary error)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does it happen?
+      options:
+        - Every time
+        - Most times
+        - Rarely, but more than once
+        - Only once so far
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Hermes version
+      description: "Output of `hermes --version`. If a previous version did not crash, name it here too."
+      placeholder: 0.5.1+4f39c9e commit 4f39c9eaab73d71362554ec916aac96293634176
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What has to happen for the crash to occur, starting from a freshly started Hermes.
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### How to get a backtrace that can be read
+
+        1. Install the debug symbols that match the version you are running. The `hermes-streaming-debug` package is
+           built next to the normal package: it is in the same CI artifact as the nightly build, and a local
+           `makepkg` produces it when `debug` is in `OPTIONS` in `/etc/makepkg.conf`.
+
+           ```bash
+           sudo pacman -U hermes-streaming-debug-<same-version>-x86_64.pkg.tar.zst
+           ```
+
+        2. Check that the crash was captured:
+
+           ```bash
+           coredumpctl list hermes
+           coredumpctl info hermes     # signal, time, and the raw stack
+           ```
+
+        3. Get the full backtrace:
+
+           ```bash
+           coredumpctl gdb hermes
+           # then, inside gdb:
+           bt full
+           thread apply all bt
+           quit
+           ```
+
+        If `coredumpctl` finds no core, make sure `systemd-coredump` is installed and that
+        `/etc/systemd/coredump.conf` has `Storage=external`, then reproduce once more.
+
+  - type: textarea
+    id: coredump-info
+    attributes:
+      label: Output of `coredumpctl info hermes`
+      description: This one is always available, even without debug symbols.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: backtrace
+    attributes:
+      label: Backtrace from `coredumpctl gdb hermes` (`bt full` and `thread apply all bt`)
+      description: >
+        This is the single most useful thing in the whole report. If you truly cannot produce it, say what stopped
+        you and it can be worked through here.
+      render: shell
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Hermes log
+
+        1. Set the log level to `debug`: Web UI -> **Configuration** -> **General** -> **Log Level** -> `debug`,
+           or `min_log_level = debug` in `~/.config/hermes/hermes.conf`.
+        2. Restart Hermes: `systemctl --user restart hermes` (or restart the process you started by hand).
+        3. Reproduce the problem.
+        4. Take the log from any of these:
+           - Web UI -> **Troubleshooting** -> **Logs** (there is a copy button)
+           - the file `~/.config/hermes/hermes.log`
+           - `journalctl --user -u hermes -b --no-pager`
+
+        Paste the part that covers the whole attempt - from Hermes starting the session to the failure - and not only
+        the last few lines. Keep the first lines of the log: they contain the version and the commit.
+
+        If the log is long, attach it as a file instead (drag and drop it into the text box). Rename it to `.txt`
+        if GitHub refuses the upload.
+
+        A log contains your hostname, local IP addresses, the names of paired clients and the paths of your apps.
+        Remove anything you do not want to be public, but do not remove the error messages.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Hermes log up to the crash (debug level)
+      description: The last lines before the process died are the ones that matter, together with the start of the log.
+      render: shell
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Host information
+
+        Run this in a terminal **on the machine that runs Hermes**, then paste the whole output below.
+        Nothing is uploaded anywhere - it only prints text for you to copy.
+
+        ```bash
+        {
+          echo "== hermes ==";  hermes --version 2>&1 | grep -i "version:"
+          echo "== os ==";      grep PRETTY_NAME /etc/os-release; uname -r
+          echo "== session =="; echo "desktop=$XDG_CURRENT_DESKTOP session=$XDG_SESSION_TYPE"
+          echo "== gpu ==";     lspci -nnk 2>/dev/null | grep -A3 -E "VGA|3D controller|Display controller"
+          echo "== packages =="
+          pacman -Q 2>/dev/null | grep -Ei "hermes|evdi|^mesa|nvidia-utils|kscreen|gamescope"
+          rpm -qa  2>/dev/null | grep -Ei "hermes|evdi|nvidia-driver"
+          echo "== drivers ==";  dkms status 2>/dev/null; lsmod | grep -E "hermes_kms|evdi"
+          echo "== kms ==";      grep -H . /sys/module/hermes_kms/parameters/* 2>/dev/null
+          echo "== drm ==";      ls -l /dev/dri/ /dev/dri/by-path/ 2>/dev/null
+          echo "== user ==";     id -nG
+          echo "== service ==";  systemctl --user is-enabled hermes; systemctl --user is-active hermes
+        } 2>&1
+        ```
+
+        If you run Hermes from the container image, run the block inside the container and add the output of
+        `podman --version` or `docker --version` from the host.
+
+  - type: textarea
+    id: sysinfo
+    attributes:
+      label: Output of the host information block
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Whether it also happens with the other virtual display backend, when run by hand instead of as a service, or with a different client.
+    validations:
+      required: false

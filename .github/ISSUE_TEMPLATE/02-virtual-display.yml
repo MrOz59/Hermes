@@ -1,0 +1,243 @@
+name: Virtual display problem
+description: Black screen, the client mirrors the physical monitor, the resolution is wrong, or no virtual output appears.
+title: "[Virtual display] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A virtual display needs three separate layers to cooperate: the kernel driver that creates the card
+        (Hermes-KMS or EVDI), the compositor that has to adopt and drive that output, and the GPU stack that
+        imports and encodes its frames. Which of the three failed is only visible in the log and in what your
+        compositor reports, so both are required below.
+
+        Worth checking before you write:
+
+        - **Hyprland** does not use a virtual DRM device at all. It gets its own headless output, so Hermes-KMS and
+          EVDI are both unusable there - see
+          [compatibility.md](https://github.com/MrOz59/Hermes/blob/main/docs/compatibility.md#hyprland--verified-through-its-own-headless-output).
+        - **Exclusive mode** (`isolated_virtual_display_option`) is only fully supported on KDE Plasma / KWin.
+          On GNOME there is no interface to turn the physical outputs off, and Hermes says so in a warning.
+        - The `hermes_kms` module must be loaded with `initial_enabled=0`. Older driver packages wrote
+          `initial_enabled=1` into `/etc/modprobe.d/hermes-kms.conf`.
+        - Do not install the driver's development seat-ignore udev rule. It stops KWin and GNOME from adopting
+          the output.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before reporting
+      options:
+        - label: I searched the open and closed issues and did not find this problem.
+          required: true
+        - label: I checked the compositor table in [docs/compatibility.md](https://github.com/MrOz59/Hermes/blob/main/docs/compatibility.md) for my compositor.
+          required: true
+
+  - type: dropdown
+    id: symptom
+    attributes:
+      label: What do you see?
+      description: Choose everything that applies.
+      multiple: true
+      options:
+        - The client shows a black screen, but audio and input work
+        - The client mirrors the physical monitor instead of getting a display of its own
+        - A virtual display is created, but at a different resolution or refresh rate than the client asked for
+        - No virtual display is created at all
+        - The game or app opens on the physical monitor instead of the virtual display
+        - Exclusive mode does not turn the physical monitors off
+        - The physical monitors were not restored after the session ended
+        - The stream falls back to the physical monitor silently
+        - Something else, described below
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Virtual display backend
+      description: The `virtual_display_backend` setting. If you can, say whether the other backend behaves differently - that alone narrows the problem down a lot.
+      options:
+        - hermes_kms (default)
+        - evdi
+        - Hyprland headless output
+        - I am not sure
+    validations:
+      required: true
+
+  - type: input
+    id: compositor
+    attributes:
+      label: Compositor and version
+      placeholder: KDE Plasma 6.7.4 (KWin) / GNOME Shell 48.2 (Mutter) / Hyprland 0.51 / sway 1.11 / cosmic-comp 1.3.0 / gamescope session
+    validations:
+      required: true
+
+  - type: dropdown
+    id: session-type
+    attributes:
+      label: Session type
+      options:
+        - Wayland
+        - X11
+        - Game Mode (gamescope-session, no desktop)
+        - Headless container image
+        - I am not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Hermes version
+      description: "Output of `hermes --version`."
+      placeholder: 0.5.1+4f39c9e commit 4f39c9eaab73d71362554ec916aac96293634176
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: Client, version and the resolution and refresh rate it requests
+      placeholder: Artemis 2.5.3 on Android 15, requesting 1920x1080 at 60 Hz
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happens, step by step
+      description: From starting the stream to the moment it goes wrong. Say whether it happens every time.
+      placeholder: |
+        1. Start the stream from Artemis, "Desktop" app.
+        2. The host screen flashes and Hermes reports the session started.
+        3. The client stays black. The host desktop is unchanged, and kscreen-doctor shows no new output.
+        4. Every time, on both backends.
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Host information
+
+        Run this in a terminal **on the machine that runs Hermes**, then paste the whole output below.
+        Nothing is uploaded anywhere - it only prints text for you to copy.
+
+        ```bash
+        {
+          echo "== hermes ==";  hermes --version 2>&1 | grep -i "version:"
+          echo "== os ==";      grep PRETTY_NAME /etc/os-release; uname -r
+          echo "== session =="; echo "desktop=$XDG_CURRENT_DESKTOP session=$XDG_SESSION_TYPE"
+          echo "== gpu ==";     lspci -nnk 2>/dev/null | grep -A3 -E "VGA|3D controller|Display controller"
+          echo "== packages =="
+          pacman -Q 2>/dev/null | grep -Ei "hermes|evdi|^mesa|nvidia-utils|kscreen|gamescope"
+          rpm -qa  2>/dev/null | grep -Ei "hermes|evdi|nvidia-driver"
+          echo "== drivers ==";  dkms status 2>/dev/null; lsmod | grep -E "hermes_kms|evdi"
+          echo "== kms ==";      grep -H . /sys/module/hermes_kms/parameters/* 2>/dev/null
+          echo "== drm ==";      ls -l /dev/dri/ /dev/dri/by-path/ 2>/dev/null
+          echo "== user ==";     id -nG
+          echo "== service ==";  systemctl --user is-enabled hermes; systemctl --user is-active hermes
+        } 2>&1
+        ```
+
+        If you run Hermes from the container image, run the block inside the container and add the output of
+        `podman --version` or `docker --version` from the host.
+
+  - type: textarea
+    id: sysinfo
+    attributes:
+      label: Output of the host information block
+      render: shell
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### What your compositor reports
+
+        Run the command for your compositor. Run it **while the stream is running**, if you can, so the virtual
+        output is there to be seen; otherwise run it right after the attempt fails.
+
+        ```bash
+        kscreen-doctor -o                    # KDE Plasma / KWin
+        hyprctl monitors                     # Hyprland
+        wlr-randr                            # sway, other wlroots compositors, COSMIC
+        xrandr --listmonitors                # X11
+        # GNOME / Mutter:
+        gdbus call --session --dest org.gnome.Mutter.DisplayConfig \
+          --object-path /org/gnome/Mutter/DisplayConfig \
+          --method org.gnome.Mutter.DisplayConfig.GetCurrentState
+        ```
+
+        Also useful, and only two lines:
+
+        ```bash
+        sudo dmesg | grep -iE "hermes_kms|evdi" | tail -40
+        ```
+
+  - type: textarea
+    id: compositor-outputs
+    attributes:
+      label: Output list from the compositor (and kernel messages, if you have them)
+      description: If your compositor has no such command, write which compositor it is and say so.
+      render: shell
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Hermes log
+
+        1. Set the log level to `debug`: Web UI -> **Configuration** -> **General** -> **Log Level** -> `debug`,
+           or `min_log_level = debug` in `~/.config/hermes/hermes.conf`.
+        2. Restart Hermes: `systemctl --user restart hermes` (or restart the process you started by hand).
+        3. Reproduce the problem.
+        4. Take the log from any of these:
+           - Web UI -> **Troubleshooting** -> **Logs** (there is a copy button)
+           - the file `~/.config/hermes/hermes.log`
+           - `journalctl --user -u hermes -b --no-pager`
+
+        Paste the part that covers the whole attempt - from Hermes starting the session to the failure - and not only
+        the last few lines. Keep the first lines of the log: they contain the version and the commit.
+
+        If the log is long, attach it as a file instead (drag and drop it into the text box). Rename it to `.txt`
+        if GitHub refuses the upload.
+
+        A log contains your hostname, local IP addresses, the names of paired clients and the paths of your apps.
+        Remove anything you do not want to be public, but do not remove the error messages.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Hermes log (debug level)
+      description: The log must cover the whole session attempt, including the virtual display setup.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Virtual display settings
+      description: "The relevant lines from `~/.config/hermes/hermes.conf`."
+      render: ini
+      placeholder: |
+        virtual_display_backend = hermes_kms
+        isolated_virtual_display_option = enabled
+        hermes_kms_multi_output = false
+        hermes_kms_isolated_sessions = false
+        capture = kms
+        encoder = vaapi
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: A photo of the black screen, whether it ever worked before, and which version was the last good one.
+    validations:
+      required: false

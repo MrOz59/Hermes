@@ -1,0 +1,17 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Compatibility and support status (read this first)
+    url: https://github.com/MrOz59/Hermes/blob/main/docs/compatibility.md
+    about: Find out whether your compositor, GPU and virtual-display backend are verified, expected to work, or already known to be broken.
+  - name: Troubleshooting guide
+    url: https://github.com/MrOz59/Hermes/blob/main/docs/troubleshooting.md
+    about: Fixes for the most common problems - hardware encoding, input permissions, KMS capture, Web UI access and network loss.
+  - name: Getting started and configuration
+    url: https://github.com/MrOz59/Hermes/blob/main/docs/getting_started.md
+    about: Installation, the systemd user service, session environment, Game Mode, and every configuration option.
+  - name: Hermes-KMS (kernel module) issues
+    url: https://github.com/MrOz59/Hermes-KMS/issues
+    about: Report there when the problem is inside the kernel module itself - it does not build, does not load, or creates no card. Streaming problems belong here.
+  - name: Hestia (desktop client) issues
+    url: https://github.com/MrOz59/Hestia/issues
+    about: Report there for problems in the Hestia desktop client. Problems on the host running Hermes belong here.

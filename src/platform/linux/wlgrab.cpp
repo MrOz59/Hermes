@@ -4,6 +4,8 @@
  */
 // standard includes
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <thread>
 
 // local includes
@@ -47,10 +49,48 @@ namespace wl {
         return -1;
       }
 
-      if (!interface[wl::interface_t::WLR_EXPORT_DMABUF]) {
-        BOOST_LOG(error) << "Missing Wayland wire for wlr-export-dmabuf"sv;
+      // Two capture protocols, and which one a session speaks is the whole
+      // difference between a stream and nothing at all. wlroots compositors
+      // speak wlr-screencopy; KWin and GNOME speak only ext-image-copy-capture,
+      // which is why a KDE or GNOME desktop was not capturable here before.
+      //
+      // Where both exist, screencopy stays the default: it is the path every
+      // working deployment is on today, and nothing is gained by moving them.
+      // ext-image-copy-capture fills the gap rather than replacing anything.
+      // HERMES_WAYLAND_CAPTURE forces one for testing the other on a session
+      // that offers both.
+      const bool have_screencopy = interface[wl::interface_t::WLR_EXPORT_DMABUF];
+      const bool have_icc = interface[wl::interface_t::IMAGE_COPY_CAPTURE] &&
+                            interface[wl::interface_t::IMAGE_CAPTURE_SOURCE] &&
+                            interface[wl::interface_t::LINUX_DMABUF];
+
+      const char *forced = std::getenv("HERMES_WAYLAND_CAPTURE");
+      if (forced && !std::strcmp(forced, "icc")) {
+        use_icc = have_icc;
+        if (!use_icc) {
+          BOOST_LOG(error) << "HERMES_WAYLAND_CAPTURE=icc, but this compositor does not offer "sv
+                           << "ext-image-copy-capture with linux-dmabuf."sv;
+          return -1;
+        }
+      } else if (forced && !std::strcmp(forced, "screencopy")) {
+        use_icc = false;
+        if (!have_screencopy) {
+          BOOST_LOG(error) << "HERMES_WAYLAND_CAPTURE=screencopy, but this compositor does not offer "sv
+                           << "wlr-screencopy."sv;
+          return -1;
+        }
+      } else {
+        use_icc = !have_screencopy && have_icc;
+      }
+
+      if (!have_screencopy && !have_icc) {
+        BOOST_LOG(error) << "This compositor offers neither wlr-screencopy nor ext-image-copy-capture; "sv
+                         << "there is no way to capture it."sv;
         return -1;
       }
+
+      BOOST_LOG(info) << "Wayland capture protocol: "sv
+                      << (use_icc ? "ext-image-copy-capture"sv : "wlr-screencopy"sv);
 
       if (interface.monitors.empty()) {
         BOOST_LOG(error) << "Wayland compositor did not advertise any enabled outputs."sv;
@@ -129,12 +169,42 @@ namespace wl {
     inline platf::capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor) {
       auto to = std::chrono::steady_clock::now() + timeout;
 
-      // Dispatch events until we get a new frame or the timeout expires
-      dmabuf.listen(interface.screencopy_manager, interface.dmabuf_interface, output, cursor);
+      // Dispatch events until we get a new frame or the timeout expires.
+      //
+      // The two protocols are asked for a frame differently. Screencopy is asked
+      // once per frame and negotiates the buffer each time. An ICC session
+      // negotiates once and then hands out frames, so the session is opened on
+      // the first snapshot and reused; icc_capture() does nothing until the
+      // compositor has finished sending the constraints, which is why it is also
+      // called from inside the dispatch loop - that is where "done" arrives.
+      if (use_icc) {
+        if (!dmabuf.icc_active() &&
+            !dmabuf.icc_listen(
+              interface.image_copy_capture_manager,
+              interface.image_capture_source_manager,
+              interface.dmabuf_interface,
+              output,
+              cursor
+            )) {
+          return platf::capture_e::error;
+        }
+        dmabuf.icc_capture(cursor);
+      } else {
+        dmabuf.listen(interface.screencopy_manager, interface.dmabuf_interface, output, cursor);
+      }
+
       do {
         auto remaining_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(to - std::chrono::steady_clock::now());
         if (remaining_time_ms.count() < 0 || !display.dispatch(remaining_time_ms)) {
           return platf::capture_e::timeout;
+        }
+        // Only while still waiting: icc_capture() arms a frame whenever the
+        // session is idle, so calling it after the status has already become
+        // READY throws the finished frame away and asks for another, and the
+        // loop never ends. REINIT is guarded for the same reason - the caller
+        // below decides what a failed session means, not the next iteration.
+        if (use_icc && dmabuf.status == dmabuf_t::WAITING) {
+          dmabuf.icc_capture(cursor);
         }
       } while (dmabuf.status == dmabuf_t::WAITING);
 
@@ -174,6 +244,7 @@ namespace wl {
     dmabuf_t dmabuf;
 
     wl_output *output;
+    bool use_icc {false};
   };
 
   class wlr_ram_t: public wlr_t {

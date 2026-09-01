@@ -174,6 +174,16 @@ if(WAYLAND_FOUND)
 
     GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "unstable/xdg-output" xdg-output-unstable-v1)
     GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "unstable/linux-dmabuf" linux-dmabuf-unstable-v1)
+    # ext-image-copy-capture is wlr-screencopy's successor and the only capture
+    # protocol KWin and GNOME speak, so it is what makes a session on either of
+    # them capturable at all. Both files come from the upstream wayland-protocols
+    # checkout already vendored here; neither needs a fork.
+    # ext-image-capture-source also declares a source that names a foreign
+    # toplevel, so its generated code refers to that interface whether or not
+    # Hermes ever captures a window. Nothing here binds it; it is here to link.
+    GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "staging/ext-foreign-toplevel-list" ext-foreign-toplevel-list-v1)
+    GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "staging/ext-image-capture-source" ext-image-capture-source-v1)
+    GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "staging/ext-image-copy-capture" ext-image-copy-capture-v1)
     GEN_WAYLAND("${CMAKE_SOURCE_DIR}/third-party/wlr-protocols" "unstable" wlr-screencopy-unstable-v1)
     GEN_WAYLAND("${CMAKE_SOURCE_DIR}/third-party/wlr-protocols" "unstable" wlr-output-management-unstable-v1)
 

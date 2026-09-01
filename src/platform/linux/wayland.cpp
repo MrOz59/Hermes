@@ -517,6 +517,8 @@ namespace wl {
       screencopy_manager {nullptr},
       dmabuf_interface {nullptr},
       output_manager {nullptr},
+      image_copy_capture_manager {nullptr},
+      image_capture_source_manager {nullptr},
       listener {
         &CLASS_CALL(interface_t, add_interface),
         &CLASS_CALL(interface_t, del_interface)
@@ -557,6 +559,16 @@ namespace wl {
       dmabuf_interface = (zwp_linux_dmabuf_v1 *) wl_registry_bind(registry, id, &zwp_linux_dmabuf_v1_interface, version);
 
       this->interface[LINUX_DMABUF] = true;
+    } else if (!std::strcmp(interface, ext_image_copy_capture_manager_v1_interface.name)) {
+      BOOST_LOG(info) << "Found interface: "sv << interface << '(' << id << ") version "sv << version;
+      image_copy_capture_manager = (ext_image_copy_capture_manager_v1 *) wl_registry_bind(registry, id, &ext_image_copy_capture_manager_v1_interface, 1);
+
+      this->interface[IMAGE_COPY_CAPTURE] = true;
+    } else if (!std::strcmp(interface, ext_output_image_capture_source_manager_v1_interface.name)) {
+      BOOST_LOG(info) << "Found interface: "sv << interface << '(' << id << ") version "sv << version;
+      image_capture_source_manager = (ext_output_image_capture_source_manager_v1 *) wl_registry_bind(registry, id, &ext_output_image_capture_source_manager_v1_interface, 1);
+
+      this->interface[IMAGE_CAPTURE_SOURCE] = true;
     }
   }
 
@@ -792,6 +804,7 @@ namespace wl {
   }
 
   dmabuf_t::~dmabuf_t() {
+    icc_destroy_session();
     cleanup_gbm();
 
     for (auto &frame : frames) {
@@ -1025,6 +1038,432 @@ namespace wl {
     std::uint32_t height
   ) {};
 
+  // ---------------------------------------------------------------------------
+  // ext-image-copy-capture
+  //
+  // Adapted from Dregu's draft for upstream Sunshine
+  // (LizardByte/Sunshine#4788), which is where the protocol sequence below was
+  // worked out. It differs in three places, each noted at the site: the render
+  // device the compositor names is validated before it is trusted, the modifier
+  // lists are owned rather than malloc'd, and buffer failures feed the same
+  // streak counter the screencopy path uses so that a session which can never
+  // produce a frame ends instead of retrying at frame rate.
+  // ---------------------------------------------------------------------------
+
+  static const struct zwp_linux_buffer_params_v1_listener icc_params_listener = {
+    .created = CLASS_CALL(dmabuf_t, icc_buffer_params_created),
+    .failed = CLASS_CALL(dmabuf_t, icc_buffer_params_failed),
+  };
+
+  static const struct ext_image_copy_capture_session_v1_listener icc_session_listener = {
+    .buffer_size = CLASS_CALL(dmabuf_t, icc_session_buffer_size),
+    .shm_format = CLASS_CALL(dmabuf_t, icc_session_shm_format),
+    .dmabuf_device = CLASS_CALL(dmabuf_t, icc_session_dmabuf_device),
+    .dmabuf_format = CLASS_CALL(dmabuf_t, icc_session_dmabuf_format),
+    .done = CLASS_CALL(dmabuf_t, icc_session_done),
+    .stopped = CLASS_CALL(dmabuf_t, icc_session_stopped),
+  };
+
+  static const struct ext_image_copy_capture_frame_v1_listener icc_frame_listener = {
+    .transform = CLASS_CALL(dmabuf_t, icc_frame_transform),
+    .damage = CLASS_CALL(dmabuf_t, icc_frame_damage),
+    .presentation_time = CLASS_CALL(dmabuf_t, icc_frame_presentation_time),
+    .ready = CLASS_CALL(dmabuf_t, icc_frame_ready),
+    .failed = CLASS_CALL(dmabuf_t, icc_frame_failed),
+  };
+
+  void dmabuf_t::icc_destroy_session() {
+    if (icc_session.frame) {
+      ext_image_copy_capture_frame_v1_destroy(icc_session.frame);
+      icc_session.frame = nullptr;
+    }
+    if (icc_session.session) {
+      ext_image_copy_capture_session_v1_destroy(icc_session.session);
+      icc_session.session = nullptr;
+    }
+    icc_session = {};
+  }
+
+  bool dmabuf_t::icc_listen(
+    ext_image_copy_capture_manager_v1 *manager,
+    ext_output_image_capture_source_manager_v1 *source_manager,
+    zwp_linux_dmabuf_v1 *dmabuf_interface,
+    wl_output *output,
+    bool blend_cursor
+  ) {
+    if (!manager || !source_manager || !dmabuf_interface) {
+      return false;
+    }
+
+    this->dmabuf_interface = dmabuf_interface;
+    icc_destroy_session();
+    icc_session.cursor = blend_cursor;
+
+    auto source = ext_output_image_capture_source_manager_v1_create_source(source_manager, output);
+    if (!source) {
+      BOOST_LOG(error) << "Could not name the Wayland output as an image capture source"sv;
+      return false;
+    }
+
+    auto session = ext_image_copy_capture_manager_v1_create_session(
+      manager,
+      source,
+      blend_cursor ? EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_OPTIONS_PAINT_CURSORS : 0
+    );
+
+    // The session holds its own reference to the source, so the source object
+    // is of no further use here.
+    ext_image_capture_source_v1_destroy(source);
+
+    if (!session) {
+      BOOST_LOG(error) << "Could not open an ext-image-copy-capture session"sv;
+      return false;
+    }
+
+    ext_image_copy_capture_session_v1_set_user_data(session, this);
+    ext_image_copy_capture_session_v1_add_listener(session, &icc_session_listener, this);
+    icc_session.session = session;
+    status = WAITING;
+
+    return true;
+  }
+
+  void dmabuf_t::icc_capture(bool blend_cursor) {
+    if (!icc_session.session || blend_cursor != icc_session.cursor) {
+      // A cursor-blending change is a different session, not a different frame.
+      status = REINIT;
+      return;
+    }
+
+    if (!icc_session.done || icc_session.frame) {
+      return;
+    }
+
+    auto frame = ext_image_copy_capture_session_v1_create_frame(icc_session.session);
+    if (!frame) {
+      note_gbm_failure();
+      status = REINIT;
+      return;
+    }
+
+    icc_session.frame = frame;
+    ext_image_copy_capture_frame_v1_set_user_data(frame, this);
+    ext_image_copy_capture_frame_v1_add_listener(frame, &icc_frame_listener, this);
+    icc_create_and_copy_dmabuf(frame);
+    status = WAITING;
+  }
+
+  void dmabuf_t::icc_create_and_copy_dmabuf(ext_image_copy_capture_frame_v1 *frame) {
+    auto give_up = [&]() {
+      note_gbm_failure();
+      ext_image_copy_capture_frame_v1_destroy(frame);
+      icc_session.frame = nullptr;
+      status = REINIT;
+    };
+
+    if (!init_gbm()) {
+      give_up();
+      return;
+    }
+
+    if (!icc_session.width || !icc_session.height || !icc_session.format) {
+      if (should_log_gbm_failure()) {
+        BOOST_LOG(error) << "The capture session negotiated no usable buffer format"sv;
+      }
+      give_up();
+      return;
+    }
+
+    // Modifiers first: a compositor that offers them is telling us the layouts
+    // it can write into, and an implicit-modifier buffer is only correct when it
+    // offers none.
+    if (auto it = icc_session.modifiers.find(icc_session.format);
+        it != icc_session.modifiers.end() && !it->second.empty()) {
+      current_bo = gbm_bo_create_with_modifiers(
+        gbm_device,
+        icc_session.width,
+        icc_session.height,
+        icc_session.format,
+        it->second.data(),
+        it->second.size()
+      );
+    }
+
+    if (!current_bo) {
+      current_bo = gbm_bo_create(gbm_device, icc_session.width, icc_session.height, icc_session.format, GBM_BO_USE_RENDERING);
+    }
+
+    if (!current_bo) {
+      if (should_log_gbm_failure()) {
+        BOOST_LOG(error) << "Failed to allocate a "sv << icc_session.width << 'x' << icc_session.height
+                         << " capture buffer in format "sv << icc_session.format
+                         << ". The render node this was allocated on is not the one the compositor "sv
+                         << "renders on, or does not support the format it asked for."sv;
+      }
+      give_up();
+      return;
+    }
+
+    // Allocating with modifiers can hand back a buffer of several planes - an
+    // AMD compression modifier does exactly that - and a compositor offered
+    // only the first plane of one cannot use it. That failure arrives as a bare
+    // "unknown reason" on the frame, with nothing to say a plane was missing.
+    const std::uint64_t modifier = gbm_bo_get_modifier(current_bo);
+    const int planes = gbm_bo_get_plane_count(current_bo);
+
+    if (planes < 1 || planes > 4) {
+      BOOST_LOG(error) << "Capture buffer has "sv << planes << " planes, which cannot be shared"sv;
+      gbm_bo_destroy(current_bo);
+      current_bo = nullptr;
+      give_up();
+      return;
+    }
+
+    auto next_frame = get_next_frame();
+    auto params = zwp_linux_dmabuf_v1_create_params(dmabuf_interface);
+
+    for (int plane = 0; plane < planes; ++plane) {
+      int fd = gbm_bo_get_fd_for_plane(current_bo, plane);
+      if (fd < 0) {
+        BOOST_LOG(error) << "Failed to get buffer FD for plane "sv << plane;
+        zwp_linux_buffer_params_v1_destroy(params);
+        next_frame->destroy();
+        gbm_bo_destroy(current_bo);
+        current_bo = nullptr;
+        give_up();
+        return;
+      }
+
+      const std::uint32_t stride = gbm_bo_get_stride_for_plane(current_bo, plane);
+      const std::uint32_t offset = gbm_bo_get_offset(current_bo, plane);
+
+      next_frame->sd.fds[plane] = fd;
+      next_frame->sd.pitches[plane] = stride;
+      next_frame->sd.offsets[plane] = offset;
+
+      zwp_linux_buffer_params_v1_add(params, fd, plane, offset, stride, modifier >> 32, modifier & 0xffffffff);
+    }
+
+    next_frame->sd.modifier = modifier;
+    next_frame->sd.fourcc = icc_session.format;
+    next_frame->sd.width = icc_session.width;
+    next_frame->sd.height = icc_session.height;
+
+    BOOST_LOG(debug) << "Capture buffer: "sv << icc_session.width << 'x' << icc_session.height
+                     << ", "sv << planes << " plane(s), modifier "sv << std::hex << modifier << std::dec;
+
+    zwp_linux_buffer_params_v1_set_user_data(params, this);
+    zwp_linux_buffer_params_v1_add_listener(params, &icc_params_listener, this);
+    zwp_linux_buffer_params_v1_create(params, icc_session.width, icc_session.height, icc_session.format, 0);
+  }
+
+  void dmabuf_t::icc_buffer_params_created(zwp_linux_buffer_params_v1 *params, struct wl_buffer *buffer) {
+    current_wl_buffer = buffer;
+    zwp_linux_buffer_params_v1_destroy(params);
+
+    if (!icc_session.frame) {
+      return;
+    }
+
+    ext_image_copy_capture_frame_v1_attach_buffer(icc_session.frame, buffer);
+    ext_image_copy_capture_frame_v1_damage_buffer(icc_session.frame, 0, 0, icc_session.width, icc_session.height);
+    ext_image_copy_capture_frame_v1_capture(icc_session.frame);
+  }
+
+  void dmabuf_t::icc_buffer_params_failed(zwp_linux_buffer_params_v1 *params) {
+    note_gbm_failure();
+    if (should_log_gbm_failure()) {
+      BOOST_LOG(error) << "The compositor refused the capture buffer offered to it"sv;
+    }
+
+    zwp_linux_buffer_params_v1_destroy(params);
+    cleanup_gbm();
+
+    if (icc_session.frame) {
+      ext_image_copy_capture_frame_v1_destroy(icc_session.frame);
+      icc_session.frame = nullptr;
+    }
+    status = REINIT;
+  }
+
+  void dmabuf_t::icc_session_buffer_size(ext_image_copy_capture_session_v1 *session, std::uint32_t width, std::uint32_t height) {
+    icc_session.width = width;
+    icc_session.height = height;
+    BOOST_LOG(debug) << "Capture session buffer size: "sv << width << 'x' << height;
+  }
+
+  void dmabuf_t::icc_session_shm_format(ext_image_copy_capture_session_v1 *session, std::uint32_t format) {
+    // Recorded for the same reason the screencopy path records it: to be able to
+    // say the compositor offered only shared memory, which nothing here can use.
+    shm_info.supported = true;
+    shm_info.format = format;
+    BOOST_LOG(debug) << "Capture session SHM format: "sv << format;
+  }
+
+  void dmabuf_t::icc_session_dmabuf_device(ext_image_copy_capture_session_v1 *session, struct wl_array *device) {
+    // This is the one thing screencopy never tells us: the compositor names the
+    // device it renders on, which is the answer init_gbm() otherwise has to
+    // guess at. Trust it, but prove it the same way - a named device that cannot
+    // allocate is still no use, and falling through to the search leaves the
+    // hybrid-GPU case working rather than trading one wrong node for another.
+    if (gbm_device) {
+      return;
+    }
+
+    if (device->size != sizeof(dev_t)) {
+      BOOST_LOG(warning) << "Capture session named a device of "sv << device->size
+                         << " bytes, expected "sv << sizeof(dev_t) << "; searching instead."sv;
+      return;
+    }
+
+    dev_t device_id;
+    std::memcpy(&device_id, device->data, sizeof(dev_t));
+
+    drmDevice *drm_device {nullptr};
+    if (drmGetDeviceFromDevId(device_id, 0, &drm_device) != 0) {
+      BOOST_LOG(warning) << "Capture session named a DRM device that could not be opened; searching instead."sv;
+      return;
+    }
+
+    const char *node {nullptr};
+    if (drm_device->available_nodes & (1 << DRM_NODE_RENDER)) {
+      node = drm_device->nodes[DRM_NODE_RENDER];
+    } else if (drm_device->available_nodes & (1 << DRM_NODE_PRIMARY)) {
+      node = drm_device->nodes[DRM_NODE_PRIMARY];
+    }
+
+    if (node) {
+      gbm_device = open_usable_gbm_device(node, drm_fd);
+      if (gbm_device) {
+        BOOST_LOG(info) << "GBM capture device: "sv << node << " (named by the compositor)"sv;
+      } else {
+        BOOST_LOG(warning) << "The compositor renders on "sv << node
+                           << ", which cannot allocate capture buffers; searching the other render nodes."sv;
+      }
+    }
+
+    drmFreeDevice(&drm_device);
+  }
+
+  void dmabuf_t::icc_session_dmabuf_format(ext_image_copy_capture_session_v1 *session, std::uint32_t format, struct wl_array *modifiers) {
+    icc_session.dmabuf_supported = true;
+
+    auto &list = icc_session.modifiers[format];
+    list.assign(
+      (const std::uint64_t *) modifiers->data,
+      (const std::uint64_t *) modifiers->data + modifiers->size / sizeof(std::uint64_t)
+    );
+
+    // The compositor sends its preferred format first, so the first one that
+    // arrives is the one to allocate in.
+    if (!icc_session.format) {
+      icc_session.format = format;
+    }
+
+    char fourcc[5] {};
+    std::memcpy(fourcc, &format, 4);
+    BOOST_LOG(debug) << "Capture session DMA-BUF format: "sv << fourcc << " with "sv << list.size() << " modifier(s)"sv;
+  }
+
+  void dmabuf_t::icc_session_done(ext_image_copy_capture_session_v1 *session) {
+    if (!icc_session.session) {
+      status = REINIT;
+      return;
+    }
+
+    if (!icc_session.width || !icc_session.height) {
+      BOOST_LOG(error) << "Capture session negotiated a zero-sized buffer"sv;
+      status = REINIT;
+      return;
+    }
+
+    if (!icc_session.dmabuf_supported) {
+      BOOST_LOG(error) << "The compositor offers capture only as a shared-memory buffer, "sv
+                       << "which this capture backend does not implement."sv;
+      status = REINIT;
+      return;
+    }
+
+    icc_session.done = true;
+    BOOST_LOG(debug) << "Capture session ready"sv;
+  }
+
+  void dmabuf_t::icc_session_stopped(ext_image_copy_capture_session_v1 *session) {
+    BOOST_LOG(warning) << "The compositor stopped the capture session"sv;
+    icc_destroy_session();
+    status = REINIT;
+  }
+
+  void dmabuf_t::icc_frame_transform(ext_image_copy_capture_frame_v1 *frame, std::uint32_t transform) {
+    BOOST_LOG(debug) << "Capture frame transform: "sv << transform;
+  }
+
+  void dmabuf_t::icc_frame_damage(
+    ext_image_copy_capture_frame_v1 *frame,
+    std::int32_t x,
+    std::int32_t y,
+    std::int32_t width,
+    std::int32_t height
+  ) {}
+
+  void dmabuf_t::icc_frame_presentation_time(
+    ext_image_copy_capture_frame_v1 *frame,
+    std::uint32_t tv_sec_hi,
+    std::uint32_t tv_sec_lo,
+    std::uint32_t tv_nsec
+  ) {}
+
+  void dmabuf_t::icc_frame_ready(ext_image_copy_capture_frame_v1 *frame) {
+    clear_gbm_failures();
+
+    current_frame->destroy();
+    current_frame = get_next_frame();
+
+    if (current_wl_buffer) {
+      wl_buffer_destroy(current_wl_buffer);
+      current_wl_buffer = nullptr;
+    }
+    cleanup_gbm();
+
+    ext_image_copy_capture_frame_v1_destroy(frame);
+    icc_session.frame = nullptr;
+    status = READY;
+  }
+
+  void dmabuf_t::icc_frame_failed(ext_image_copy_capture_frame_v1 *frame, std::uint32_t reason) {
+    note_gbm_failure();
+
+    ext_image_copy_capture_frame_v1_destroy(frame);
+    icc_session.frame = nullptr;
+
+    if (reason == EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_STOPPED) {
+      if (should_log_gbm_failure()) {
+        BOOST_LOG(error) << "The capture session stopped while a frame was in flight"sv;
+      }
+      cleanup_gbm();
+      get_next_frame()->destroy();
+      icc_destroy_session();
+      status = REINIT;
+      return;
+    }
+
+    if (reason == EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_BUFFER_CONSTRAINTS) {
+      // The negotiated constraints no longer describe the output - a mode change,
+      // most often. The session renegotiates them, so drop what we cached.
+      if (should_log_gbm_failure()) {
+        BOOST_LOG(warning) << "Capture buffer no longer meets the session's constraints; renegotiating"sv;
+      }
+      cleanup_gbm();
+      status = REINIT;
+      return;
+    }
+
+    if (should_log_gbm_failure()) {
+      BOOST_LOG(error) << "The compositor failed the capture frame for an unknown reason ("sv << reason << ')';
+    }
+    status = REINIT;
+  }
+
   void frame_t::destroy() {
     for (auto x = 0; x < 4; ++x) {
       if (sd.fds[x] >= 0) {
@@ -1064,6 +1503,21 @@ namespace wl {
     display.roundtrip();
 
     return std::move(interface.monitors);
+  }
+
+  bool render_node_can_allocate(const char *node) {
+    if (!node || !node[0]) {
+      return false;
+    }
+    int fd = -1;
+    gbm_device *device = open_usable_gbm_device(node, fd);
+    if (!device) {
+      return false;
+    }
+    gbm_device_destroy(device);
+    // gbm_create_device() borrows the fd rather than adopting it.
+    ::close(fd);
+    return true;
   }
 
   bool configure_virtual_output(const std::string &output_name, int width, int height, int refresh_rate, bool exclusive) {

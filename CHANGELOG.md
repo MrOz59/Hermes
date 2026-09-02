@@ -644,6 +644,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   while a session is live, since Hermes holds those ports itself then and every
   one of them would read as taken.
 
+- The Hestia capabilities document advertises only the virtual display backends
+  a client can be served by (`evdi`, `hermes_kms`), which is also what
+  `capabilities.schema.json` allows. Advertising `none` made every shipped
+  Hestia reject the whole document and launch without asking for a virtual
+  display, so the physical monitor was mirrored instead ([#36], [#25]).
 - Absolute pointer input now lands on the streamed display under GNOME. Mutter
   measures an absolute pointing device against the extents of the whole stage,
   so a client's coordinates only arrive on the right monitor once they carry
@@ -1255,6 +1260,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#25]: https://github.com/MrOz59/Hermes/issues/25
 [#28]: https://github.com/MrOz59/Hermes/issues/28
 [#29]: https://github.com/MrOz59/Hermes/issues/29
+[#36]: https://github.com/MrOz59/Hermes/issues/36
 
 ## [0.4.0] - 2026-07-02
 

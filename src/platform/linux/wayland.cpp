@@ -556,7 +556,8 @@ namespace wl {
       this->interface[WLR_EXPORT_DMABUF] = true;
     } else if (!std::strcmp(interface, zwp_linux_dmabuf_v1_interface.name)) {
       BOOST_LOG(info) << "Found interface: "sv << interface << '(' << id << ") version "sv << version;
-      dmabuf_interface = (zwp_linux_dmabuf_v1 *) wl_registry_bind(registry, id, &zwp_linux_dmabuf_v1_interface, version);
+      // Never bind a version newer than the generated code knows about.
+      dmabuf_interface = (zwp_linux_dmabuf_v1 *) wl_registry_bind(registry, id, &zwp_linux_dmabuf_v1_interface, std::min<std::uint32_t>(version, zwp_linux_dmabuf_v1_interface.version));
 
       this->interface[LINUX_DMABUF] = true;
     } else if (!std::strcmp(interface, ext_image_copy_capture_manager_v1_interface.name)) {

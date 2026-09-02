@@ -22,6 +22,13 @@
 // local includes
 #include "graphics.h"
 
+// Declared at global scope so a translation unit that never includes <gbm.h>
+// agrees with one that does about the type of dmabuf_t's members; otherwise
+// `struct gbm_device *` below declares a wl::gbm_device of its own and LTO
+// reports the mismatch.
+struct gbm_device;
+struct gbm_bo;
+
 /**
  * The classes defined in this macro block should only be used by
  * cpp files whose compilation depends on SUNSHINE_BUILD_WAYLAND

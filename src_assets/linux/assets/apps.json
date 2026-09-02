@@ -36,6 +36,7 @@
       "name": "Gamescope Steam Session",
       "image-path": "steam.png",
       "virtual-display": true,
+      "virtual-display-layout": "mirror",
       "auto-detach": false,
       "wait-all": true,
       "exit-timeout": 5,

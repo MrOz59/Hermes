@@ -915,7 +915,9 @@ namespace proc {
       launch_session->height,
       target_fps,
       launch_session->display_guid,
-      session_owner_uid
+      session_owner_uid,
+      app.virtual_display_layout == "mirror" ? VDISPLAY::virtual_display_layout_e::mirror :
+                                               VDISPLAY::virtual_display_layout_e::extend
     );
     if (display_name.empty()) {
       return 503;
@@ -2059,6 +2061,18 @@ namespace proc {
           target_fps *= 2;
         }
 
+        // Per-app virtual display layout: "mirror" overlaps the primary
+        // output so the desktop is cloned, "exclusive" hands the desktop to
+        // the virtual display for the session, "extend" forces the default
+        // side-by-side placement, and "auto" follows the global exclusive
+        // option. An explicit extend/mirror also disables the global
+        // exclusive option for this session - the app asked for a specific
+        // layout.
+        const std::string &vd_layout = _app.virtual_display_layout;
+        const bool vd_layout_explicit = vd_layout == "extend" || vd_layout == "mirror";
+        const bool want_exclusive = vd_layout == "exclusive" ||
+                                    (config::video.isolated_virtual_display_option && !vd_layout_explicit);
+
 #ifdef _WIN32
         std::wstring vdisplayName = VDISPLAY::createVirtualDisplay(
           device_uuid_str.c_str(),
@@ -2075,7 +2089,10 @@ namespace proc {
           render_width,
           render_height,
           target_fps,
-          launch_session->display_guid
+          launch_session->display_guid,
+          std::nullopt,
+          vd_layout == "mirror" ? VDISPLAY::virtual_display_layout_e::mirror :
+                                  VDISPLAY::virtual_display_layout_e::extend
         );
 #endif
 
@@ -2112,8 +2129,10 @@ namespace proc {
           }
 #endif
 
-          // Check the ISOLATED DISPLAY configuration setting and rearrange the displays
-          if (virtual_display_ready_for_capture && config::video.isolated_virtual_display_option == true) {
+          // Rearrange the displays when this session asked for the virtual
+          // display exclusively - through the global ISOLATED DISPLAY setting
+          // or the app's virtual-display-layout.
+          if (virtual_display_ready_for_capture && want_exclusive) {
             // Apply the isolated display settings
 #ifdef _WIN32
             VDISPLAY::changeDisplaySettings2(vdisplayName.c_str(), render_width, render_height, target_fps, true);
@@ -3116,16 +3135,63 @@ namespace proc {
     }
   }
 
-  void migrate(nlohmann::json& fileTree, const std::string& fileName) {
-    int last_version = 2;
+  /**
+   * v3: gamescope launcher entries now carry an explicit
+   * virtual-display-layout. Entries created before the field existed ran with
+   * the v0.5.0 "extend" placement, which left a nested Gamescope on the
+   * physical monitor and an empty virtual display in the stream. Pin existing
+   * launcher entries to "mirror" (the pre-0.5.0 clone behaviour) unless the
+   * user already set a layout themselves.
+   */
+  void migration_v3(nlohmann::json& fileTree) {
+    static const int this_version = 3;
 
+    if (fileTree.contains("apps") && fileTree["apps"].is_array()) {
+      for (auto &app : fileTree["apps"]) {
+        if (!app.is_object() || app.contains("virtual-display-layout")) {
+          continue;
+        }
+
+        const std::string cmd = app.value("cmd", "");
+        std::string first_token;
+        std::istringstream tokens {cmd};
+        tokens >> first_token;
+
+        bool is_launcher = first_token == "hermes-gamescope-launch" ||
+                           first_token == "apollo-gamescope-launch";
+        if (!is_launcher &&
+            app.value("name", "") == "Gamescope Steam Session" &&
+            cmd.find("gamescope-launch") != std::string::npos) {
+          is_launcher = true;
+        }
+
+        if (is_launcher) {
+          app["virtual-display-layout"] = "mirror";
+          BOOST_LOG(info) << "Migrating app '" << app.value("name", cmd)
+                          << "': gamescope launcher now uses the mirror virtual-display layout.";
+        }
+      }
+    }
+
+    fileTree["version"] = this_version;
+  }
+
+  void migrate(nlohmann::json& fileTree, const std::string& fileName) {
     int file_version = 0;
     if (fileTree.contains("version")) {
       file_version = fileTree["version"].get<int>();
     }
 
-    if (file_version < last_version) {
+    bool changed = false;
+    if (file_version < 2) {
       migration_v2(fileTree);
+      changed = true;
+    }
+    if (file_version < 3) {
+      migration_v3(fileTree);
+      changed = true;
+    }
+    if (changed) {
       file_handler::write_file(fileName.c_str(), fileTree.dump(4));
     }
   }
@@ -3271,6 +3337,15 @@ namespace proc {
             BOOST_LOG(warning) << "Unknown session-type '" << ctx.session_type
                                << "' for app " << name << "; using auto.";
             ctx.session_type = "auto";
+          }
+          ctx.virtual_display_layout = app_node.value("virtual-display-layout", "auto");
+          if (ctx.virtual_display_layout != "auto" &&
+              ctx.virtual_display_layout != "extend" &&
+              ctx.virtual_display_layout != "mirror" &&
+              ctx.virtual_display_layout != "exclusive") {
+            BOOST_LOG(warning) << "Unknown virtual-display-layout '" << ctx.virtual_display_layout
+                               << "' for app " << name << "; using auto.";
+            ctx.virtual_display_layout = "auto";
           }
           ctx.gamepad = app_node.value("gamepad", "");
 

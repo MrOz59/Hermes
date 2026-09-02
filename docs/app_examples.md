@@ -32,15 +32,17 @@ and applications to Sunshine.
 > process is started and nothing is placed on the virtual display.
 >
 > On Linux, the **Gamescope Steam Session** entry is the counterpart: `hermes-gamescope-launch` starts Steam Big
-> Picture inside a Gamescope compositor of its own at the resolution the client asked for. With the default
-> (`auto`/`wayland`) backend, though, that Gamescope runs *nested*: it is a fullscreen window of the desktop
-> compositor, and the compositor decides where that window opens — normally the primary monitor, not the virtual
-> display. To make it land on the virtual display, turn on **Use the Virtual Display exclusively** in Audio/Video:
-> Hermes then makes the virtual display primary and disables the physical outputs for the session, so the Gamescope
-> window has nowhere else to open. The physical monitors stay dark while streaming and are restored when the session
-> ends (with crash recovery on startup). Gamescope's own log is at `~/.local/state/hermes/gamescope.log`.
+> Picture inside a Gamescope compositor of its own at the resolution the client asked for. Gamescope runs *nested* —
+> a fullscreen window of the desktop compositor, which would normally place that window on the primary monitor. The
+> entry therefore ships with `virtual-display-layout: mirror`, which makes Hermes position the virtual display over
+> the primary output, so the desktop (and the Gamescope window on it) is cloned into the stream. Set the app's
+> `virtual-display-layout` to `exclusive` instead to hand the desktop to the virtual display and turn the
+> physical monitors off for the session (native resolution, no clone), or to `extend` for the default side-by-side
+> placement. Gamescope's own log is at `~/.local/state/hermes/gamescope.log`.
 >
 > Keeping this entry is still useful for the opposite case: reaching the Steam on the host's own desktop.
+> If you do give this entry a virtual display, a `virtual-display-layout` of `mirror` will clone the desktop —
+> Steam included — into the stream; that is the mirror doing it, not the window being placed.
 
 @tabs{
   @tab{Linux | <!-- -->

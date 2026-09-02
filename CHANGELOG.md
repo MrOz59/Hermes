@@ -543,10 +543,18 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   sharper case still: `steam://open/bigpicture` is a URL handed to the Steam
   already running on the desktop, so it asks that process to change modes and
   starts nothing - the window cannot land on a display it was never launched on.
-  The entry that does what people are reaching for is `Gamescope Steam Session`,
-  which runs Steam inside a Gamescope compositor of its own at the client's
-  resolution and ships with the virtual display already on. Both are now
+  The entry that does what people are reaching for is `Gamescope Steam
+  Session`, which runs Steam inside a Gamescope compositor of its own at the
+  client's resolution; it now ships with `virtual-display-layout: mirror` so
+  the virtual display clones the desktop instead of sitting beside it empty,
+  and existing installs are migrated to the same layout. Both entries are now
   documented, on the option and in the app examples. Reported in #31.
+- Gamescope Steam Session no longer streams an empty virtual display. The
+  v0.5.0 KScreen change that positioned the virtual output beside the physical
+  monitors - instead of letting KWin clone it - left a nested Gamescope, a
+  window of the desktop compositor placed on the primary monitor, off the
+  captured output entirely. The launcher entry now uses the mirror layout, and
+  the apps.json migration pins pre-existing launcher entries to it too.
 - The Brazilian Portuguese strings for the independent-session option were
   overwritten with English in the previous commit; translated properly.
 - A crash report is now something that can be answered. The Arch package

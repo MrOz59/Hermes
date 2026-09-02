@@ -386,6 +386,17 @@
                   v-model="editForm['virtual-display']"
                   default="false"
         ></Checkbox>
+        <!-- virtual display layout -->
+        <div class="mb-3" v-if="platform === 'linux' && editForm['virtual-display']">
+          <label for="virtualDisplayLayout" class="form-label">{{ $t('apps.virtual_display_layout') }}</label>
+          <select id="virtualDisplayLayout" class="form-select" v-model="editForm['virtual-display-layout']">
+            <option value="auto">{{ $t('apps.virtual_display_layout_auto') }}</option>
+            <option value="extend">{{ $t('apps.virtual_display_layout_extend') }}</option>
+            <option value="mirror">{{ $t('apps.virtual_display_layout_mirror') }}</option>
+            <option value="exclusive">{{ $t('apps.virtual_display_layout_exclusive') }}</option>
+          </select>
+          <div class="form-text">{{ $t('apps.virtual_display_layout_desc') }}</div>
+        </div>
         <!-- experimental isolated session profile -->
         <div class="mb-3" v-if="platform === 'linux'">
           <label for="sessionType" class="form-label">{{ $t('apps.session_type') }}</label>
@@ -557,6 +568,7 @@
     "per-client-app-identity": false,
     "allow-client-commands": true,
     "virtual-display": false,
+    "virtual-display-layout": "auto",
     "session-type": "auto",
     "terminate-on-pause": false,
     "gamepad": ""

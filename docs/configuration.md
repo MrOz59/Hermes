@@ -1482,9 +1482,11 @@ editing the `conf` file in a text editor. Use the examples as reference.
             specific backend.
             @note{A nested Gamescope is an ordinary window: the desktop
             compositor chooses where it opens, normally the primary monitor, and
-            this setting never moves it onto the virtual display. Enable
-            isolated_virtual_display_option to make the virtual display the only
-            output for the duration of the session.}
+            this setting never moves it onto the virtual display. To have it
+            appear in the stream, give the app a
+            <code>virtual-display-layout</code> of <code>mirror</code> (clone
+            the desktop) or <code>exclusive</code>, or enable
+            isolated_virtual_display_option globally.}
             @note{Ignored in a standalone Gamescope session (e.g. SteamOS Game
             Mode), where the application runs directly in the existing session.}
         </td>
@@ -2054,6 +2056,11 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td colspan="2">
             Isolates the virtual display, so the streamed session is the only
             active output for its duration.
+            @note{Individual apps can override this through their
+            <code>virtual-display-layout</code> field in apps.json:
+            <code>exclusive</code> forces this behaviour for that app, while
+            <code>extend</code> or <code>mirror</code> keep the physical
+            outputs on even when this option is enabled.}
             @note{On Linux, this requires a compositor Hermes can drive:
             KDE/KWin through KScreen, or a Wayland compositor implementing the
             wlr-output-management protocol. GNOME is not supported here —

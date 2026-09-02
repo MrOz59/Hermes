@@ -1549,6 +1549,7 @@ namespace VDISPLAY {
     std::array<uint64_t, 2> session_token;
     std::shared_ptr<EvdiBuffer> evdi_buffer;
     int evdi_buffer_id;
+    virtual_display_layout_e layout {virtual_display_layout_e::extend};
   };
 
   static std::map<std::string, VirtualDisplayInfo> virtual_displays;
@@ -2346,32 +2347,58 @@ namespace VDISPLAY {
       const std::map<std::string, int> &enabled_before,
       int mode_width,
       int mode_height,
-      int mode_refresh_hz
+      int mode_refresh_hz,
+      virtual_display_layout_e layout
     ) {
       const auto current = outputs();
       int target_x = 0;
       int target_y = 0;
       bool have_existing_output = false;
 
-      // Keep the virtual desktop regions disjoint. KWin may replay a saved
-      // hotplug layout with the new connector at 0,0, directly overlapping the
-      // physical monitor. Besides mirroring physical content into the stream,
-      // overlap makes absolute input ambiguous. Append each new virtual output
-      // to the right of every output that was active before this hotplug.
-      for (const auto &output : current) {
-        if (output.name == virtual_output ||
-            !output.connected ||
-            !output.enabled ||
-            !enabled_before.contains(output.name)) {
-          continue;
+      // Mirror overlaps the primary output so KWin clones the desktop onto
+      // the virtual connector: windows the compositor places on the physical
+      // monitor (a nested Gamescope, the panel, anything) then appear in the
+      // captured stream. This restores the pre-0.5.0 behaviour, per app.
+      if (layout == virtual_display_layout_e::mirror) {
+        for (const auto &output : current) {
+          if (output.name == virtual_output ||
+              !output.connected ||
+              !output.enabled ||
+              !enabled_before.contains(output.name)) {
+            continue;
+          }
+          // KScreen priority 1 marks the primary output. Before one is
+          // found, keep the first enabled output as the fallback anchor.
+          if (output.priority == 1 || !have_existing_output) {
+            target_x = output.x;
+            target_y = output.y;
+            have_existing_output = true;
+            if (output.priority == 1) {
+              break;
+            }
+          }
         }
-        if (!have_existing_output) {
-          target_y = output.y;
-          have_existing_output = true;
-        } else {
-          target_y = std::min(target_y, output.y);
+      } else {
+        // Keep the virtual desktop regions disjoint. KWin may replay a saved
+        // hotplug layout with the new connector at 0,0, directly overlapping the
+        // physical monitor. Besides mirroring physical content into the stream,
+        // overlap makes absolute input ambiguous. Append each new virtual output
+        // to the right of every output that was active before this hotplug.
+        for (const auto &output : current) {
+          if (output.name == virtual_output ||
+              !output.connected ||
+              !output.enabled ||
+              !enabled_before.contains(output.name)) {
+            continue;
+          }
+          if (!have_existing_output) {
+            target_y = output.y;
+            have_existing_output = true;
+          } else {
+            target_y = std::min(target_y, output.y);
+          }
+          target_x = std::max(target_x, output.x + output.width);
         }
-        target_x = std::max(target_x, output.x + output.width);
       }
 
       const bool has_mode = mode_width > 0 && mode_height > 0 && mode_refresh_hz > 0;
@@ -2400,7 +2427,9 @@ namespace VDISPLAY {
       }
       BOOST_LOG(info) << "[VDISPLAY/KScreen] Positioned " << virtual_output
                       << " at " << target_x << ',' << target_y
-                      << " outside the pre-session output regions";
+                      << (layout == virtual_display_layout_e::mirror ?
+                            " overlapping the primary output (mirror)" :
+                            " outside the pre-session output regions");
       return true;
     }
 
@@ -2453,7 +2482,8 @@ namespace VDISPLAY {
       const char *backend_label,
       int mode_width,
       int mode_height,
-      int mode_refresh_hz
+      int mode_refresh_hz,
+      virtual_display_layout_e layout
     ) {
       if (!available()) {
         return false;
@@ -2498,7 +2528,7 @@ namespace VDISPLAY {
           original_outputs.emplace(output, priority);
         }
       }
-      if (!apply_pre_session_layout(virtual_output, enabled_before, mode_width, mode_height, mode_refresh_hz)) {
+      if (!apply_pre_session_layout(virtual_output, enabled_before, mode_width, mode_height, mode_refresh_hz, layout)) {
         return false;
       }
 
@@ -4627,7 +4657,8 @@ namespace VDISPLAY {
     uint32_t height,
     uint32_t fps,
     const uuid_util::uuid_t &guid,
-    std::optional<uid_t> session_owner_uid
+    std::optional<uid_t> session_owner_uid,
+    virtual_display_layout_e layout
   ) {
     std::lock_guard<std::mutex> lock(vdisplay_mutex);
 
@@ -4678,6 +4709,7 @@ namespace VDISPLAY {
     vdinfo.session_id = 0;
     vdinfo.session_token = {};
     vdinfo.evdi_buffer_id = 0;
+    vdinfo.layout = layout;
 
     const auto backend = selected_backend();
 
@@ -4805,7 +4837,8 @@ namespace VDISPLAY {
             "Hermes-KMS",
             static_cast<int>(vdinfo.width),
             static_cast<int>(vdinfo.height),
-            static_cast<int>(vdinfo.fps / 1000)
+            static_cast<int>(vdinfo.fps / 1000),
+            vdinfo.layout
           );
         }
       }
@@ -4871,7 +4904,8 @@ namespace VDISPLAY {
               "EVDI",
               static_cast<int>(vdinfo.width),
               static_cast<int>(vdinfo.height),
-              static_cast<int>(vdinfo.fps / 1000)
+              static_cast<int>(vdinfo.fps / 1000),
+              vdinfo.layout
             );
           } else {
             BOOST_LOG(error) << "[VDISPLAY] EVDI connected but no matching DRM card appeared.";

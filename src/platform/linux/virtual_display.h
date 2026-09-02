@@ -219,6 +219,21 @@ namespace VDISPLAY {
   bool setRenderAdapterByName(const std::string &adapterName);
 
   /**
+   * @brief Where the host compositor places a newly created virtual output.
+   *
+   * The KScreen path either appends the output beside the physical monitors
+   * (extend) or overlaps the primary output (mirror). Mirror reproduces the
+   * pre-0.5.0 behaviour, where KWin adopted the hotplugged connector at the
+   * primary's position and cloned the desktop onto it - which is also what
+   * makes windows the compositor places on the physical monitor (such as a
+   * nested Gamescope) visible in the captured stream.
+   */
+  enum class virtual_display_layout_e {
+    extend,  ///< Side-by-side with the physical outputs (the default).
+    mirror,  ///< Overlapped with the primary output, so the desktop is cloned.
+  };
+
+  /**
    * @brief Create a virtual display.
    * @param s_client_uid The unique identifier of the client.
    * @param s_client_name The name of the client.
@@ -229,6 +244,9 @@ namespace VDISPLAY {
    * @param session_owner_uid When set, a Hermes-KMS card the broker creates
    *        for this display belongs to this uid (an isolated session's
    *        account) rather than to Hermes itself.
+   * @param layout Where the compositor should place the output. Only the
+   *        KScreen (KWin) activation path honours it; other backends keep
+   *        their own behaviour.
    * @return The name of the created virtual display, or empty string on failure.
    */
   std::string createVirtualDisplay(
@@ -238,7 +256,8 @@ namespace VDISPLAY {
     uint32_t height,
     uint32_t fps,
     const uuid_util::uuid_t &guid,
-    std::optional<uid_t> session_owner_uid = std::nullopt
+    std::optional<uid_t> session_owner_uid = std::nullopt,
+    virtual_display_layout_e layout = virtual_display_layout_e::extend
   );
 
   /**

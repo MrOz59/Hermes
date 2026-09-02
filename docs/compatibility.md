@@ -211,10 +211,15 @@ path, not a mock: the output is created, the client's mode is applied and read
 back from the compositor, capture initialises on it at that mode, and removing
 the display leaves the session as it was.
 
-Where the verification stops: **no full stream to a client has been completed
-yet.** Capture initialising is not the same as frames reaching Moonlight, and
-the pacing question below is open — a headless output redraws on damage, so a
-still screen may not produce frames at the requested rate on its own.
+Where the verification stands: **a full stream to a client was completed on
+2026-09-01** on Arch Linux (Omarchy), kernel 7.1.9, Hyprland 0.56.2, Intel UHD
+770 plus NVIDIA RTX 4080 SUPER (driver 610.57) with Hyprland rendering on the
+NVIDIA card, NVENC, to a Hestia client over LAN, on the physical monitor and on
+a headless output alike, once screencopy buffers were allocated on the GPU the
+compositor renders with (see the known limitation below). The pacing question
+below is still open: the frame rate was not measured, and a headless output
+redraws on damage, so a still screen may not produce frames at the requested
+rate on its own.
 
 Hermes does not give Hyprland a virtual DRM device. It asks Hyprland to create a
 **headless output**, which Hyprland renders itself on the primary GPU — so the
@@ -471,6 +476,16 @@ compositor" for an output the same log had just listed. Only the Hyprland
 headless path selects by name — a physical monitor is selected by index — so
 this never surfaced before. Fixed; noted here because the error message points
 at the compositor and the fault was Hermes'.
+
+**On a multi-GPU host, Wayland screencopy capture allocates on the GPU the
+compositor renders with.** The render-node scan used to keep the first node that
+could allocate a buffer, and on an Intel + NVIDIA desktop with Hyprland on the
+NVIDIA card that was the Intel iGPU; Hyprland refused the buffer with a fatal
+`zwp_linux_buffer_params_v1` protocol error that nothing read, and the client got
+a black stream with working audio and input. The compositor's device now comes
+from linux-dmabuf default feedback (protocol v4 and later); on a compositor below
+v4 the scan still runs, and `adapter_name = /dev/dri/renderDNN` names the right
+card by hand.
 
 **The development udev rule hides the card from every compositor.**
 `udev/99-hermes-kms-ignore-seat.rules` strips `TAG+="seat"` and `ID_SEAT` from

@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <algorithm>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
@@ -109,6 +110,17 @@ namespace wl {
       }
       display.roundtrip();
 
+      // Capture buffers must be allocated on the GPU the compositor renders
+      // with; ask it which one that is before the first frame is requested.
+      // This performs a roundtrip, so it must not run before the listen()
+      // loop above: a roundtrip while the initial wl_output events are still
+      // unread and unlistened discards them, and the monitor size stays 0x0.
+      // An ICC session names its own device (dmabuf_device), which is the more
+      // precise answer, so only screencopy asks the default feedback.
+      if (!use_icc) {
+        dmabuf.set_render_node(wl::compositor_render_node(display, interface.dmabuf_interface));
+      }
+
       auto monitor = interface.monitors[0].get();
 
       if (!display_name.empty() && display_name.rfind("VIRTUAL-", 0) != 0) {
@@ -203,6 +215,13 @@ namespace wl {
       do {
         auto remaining_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(to - std::chrono::steady_clock::now());
         if (remaining_time_ms.count() < 0 || !display.dispatch(remaining_time_ms)) {
+          // A dead connection never delivers a frame, so it would time out here
+          // on every call forever. A protocol error is a bug on our side that a
+          // reinit would only repeat; anything else (a compositor restart) is
+          // worth reconnecting for.
+          if (auto err = display.connection_error()) {
+            return err == EPROTO ? platf::capture_e::error : platf::capture_e::reinit;
+          }
           return platf::capture_e::timeout;
         }
         // Only while still waiting: icc_capture() arms a frame whenever the

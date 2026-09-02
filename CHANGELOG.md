@@ -623,6 +623,18 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   and choosing "IPv4 only" wrote nothing and changed nothing. The two defaults
   agree again.
 
+- Wayland screencopy capture on a multi-GPU host allocates its buffers on the
+  GPU the compositor renders with, learned from linux-dmabuf default feedback,
+  before consulting `WLR_RENDER_DRM_DEVICE` or scanning render nodes. The scan
+  keeps the first node that can allocate a buffer, and on an Intel + NVIDIA
+  desktop with Hyprland on the NVIDIA card that is the Intel iGPU: its buffer
+  allocates fine and Hyprland then refuses to import it with a fatal protocol
+  error. That error was invisible, because the Wayland connection was never
+  checked for one; every frame looked like a timeout and the client got a black
+  stream with working audio and input. A dead connection is now logged once,
+  ends capture on a protocol error, and reinitialises it on any other loss.
+  `adapter_name` still wins when set, with a warning if it names another GPU
+  ([#34], [#29]).
 - A session no longer crashes the server when the control port cannot be bound.
   `net::host_create` set a socket option on the result of `enet_host_create`
   before checking it, and enet returns null whenever it cannot create or bind
@@ -1255,6 +1267,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#25]: https://github.com/MrOz59/Hermes/issues/25
 [#28]: https://github.com/MrOz59/Hermes/issues/28
 [#29]: https://github.com/MrOz59/Hermes/issues/29
+[#34]: https://github.com/MrOz59/Hermes/issues/34
 
 ## [0.4.0] - 2026-07-02
 

@@ -39,6 +39,9 @@ namespace {
   struct session_t {
     wl::display_t display;
     wl::interface_t interface;
+    // The render node the compositor named, as wlr_t::init() learns it; empty
+    // when it did not say.
+    std::string render_node;
 
     static std::unique_ptr<session_t> open() {
       auto session = std::make_unique<session_t>();
@@ -57,6 +60,8 @@ namespace {
         monitor->listen(session->interface.output_manager);
       }
       session->display.roundtrip();
+
+      session->render_node = wl::compositor_render_node(session->display, session->interface.dmabuf_interface);
 
       return session;
     }
@@ -191,6 +196,7 @@ TEST_F(WaylandCaptureTest, ScreencopyStillProducesAFrame) {
 
   auto monitor = session->first_monitor();
   wl::dmabuf_t dmabuf;
+  dmabuf.set_render_node(session->render_node);
 
   dmabuf.listen(
     session->interface.screencopy_manager,
@@ -207,6 +213,17 @@ TEST_F(WaylandCaptureTest, ScreencopyStillProducesAFrame) {
   EXPECT_EQ(sd.height, (std::uint32_t) monitor->viewport.height);
   EXPECT_NE(sd.fourcc, 0u);
   EXPECT_GE(sd.fds[0], 0);
+}
+
+TEST_F(WaylandCaptureTest, CompositorNamesANodeThatCanAllocate) {
+  // The node the compositor renders on is where screencopy buffers get
+  // allocated; one that cannot allocate would send init_gbm() back to the scan
+  // that this answer exists to avoid.
+  if (session->render_node.empty()) {
+    GTEST_SKIP() << "Compositor did not name its render node (linux-dmabuf feedback needs protocol v4)";
+  }
+  EXPECT_TRUE(wl::render_node_can_allocate(session->render_node.c_str()))
+    << session->render_node << " is the GPU the compositor renders on but cannot allocate a buffer";
 }
 
 /**

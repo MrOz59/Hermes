@@ -594,6 +594,23 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- A host with no routable IPv6 address can stream again. The streaming control
+  server asks enet to bind the wildcard address, and enet resolves that through
+  `getaddrinfo` with `AI_ADDRCONFIG` - which refuses to return `::` unless the
+  machine has an IPv6 address on something other than loopback. It reports that
+  through a return value nobody read, so the address stayed as it was found and
+  the bind went out with a length of zero. Every session failed, on a host where
+  binding the wildcard would have worked perfectly; the wildcard was never the
+  problem, resolving its name was. It is built directly now, which is what a
+  wildcard deserves anyway - there is nothing in it to resolve ([#33]).
+
+- The address family setting could not actually be changed from the Web UI. The
+  page drops any value equal to the default it declares, and its declared
+  default for `address_family` still said `ipv4` after the server's became
+  `both` in 0.5.0. So the page showed "IPv4 only" on a host running dual-stack,
+  and choosing "IPv4 only" wrote nothing and changed nothing. The two defaults
+  agree again.
+
 - A session no longer crashes the server when the control port cannot be bound.
   `net::host_create` set a socket option on the result of `enet_host_create`
   before checking it, and enet returns null whenever it cannot create or bind

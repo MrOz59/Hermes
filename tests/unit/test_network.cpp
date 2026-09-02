@@ -95,3 +95,42 @@ INSTANTIATE_TEST_SUITE_P(
     return info.param == net::IPV4 ? "ipv4" : "both";
   }
 );
+
+/**
+ * The wildcard address must be built, not resolved.
+ *
+ * enet resolves names through getaddrinfo with AI_ADDRCONFIG, which refuses to
+ * return "::" on a host whose only IPv6 address is on loopback — and reports
+ * that through a return value the caller never read, leaving the address as it
+ * found it. The bind then went out with a length of zero and failed, on a host
+ * where binding the wildcard would have worked perfectly (#33).
+ *
+ * Poisoning the address first is the point: it has to be fully overwritten,
+ * which a failed resolution would not do.
+ */
+TEST_P(HostCreateTest, BuildsTheWildcardAddressWithoutResolvingIt) {
+  const auto af = GetParam();
+  constexpr std::uint16_t port = 47989 + 10 + 1001;
+
+  ENetAddress addr {};
+  std::memset(&addr, 0xAB, sizeof(addr));
+
+  auto host = net::host_create(af, addr, port);
+  if (!host) {
+    GTEST_SKIP() << "could not bind the probe port";
+  }
+
+  const auto expected_family = af == net::IPV4 ? AF_INET : AF_INET6;
+  EXPECT_EQ(addr.address.ss_family, expected_family);
+  EXPECT_EQ(addr.addressLength, af == net::IPV4 ? sizeof(sockaddr_in) : sizeof(sockaddr_in6));
+
+  if (af == net::IPV4) {
+    const auto *sin = reinterpret_cast<const sockaddr_in *>(&addr.address);
+    EXPECT_EQ(ntohs(sin->sin_port), port);
+    EXPECT_EQ(sin->sin_addr.s_addr, htonl(INADDR_ANY));
+  } else {
+    const auto *sin6 = reinterpret_cast<const sockaddr_in6 *>(&addr.address);
+    EXPECT_EQ(ntohs(sin6->sin6_port), port);
+    EXPECT_EQ(std::memcmp(&sin6->sin6_addr, &in6addr_any, sizeof(in6addr_any)), 0);
+  }
+}

@@ -235,7 +235,12 @@
             name: "Network",
             options: {
               "upnp": "disabled",
-              "address_family": "ipv4",
+              // Must match the server default in config.cpp. The save handler
+              // drops any value equal to the default here, so a mismatch makes
+              // the option unreachable: picking the server's real default
+              // writes nothing, and the page shows a setting the host is not
+              // using.
+              "address_family": "both",
               "port": 47989,
               "origin_web_ui_allowed": "lan",
               "external_ip": "",

@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <algorithm>
+#include <cstring>
 #include <sstream>
 
 #include <boost/asio.hpp>
@@ -161,9 +162,32 @@ namespace net {
       enet_initialize();
     });
 
-    auto any_addr = net::af_to_any_address_string(af);
-    enet_address_set_host(&addr, any_addr.data());
-    enet_address_set_port(&addr, port);
+    const auto any_addr = net::af_to_any_address_string(af);
+
+    // Build the wildcard address instead of resolving it. enet resolves names
+    // through getaddrinfo with AI_ADDRCONFIG, which refuses to return "::" on a
+    // host whose only IPv6 address is on loopback - the loopback does not count
+    // as a configured address for that flag. enet then reports the failure
+    // through a return value nobody reads, leaving the address zeroed, and the
+    // bind goes out with a length of zero and fails with EINVAL. The result was
+    // a host that could never stream while the wildcard bind it actually needed
+    // would have worked perfectly.
+    //
+    // The wildcard is not a name and has nothing to resolve, so build it.
+    std::memset(&addr, 0, sizeof(addr));
+    if (af == IPV4) {
+      auto *sin = reinterpret_cast<sockaddr_in *>(&addr.address);
+      sin->sin_family = AF_INET;
+      sin->sin_addr.s_addr = htonl(INADDR_ANY);
+      sin->sin_port = htons(port);
+      addr.addressLength = sizeof(sockaddr_in);
+    } else {
+      auto *sin6 = reinterpret_cast<sockaddr_in6 *>(&addr.address);
+      sin6->sin6_family = AF_INET6;
+      sin6->sin6_addr = in6addr_any;
+      sin6->sin6_port = htons(port);
+      addr.addressLength = sizeof(sockaddr_in6);
+    }
 
     // Maximum of 128 clients, which should be enough for anyone
     auto host = host_t {enet_host_create(af == IPV4 ? AF_INET : AF_INET6, &addr, 128, 0, 0, 0)};
@@ -172,8 +196,7 @@ namespace net {
       // being taken is the ordinary case. Callers handle a null host; reaching
       // for its socket first turned that into a segfault at session start.
       BOOST_LOG(error) << "Couldn't create an ENet host on ["sv << any_addr << ':' << port
-                       << "]; the port may be in use, or this host may not accept "sv
-                       << (af == IPV4 ? "IPv4"sv : "IPv6"sv) << " sockets."sv;
+                       << "]; the port is most likely already in use."sv;
       return host;
     }
 

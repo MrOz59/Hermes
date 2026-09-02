@@ -278,9 +278,15 @@ namespace VDISPLAY {
    * @param width The new width.
    * @param height The new height.
    * @param refresh_rate The new refresh rate (in mHz).
-   * @return 0 on success, non-zero on failure.
+   * @param deadline_ms How long the compositor-side mode apply may poll before
+   *        giving up. A hot path answering a waiting client - `/resume` - passes
+   *        a shorter budget than a launch does.
+   * @return 0 on success, -1 on failure, and 1 when the driver accepted the
+   *         mode but the compositor kept the previously active one. That last
+   *         case is not fatal: capture reads the real scanout geometry, so the
+   *         stream follows the display rather than the request.
    */
-  int changeDisplaySettings(const char *deviceName, int width, int height, int refresh_rate);
+  int changeDisplaySettings(const char *deviceName, int width, int height, int refresh_rate, int deadline_ms = 4000);
 
   /**
    * @brief Change the display settings with isolated display option.

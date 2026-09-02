@@ -923,12 +923,18 @@ namespace proc {
       return 503;
     }
 
-    VDISPLAY::changeDisplaySettings(
-      display_name.c_str(),
-      launch_session->width,
-      launch_session->height,
-      target_fps
-    );
+    if (VDISPLAY::changeDisplaySettings(
+          display_name.c_str(),
+          launch_session->width,
+          launch_session->height,
+          target_fps
+        ) != 0) {
+      // Not fatal: capture re-reads the real scanout geometry, so the stream
+      // follows the display rather than the request. Say it, though - a
+      // resolution the client did not ask for is otherwise a silent surprise.
+      BOOST_LOG(warning) << "Virtual display did not reach "sv << launch_session->width << 'x'
+                         << launch_session->height << "; streaming the display's active mode instead."sv;
+    }
     if (!config::video.hermes_kms_isolated_sessions &&
         !VDISPLAY::activateVirtualDisplayOutput(display_name)) {
       BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] The compositor did not activate session output "
@@ -2108,10 +2114,17 @@ namespace proc {
           if (launch_session->width && launch_session->height && launch_session->fps) {
             // Apply display settings
 #ifdef _WIN32
-            VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
+            const int mode_result = VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
 #else
-            VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
+            const int mode_result = VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
 #endif
+            if (mode_result != 0) {
+              // DISP_CHANGE_SUCCESSFUL is 0 on Windows too, so this reads the
+              // same on both. Capture follows the display's real mode from
+              // here, which is worth saying rather than leaving to be noticed.
+              BOOST_LOG(warning) << "Virtual display did not reach "sv << render_width << 'x' << render_height
+                                 << "; streaming the display's active mode instead."sv;
+            }
           }
 
 #ifndef _WIN32

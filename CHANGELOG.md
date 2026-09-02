@@ -594,6 +594,18 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- A second client resuming a running app now gets its own resolution. `/resume`
+  only configured the display when there was no virtual display, so an app that
+  still owned one kept the mode the previous client negotiated: A streams at
+  1440p and disconnects, B resumes the same app at 1080p and gets A's mode. The
+  missing branch applies the new client's geometry before the encoders are
+  probed, on a shorter deadline than a launch uses because it runs inside the
+  HTTP handler a client is waiting on. Where the compositor keeps its own mode
+  anyway, that is now reported rather than swallowed - `changeDisplaySettings()`
+  returns 1 for it, and the launch paths say so too. Capture reads the real
+  scanout geometry either way, so the stream follows the display rather than the
+  request. Ported from [#18] by @teodorgross.
+
 - A host with no routable IPv6 address can stream again. The streaming control
   server asks enet to bind the wildcard address, and enet resolves that through
   `getaddrinfo` with `AI_ADDRCONFIG` - which refuses to return `::` unless the
@@ -1236,6 +1248,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#17]: https://github.com/MrOz59/Hermes/issues/17
 [#19]: https://github.com/MrOz59/Hermes/issues/19
 [#20]: https://github.com/MrOz59/Hermes/issues/20
+[#18]: https://github.com/MrOz59/Hermes/pull/18
 [#22]: https://github.com/MrOz59/Hermes/issues/22
 [#33]: https://github.com/MrOz59/Hermes/issues/33
 [#23]: https://github.com/MrOz59/Hermes/issues/23

@@ -3438,8 +3438,12 @@ namespace VDISPLAY {
      * mode. Mutter applies asynchronously, so a single immediate read races
      * with the config it just accepted.
      */
-    static bool mode_confirmed(const std::string &connector, uint32_t width, uint32_t height, uint32_t refresh_mhz) {
-      for (int attempt = 0; attempt < 10; ++attempt) {  // ~1s
+    static bool mode_confirmed(const std::string &connector,
+                               uint32_t width,
+                               uint32_t height,
+                               uint32_t refresh_mhz,
+                               std::chrono::steady_clock::time_point deadline) {
+      while (std::chrono::steady_clock::now() < deadline) {
         state_t state;
         std::string argument;
         switch (build_layout_with_mode(command_output(get_current_state_command),
@@ -3485,12 +3489,23 @@ namespace VDISPLAY {
     static bool apply_output_mode(const std::string &connector,
                                   uint32_t width,
                                   uint32_t height,
-                                  uint32_t refresh_mhz) {
+                                  uint32_t refresh_mhz,
+                                  int deadline_ms) {
       if (!available() || connector.empty() || !width || !height) {
         return false;
       }
 
-      for (int attempt = 0; attempt < 40; ++attempt) {  // ~4s
+      // Mutter adopts a hotplugged connector asynchronously, so this waits.
+      // A caller on a hot path - /resume answers a client that is counting the
+      // seconds - passes a shorter budget than a launch does. Two thirds go to
+      // waiting for the connector to appear and the rest to confirming the mode
+      // stuck, so a short budget shortens both rather than spending everything
+      // on the first half.
+      const auto start = std::chrono::steady_clock::now();
+      const auto appear_deadline = start + std::chrono::milliseconds {deadline_ms * 2 / 3};
+      const auto confirm_budget = std::chrono::milliseconds {deadline_ms / 3};
+
+      while (std::chrono::steady_clock::now() < appear_deadline) {
         state_t state;
         std::string argument;
         switch (build_layout_with_mode(command_output(get_current_state_command),
@@ -3530,7 +3545,8 @@ namespace VDISPLAY {
         // The capture path reports the real scanout, so an unconfirmed mode is
         // exactly the resolution mismatch that reaches the client as a broken
         // image. Confirm it, and say so when it did not stick.
-        return mode_confirmed(connector, width, height, refresh_mhz);
+        return mode_confirmed(connector, width, height, refresh_mhz,
+                              std::chrono::steady_clock::now() + confirm_budget);
       }
 
       BOOST_LOG(warning) << "[VDISPLAY/Mutter] " << connector << " never appeared in Mutter's monitor state.";
@@ -5992,10 +6008,11 @@ namespace VDISPLAY {
     const std::string &connector,
     int width,
     int height,
-    int refresh_mhz
+    int refresh_mhz,
+    int deadline_ms = 4000
   );
 
-  int changeDisplaySettings(const char *deviceName, int width, int height, int refresh_rate) {
+  int changeDisplaySettings(const char *deviceName, int width, int height, int refresh_rate, int deadline_ms) {
     std::unique_lock<std::mutex> lock(vdisplay_mutex);
 
     refresh_rate = normalize_refresh_rate(refresh_rate);
@@ -6072,10 +6089,14 @@ namespace VDISPLAY {
     if (!push_mode_for.empty()) {
       const auto connector = virtual_display_connector_name(push_mode_for);
       if (connector.empty() ||
-          !pushVirtualOutputMode(push_mode_for, connector, width, height, refresh_rate)) {
+          !pushVirtualOutputMode(push_mode_for, connector, width, height, refresh_rate, deadline_ms)) {
         BOOST_LOG(warning) << "[VDISPLAY] The compositor was not moved to " << width << 'x' << height << '@'
                            << refresh_hz << "Hz for " << push_mode_for
-                           << "; the stream will not match the resolution the client asked for.";
+                           << "; the previous compositor mode stays active.";
+        // The driver took the mode and the compositor did not. Callers that
+        // care can say so; the ones that do not are no worse off than before,
+        // since the display is still there and still capturable.
+        return 1;
       }
     }
 
@@ -6330,7 +6351,8 @@ namespace VDISPLAY {
     const std::string &connector,
     int width,
     int height,
-    int refresh_mhz
+    int refresh_mhz,
+    int deadline_ms
   ) {
     if (width <= 0 || height <= 0 || refresh_mhz <= 0 || window_system != window_system_e::WAYLAND) {
       return false;
@@ -6340,7 +6362,7 @@ namespace VDISPLAY {
       return kscreen::apply_mode(displayName, width, height, refresh_mhz / 1000);
     }
     if (mutter::available()) {
-      return mutter::apply_output_mode(connector, width, height, refresh_mhz);
+      return mutter::apply_output_mode(connector, width, height, refresh_mhz, deadline_ms);
     }
 #ifdef SUNSHINE_BUILD_WAYLAND
     return wl::configure_virtual_output(connector, width, height, refresh_mhz, false);

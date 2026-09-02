@@ -75,6 +75,17 @@ namespace system_tray {
   update_tray_launch_error(std::string app_name, int exit_code);
 
   /**
+   * @brief Spawns a notification for a session that could not start at all.
+   *
+   * A stream that fails before it begins is felt as "it just does not work":
+   * the client shows a generic error and the host shows nothing. This puts the
+   * reason where someone will actually see it.
+   *
+   * @param reason Plain-language reason, shown as the notification body.
+   */
+  void update_tray_session_error(std::string reason);
+
+  /**
    * @brief Spawns a notification for PIN Pairing. Clicking it opens the PIN Web UI Page
    */
   void update_tray_require_pin();

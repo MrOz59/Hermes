@@ -1777,6 +1777,21 @@ namespace stream {
     shutdown_event->raise(true);
   }
 
+  /**
+   * Say, where someone will see it, that a stream could not start.
+   *
+   * A port conflict is invisible from both ends otherwise: the client shows a
+   * generic failure and the host shows nothing, because the reason only exists
+   * in the log. The Web UI carries the same finding on its home page, but a
+   * notification is what reaches someone who is holding a controller.
+   */
+  static void report_stream_start_failure(const std::string &reason) {
+    BOOST_LOG(error) << reason;
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+    system_tray::update_tray_session_error(reason);
+#endif
+  }
+
   int start_broadcast(broadcast_ctx_t &ctx) {
     auto address_family = net::af_from_enum_string(config::sunshine.address_family);
     auto protocol = address_family == net::IPV4 ? udp::v4() : udp::v6();
@@ -1785,7 +1800,11 @@ namespace stream {
     auto audio_port = net::map_port(AUDIO_STREAM_PORT);
 
     if (ctx.control_server.bind(address_family, control_port)) {
-      BOOST_LOG(error) << "Couldn't bind Control server to port ["sv << control_port << "], likely another process already bound to the port"sv;
+      report_stream_start_failure(
+        "Port " + std::to_string(control_port) +
+        " is already in use, so the stream could not start. Another Hermes may still be running, or "
+        "another program has taken the port."
+      );
 
       return -1;
     }
@@ -1807,7 +1826,10 @@ namespace stream {
 
     ctx.video_sock.bind(udp::endpoint(protocol, video_port), ec);
     if (ec) {
-      BOOST_LOG(fatal) << "Couldn't bind Video server to port ["sv << video_port << "]: "sv << ec.message();
+      report_stream_start_failure(
+        "Port " + std::to_string(video_port) + " is already in use, so the stream could not start (" +
+        ec.message() + "). Another Hermes may still be running, or another program has taken the port."
+      );
 
       return -1;
     }
@@ -1821,7 +1843,10 @@ namespace stream {
 
     ctx.audio_sock.bind(udp::endpoint(protocol, audio_port), ec);
     if (ec) {
-      BOOST_LOG(fatal) << "Couldn't bind Audio server to port ["sv << audio_port << "]: "sv << ec.message();
+      report_stream_start_failure(
+        "Port " + std::to_string(audio_port) + " is already in use, so the stream could not start (" +
+        ec.message() + "). Another Hermes may still be running, or another program has taken the port."
+      );
 
       return -1;
     }

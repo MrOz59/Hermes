@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <sstream>
 
+#include <boost/asio.hpp>
+
 // local includes
 #include "config.h"
 #include "logging.h"
@@ -165,11 +167,42 @@ namespace net {
 
     // Maximum of 128 clients, which should be enough for anyone
     auto host = host_t {enet_host_create(af == IPV4 ? AF_INET : AF_INET6, &addr, 128, 0, 0, 0)};
+    if (!host) {
+      // enet returns null when it cannot create or bind the socket - the port
+      // being taken is the ordinary case. Callers handle a null host; reaching
+      // for its socket first turned that into a segfault at session start.
+      BOOST_LOG(error) << "Couldn't create an ENet host on ["sv << any_addr << ':' << port
+                       << "]; the port may be in use, or this host may not accept "sv
+                       << (af == IPV4 ? "IPv4"sv : "IPv6"sv) << " sockets."sv;
+      return host;
+    }
 
     // Enable opportunistic QoS tagging (automatically disables if the network appears to drop tagged packets)
     enet_socket_set_option(host->socket, ENET_SOCKOPT_QOS, 1);
 
     return host;
+  }
+
+  bool udp_port_available(af_e af, std::uint16_t port) {
+    boost::asio::io_context io_context;
+    boost::system::error_code ec;
+
+    const auto protocol = af == IPV4 ? boost::asio::ip::udp::v4() : boost::asio::ip::udp::v6();
+    boost::asio::ip::udp::socket probe {io_context};
+    probe.open(protocol, ec);
+    if (ec) {
+      // The family itself is unavailable, which is a different problem from a
+      // taken port and not one this answer should claim.
+      return true;
+    }
+
+    const auto any = af == IPV4 ?
+                       boost::asio::ip::udp::endpoint {boost::asio::ip::udp::v4(), port} :
+                       boost::asio::ip::udp::endpoint {boost::asio::ip::udp::v6(), port};
+    probe.bind(any, ec);
+    const bool available = !ec;
+    probe.close(ec);
+    return available;
   }
 
   void free_host(ENetHost *host) {

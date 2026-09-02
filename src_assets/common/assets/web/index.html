@@ -299,6 +299,20 @@
           });
         }
 
+        const busyPorts = (this.config.streamPorts || []).filter(port => port.available === false);
+        if (busyPorts.length > 0) {
+          warnings.push({
+            id: 'stream-port-in-use',
+            level: 'danger',
+            title: 'A port Hermes needs to stream is already taken',
+            message: `${busyPorts.map(port => `${port.name} (${port.port})`).join(', ')} cannot be bound. `
+              + 'Streams will fail the moment a client connects. Another Hermes may still be running, or '
+              + 'another program has taken the port; changing the base port moves all of them at once.',
+            href: './config#Network',
+            action: 'Open network settings',
+          });
+        }
+
         if (evdiInfo.captureFallbackActive) {
           warnings.push({
             id: 'evdi-capture-fallback',

@@ -333,6 +333,42 @@ namespace confighttp {
     return "module_not_loaded";
   }
 
+  /**
+   * Whether the ports a stream will need are still free.
+   *
+   * They are only bound when a session starts, so a port another program has
+   * taken stays invisible until someone tries to play - and the failure is then
+   * felt far away from its cause. Probing them here lets the home page say so
+   * while nothing is at stake.
+   *
+   * While a session is streaming Hermes holds these itself, so the probe would
+   * report every one as taken; the answer is empty then rather than wrong.
+   */
+  static nlohmann::json stream_ports_json() {
+    nlohmann::json ports = nlohmann::json::array();
+    if (rtsp_stream::session_count() > 0) {
+      return ports;
+    }
+
+    const auto address_family = net::af_from_enum_string(config::sunshine.address_family);
+    const std::pair<const char *, int> checks[] = {
+      {"Video", stream::VIDEO_STREAM_PORT},
+      {"Control", stream::CONTROL_PORT},
+      {"Audio", stream::AUDIO_STREAM_PORT},
+    };
+
+    for (const auto &[name, offset] : checks) {
+      const auto port = net::map_port(offset);
+      ports.push_back({
+        {"name", name},
+        {"port", port},
+        {"available", net::udp_port_available(address_family, port)},
+      });
+    }
+    return ports;
+  }
+
+
   static nlohmann::json evdi_status_json() {
     const auto status = VDISPLAY::getEvdiStatus();
     nlohmann::json output {
@@ -1414,6 +1450,7 @@ namespace confighttp {
     output_tree["version"] = PROJECT_VERSION;
     output_tree["version_commit"] = PROJECT_VERSION_COMMIT;
     output_tree["vdisplayStatus"] = (int)proc::vDisplayDriverStatus;
+    output_tree["streamPorts"] = stream_ports_json();
 #ifdef __linux__
     output_tree["evdiSetupRequired"] = VDISPLAY::needsInitialDeviceConfiguration();
     output_tree["evdiInfo"] = evdi_status_json();

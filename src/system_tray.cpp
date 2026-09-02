@@ -343,6 +343,34 @@ namespace system_tray {
     tray_update(&tray);
   }
 
+  void update_tray_session_error(std::string reason) {
+    if (!tray_initialized) {
+      return;
+    }
+
+    tray.notification_title = nullptr;
+    tray.notification_text = nullptr;
+    tray.notification_cb = nullptr;
+    tray.notification_icon = nullptr;
+    tray.icon = TRAY_ICON;
+    tray_update(&tray);
+
+    char msg[512];
+    snprintf(msg, std::size(msg), "%s", reason.c_str());
+  #ifdef _WIN32
+    strncpy(msg, utf8ToAcp(msg).c_str(), std::size(msg) - 1);
+  #endif
+    tray.icon = TRAY_ICON;
+    tray.notification_icon = TRAY_ICON;
+    tray.notification_title = "Stream could not start";
+    tray.notification_text = msg;
+    tray.notification_cb = []() {
+      launch_ui();
+    };
+    tray.tooltip = PROJECT_NAME;
+    tray_update(&tray);
+  }
+
   void update_tray_require_pin() {
     if (!tray_initialized) {
       return;

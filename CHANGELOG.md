@@ -594,6 +594,27 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- A session no longer crashes the server when the control port cannot be bound.
+  `net::host_create` set a socket option on the result of `enet_host_create`
+  before checking it, and enet returns null whenever it cannot create or bind
+  the socket - the port already being taken being the ordinary way that
+  happens. So a bind failure at session start was a SIGSEGV instead of the
+  "Couldn't bind Control server to port" its caller is written to report, and
+  the server died every time a client connected. The failure is now logged with
+  the address, the port and the address family, which is what tells the two
+  causes apart. Present since the QoS tagging landed upstream in early 2024, so
+  it is not specific to Hermes ([#33]).
+
+  A log line is not an answer for someone holding a controller, though, so the
+  reason now reaches them two other ways. A stream that cannot start raises a
+  desktop notification naming the port, the same way a failed app launch
+  already does. And because the streaming ports are only bound once a session
+  starts, a port another program has taken stays invisible until someone tries
+  to play - so the home page now probes them while nothing is at stake and says
+  which one is taken, next to the other host warnings. The probe is skipped
+  while a session is live, since Hermes holds those ports itself then and every
+  one of them would read as taken.
+
 - Absolute pointer input now lands on the streamed display under GNOME. Mutter
   measures an absolute pointing device against the extents of the whole stage,
   so a client's coordinates only arrive on the right monitor once they carry
@@ -1199,6 +1220,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#19]: https://github.com/MrOz59/Hermes/issues/19
 [#20]: https://github.com/MrOz59/Hermes/issues/20
 [#22]: https://github.com/MrOz59/Hermes/issues/22
+[#33]: https://github.com/MrOz59/Hermes/issues/33
 [#23]: https://github.com/MrOz59/Hermes/issues/23
 [#25]: https://github.com/MrOz59/Hermes/issues/25
 [#28]: https://github.com/MrOz59/Hermes/issues/28

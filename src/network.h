@@ -52,6 +52,21 @@ namespace net {
   host_t host_create(af_e af, ENetAddress &addr, std::uint16_t port);
 
   /**
+   * @brief Whether a UDP port can still be bound on this host.
+   *
+   * The streaming ports are only bound when a session starts, so a port another
+   * program has taken is invisible until someone tries to play - at which point
+   * the stream fails for a reason that is nowhere near where it is felt. This
+   * answers the question ahead of time, by doing exactly what the stream will
+   * do: bind the wildcard address on the same address family.
+   *
+   * @return false when the bind fails, which is what "in use" looks like from
+   *         here; a port Hermes itself is already streaming on answers false
+   *         too, so callers should ask only when nothing is streaming.
+   */
+  bool udp_port_available(af_e af, std::uint16_t port);
+
+  /**
    * @brief Get the address family enum value from a string.
    * @param view The config option value.
    * @return The address family enum value.

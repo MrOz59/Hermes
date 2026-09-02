@@ -190,6 +190,9 @@ namespace wl {
     std::string name;
     std::string description;
     platf::touch_port_t viewport;
+    // Size in the compositor's logical coordinates (xdg_output); 0 until known.
+    int logical_width {0};
+    int logical_height {0};
     wl_output_listener wl_listener;
     zxdg_output_v1_listener xdg_listener;
   };
@@ -267,6 +270,58 @@ namespace wl {
   };
 
   std::vector<std::unique_ptr<monitor_t>> monitors(const char *display_name = nullptr);
+
+  /**
+   * @brief Size of a head in the compositor's logical coordinates, the wlr
+   * counterpart of mutter::state_t::logical_size.
+   *
+   * Head positions are logical, so anything added to them has to be logical
+   * too: the mode's pixel size divided by the scale, with the axes swapped for
+   * a rotated transform. `transform & 1` covers the 90 and 270 degree
+   * rotations including their flipped variants (WL_OUTPUT_TRANSFORM_FLIPPED_90
+   * is 5 and _FLIPPED_270 is 7). The scale arrives as 24.8 fixed point and is
+   * rounded to two decimals first: 1.6 is carried as 410/256 = 1.6015625, and
+   * 3840 divided by that rounds to 2398 where the compositor lays out 2400.
+   * @param scale The head's scale as wl_fixed_t; a non-positive scale counts as 1.
+   */
+  void logical_size(int mode_width, int mode_height, int transform, wl_fixed_t scale, int &width, int &height);
+
+  /** An output's rectangle in the compositor's logical coordinates. */
+  struct output_rect_t {
+    int x, y;
+    int width, height;
+  };
+
+  /**
+   * @brief The desktop envelope: the bounding box of every output in logical
+   * coordinates, origin included. wlroots-style compositors (Hyprland, sway)
+   * spread an absolute input device across exactly this box.
+   *
+   * Outputs without a positive size are skipped; with none left the envelope
+   * is all zeros.
+   */
+  output_rect_t desktop_envelope(const std::vector<output_rect_t> &outputs);
+
+  /** The streamed output's place in the desktop envelope, see platf::display_t. */
+  struct input_geometry_t {
+    int offset_x, offset_y;
+    int env_width, env_height;
+  };
+
+  /**
+   * @brief Express an output's offset within the envelope, and the envelope,
+   * in that output's own capture pixels.
+   *
+   * platf::display_t carries both that way, and the consumer forms
+   * (offset + x) / env, so scaling the logical values by mode / logical size
+   * gives the same ratio as converting x into logical space would. An output
+   * whose logical size is unknown (zero) counts as scale 1.
+   * @param output The streamed output's logical rectangle.
+   * @param mode_width The streamed output's mode, i.e. capture, width.
+   * @param mode_height The streamed output's mode, i.e. capture, height.
+   */
+  input_geometry_t input_geometry(const output_rect_t &envelope, const output_rect_t &output, int mode_width, int mode_height);
+
   /**
    * Configure a virtual output through wlroots' output-management protocol.
    * Returns false when the compositor does not expose that protocol or rejects

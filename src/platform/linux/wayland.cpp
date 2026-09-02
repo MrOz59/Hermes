@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <climits>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -45,6 +47,49 @@ using namespace std::literals;
 #pragma GCC diagnostic ignored "-Wpmf-conversions"
 
 namespace wl {
+  void logical_size(int mode_width, int mode_height, int transform, wl_fixed_t scale, int &width, int &height) {
+    const bool rotated = transform & 1;
+    width = rotated ? mode_height : mode_width;
+    height = rotated ? mode_width : mode_height;
+    // Fixed point is exact to 1/256, so two decimals recover any scale a user
+    // is likely to have configured without changing an exact one.
+    const double factor = std::round(wl_fixed_to_double(scale) * 100.0) / 100.0;
+    if (factor > 0.0) {
+      width = (int) std::lround(width / factor);
+      height = (int) std::lround(height / factor);
+    }
+  }
+
+  output_rect_t desktop_envelope(const std::vector<output_rect_t> &outputs) {
+    int left = INT_MAX;
+    int top = INT_MAX;
+    int right = INT_MIN;
+    int bottom = INT_MIN;
+    for (const auto &output : outputs) {
+      if (output.width <= 0 || output.height <= 0) {
+        continue;
+      }
+      left = std::min(left, output.x);
+      top = std::min(top, output.y);
+      right = std::max(right, output.x + output.width);
+      bottom = std::max(bottom, output.y + output.height);
+    }
+    if (left == INT_MAX) {
+      return {0, 0, 0, 0};
+    }
+    return {left, top, right - left, bottom - top};
+  }
+
+  input_geometry_t input_geometry(const output_rect_t &envelope, const output_rect_t &output, int mode_width, int mode_height) {
+    const double s_x = output.width > 0 && mode_width > 0 ? (double) mode_width / output.width : 1.0;
+    const double s_y = output.height > 0 && mode_height > 0 ? (double) mode_height / output.height : 1.0;
+    return {
+      (int) std::lround((output.x - envelope.x) * s_x),
+      (int) std::lround((output.y - envelope.y) * s_y),
+      (int) std::lround(envelope.width * s_x),
+      (int) std::lround(envelope.height * s_y),
+    };
+  }
 
   // Helper to call C++ method from wayland C callback
   template<class T, class Method, Method m, class... Params>
@@ -379,8 +424,14 @@ namespace wl {
       bool valid = true;
       int right_edge = 0;
       for (const auto &head : control.heads) {
-        if (head->enabled && head->current_mode) {
-          right_edge = std::max(right_edge, head->x + head->current_mode->width);
+        if (head->enabled && head->current_mode && head.get() != &virtual_head) {
+          // Positions are logical, so the edge has to be logical too. Adding
+          // the mode width instead leaves a gap after a scaled output, which
+          // the cursor cannot cross.
+          int logical_width = 0;
+          int logical_height = 0;
+          logical_size(head->current_mode->width, head->current_mode->height, head->transform, head->scale, logical_width, logical_height);
+          right_edge = std::max(right_edge, head->x + logical_width);
         }
       }
 
@@ -490,6 +541,9 @@ namespace wl {
   }
 
   void monitor_t::xdg_size(zxdg_output_v1 *, std::int32_t width, std::int32_t height) {
+    logical_width = width;
+    logical_height = height;
+
     BOOST_LOG(info) << "Logical size: "sv << width << 'x' << height;
   }
 

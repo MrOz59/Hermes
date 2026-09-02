@@ -288,6 +288,10 @@ namespace VDISPLAY {
     return "EVDI";
   }
 
+  // Defined with the KScreen backend below; the Hyprland one interpolates
+  // output names into its socket commands too.
+  static bool safe_output_name(const std::string &name);
+
   /**
    * @brief Hyprland's control socket.
    *
@@ -420,6 +424,69 @@ namespace VDISPLAY {
 
       BOOST_LOG(error) << "[VDISPLAY] Hyprland accepted the headless output but never published it.";
       return std::nullopt;
+    }
+
+    /**
+     * @brief Pin the mode and scale of a headless output with a monitor rule,
+     * so they survive Hyprland re-applying its rules.
+     *
+     * Hyprland applies wlr-output-management state on top of the monitor rule
+     * that matches the output, but that state lives in the requesting
+     * client's manager object and is erased when the client disconnects.
+     * configure_virtual_output() destroys its connection on return, so the
+     * next rule reload - a physical display powering off is enough, and so is
+     * a config reload - finds nothing of what Hermes applied and puts the
+     * headless output back on the catch-all rule: on a scaled desktop that
+     * means a different mode, a different scale and an auto position, while
+     * the stream keeps encoding the size it negotiated. A rule keyed by the
+     * output's name is what `hyprctl keyword monitor` adds by hand, and it is
+     * what the reload finds. Rules replace by name and HEADLESS-N names are
+     * not reused, so one stale rule per session name remains until the next
+     * config reload; it matches nothing once its output is gone.
+     *
+     * The rule goes through `eval hl.monitor({...})` first, the only form
+     * Hyprland main still registers, and through `keyword monitor` when eval
+     * is refused, for a release that still parses the legacy config.
+     *
+     * The position stays `auto`. Adding the rule makes Hyprland lay out every
+     * monitor again, and a physical monitor on an `auto` rule is then placed
+     * after any explicitly positioned one - pinning the position Hermes just
+     * applied would shove the physical monitor to the right of the virtual
+     * one. With `auto` on both, the virtual output lands after the physical
+     * ones, which is where the wlr-output-management step put it anyway. A
+     * future `mirror` layout on Hyprland belongs in this rule too, through
+     * Hyprland's `mirror` option, not in overlapping positions.
+     */
+    static void pin_output(const std::string &name, int width, int height, int refresh_mhz) {
+      if (width <= 0 || height <= 0) {
+        return;
+      }
+      // The name is interpolated into a Lua expression and a config line.
+      if (!safe_output_name(name)) {
+        BOOST_LOG(warning) << "[VDISPLAY] Refusing to pin a Hyprland monitor rule for an unsafe output name.";
+        return;
+      }
+      std::string mode = std::to_string(width) + "x" + std::to_string(height);
+      if (refresh_mhz > 0) {
+        char refresh[32];
+        std::snprintf(refresh, sizeof(refresh), "@%.3f", refresh_mhz / 1000.0);
+        mode += refresh;
+      }
+
+      std::string rule = "hl.monitor({ output = \"" + name + "\", mode = \"" + mode + "\", position = \"auto\", scale = 1 })";
+      auto reply = request("/eval " + rule);
+      if (!reply || reply->rfind("ok", 0) != 0) {
+        BOOST_LOG(info) << "[VDISPLAY] Hyprland did not take the monitor rule through eval"
+                        << (reply ? " (" + *reply + ")" : " (no reply from its socket)") << "; trying keyword.";
+        rule = name + "," + mode + ",auto,1";
+        reply = request("/keyword monitor " + rule);
+      }
+      if (!reply || reply->rfind("ok", 0) != 0) {
+        BOOST_LOG(warning) << "[VDISPLAY] Hyprland refused the monitor rule '" << rule << "'"
+                           << (reply ? ": " + *reply : " (no reply from its socket).");
+        return;
+      }
+      BOOST_LOG(info) << "[VDISPLAY] Pinned Hyprland monitor rule '" << rule << "'";
     }
 
     static bool remove_output(const std::string &name) {
@@ -6365,7 +6432,17 @@ namespace VDISPLAY {
       return mutter::apply_output_mode(connector, width, height, refresh_mhz, deadline_ms);
     }
 #ifdef SUNSHINE_BUILD_WAYLAND
-    return wl::configure_virtual_output(connector, width, height, refresh_mhz, false);
+    const bool applied = wl::configure_virtual_output(connector, width, height, refresh_mhz, false);
+    if (applied && !getHyprlandOutputName(displayName).empty()) {
+      if (virtual_display_layout(displayName) == virtual_display_layout_e::mirror) {
+        BOOST_LOG(warning) << "[VDISPLAY] The mirror layout is not implemented on Hyprland; "
+                              "the virtual output extends the desktop instead.";
+      }
+      // Pinned here rather than at creation so a mid-session mode change
+      // re-pins the new mode.
+      hyprland::pin_output(connector, width, height, refresh_mhz);
+    }
+    return applied;
 #else
     (void) connector;
     return false;

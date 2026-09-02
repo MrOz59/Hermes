@@ -114,6 +114,20 @@ if(LIBDRM_FOUND)
     list(APPEND PLATFORM_LIBRARIES ${LIBDRM_LIBRARIES})
 endif()
 
+# libsystemd provides sd-bus, which is what lets the GNOME backend hold a live
+# subscription to org.gnome.Mutter.DisplayConfig instead of re-reading it on a
+# timer. Optional on purpose: without it the backend still drives and captures
+# the output, it just cannot notice the desktop layout changing mid-session.
+pkg_check_modules(LIBSYSTEMD libsystemd)
+if(LIBSYSTEMD_FOUND)
+    add_compile_definitions(SUNSHINE_BUILD_SDBUS)
+    include_directories(SYSTEM ${LIBSYSTEMD_INCLUDE_DIRS})
+    list(APPEND PLATFORM_LIBRARIES ${LIBSYSTEMD_LIBRARIES})
+    message(STATUS "libsystemd found; GNOME display-layout changes will be watched over D-Bus")
+else()
+    message(STATUS "libsystemd not found; GNOME display-layout changes will not be noticed mid-session")
+endif()
+
 # drm
 if(${SUNSHINE_ENABLE_DRM})
     find_package(LIBCAP REQUIRED)

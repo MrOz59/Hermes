@@ -196,13 +196,31 @@ TEST(SessionAssessment, AnUnrecognisedCompositorWithTheProtocolIsDegradedNotUnav
   EXPECT_EQ(reportFor(facts, VDISPLAY::feature_e::client_requested_mode).readiness, VDISPLAY::readiness_e::unknown);
 }
 
-TEST(SessionAssessment, MutterDrivesADisplayButCannotBlankThePhysicalOne) {
+TEST(SessionAssessment, MutterDrivesADisplayAndCanBlankThePhysicalOne) {
   auto facts = workingKwinSession();
   facts.compositor = VDISPLAY::compositor_e::mutter;
   facts.kscreen = false;
   facts.mutter = true;
 
   EXPECT_EQ(reportFor(facts, VDISPLAY::feature_e::virtual_display).readiness, VDISPLAY::readiness_e::ready);
+  // ApplyMonitorsConfig takes the whole layout and Mutter disables every
+  // monitor left out of it, so a config naming only the virtual output is the
+  // GNOME way of turning the physical ones off. This was reported as impossible
+  // until the D-Bus interface was actually read.
+  const auto exclusive = reportFor(facts, VDISPLAY::feature_e::exclusive_mode);
+  EXPECT_EQ(exclusive.readiness, VDISPLAY::readiness_e::ready);
+  EXPECT_TRUE(exclusive.remediation.empty());
+}
+
+TEST(SessionAssessment, MutterWithoutDisplayConfigCannotBlankThePhysicalOne) {
+  // GNOME is running but the D-Bus interface did not answer: nothing can be
+  // driven and nothing can be turned off, and the remediation says where to
+  // look.
+  auto facts = workingKwinSession();
+  facts.compositor = VDISPLAY::compositor_e::mutter;
+  facts.kscreen = false;
+  facts.mutter = false;
+
   const auto exclusive = reportFor(facts, VDISPLAY::feature_e::exclusive_mode);
   EXPECT_EQ(exclusive.readiness, VDISPLAY::readiness_e::unavailable);
   EXPECT_FALSE(exclusive.remediation.empty());

@@ -13,11 +13,32 @@
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/platform/linux/virtual_display.h"
 #include "src/utility.h"
 
 using namespace std::literals;
 
 namespace platf {
+
+  /**
+   * Every Hermes virtual input device is created with these ids.
+   *
+   * GNOME binds a touchscreen or a tablet to a monitor through a settings key
+   * whose path it builds from the device's vendor and product, so these are
+   * named rather than repeated as literals: the display code has to derive the
+   * same path, and a drift between the two would silently stop the binding from
+   * reaching our devices.
+   */
+  constexpr uint16_t VIRTUAL_INPUT_VENDOR_ID = 0xBEEF;
+  constexpr uint16_t VIRTUAL_INPUT_PRODUCT_ID = 0xDEAD;
+
+  // GNOME derives the settings path that binds our touch and pen devices to a
+  // monitor from these, and the display code cannot include this header.
+  static_assert(
+    VIRTUAL_INPUT_VENDOR_ID == VDISPLAY::VIRTUAL_INPUT_SETTINGS_VENDOR_ID &&
+      VIRTUAL_INPUT_PRODUCT_ID == VDISPLAY::VIRTUAL_INPUT_SETTINGS_PRODUCT_ID,
+    "The device ids and the ids the GNOME input binding is built from have drifted apart"
+  );
 
   using joypads_t = std::variant<inputtino::XboxOneJoypad, inputtino::SwitchJoypad, inputtino::PS5Joypad>;
 
@@ -32,16 +53,16 @@ namespace platf {
         session_tag(std::move(session_tag)),
         mouse(inputtino::Mouse::create({
           .name = this->session_tag.empty() ? "Mouse passthrough" : "Hermes Session Mouse",
-          .vendor_id = 0xBEEF,
-          .product_id = 0xDEAD,
+          .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
+          .product_id = VIRTUAL_INPUT_PRODUCT_ID,
           .version = 0x111,
           .device_phys = this->session_tag,
           .device_uniq = this->session_tag,
         })),
         keyboard(inputtino::Keyboard::create({
           .name = this->session_tag.empty() ? "Keyboard passthrough" : "Hermes Session Keyboard",
-          .vendor_id = 0xBEEF,
-          .product_id = 0xDEAD,
+          .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
+          .product_id = VIRTUAL_INPUT_PRODUCT_ID,
           .version = 0x111,
           .device_phys = this->session_tag,
           .device_uniq = this->session_tag,
@@ -75,16 +96,16 @@ namespace platf {
         global((input_raw_t *) input.get()),
         touch(inputtino::TouchScreen::create({
           .name = global->session_tag.empty() ? "Touch passthrough" : "Hermes Session Touch",
-          .vendor_id = 0xBEEF,
-          .product_id = 0xDEAD,
+          .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
+          .product_id = VIRTUAL_INPUT_PRODUCT_ID,
           .version = 0x111,
           .device_phys = global->session_tag,
           .device_uniq = global->session_tag,
         })),
         pen(inputtino::PenTablet::create({
           .name = global->session_tag.empty() ? "Pen passthrough" : "Hermes Session Pen",
-          .vendor_id = 0xBEEF,
-          .product_id = 0xDEAD,
+          .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
+          .product_id = VIRTUAL_INPUT_PRODUCT_ID,
           .version = 0x111,
           .device_phys = global->session_tag,
           .device_uniq = global->session_tag,

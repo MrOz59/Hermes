@@ -2006,6 +2006,101 @@ namespace platf {
       std::uint64_t sequence {};
     };
 
+    /**
+     * The geometry a capture resolved at start-up is a snapshot of the
+     * compositor's layout, and the compositor can rewrite that layout at any
+     * moment - another monitor plugged in, the display panel opened, a stored
+     * configuration reapplied after a resume. When it does, the offsets
+     * absolute input is measured against are stale and the pointer goes back to
+     * landing in the wrong place, with nothing failing to say so.
+     *
+     * Reinitialising is how the rest of this file already handles the display
+     * changing underneath it, and it re-resolves the geometry and republishes
+     * the touch port on the way through, so this needs no path of its own.
+     */
+    inline bool hermes_layout_changed(std::uint64_t &recorded) {
+      const auto current = VDISPLAY::displayLayoutGeneration();
+      if (current == recorded) {
+        return false;
+      }
+      recorded = current;
+      BOOST_LOG(info) << "Hermes-KMS capture: the desktop layout changed; reinitialising to re-resolve "
+                         "the input geometry."sv;
+      return true;
+    }
+
+    /**
+     * Place a Hermes-KMS output on the host desktop, for absolute input.
+     *
+     * The client sends pointer coordinates inside the streamed display, while
+     * the uinput device Hermes injects them through spans the whole desktop.
+     * Without this display's offset and the desktop's envelope, those
+     * coordinates are measured against the wrong rectangle and the pointer
+     * lands on whichever monitor sits at the desktop origin - the physical one,
+     * on every extended desktop.
+     *
+     * Falls back to output-local coordinates, which are only correct when the
+     * virtual display is the entire desktop.
+     */
+    inline void resolve_hermes_input_geometry(
+      const std::string &display_name,
+      int width,
+      int height,
+      int &offset_x,
+      int &offset_y,
+      int &env_width,
+      int &env_height
+    ) {
+      offset_x = 0;
+      offset_y = 0;
+      env_width = width;
+      env_height = height;
+
+      // An isolated session runs a compositor that drives nothing but this
+      // output, so the display really is the whole desktop and there is no
+      // host layout to ask about.
+      if (config::video.hermes_kms_isolated_sessions) {
+        return;
+      }
+
+      int desktop_x = 0;
+      int desktop_y = 0;
+      int desktop_width = 0;
+      int desktop_height = 0;
+      if (!VDISPLAY::getHermesKmsDisplayGeometry(
+            display_name,
+            desktop_x,
+            desktop_y,
+            desktop_width,
+            desktop_height
+          )) {
+        BOOST_LOG(warning) << "Could not resolve compositor geometry for ["sv << display_name
+                           << "]; absolute input will use output-local coordinates, which are only "
+                              "correct while the virtual display is the whole desktop."sv;
+        return;
+      }
+
+      // Deliberately loose: the offset has to land inside the envelope, but the
+      // display is not required to fit it exactly, because a scaled desktop
+      // converts through a rounding step.
+      if (desktop_x < 0 || desktop_y < 0 || desktop_width <= 0 || desktop_height <= 0 ||
+          desktop_x >= desktop_width || desktop_y >= desktop_height) {
+        BOOST_LOG(warning) << "Compositor reported an unusable desktop geometry for ["sv << display_name
+                           << "]: "sv << width << 'x' << height << " at "sv << desktop_x << ',' << desktop_y
+                           << " in "sv << desktop_width << 'x' << desktop_height
+                           << "; keeping output-local coordinates."sv;
+        return;
+      }
+
+      offset_x = desktop_x;
+      offset_y = desktop_y;
+      env_width = desktop_width;
+      env_height = desktop_height;
+      BOOST_LOG(info) << "Hermes-KMS input geometry for ["sv << display_name << "]: "
+                      << offset_x << ',' << offset_y << " in "
+                      << env_width << 'x' << env_height;
+    }
+
     // Zero-copy capture of a Hermes-KMS virtual display.
     //
     // Unlike the KMS path, this never reads the scanout through drmModeGetFB +
@@ -2045,32 +2140,8 @@ namespace platf {
         height = img_height = h;
         img_offset_x = 0;
         img_offset_y = 0;
-        env_width = w;
-        env_height = h;
-        if (config::video.hermes_kms_multi_output &&
-            !config::video.hermes_kms_isolated_sessions) {
-          int desktop_x = 0;
-          int desktop_y = 0;
-          int desktop_width = w;
-          int desktop_height = h;
-          if (VDISPLAY::getHermesKmsDisplayGeometry(
-                display_name,
-                desktop_x,
-                desktop_y,
-                desktop_width,
-                desktop_height)) {
-            offset_x = desktop_x;
-            offset_y = desktop_y;
-            env_width = desktop_width;
-            env_height = desktop_height;
-            BOOST_LOG(info) << "Hermes-KMS input geometry for ["sv << display_name << "]: "
-                            << offset_x << ',' << offset_y << " in "
-                            << env_width << 'x' << env_height;
-          } else {
-            BOOST_LOG(warning) << "Could not resolve compositor geometry for ["sv << display_name
-                               << "]; absolute input will use output-local coordinates."sv;
-          }
-        }
+        resolve_hermes_input_geometry(display_name, w, h, offset_x, offset_y, env_width, env_height);
+        layout_generation = VDISPLAY::displayLayoutGeneration();
 
         // The Hermes render node only exports DMA-BUFs; it is not a render GPU,
         // so VAAPI must run on a real GPU (e.g. amdgpu/renderD128). Honour an
@@ -2198,6 +2269,10 @@ namespace platf {
           return platf::capture_e::interrupted;
         }
         auto img = static_cast<egl::img_descriptor_t *>(img_out.get());
+
+        if (hermes_layout_changed(layout_generation)) {
+          return platf::capture_e::reinit;
+        }
 
         VDISPLAY::HermesKmsFrame frame;
         const auto timeout_ms = hermes_timeout_ms(timeout);
@@ -2359,6 +2434,8 @@ namespace platf {
       }
 
       int hermes_fd {-1};
+      /// The desktop layout this capture resolved its geometry against.
+      std::uint64_t layout_generation {0};
       file_t encode_render_fd;
       uint64_t last_sequence {0};
       uint64_t last_cursor_sequence {0};
@@ -2416,8 +2493,8 @@ namespace platf {
         height = img_height = h;
         img_offset_x = 0;
         img_offset_y = 0;
-        env_width = w;
-        env_height = h;
+        resolve_hermes_input_geometry(display_name, w, h, offset_x, offset_y, env_width, env_height);
+        layout_generation = VDISPLAY::displayLayoutGeneration();
 
         BOOST_LOG(info) << "Hermes-KMS CPU-copy capture ready: "sv << w << 'x' << h;
         return 0;
@@ -2459,6 +2536,10 @@ namespace platf {
         // img_out, so it must already hold a valid image by then.
         if (!pull_free_image_cb(img_out)) {
           return platf::capture_e::interrupted;
+        }
+
+        if (hermes_layout_changed(layout_generation)) {
+          return platf::capture_e::reinit;
         }
 
         VDISPLAY::HermesKmsFrame frame;
@@ -2690,6 +2771,8 @@ namespace platf {
       }
 
       int hermes_fd {-1};
+      /// The desktop layout this capture resolved its geometry against.
+      std::uint64_t layout_generation {0};
       uint64_t last_sequence {0};
       uint64_t last_cursor_sequence {0};
       std::optional<bool> last_cursor_requested;

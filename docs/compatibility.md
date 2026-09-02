@@ -42,7 +42,7 @@ compositor rather than per distribution.
 | wlroots (sway, …) | `wlr-output-management` | Expected to work |
 | Hyprland / aquamarine | `hyprctl output create headless` + `wlr-output-management` | Verified |
 | Weston | none — see below | Driver verified, activation N/A |
-| GNOME / Mutter | `org.gnome.Mutter.DisplayConfig` | Video verified; exclusive mode unsupported |
+| GNOME / Mutter | `org.gnome.Mutter.DisplayConfig` | Video verified on hardware; layout, exclusive, mirror and input geometry verified against mutter 50.4 |
 | gamescope | n/a (own session) | Expected to work |
 | X11 | X11 capture path | Expected to work |
 
@@ -76,13 +76,12 @@ Observed:
   capture reads.
 
 Not tested: a real streaming session, and exclusive mode. Exclusive mode uses
-the same `wlr-output-management` path, so it is *expected to work*, unlike on
-GNOME.
+the same `wlr-output-management` path, so it is *expected to work*.
 
 Capture on COSMIC works only with the Hermes-KMS backend — see
 [Capture backends](#capture-backends).
 
-### GNOME / Mutter — video verified
+### GNOME / Mutter — video and input verified
 
 Mutter implements neither `kscreen-doctor` nor `wlr-output-management`, only its
 own `org.gnome.Mutter.DisplayConfig` D-Bus interface.
@@ -116,10 +115,85 @@ kernel 7.1.8 and GNOME Shell/Mutter 50.4. Separately, the original reporter in
 stream on an RX 7800 XT after installing the driver fix. This verifies the video
 path; it does not change the exclusive-mode limitation below.
 
-**Exclusive mode is not supported on GNOME.** There is no interface Hermes can
-use to disable the physical outputs, so it logs a warning and the physical
-outputs stay on. The `DisplayConfig` interface used for mode negotiation does
-not provide this.
+A fourth problem, on the input side, was found afterwards and is fixed. Mutter
+measures an absolute pointing device against the extents of the whole stage, so
+the client's coordinates need the streamed output's offset within the desktop
+envelope to land on it. Hermes resolved that geometry through `kscreen-doctor`,
+which GNOME does not implement, and only asked for it in multi-output mode. Since
+the physical outputs stay on for the session here, the desktop is always
+extended and the offset always matters: a 1600x1068 client stretched across the
+reporter's 4160-wide desktop, so most of its screen pointed at the physical
+monitor. Geometry now comes from `GetCurrentState`, in the logical coordinates
+the pointer is actually measured in.
+
+Whether that is the whole of the pointer behaviour reported in
+[#22](https://github.com/MrOz59/Hermes/issues/22) is not established - the same
+description also fits the host's own mouse, which Hermes never touches - but the
+missing offset was real and is gone.
+
+**What was verified, and how.** Every configuration described below was
+submitted to a real mutter 50.4 — headless, with two virtual monitors, its
+session bus exposed on a shared socket so the payloads Hermes builds could be
+fed to it unchanged. Mutter accepted and applied the exclusive configuration and
+left only the virtual output in the layout; accepted the mirrored one and put
+both connectors in a single logical monitor; and restored the original layout
+from the captured configuration in both cases. The offsets were checked against
+the live logical monitors at 100% and at 200%, where the mode-size arithmetic
+this replaced would have overstated the desktop by 44%. The placement fix was
+checked the other way round as well: the payload the previous code would have
+built is rejected by mutter with `Logical monitors not adjacent`, which is what
+made it take the whole configuration down rather than just the placement. The
+`MonitorsChanged` subscription was exercised with the same four match strings
+the code uses, and the touch and pen settings paths were written, read back and
+reset through GSettings.
+
+Not covered by that: a real KMS session with the output on a second GPU, which
+is what the copy path and the cursor plane depend on; whether GNOME's input
+mapper actually routes a touchscreen to the bound monitor, which needs real
+devices on a seat; and the `global-scale-required` branch, which headless mutter
+does not exercise. The D-Bus and GSettings calls themselves were reproduced
+command-for-command rather than executed through Hermes' own wrappers.
+
+**A layout change mid-session is noticed.** Everything above reads the monitor
+state once and acts on the answer, and GNOME rewrites the layout for reasons
+that have nothing to do with streaming — another monitor plugged in, the
+Displays panel opened, a stored configuration reapplied after a resume. Hermes
+subscribes to `MonitorsChanged` over sd-bus and, when the change actually moves
+an output or changes a mode, reinitialises capture so the geometry is resolved
+again. It deliberately does not put the layout back: whoever changed it very
+likely meant to, and the resolution the client sees follows the compositor. The
+subscription needs libsystemd at build time; without it the rest still works and
+a mid-session change simply goes unnoticed.
+
+**Touch and pen are bound to the streamed output.** GNOME routes an absolute
+pointer over the whole desktop, but binds a touchscreen or tablet to a single
+monitor. Left to itself it guesses - by EDID, by the device's physical size,
+and failing both a touchscreen falls back to the built-in panel - so a client's
+touches landed on the laptop screen, or spread across the desktop on a machine
+with no built-in panel. Hermes now writes the per-device `output` key for its
+own virtual devices, matching the virtual monitor's EDID, and puts the key back
+when the session ends. The key is addressed by the device's vendor and product
+ids, which every Hermes device shares, so it is one binding per host: with
+concurrent sessions it points at whichever output was activated last.
+
+**Exclusive mode works on GNOME.** This was recorded here as impossible, which
+was wrong. `ApplyMonitorsConfig` takes the complete list of logical monitors and
+Mutter disables every connected monitor absent from it, so handing the desktop
+to the virtual output is a configuration that names only it. Hermes captures the
+layout it found first, submits the exclusive one through `VERIFY` before
+applying it as temporary, and submits the captured layout again when the session
+ends. The captured layout is also written to
+`$XDG_STATE_HOME/hermes/saved-mutter-layout` before the monitors go dark - minus
+the virtual connector, which usually no longer exists after a crash - and
+replayed at the next start, so a crash mid-session cannot leave the screens off.
+
+**Mirroring works differently on GNOME than on KDE.** KWin clones by overlapping
+the virtual output with the primary one. Mutter refuses overlapping logical
+monitors, and clones by putting both connectors in a single logical monitor -
+which it accepts only when both advertise the same mode size. So a mirrored
+session on GNOME runs at the physical monitor's resolution rather than the one
+the client negotiated, and if the virtual output does not advertise that
+resolution, Hermes says so and keeps the extended layout.
 
 ### wlroots compositors — expected to work
 
@@ -410,8 +484,8 @@ rule is for isolated testing only; remove it for streaming.
 for a portrait mode such as 1440x2560 fails validation with `-EINVAL`. This
 affects tablets and phones streaming in portrait orientation.
 
-**Exclusive mode is KDE and wlroots only.** See
-[GNOME / Mutter](#gnome--mutter--video-verified). On Hyprland the question
+**Exclusive mode is implemented for KDE, GNOME and wlroots.** See
+[GNOME / Mutter](#gnome--mutter--video-and-input-verified). On Hyprland the question
 does not arise: the headless output is not a DRM device — see
 [Hyprland](#hyprland--verified-through-its-own-headless-output).
 

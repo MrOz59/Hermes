@@ -33,6 +33,80 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   token remains valid from this machine and private/local networks.
 
 ### Added
+- A GNOME session now notices the desktop layout changing under it. Every
+  decision the display backend makes — which mode to drive, where the output
+  sits, what the offsets for absolute input are — comes from reading the monitor
+  state once, and GNOME rewrites that layout for reasons that have nothing to do
+  with streaming: another monitor plugged in, the Displays panel opened, a
+  stored configuration reapplied after a resume. The offsets then go quietly
+  wrong and the pointer goes back to landing in the wrong place, with nothing
+  failing. Hermes now holds a live subscription to `MonitorsChanged` over sd-bus
+  and, when the change actually moves an output or alters a mode, reinitialises
+  capture — which re-resolves the geometry and republishes the touch port
+  through the path that already exists for a resolution change, rather than a
+  new one of its own.
+
+  It deliberately does not put the layout back. If the mode or the position
+  changed, something — very likely the person at the keyboard — wanted it that
+  way, and a session that keeps overwriting the display settings while someone
+  is trying to change them is worse than one that follows. Unrelated
+  notifications are ignored by comparing the configuration a restore would
+  submit, so a backlight or privacy-screen change costs nothing. libsystemd is
+  an optional build dependency: without it everything else still works and a
+  mid-session change goes unnoticed, as before ([#22]).
+
+- Touch and pen input now land on the streamed display under GNOME. Mutter
+  routes an absolute pointer over the whole desktop, but binds a touchscreen or
+  a tablet to one monitor, and with nothing configured it guesses: by EDID, by
+  the device's physical size, and failing both a touchscreen falls back to the
+  built-in panel. So a client's touches went to the laptop screen, or stretched
+  across the whole desktop on a machine with no built-in panel - never to the
+  output being streamed, and with nothing in any log to say so. Hermes now
+  writes GNOME's per-device `output` key for its own virtual touch and pen
+  devices, naming the virtual monitor's EDID, and restores whatever the key held
+  before when the session ends.
+
+  Two things worth knowing. The key is addressed by the device's vendor and
+  product ids, which every Hermes device shares, so it is one binding per host
+  rather than per session: with concurrent sessions it points at whichever
+  output was activated last. And a binding left behind by a crash is harmless -
+  it names a monitor that no longer exists, so nothing matches it and the device
+  behaves as it did before - which is why this has no recovery file, unlike the
+  display layout. A monitor whose EDID carries characters that would need shell
+  escaping is refused rather than escaped; the cost is the fallback placement
+  that was there anyway ([#22]).
+
+- Exclusive mode and mirroring now work on GNOME. Both were recorded as
+  impossible there, which was wrong: `ApplyMonitorsConfig` takes the complete
+  list of logical monitors and Mutter disables every connected monitor absent
+  from that list, so handing the desktop to the virtual output is a
+  configuration naming only it. Hermes captures the layout it found, submits the
+  new one to Mutter's own `VERIFY` before applying it as temporary, and submits
+  the captured layout again when the session ends. Before the monitors go dark
+  it also writes a physical-only layout to
+  `$XDG_STATE_HOME/hermes/saved-mutter-layout` and replays it at the next start,
+  so a crash mid-session cannot leave a desktop with every screen off. The saved
+  layout deliberately omits the virtual connector, which after a crash usually
+  no longer exists - and a configuration naming a monitor Mutter cannot find is
+  rejected outright, which would defeat the point of the file.
+
+  Mirroring is not the same operation it is on KDE. KWin clones by overlapping
+  the virtual output with the primary one; Mutter refuses overlapping logical
+  monitors and clones by putting both connectors in a single logical monitor,
+  which it accepts only when both advertise the same mode size. So a mirrored
+  GNOME session runs at the physical monitor's resolution rather than the one
+  the client asked for, and where the virtual output does not advertise that
+  resolution Hermes says so and keeps the extended layout rather than applying
+  something else. The session assessment and the Audio/Video panel now report
+  exclusive mode as available on GNOME instead of unsupported ([#22]).
+
+- A per-app `virtual-display-layout` field in apps.json (`auto`, `extend`,
+  `mirror`, `exclusive`). It decides where a session's virtual display sits:
+  `mirror` overlaps the primary output so the desktop - including windows the
+  compositor places there, such as a nested Gamescope - is cloned into the
+  stream; `exclusive` hands the desktop to the virtual display for the
+  session; `extend` forces the default side-by-side placement; `auto`
+  follows the global "Use the Virtual Display exclusively" setting.
 - A session compositor profile for labwc, which does not yet help a Hermes-KMS
   session and says so. Hermes shipped one profile, weston, and weston
   takes KMS nodes only - for its display device and for its rendering device
@@ -520,6 +594,38 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- Absolute pointer input now lands on the streamed display under GNOME. Mutter
+  measures an absolute pointing device against the extents of the whole stage,
+  so a client's coordinates only arrive on the right monitor once they carry
+  that output's offset within the desktop envelope. Hermes resolved that
+  geometry through kscreen-doctor alone, which no GNOME session answers, and
+  only asked for it when `hermes_kms_multi_output` was on — a flag that is off
+  by default and unrelated to the question. On GNOME, where the physical outputs
+  cannot be turned off for the session, that left every stream measuring the
+  client's screen against the virtual output alone while the pointer moved over
+  a desktop several times wider: the reporter's 1600x1068 tablet stretched
+  across a 4160-wide desktop, putting its left-hand 61% on the physical monitor.
+  Geometry now comes from `org.gnome.Mutter.DisplayConfig` on GNOME, is asked
+  for on every shared desktop rather than only in multi-output mode, and is
+  resolved for the CPU-copy capture path as well, which never asked at all
+  ([#22]).
+
+  It is read from the logical monitor layout, which is the space the pointer is
+  measured in - so a scaled monitor counts as mode divided by scale and a
+  rotated one has its axes swapped - and returned in the streamed output's own
+  pixels, so coordinates that arrive in the captured mode's pixels need no
+  conversion.
+
+- A virtual output added to a scaled GNOME desktop is no longer placed past the
+  edge of the layout. The right edge it is butted against was computed from the
+  monitor's mode rather than from the layout rectangle, so at 200% the new
+  output was pushed twice as far right as it should be, leaving a gap - and
+  Mutter refuses a layout whose logical monitors are not all adjacent, so the
+  whole configuration was rejected rather than just the placement. Where the
+  backend demands a single scale for the desktop, the new output now adopts it
+  instead of asking for one of its own, which is refused for the same
+  all-or-nothing reason.
+
 - Five defects in the ext-image-copy-capture backend, found by reviewing it
   after it landed rather than before. The worst one disarmed the protection the
   backend was written around: `icc_capture()` overwrote the reinit that an

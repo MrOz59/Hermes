@@ -47,6 +47,9 @@
 #include <sys/un.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+#ifdef SUNSHINE_BUILD_SDBUS
+  #include <systemd/sd-bus.h>
+#endif
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
@@ -1865,9 +1868,11 @@ namespace VDISPLAY {
     if (facts.compositor == compositor_e::mutter) {
       add(
         feature_e::exclusive_mode,
-        readiness_e::unavailable,
-        "Mutter exposes no way to disable a physical output for the duration of a session.",
-        "Exclusive mode needs a KDE, wlroots or X11 session."
+        facts.mutter ? readiness_e::ready : readiness_e::unavailable,
+        facts.mutter ?
+          "GNOME, through ApplyMonitorsConfig: a config naming only the virtual output disables the rest." :
+          "GNOME is running but org.gnome.Mutter.DisplayConfig did not answer.",
+        facts.mutter ? "" : "Check that gnome-shell is running and that Hermes may reach the session bus."
       );
     } else if (!exclusive_mechanism) {
       add(feature_e::exclusive_mode, readiness_e::unavailable, "No protocol in this session can disable a physical output.");
@@ -2823,7 +2828,18 @@ namespace VDISPLAY {
 
     struct monitor_t {
       std::string connector;
+      // The rest of the monitor spec. GNOME identifies a monitor by these three
+      // when binding an input device to it, not by the connector.
+      std::string vendor;
+      std::string product;
+      std::string serial;
       std::vector<mode_t> modes;
+    };
+
+    /// Values of Mutter's "layout-mode" property.
+    enum class layout_mode_e : unsigned {
+      logical = 1,   ///< A logical monitor measures mode / scale.
+      physical = 2,  ///< A logical monitor measures the mode, whatever the scale.
     };
 
     struct state_t {
@@ -2831,6 +2847,10 @@ namespace VDISPLAY {
       std::map<std::string, std::string> current_mode;  ///< connector -> mode id
       std::vector<monitor_t> monitors;
       std::vector<logical_monitor_t> logical_monitors;
+      // Absence of "layout-mode" means it cannot be changed and that logical is
+      // in use, so that is the default rather than a guess.
+      layout_mode_e layout_mode {layout_mode_e::logical};
+      bool global_scale_required {false};
 
       const monitor_t *find_monitor(const std::string &connector) const {
         for (const auto &monitor : monitors) {
@@ -2841,22 +2861,65 @@ namespace VDISPLAY {
         return nullptr;
       }
 
-      /** Width of a logical monitor, taken from its first connector's current mode. */
-      int logical_width(const logical_monitor_t &lm) const {
+      const logical_monitor_t *find_logical_monitor(const std::string &connector) const {
+        for (const auto &lm : logical_monitors) {
+          if (std::find(lm.connectors.begin(), lm.connectors.end(), connector) != lm.connectors.end()) {
+            return &lm;
+          }
+        }
+        return nullptr;
+      }
+
+      static double scale_of(const logical_monitor_t &lm) {
+        const double scale = std::atof(lm.scale.c_str());
+        return scale > 0.0 ? scale : 1.0;
+      }
+
+      /**
+       * Size of a logical monitor in layout coordinates - the space the desktop,
+       * and therefore the pointer, is measured in.
+       *
+       * Mutter derives it from the current mode of the monitors assigned to it:
+       * a rotated transform swaps the axes, and in the logical layout mode the
+       * result is divided by the logical monitor's scale. Taking the mode size
+       * instead is only correct at scale 1 with no rotation.
+       */
+      bool logical_size(const logical_monitor_t &lm, int &width, int &height) const {
         if (lm.connectors.empty()) {
-          return 0;
+          return false;
         }
         const auto current = current_mode.find(lm.connectors.front());
         const auto *monitor = find_monitor(lm.connectors.front());
         if (current == current_mode.end() || !monitor) {
-          return 0;
+          return false;
         }
-        for (const auto &mode : monitor->modes) {
-          if (mode.id == current->second) {
-            return mode.width;
+        const mode_t *mode = nullptr;
+        for (const auto &candidate : monitor->modes) {
+          if (candidate.id == current->second) {
+            mode = &candidate;
+            break;
           }
         }
-        return 0;
+        if (!mode || mode->width <= 0 || mode->height <= 0) {
+          return false;
+        }
+
+        double w = mode->width;
+        double h = mode->height;
+        // Transforms 1, 3, 5 and 7 are the 90 and 270 degree rotations.
+        const int transform = std::atoi(lm.transform.c_str());
+        if (transform == 1 || transform == 3 || transform == 5 || transform == 7) {
+          std::swap(w, h);
+        }
+        if (layout_mode == layout_mode_e::logical) {
+          const double scale = scale_of(lm);
+          w /= scale;
+          h /= scale;
+        }
+
+        width = static_cast<int>(std::lround(w));
+        height = static_cast<int>(std::lround(h));
+        return width > 0 && height > 0;
       }
     };
 
@@ -3006,6 +3069,11 @@ namespace VDISPLAY {
         }
         monitor_t parsed_monitor;
         parsed_monitor.connector = connector;
+        if (spec_fields.size() >= 4) {
+          parsed_monitor.vendor = unquote_variant(spec_fields[1]);
+          parsed_monitor.product = unquote_variant(spec_fields[2]);
+          parsed_monitor.serial = unquote_variant(spec_fields[3]);
+        }
         for (const auto &mode_entry : split_variant(modes)) {
           std::string mode = mode_entry;
           if (!strip_variant(mode, '(', ')')) {
@@ -3075,6 +3143,29 @@ namespace VDISPLAY {
 
         if (!parsed.connectors.empty()) {
           out.logical_monitors.emplace_back(std::move(parsed));
+        }
+      }
+
+      // The properties dict carries the two flags that decide how a layout is
+      // measured and what scale a new logical monitor may take. Both are
+      // optional; the defaults in state_t are what their absence means.
+      std::string properties = top[3];
+      if (strip_variant(properties, '{', '}')) {
+        for (const auto &entry : split_variant(properties)) {
+          const size_t colon = entry.find(':');
+          if (colon == std::string::npos) {
+            continue;
+          }
+          const std::string key = unquote_variant(trim_variant(entry.substr(0, colon)));
+          std::string value = trim_variant(entry.substr(colon + 1));
+          strip_variant(value, '<', '>');
+          if (key == "layout-mode") {
+            if (std::atoi(numeric_variant(value).c_str()) == static_cast<int>(layout_mode_e::physical)) {
+              out.layout_mode = layout_mode_e::physical;
+            }
+          } else if (key == "global-scale-required") {
+            out.global_scale_required = numeric_variant(value) == "true";
+          }
         }
       }
 
@@ -3307,10 +3398,16 @@ namespace VDISPLAY {
       });
       if (owner == layout.end()) {
         int right_edge = 0;
+        // A layout is measured in logical pixels, so the right edge has to come
+        // from mode / scale. Using the mode size on a scaled desktop places the
+        // new monitor past the edge, which leaves a gap, and Mutter rejects a
+        // layout whose monitors are not all adjacent - taking the whole config
+        // down with it, not just our output.
         for (const auto &lm : layout) {
-          const int lm_width = state.logical_width(lm);
-          if (lm_width <= 0) {
-            // Without a width the placement cannot be made adjacent, and Mutter
+          int lm_width = 0;
+          int lm_height = 0;
+          if (!state.logical_size(lm, lm_width, lm_height)) {
+            // Without a size the placement cannot be made adjacent, and Mutter
             // would reject the whole config.
             return mode_push::unavailable;
           }
@@ -3319,7 +3416,13 @@ namespace VDISPLAY {
         logical_monitor_t added;
         added.x = std::to_string(right_edge);
         added.y = "0";
+        // Where the backend demands one scale for the whole desktop, a scale of
+        // our own is refused ("Logical monitor scales must be identical"), so
+        // adopt whatever the existing monitors carry.
         added.scale = "1.0";
+        if (state.global_scale_required && !layout.empty() && !layout.front().scale.empty()) {
+          added.scale = layout.front().scale;
+        }
         added.transform = "0";
         added.primary = layout.empty() ? "true" : "false";
         added.connectors.emplace_back(connector);
@@ -3433,6 +3536,876 @@ namespace VDISPLAY {
       BOOST_LOG(warning) << "[VDISPLAY/Mutter] " << connector << " never appeared in Mutter's monitor state.";
       return false;
     }
+
+    /**
+     * Where @p connector sits on the desktop, for absolute pointer input.
+     *
+     * Mutter feeds an absolute pointing device the extents of the whole stage,
+     * so a client's coordinates only land on the streamed output once they
+     * carry that output's offset within the desktop envelope. Both are read
+     * from the logical monitor layout, which is what the stage is measured in;
+     * Mutter anchors that layout at the origin, so the envelope is simply the
+     * far edge of the furthest monitor.
+     *
+     * The numbers are returned in the virtual output's own pixel space rather
+     * than in logical pixels. The client's coordinates arrive in the mode's
+     * pixels, and the consumer only ever forms the ratio
+     * (offset + x) / envelope, so scaling offset and envelope by this monitor's
+     * scale keeps that ratio exact while letting x stay in the units the
+     * capture path already uses. At scale 1 - every desktop that does not use
+     * fractional or integer scaling - this is the identity.
+     *
+     * @return true when the connector is in Mutter's layout and the envelope
+     *         could be measured.
+     */
+    static bool geometry_from_state(const state_t &state,
+                                    const std::string &connector,
+                                    int &x, int &y,
+                                    int &env_width, int &env_height) {
+      if (connector.empty()) {
+        return false;
+      }
+
+      const logical_monitor_t *owner = state.find_logical_monitor(connector);
+      if (!owner) {
+        BOOST_LOG(debug) << "[VDISPLAY/Mutter] " << connector
+                         << " is not in the monitor layout; absolute input has no offset to apply.";
+        return false;
+      }
+
+      double envelope_width = 0.0;
+      double envelope_height = 0.0;
+      for (const auto &lm : state.logical_monitors) {
+        int lm_width = 0;
+        int lm_height = 0;
+        if (!state.logical_size(lm, lm_width, lm_height)) {
+          return false;
+        }
+        envelope_width = std::max(envelope_width, static_cast<double>(std::atoi(lm.x.c_str()) + lm_width));
+        envelope_height = std::max(envelope_height, static_cast<double>(std::atoi(lm.y.c_str()) + lm_height));
+      }
+      if (envelope_width <= 0.0 || envelope_height <= 0.0) {
+        return false;
+      }
+
+      // Only the logical layout mode divides the mode by the scale; in the
+      // physical one the layout already counts mode pixels and there is nothing
+      // to convert.
+      const double scale =
+        state.layout_mode == layout_mode_e::logical ? state_t::scale_of(*owner) : 1.0;
+      x = static_cast<int>(std::lround(std::atoi(owner->x.c_str()) * scale));
+      y = static_cast<int>(std::lround(std::atoi(owner->y.c_str()) * scale));
+      env_width = static_cast<int>(std::lround(envelope_width * scale));
+      env_height = static_cast<int>(std::lround(envelope_height * scale));
+      return env_width > 0 && env_height > 0;
+    }
+
+    static bool geometry(const std::string &connector, int &x, int &y, int &env_width, int &env_height) {
+      if (!available() || connector.empty()) {
+        return false;
+      }
+
+      state_t state;
+      if (!parse_current_state(command_output(get_current_state_command), state)) {
+        return false;
+      }
+      return geometry_from_state(state, connector, x, y, env_width, env_height);
+    }
+
+    // ------------------------------------------------------------------
+    // Session layout: exclusive and mirror.
+    //
+    // ApplyMonitorsConfig takes the complete list of logical monitors, and
+    // Mutter disables every connected monitor absent from that list
+    // (create_disabled_monitor_specs_for_config). So exclusive mode is a config
+    // carrying nothing but the virtual output, and there is no separate
+    // "disable this output" call to look for.
+    //
+    // Mirror is not a position. Mutter refuses overlapping logical monitors, so
+    // cloning means one logical monitor holding both connectors - and it
+    // refuses that too unless their modes have identical dimensions, which is
+    // why this can only mirror at a resolution the virtual output advertises.
+    // ------------------------------------------------------------------
+
+    struct layout_state_t {
+      /// The config that puts the layout back as it was found, virtual output included.
+      std::string restore_argument;
+      /// Set once a session layout was applied and a restore is owed.
+      bool active {false};
+    };
+
+    static std::mutex layouts_mutex;
+    static std::map<std::string, layout_state_t> layouts;
+
+    /**
+     * Every character a config built by build_apply_argument() can contain.
+     * The argument is interpolated into a gdbus command line, and one read back
+     * from disk has not been through that builder, so it is checked before use.
+     */
+    static bool safe_apply_argument(const std::string &argument) {
+      if (argument.empty() || argument.size() > 8192) {
+        return false;
+      }
+      return std::all_of(argument.begin(), argument.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
+               c == '\'' || c == ',' || c == ' ' || c == '.' || c == '-' || c == '_' || c == '@' ||
+               c == '+' || c == ':';
+      });
+    }
+
+    static std::string recovery_state_file() {
+      const char *xdg_state = std::getenv("XDG_STATE_HOME");
+      const char *home = std::getenv("HOME");
+      std::string base;
+      if (xdg_state && xdg_state[0]) {
+        base = std::string {xdg_state} + "/hermes";
+      } else if (home && home[0]) {
+        base = std::string {home} + "/.local/state/hermes";
+      } else {
+        return {};
+      }
+
+      std::error_code ec;
+      fs::create_directories(base, ec);
+      return base + "/saved-mutter-layout";
+    }
+
+    /**
+     * Persist the layout to fall back to if Hermes dies while the physical
+     * monitors are off. It deliberately excludes the virtual connector: after a
+     * crash the connector is usually gone, and a config naming a monitor Mutter
+     * cannot find is rejected outright - which would leave the screens dark for
+     * exactly the reason the file exists.
+     */
+    static void write_recovery_state(const std::string &reply, const std::string &virtual_connector) {
+      state_t ignored;
+      std::string argument;
+      if (build_layout_without(reply, virtual_connector, ignored, argument) != layout_repair::ready ||
+          !safe_apply_argument(argument)) {
+        BOOST_LOG(warning) << "[VDISPLAY/Mutter] No physical-only layout to fall back on; a crash while the "
+                              "monitors are off would leave them off.";
+        return;
+      }
+
+      const auto path = recovery_state_file();
+      if (path.empty()) {
+        return;
+      }
+      const auto temporary_path = path + ".tmp";
+      {
+        std::ofstream file {temporary_path, std::ios::binary | std::ios::trunc};
+        if (!file) {
+          return;
+        }
+        file << argument << '\n';
+      }
+      std::error_code ec;
+      fs::rename(temporary_path, path, ec);
+      if (ec) {
+        fs::remove(temporary_path, ec);
+      }
+    }
+
+    static void clear_recovery_state() {
+      const auto path = recovery_state_file();
+      if (path.empty()) {
+        return;
+      }
+      std::error_code ec;
+      fs::remove(path, ec);
+    }
+
+    /** Submit @p argument against a freshly read serial. */
+    static bool apply_argument(const std::string &argument) {
+      if (!safe_apply_argument(argument)) {
+        return false;
+      }
+      state_t state;
+      if (!parse_current_state(command_output(get_current_state_command), state)) {
+        BOOST_LOG(warning) << "[VDISPLAY/Mutter] Could not read the monitor state to apply a layout.";
+        return false;
+      }
+      if (!run_apply(state, argument, apply_method::verify)) {
+        return false;
+      }
+      return run_apply(state, argument, apply_method::temporary);
+    }
+
+    static void recover_on_startup() {
+      if (!available()) {
+        return;
+      }
+      const auto path = recovery_state_file();
+      if (path.empty()) {
+        return;
+      }
+      std::string argument;
+      {
+        std::ifstream file {path};
+        if (!file) {
+          return;
+        }
+        std::getline(file, argument);
+      }
+      if (argument.empty()) {
+        clear_recovery_state();
+        return;
+      }
+      if (!safe_apply_argument(argument)) {
+        BOOST_LOG(warning) << "[VDISPLAY/Mutter] Discarding an unreadable saved layout.";
+        clear_recovery_state();
+        return;
+      }
+
+      state_t state;
+      if (!parse_current_state(command_output(get_current_state_command), state)) {
+        // Mutter did not answer; this is not evidence the layout is stale.
+        BOOST_LOG(warning) << "[VDISPLAY/Mutter] Startup recovery deferred: Mutter did not answer.";
+        return;
+      }
+
+      BOOST_LOG(info) << "[VDISPLAY/Mutter] Recovering the display layout a previous session left behind.";
+      if (run_apply(state, argument, apply_method::verify) &&
+          run_apply(state, argument, apply_method::temporary)) {
+        clear_recovery_state();
+        return;
+      }
+      // Mutter answered and refused: the layout no longer describes this
+      // desktop, and Mutter has already configured something for it. Keeping
+      // the file would retry the same rejection every start.
+      BOOST_LOG(warning) << "[VDISPLAY/Mutter] The saved layout no longer applies to this desktop; discarding it.";
+      clear_recovery_state();
+    }
+
+    enum class layout_change {
+      unavailable,  ///< The reply did not parse, or the connector is not driven.
+      unsupported,  ///< The change cannot be expressed on this desktop.
+      already_set,  ///< The layout already is what was asked for.
+      ready,        ///< `argument` holds the config to submit.
+    };
+
+    /** The config that reproduces @p state exactly, for undoing a session layout. */
+    static bool build_restore_layout(const state_t &state, std::string &argument) {
+      return build_apply_argument(state, state.logical_monitors, argument);
+    }
+
+    /**
+     * The config that leaves @p connector alone on the desktop. Every other
+     * connected monitor is disabled by being left out of the list, which is how
+     * Mutter reads a config it is handed.
+     */
+    static layout_change build_exclusive_layout(const std::string &reply,
+                                                const std::string &connector,
+                                                state_t &state,
+                                                std::string &argument) {
+      state = {};
+      argument.clear();
+      if (reply.empty() || connector.empty() || !parse_current_state(reply, state)) {
+        return layout_change::unavailable;
+      }
+      if (state.current_mode.find(connector) == state.current_mode.end()) {
+        // Nothing is being scanned out on it, so there is no mode to name and
+        // handing it the desktop would black the session out.
+        return layout_change::unsupported;
+      }
+
+      const logical_monitor_t *owner = state.find_logical_monitor(connector);
+      if (owner && state.logical_monitors.size() == 1 && owner->connectors.size() == 1) {
+        return layout_change::already_set;
+      }
+
+      logical_monitor_t only;
+      only.x = "0";
+      only.y = "0";
+      // Keep the scale Mutter already drives it at: one of our own can fail the
+      // "mode divided by scale must be a whole number" check and take the
+      // whole config with it.
+      only.scale = owner ? owner->scale : std::string {"1.0"};
+      only.transform = owner ? owner->transform : std::string {"0"};
+      only.primary = "true";
+      only.connectors.emplace_back(connector);
+
+      return build_apply_argument(state, {only}, argument) ? layout_change::ready :
+                                                             layout_change::unavailable;
+    }
+
+    /**
+     * The config that clones the primary output onto @p connector by putting
+     * both in one logical monitor - the only form of mirroring Mutter accepts,
+     * and only at a mode size both advertise.
+     */
+    static layout_change build_mirror_layout(const std::string &reply,
+                                             const std::string &connector,
+                                             state_t &state,
+                                             std::string &argument,
+                                             int *mirrored_width = nullptr,
+                                             int *mirrored_height = nullptr) {
+      state = {};
+      argument.clear();
+      if (reply.empty() || connector.empty() || !parse_current_state(reply, state)) {
+        return layout_change::unavailable;
+      }
+
+      // The monitor to clone: the primary one that is not ours, else the first.
+      const logical_monitor_t *target = nullptr;
+      for (const auto &lm : state.logical_monitors) {
+        if (std::find(lm.connectors.begin(), lm.connectors.end(), connector) != lm.connectors.end()) {
+          if (lm.connectors.size() > 1) {
+            return layout_change::already_set;  // already sharing a logical monitor
+          }
+          continue;
+        }
+        if (!target || lm.primary == "true") {
+          target = &lm;
+        }
+      }
+      if (!target || target->connectors.empty()) {
+        return layout_change::unsupported;
+      }
+
+      const auto target_mode_id = state.current_mode.find(target->connectors.front());
+      const auto *target_monitor = state.find_monitor(target->connectors.front());
+      if (target_mode_id == state.current_mode.end() || !target_monitor) {
+        return layout_change::unavailable;
+      }
+      const mode_t *target_mode = nullptr;
+      for (const auto &mode : target_monitor->modes) {
+        if (mode.id == target_mode_id->second) {
+          target_mode = &mode;
+          break;
+        }
+      }
+      if (!target_mode) {
+        return layout_change::unavailable;
+      }
+
+      // Mutter refuses a logical monitor whose monitors do not share the mode
+      // dimensions, so the virtual output has to advertise this exact size.
+      const monitor_t *virtual_monitor = state.find_monitor(connector);
+      if (!virtual_monitor) {
+        return layout_change::unavailable;
+      }
+      const mode_t *chosen = nullptr;
+      for (const auto &mode : virtual_monitor->modes) {
+        if (mode.width != target_mode->width || mode.height != target_mode->height) {
+          continue;
+        }
+        if (!chosen ||
+            std::abs(mode.refresh - target_mode->refresh) < std::abs(chosen->refresh - target_mode->refresh)) {
+          chosen = &mode;
+        }
+      }
+      if (!chosen) {
+        return layout_change::unsupported;
+      }
+
+      if (mirrored_width) {
+        *mirrored_width = target_mode->width;
+      }
+      if (mirrored_height) {
+        *mirrored_height = target_mode->height;
+      }
+
+      // Take the connector out of wherever it sits and add it to the target,
+      // dropping a logical monitor that held nothing else. The target is
+      // identified by its leading connector, which the virtual one is not.
+      const std::string target_connector = target->connectors.front();
+      std::vector<logical_monitor_t> layout;
+      bool mirrored = false;
+      for (auto lm : state.logical_monitors) {
+        lm.connectors.erase(
+          std::remove(lm.connectors.begin(), lm.connectors.end(), connector),
+          lm.connectors.end()
+        );
+        if (lm.connectors.empty()) {
+          continue;
+        }
+        if (lm.connectors.front() == target_connector) {
+          lm.connectors.emplace_back(connector);
+          mirrored = true;
+        }
+        layout.emplace_back(std::move(lm));
+      }
+      if (layout.empty() || !mirrored) {
+        return layout_change::unavailable;
+      }
+
+      return build_apply_argument(state, layout, argument, {{connector, chosen->id}}) ?
+               layout_change::ready :
+               layout_change::unavailable;
+    }
+
+    /**
+     * Hand the desktop to @p connector for the session: a config carrying only
+     * its logical monitor, which disables every physical output by omission.
+     *
+     * Called at SESSION START, never at display creation - the local screens
+     * must not go dark before a stream is live.
+     */
+    static bool make_exclusive(const std::string &display_name, const std::string &connector) {
+      if (!available() || connector.empty()) {
+        return false;
+      }
+
+      const auto reply = command_output(get_current_state_command);
+      state_t state;
+      std::string argument;
+      switch (build_exclusive_layout(reply, connector, state, argument)) {
+        case layout_change::already_set:
+          BOOST_LOG(info) << "[VDISPLAY/Mutter] " << connector << " already has the desktop to itself.";
+          return true;
+        case layout_change::unsupported:
+          BOOST_LOG(warning) << "[VDISPLAY/Mutter] " << connector
+                             << " is not being driven; refusing to hand it the desktop.";
+          return false;
+        case layout_change::unavailable:
+          BOOST_LOG(warning) << "[VDISPLAY/Mutter] Could not read the monitor state; leaving the layout alone.";
+          return false;
+        case layout_change::ready:
+          break;
+      }
+
+      std::string restore_argument;
+      if (!build_restore_layout(state, restore_argument)) {
+        BOOST_LOG(warning) << "[VDISPLAY/Mutter] Refusing exclusive mode: the current layout could not be "
+                              "captured, so it could not be put back.";
+        return false;
+      }
+
+      // Written before the monitors go dark, so a crash between the two leaves
+      // something for the next start to work from.
+      write_recovery_state(reply, connector);
+
+      if (!run_apply(state, argument, apply_method::verify) ||
+          !run_apply(state, argument, apply_method::temporary)) {
+        BOOST_LOG(warning) << "[VDISPLAY/Mutter] GNOME refused the exclusive layout; the physical outputs stay on.";
+        clear_recovery_state();
+        return false;
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(layouts_mutex);
+        layouts[display_name] = {.restore_argument = std::move(restore_argument), .active = true};
+      }
+      BOOST_LOG(info) << "[VDISPLAY/Mutter] " << connector << " has the desktop for this session.";
+      return true;
+    }
+
+    /**
+     * Clone the primary output onto @p connector by putting both in one logical
+     * monitor, which is the only thing Mutter accepts as mirroring.
+     *
+     * The shared logical monitor takes the primary's mode size, so this only
+     * works at a resolution @p connector advertises - and the stream then runs
+     * at that resolution rather than the one the client negotiated.
+     */
+    static bool apply_mirror(const std::string &display_name, const std::string &connector) {
+      if (!available() || connector.empty()) {
+        return false;
+      }
+
+      state_t state;
+      std::string argument;
+      int mirrored_width = 0;
+      int mirrored_height = 0;
+      switch (build_mirror_layout(
+        command_output(get_current_state_command), connector, state, argument, &mirrored_width, &mirrored_height
+      )) {
+        case layout_change::already_set:
+          return true;
+        case layout_change::unsupported:
+          BOOST_LOG(warning) << "[VDISPLAY/Mutter] Cannot mirror onto " << connector
+                             << ": GNOME clones by putting both outputs in one logical monitor, which requires "
+                                "them to advertise the same mode size. The session keeps the extended layout.";
+          return false;
+        case layout_change::unavailable:
+          BOOST_LOG(warning) << "[VDISPLAY/Mutter] Could not read the monitor state; not mirroring.";
+          return false;
+        case layout_change::ready:
+          break;
+      }
+
+      std::string restore_argument;
+      if (!build_restore_layout(state, restore_argument)) {
+        return false;
+      }
+
+      if (!run_apply(state, argument, apply_method::verify) ||
+          !run_apply(state, argument, apply_method::temporary)) {
+        BOOST_LOG(warning) << "[VDISPLAY/Mutter] GNOME refused the mirrored layout; the outputs stay as they were.";
+        return false;
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(layouts_mutex);
+        layouts[display_name] = {.restore_argument = std::move(restore_argument), .active = true};
+      }
+      BOOST_LOG(info) << "[VDISPLAY/Mutter] Mirroring onto " << connector << " at " << mirrored_width << 'x'
+                      << mirrored_height << "; the stream runs at that resolution, not the one the client asked for.";
+      return true;
+    }
+
+    // ------------------------------------------------------------------
+    // Input device mapping.
+    //
+    // Mutter measures an absolute *pointer* against the whole desktop, but a
+    // touchscreen or a tablet is bound to one monitor by MetaInputMapper. With
+    // nothing configured it guesses - by EDID, by the device's physical size,
+    // and failing both a touchscreen falls back to the built-in panel. On a
+    // laptop that pins the client's touches to the laptop screen; on a desktop
+    // with no built-in panel nothing matches and the device stretches over the
+    // whole desktop. Neither is the streamed output.
+    //
+    // The deterministic control is the per-device "output" key: a list of at
+    // least three strings compared against the monitor's EDID vendor, product
+    // and serial (meta-input-mapper.c, match_config). Hermes owns the vendor
+    // and product ids of its virtual devices, so it can write the key for
+    // exactly its own and leave every real device alone.
+    //
+    // A mapping left behind by a crash is harmless: it names a monitor that no
+    // longer exists, no monitor matches it, and the device falls back to what
+    // it would have done anyway. That is why there is no recovery file here,
+    // unlike the layout.
+    //
+    // The binding is per vendor:product, and every Hermes device carries the
+    // same pair, so it is one binding for the host rather than one per session.
+    // With concurrent sessions it therefore points at whichever output was
+    // activated last. That is a limit of how GNOME addresses devices, not a
+    // choice made here - and it is still an improvement on the guess, which is
+    // wrong for every session.
+    // ------------------------------------------------------------------
+
+    struct device_settings_t {
+      const char *schema;
+      const char *group;
+    };
+
+    /// Touch and pen land in different schemas: Mutter groups touchscreens
+    /// separately from the tablet family, which the pen belongs to.
+    static constexpr device_settings_t touch_settings {
+      "org.gnome.desktop.peripherals.touchscreen", "touchscreens"
+    };
+    static constexpr device_settings_t pen_settings {
+      "org.gnome.desktop.peripherals.tablet", "tablets"
+    };
+
+    /// `<schema>:<path>`, the form gsettings takes for a relocatable schema.
+    static std::string device_settings_target(const device_settings_t &device) {
+      char ids[16] = {};
+      // Mutter formats the path with %.4x, so lowercase hex, at least 4 digits.
+      std::snprintf(ids, sizeof(ids), "%.4x:%.4x", VIRTUAL_INPUT_SETTINGS_VENDOR_ID, VIRTUAL_INPUT_SETTINGS_PRODUCT_ID);
+      return std::string {device.schema} + ":/org/gnome/desktop/peripherals/" + device.group + "/" + ids + "/";
+    }
+
+    /**
+     * EDID strings come from the monitor, so they reach a command line only
+     * after being checked. A quote or a backslash is refused rather than
+     * escaped: a monitor whose name needs escaping is not worth the risk of
+     * getting the escaping wrong, and the cost of refusing is the fallback
+     * behaviour we already had.
+     */
+    static bool safe_edid_field(const std::string &value) {
+      return value.size() <= 128 && std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == ' ' || c == '-' || c == '_' || c == '.' || c == ':' ||
+               c == '+' || c == '/' || c == '(' || c == ')' || c == ',';
+      });
+    }
+
+    /**
+     * The `output` value that binds a device to @p connector, or empty when the
+     * monitor's identity cannot be spelled safely.
+     *
+     * The connector is appended as a fourth element, which Mutter uses to
+     * disambiguate two monitors sharing an EDID.
+     */
+    static std::string device_output_value(const state_t &state, const std::string &connector) {
+      const monitor_t *monitor = state.find_monitor(connector);
+      if (!monitor) {
+        return {};
+      }
+      if (!safe_edid_field(monitor->vendor) || !safe_edid_field(monitor->product) ||
+          !safe_edid_field(monitor->serial) || !safe_variant_token(monitor->connector)) {
+        return {};
+      }
+      // A binding whose three EDID fields are all empty is read as "not
+      // configured", so it would bind nothing while still counting as a user
+      // value - the worst of both.
+      if (monitor->vendor.empty() && monitor->product.empty() && monitor->serial.empty()) {
+        return {};
+      }
+      return "['" + monitor->vendor + "', '" + monitor->product + "', '" + monitor->serial + "', '" +
+             monitor->connector + "']";
+    }
+
+    struct input_mapping_t {
+      bool active {false};
+      /// What the key held before, so it can be put back rather than reset when
+      /// the user had configured one.
+      std::string previous_touch;
+      std::string previous_pen;
+    };
+
+    static std::mutex input_mapping_mutex;
+    static input_mapping_t input_mapping;
+
+    static std::string read_device_setting(const device_settings_t &device) {
+      const std::string command = "gsettings get " + device_settings_target(device) + " output 2>/dev/null";
+      return trim_variant(command_output(command.c_str()));
+    }
+
+    static bool write_device_setting(const device_settings_t &device, const std::string &value) {
+      const std::string command = "gsettings set " + device_settings_target(device) + " output \"" + value +
+                                  "\" 2>/dev/null";
+      return std::system(command.c_str()) == 0;
+    }
+
+    static void reset_device_setting(const device_settings_t &device) {
+      const std::string command = "gsettings reset " + device_settings_target(device) + " output 2>/dev/null";
+      (void) std::system(command.c_str());
+    }
+
+    /** The unset value of the key, which restore turns back into a reset. */
+    static bool is_unset_output_value(const std::string &value) {
+      return value.empty() || value == "['', '', '']" || value == "@as []" || value == "[]";
+    }
+
+    /**
+     * Bind the touch and pen devices to @p connector for the session.
+     *
+     * Best effort by design: a failure costs the session its touch placement,
+     * not its stream, so it is logged and the stream goes on.
+     */
+    static void map_input_devices(const std::string &connector) {
+      if (!available() || connector.empty()) {
+        return;
+      }
+
+      state_t state;
+      if (!parse_current_state(command_output(get_current_state_command), state)) {
+        return;
+      }
+      const auto value = device_output_value(state, connector);
+      if (value.empty()) {
+        BOOST_LOG(warning) << "[VDISPLAY/Mutter] Cannot bind touch input to " << connector
+                           << ": its monitor identity is missing or cannot be spelled safely. Touches will "
+                              "land wherever GNOME guesses.";
+        return;
+      }
+
+      std::lock_guard<std::mutex> lock(input_mapping_mutex);
+      if (!input_mapping.active) {
+        input_mapping.previous_touch = read_device_setting(touch_settings);
+        input_mapping.previous_pen = read_device_setting(pen_settings);
+      }
+      const bool touch_ok = write_device_setting(touch_settings, value);
+      const bool pen_ok = write_device_setting(pen_settings, value);
+      if (!touch_ok && !pen_ok) {
+        BOOST_LOG(warning) << "[VDISPLAY/Mutter] Could not bind the virtual touch devices to " << connector
+                           << "; is gsettings available in this session?";
+        return;
+      }
+      input_mapping.active = true;
+      BOOST_LOG(info) << "[VDISPLAY/Mutter] Touch and pen input bound to " << connector << '.';
+    }
+
+    /** Undo map_input_devices(), putting a user's own binding back if there was one. */
+    static void unmap_input_devices() {
+      std::lock_guard<std::mutex> lock(input_mapping_mutex);
+      if (!input_mapping.active) {
+        return;
+      }
+      const auto put_back = [](const device_settings_t &device, const std::string &previous) {
+        // A value read back from the store has not been through our builder, so
+        // anything that could not have come out of it is reset rather than
+        // written to a command line.
+        if (is_unset_output_value(previous) || !safe_apply_argument(previous)) {
+          reset_device_setting(device);
+        } else {
+          write_device_setting(device, previous);
+        }
+      };
+      put_back(touch_settings, input_mapping.previous_touch);
+      put_back(pen_settings, input_mapping.previous_pen);
+      input_mapping = {};
+      BOOST_LOG(info) << "[VDISPLAY/Mutter] Released the touch and pen input binding.";
+    }
+
+    /** Put back the layout that was captured before the session changed it. */
+    static void restore(const std::string &display_name) {
+      std::string argument;
+      {
+        std::lock_guard<std::mutex> lock(layouts_mutex);
+        const auto it = layouts.find(display_name);
+        if (it == layouts.end() || !it->second.active) {
+          return;
+        }
+        argument = it->second.restore_argument;
+        layouts.erase(it);
+      }
+
+      if (apply_argument(argument)) {
+        clear_recovery_state();
+        BOOST_LOG(info) << "[VDISPLAY/Mutter] Restored the display layout the session found.";
+        return;
+      }
+      BOOST_LOG(warning) << "[VDISPLAY/Mutter] Could not restore the display layout; keeping the recovery state "
+                            "so the next start can.";
+    }
+
+    // ------------------------------------------------------------------
+    // Watching the layout.
+    //
+    // Everything above reads GetCurrentState once and acts on the answer. That
+    // answer has a shelf life: GNOME rewrites the layout for reasons that have
+    // nothing to do with streaming - another monitor is plugged in, the
+    // Displays panel is opened, a stored configuration is reapplied after a
+    // resume - and any of those can move our output, change its mode, or
+    // replace the temporary configuration a session applied. The offsets the
+    // capture path computed at session start are then quietly wrong, and the
+    // pointer goes back to landing in the wrong place with nothing to show for
+    // it.
+    //
+    // MonitorsChanged is the compositor telling us exactly that. It costs
+    // nothing until it fires, unlike re-reading the state on a timer, which is
+    // a subprocess per tick for a whole session.
+    //
+    // What this deliberately does NOT do is put the layout back. If the mode or
+    // the layout changed under us, something - very likely the user - wanted
+    // it that way, and a session that keeps overwriting the display settings
+    // while someone is trying to change them is worse than one that follows.
+    // So it records the change and lets the capture path pick the new geometry
+    // up; the resolution the client sees follows the compositor.
+    // ------------------------------------------------------------------
+
+    /// Bumped whenever the desktop layout changes in a way that moves outputs
+    /// or changes their modes. A capture that started at an older value has
+    /// stale geometry and reinitialises.
+    static std::atomic<uint64_t> layout_generation {1};
+
+#ifdef SUNSHINE_BUILD_SDBUS
+    struct watcher_t {
+      sd_bus *bus {nullptr};
+      sd_bus_slot *slot {nullptr};
+      std::thread thread;
+      std::atomic<bool> stop {false};
+      /// The layout as last seen, in the form a restore would submit: it spells
+      /// out every monitor's position, scale, transform and current mode, so
+      /// comparing it catches every change that matters here and ignores the
+      /// ones that do not (a monitor's backlight, a privacy screen).
+      std::string signature;
+    };
+
+    static std::mutex watcher_mutex;
+    static std::unique_ptr<watcher_t> watcher;
+
+    /// Read the current layout signature; empty when it cannot be read.
+    static std::string layout_signature() {
+      state_t state;
+      std::string signature;
+      if (!parse_current_state(command_output(get_current_state_command), state) ||
+          !build_restore_layout(state, signature)) {
+        return {};
+      }
+      return signature;
+    }
+
+    static int on_monitors_changed(sd_bus_message * /* message */, void *userdata, sd_bus_error * /* error */) {
+      auto *state = static_cast<watcher_t *>(userdata);
+      const auto signature = layout_signature();
+      if (signature.empty() || signature == state->signature) {
+        // Unreadable, or a change that does not touch any geometry we use.
+        return 0;
+      }
+      state->signature = signature;
+      layout_generation.fetch_add(1, std::memory_order_relaxed);
+      BOOST_LOG(info) << "[VDISPLAY/Mutter] The desktop layout changed; capture will pick up the new geometry.";
+      return 0;
+    }
+
+    /** Start watching, replacing any previous watch. Best effort. */
+    static void watch_layout() {
+      if (!available()) {
+        return;
+      }
+
+      std::lock_guard<std::mutex> lock(watcher_mutex);
+      if (watcher) {
+        return;  // already watching; one subscription serves every display
+      }
+
+      auto started = std::make_unique<watcher_t>();
+      if (sd_bus_open_user(&started->bus) < 0 || !started->bus) {
+        BOOST_LOG(debug) << "[VDISPLAY/Mutter] No session bus to watch for layout changes.";
+        return;
+      }
+      started->signature = layout_signature();
+
+      const int matched = sd_bus_match_signal(
+        started->bus,
+        &started->slot,
+        "org.gnome.Mutter.DisplayConfig",
+        "/org/gnome/Mutter/DisplayConfig",
+        "org.gnome.Mutter.DisplayConfig",
+        "MonitorsChanged",
+        on_monitors_changed,
+        started.get()
+      );
+      if (matched < 0) {
+        BOOST_LOG(warning) << "[VDISPLAY/Mutter] Could not subscribe to MonitorsChanged: "
+                           << std::strerror(-matched)
+                           << ". A layout change mid-session will go unnoticed.";
+        sd_bus_unref(started->bus);
+        return;
+      }
+
+      watcher_t *raw = started.get();
+      started->thread = std::thread([raw]() {
+        while (!raw->stop.load(std::memory_order_relaxed)) {
+          const int processed = sd_bus_process(raw->bus, nullptr);
+          if (processed < 0) {
+            break;
+          }
+          if (processed > 0) {
+            continue;  // more may be queued
+          }
+          // A bounded wait rather than an indefinite one, so stopping does not
+          // need a second wakeup channel.
+          if (sd_bus_wait(raw->bus, 250000 /* us */) < 0) {
+            break;
+          }
+        }
+      });
+      watcher = std::move(started);
+      BOOST_LOG(info) << "[VDISPLAY/Mutter] Watching the desktop layout for changes.";
+    }
+
+    static void unwatch_layout() {
+      std::unique_ptr<watcher_t> stopping;
+      {
+        std::lock_guard<std::mutex> lock(watcher_mutex);
+        stopping = std::move(watcher);
+      }
+      if (!stopping) {
+        return;
+      }
+      stopping->stop.store(true, std::memory_order_relaxed);
+      if (stopping->thread.joinable()) {
+        stopping->thread.join();
+      }
+      if (stopping->slot) {
+        sd_bus_slot_unref(stopping->slot);
+      }
+      if (stopping->bus) {
+        sd_bus_unref(stopping->bus);
+      }
+    }
+#else
+    // Without sd-bus there is no subscription to hold, so the generation never
+    // moves and every capture keeps the geometry it started with.
+    static void watch_layout() {}
+
+    static void unwatch_layout() {}
+#endif
   }  // namespace mutter
 
   EvdiBuffer::EvdiBuffer(uint32_t width, uint32_t height):
@@ -3860,12 +4833,13 @@ namespace VDISPLAY {
       }
     }
 #endif
-    // GNOME/Mutter: Hermes cannot push a layout, but it can verify Mutter has
-    // adopted the virtual output. Report this so diagnostics make the limited
-    // (verify-only, no exclusive layout) support explicit.
+    // GNOME/Mutter drives the output through ApplyMonitorsConfig, which takes
+    // the whole layout: a config naming only the virtual output turns the
+    // physical ones off, so exclusive mode is available here too.
     if (window_system == window_system_e::WAYLAND && output_layout_backend == "unavailable" &&
         mutter::available()) {
-      output_layout_backend = "mutter-displayconfig (verify-only)";
+      output_layout_backend = "mutter-displayconfig";
+      exclusive_layout_supported = true;
     }
     EvdiStatus status {
       .diagnostic = getEvdiDiagnostic(),
@@ -4450,6 +5424,7 @@ namespace VDISPLAY {
     }
 
     kscreen::recover_on_startup();
+    mutter::recover_on_startup();
 
     if (backend == VirtualDisplayBackend::HERMES_KMS) {
       evdi_available = false;
@@ -4535,6 +5510,9 @@ namespace VDISPLAY {
     }
 
     BOOST_LOG(info) << "[VDISPLAY] Closing Linux virtual display driver...";
+    // Before the displays go: the watch outlives any single one of them,
+    // and its thread holds a bus connection.
+    mutter::unwatch_layout();
 
     // Stop watchdog thread
     watchdog_running = false;
@@ -4569,6 +5547,8 @@ namespace VDISPLAY {
           ::close(vdinfo.drm_fd);
         }
         kscreen::restore(vdinfo.name);
+        mutter::restore(vdinfo.name);
+        mutter::unmap_input_devices();
       }
       hermes_kms::forget_secret(vdinfo.session_token.data(), sizeof(vdinfo.session_token));
     }
@@ -4988,6 +5968,8 @@ namespace VDISPLAY {
     }
     hermes_kms::forget_secret(vdinfo.session_token.data(), sizeof(vdinfo.session_token));
     kscreen::restore(vdinfo.name);
+    mutter::restore(vdinfo.name);
+    mutter::unmap_input_devices();
 
     if (vdinfo.drm_fd >= 0) {
       ::close(vdinfo.drm_fd);
@@ -5177,6 +6159,97 @@ namespace VDISPLAY {
     return ready;
   }
 
+  bool buildMutterExclusiveLayout(
+    const std::string &current_state,
+    const std::string &connector,
+    std::string &serial,
+    std::string &argument
+  ) {
+    mutter::state_t state;
+    const bool ready =
+      mutter::build_exclusive_layout(current_state, connector, state, argument) == mutter::layout_change::ready;
+    serial = ready ? state.serial : std::string {};
+    if (!ready) {
+      argument.clear();
+    }
+    return ready;
+  }
+
+  bool buildMutterMirrorLayout(
+    const std::string &current_state,
+    const std::string &connector,
+    std::string &serial,
+    std::string &argument
+  ) {
+    mutter::state_t state;
+    const bool ready =
+      mutter::build_mirror_layout(current_state, connector, state, argument) == mutter::layout_change::ready;
+    serial = ready ? state.serial : std::string {};
+    if (!ready) {
+      argument.clear();
+    }
+    return ready;
+  }
+
+  bool buildMutterRestoreLayout(
+    const std::string &current_state,
+    std::string &serial,
+    std::string &argument
+  ) {
+    mutter::state_t state;
+    argument.clear();
+    serial.clear();
+    if (!mutter::parse_current_state(current_state, state) ||
+        !mutter::build_restore_layout(state, argument)) {
+      argument.clear();
+      return false;
+    }
+    serial = state.serial;
+    return true;
+  }
+
+  std::string mutterInputDeviceOutputValue(
+    const std::string &current_state,
+    const std::string &connector
+  ) {
+    mutter::state_t state;
+    if (!mutter::parse_current_state(current_state, state)) {
+      return {};
+    }
+    return mutter::device_output_value(state, connector);
+  }
+
+  void mutterInputDeviceSettingsTargets(std::string &touch, std::string &pen) {
+    touch = mutter::device_settings_target(mutter::touch_settings);
+    pen = mutter::device_settings_target(mutter::pen_settings);
+  }
+
+  uint64_t displayLayoutGeneration() {
+    return mutter::layout_generation.load(std::memory_order_relaxed);
+  }
+
+  bool mutterDisplayGeometry(
+    const std::string &current_state,
+    const std::string &connector,
+    int &offset_x,
+    int &offset_y,
+    int &environment_width,
+    int &environment_height
+  ) {
+    mutter::state_t state;
+    if (!mutter::parse_current_state(current_state, state)) {
+      return false;
+    }
+    return mutter::geometry_from_state(
+      state,
+      connector,
+      offset_x,
+      offset_y,
+      environment_width,
+      environment_height
+    );
+  }
+
   void setVirtualDisplayCaptureFallbackActive(bool active) {
     virtual_display_capture_fallback_active = active;
   }
@@ -5197,6 +6270,17 @@ namespace VDISPLAY {
       }
     }
     return false;
+  }
+
+  /** The layout an app asked for, or extend when the display is not registered. */
+  static virtual_display_layout_e virtual_display_layout(const std::string &display_name) {
+    std::lock_guard<std::mutex> lock(vdisplay_mutex);
+    for (const auto &[guid, display] : virtual_displays) {
+      if (display.name == display_name) {
+        return display.layout;
+      }
+    }
+    return virtual_display_layout_e::extend;
   }
 
   std::string getHyprlandOutputName(const std::string &displayName) {
@@ -5334,6 +6418,19 @@ namespace VDISPLAY {
         if (pushVirtualOutputMode(displayName, connector, width, height, refresh_mhz)) {
           BOOST_LOG(info) << "[VDISPLAY] Mutter is driving virtual output " << connector << " at " << width << "x"
                           << height << "@" << refresh_mhz << "; capturing it directly.";
+          // Mirror is a display-creation choice, unlike exclusive mode, which
+          // waits for a live session before the local screens may go dark.
+          // A refusal is logged where it happens and costs the session the
+          // cloning, not the display: the output is driven and capturable.
+          if (virtual_display_layout(displayName) == virtual_display_layout_e::mirror) {
+            mutter::apply_mirror(displayName, connector);
+          }
+          // Touch and pen are bound to a single monitor by GNOME, and the one
+          // it picks by itself is never this one.
+          mutter::map_input_devices(connector);
+          // Everything decided above is a snapshot of a layout the compositor
+          // can rewrite at any moment.
+          mutter::watch_layout();
           return true;
         }
         BOOST_LOG(warning) << "[VDISPLAY] GNOME/Mutter did not end up driving " << connector << " at " << width << "x"
@@ -5386,6 +6483,17 @@ namespace VDISPLAY {
       return false;
     }
 
+    // GNOME reaches this before the wlr path below, which it does not speak.
+    // ApplyMonitorsConfig disables every monitor left out of the config, so the
+    // desktop is handed over by submitting one that names only this output.
+    if (window_system == window_system_e::WAYLAND && mutter::available()) {
+      const bool enabled = mutter::make_exclusive(displayName, connector);
+      if (enabled) {
+        exclusive_virtual_display_active = true;
+      }
+      return enabled;
+    }
+
 #ifdef SUNSHINE_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND) {
       int width = 0;
@@ -5431,6 +6539,14 @@ namespace VDISPLAY {
 
   void restoreExclusiveVirtualDisplay() {
     if (!exclusive_virtual_display_active) {
+      return;
+    }
+
+    // On GNOME the layout is restored per display when it is torn down, where
+    // the captured configuration lives. Falling through would reach the wlr
+    // path, which GNOME does not implement, and warn about it.
+    if (window_system == window_system_e::WAYLAND && mutter::available()) {
+      exclusive_virtual_display_active = false;
       return;
     }
 
@@ -5806,13 +6922,35 @@ namespace VDISPLAY {
   bool getHermesKmsDisplayGeometry(const std::string &display_name,
                                    int &offset_x, int &offset_y,
                                    int &environment_width, int &environment_height) {
-    return kscreen::geometry(
-      display_name,
-      offset_x,
-      offset_y,
-      environment_width,
-      environment_height
-    );
+    // Each compositor answers this through its own output management, and there
+    // is no generic one: KWin through kscreen-doctor, GNOME through
+    // org.gnome.Mutter.DisplayConfig. Both guards already check which session
+    // this is, so the order between them does not matter.
+    if (kscreen::available()) {
+      return kscreen::geometry(
+        display_name,
+        offset_x,
+        offset_y,
+        environment_width,
+        environment_height
+      );
+    }
+
+    if (mutter::available()) {
+      const auto connector = virtual_display_connector_name(display_name);
+      if (connector.empty()) {
+        return false;
+      }
+      return mutter::geometry(
+        connector,
+        offset_x,
+        offset_y,
+        environment_width,
+        environment_height
+      );
+    }
+
+    return false;
   }
 
   bool hermesKmsCaptureSize(int render_fd, int &width, int &height) {

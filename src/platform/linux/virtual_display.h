@@ -244,9 +244,14 @@ namespace VDISPLAY {
    * @param session_owner_uid When set, a Hermes-KMS card the broker creates
    *        for this display belongs to this uid (an isolated session's
    *        account) rather than to Hermes itself.
-   * @param layout Where the compositor should place the output. Only the
-   *        KScreen (KWin) activation path honours it; other backends keep
-   *        their own behaviour.
+   * @param layout Where the compositor should place the output. Honoured by
+   *        the KScreen (KWin) and Mutter (GNOME) activation paths; other
+   *        backends keep their own behaviour. The two compositors clone
+   *        differently: KWin overlaps the virtual output with the primary,
+   *        while Mutter refuses overlapping monitors and clones by putting
+   *        both connectors in one logical monitor - which it only accepts when
+   *        they advertise the same mode size, so mirroring there runs the
+   *        stream at the physical monitor's resolution.
    * @return The name of the created virtual display, or empty string on failure.
    */
   std::string createVirtualDisplay(
@@ -512,6 +517,140 @@ namespace VDISPLAY {
     uint32_t refresh_mhz,
     std::string &serial,
     std::string &argument
+  );
+
+  /**
+   * @brief Build the ApplyMonitorsConfig payload that hands the desktop to
+   *        @p connector alone, which is how a monitor is turned off on GNOME:
+   *        Mutter disables every connected monitor absent from the config.
+   *
+   * Exposed so an all-or-nothing payload can be checked without a GNOME
+   * session.
+   *
+   * @return true when a config was built; false when the reply is unusable, the
+   *         connector is not being driven, or it already has the desktop to
+   *         itself (nothing to apply).
+   */
+  bool buildMutterExclusiveLayout(
+    const std::string &current_state,
+    const std::string &connector,
+    std::string &serial,
+    std::string &argument
+  );
+
+  /**
+   * @brief Build the payload that clones the primary output onto @p connector.
+   *
+   * Mutter refuses overlapping logical monitors, so cloning means one logical
+   * monitor holding both connectors - and it refuses that unless their modes
+   * have identical dimensions. The payload therefore exists only at a
+   * resolution the virtual output advertises.
+   *
+   * @return true when a config was built; false when the reply is unusable, no
+   *         shared mode size exists, or the outputs are already mirrored.
+   */
+  bool buildMutterMirrorLayout(
+    const std::string &current_state,
+    const std::string &connector,
+    std::string &serial,
+    std::string &argument
+  );
+
+  /**
+   * @brief Build the payload that reproduces the layout in @p current_state.
+   *
+   * This is what a session captures before changing the layout, and submits
+   * again when it ends.
+   */
+  bool buildMutterRestoreLayout(
+    const std::string &current_state,
+    std::string &serial,
+    std::string &argument
+  );
+
+  /**
+   * @brief A counter bumped whenever the desktop layout changes underneath a
+   *        running session.
+   *
+   * The offsets a capture resolves at start-up are a snapshot: the compositor
+   * can move outputs, change their modes or replace a temporary configuration
+   * at any time, and the geometry absolute input is measured against then goes
+   * quietly wrong. A capture records this value when it starts and reinitialises
+   * when it no longer matches, which re-resolves the geometry through the path
+   * that already exists for a resolution change.
+   *
+   * Only the GNOME backend moves it today, and only when built with sd-bus;
+   * everywhere else it is constant and the comparison costs nothing.
+   */
+  uint64_t displayLayoutGeneration();
+
+  /**
+   * @brief The ids GNOME's per-device settings path is built from.
+   *
+   * GNOME binds a touchscreen or tablet to a monitor through a key whose path
+   * it derives from the device's vendor and product. These must be the ids
+   * inputtino gives Hermes' virtual devices, or the binding addresses a device
+   * that does not exist - which fails silently, since nothing errors and touch
+   * input simply goes on being placed by guesswork.
+   * `platf::VIRTUAL_INPUT_VENDOR_ID` is checked against these at compile time.
+   */
+  constexpr uint16_t VIRTUAL_INPUT_SETTINGS_VENDOR_ID = 0xBEEF;
+  constexpr uint16_t VIRTUAL_INPUT_SETTINGS_PRODUCT_ID = 0xDEAD;
+
+  /**
+   * @brief The GNOME `output` value that binds an input device to @p connector.
+   *
+   * GNOME binds a touchscreen or tablet to one monitor, matching a list of at
+   * least three strings against the monitor's EDID vendor, product and serial.
+   * The connector is appended as a fourth element, which Mutter uses to
+   * disambiguate two monitors sharing an EDID.
+   *
+   * @return the value to write, or an empty string when the monitor is unknown,
+   *         carries no identity at all, or spells one that cannot be put on a
+   *         command line safely.
+   */
+  std::string mutterInputDeviceOutputValue(
+    const std::string &current_state,
+    const std::string &connector
+  );
+
+  /**
+   * @brief The relocatable-schema targets whose `output` key binds Hermes' own
+   *        touch and pen devices, as `<schema>:<path>`.
+   *
+   * Mutter derives the path from the device's vendor and product ids, so these
+   * only reach Hermes' devices while they match the ids inputtino is given.
+   */
+  void mutterInputDeviceSettingsTargets(std::string &touch, std::string &pen);
+
+  /**
+   * @brief Where a connector sits on a GNOME desktop, for absolute input.
+   *
+   * Mutter feeds an absolute pointing device the extents of the whole stage, so
+   * a client's coordinates only land on the streamed output once they carry
+   * that output's offset within the desktop envelope. Both are read from the
+   * logical monitor layout - the space the stage is measured in - which means
+   * scale and rotation, not the mode size.
+   *
+   * The values come back in the connector's own pixel space rather than in
+   * logical pixels, so a consumer holding coordinates in the captured mode's
+   * pixels can use them unchanged; at scale 1 the two are the same thing.
+   *
+   * Exposed so the arithmetic can be checked against a captured
+   * GetCurrentState reply, without a running GNOME session.
+   *
+   * @param current_state The GetCurrentState reply, as printed by `gdbus call`.
+   * @param connector The connector to locate, e.g. "Virtual-1".
+   * @return true when the connector is in the layout and the envelope could be
+   *         measured; false leaves the outputs untouched.
+   */
+  bool mutterDisplayGeometry(
+    const std::string &current_state,
+    const std::string &connector,
+    int &offset_x,
+    int &offset_y,
+    int &environment_width,
+    int &environment_height
   );
 
   /**

@@ -594,6 +594,25 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- The virtual display no longer lands on top of the physical monitor under KDE.
+  KWin keeps a saved setup per output combination and replays it when a
+  connector appears, so a combination last used by an exclusive session came
+  back with the monitor disabled and the virtual connector at the origin.
+  Hermes placed the virtual output by scanning the outputs that were enabled at
+  that moment, found none, and left it at 0,0 - then re-enabled the monitor in
+  the same transaction, which put it back at 0,0 as well. Both sat at the
+  origin, KWin composed the same desktop region onto both, and the client
+  received the host's screen cropped to the resolution it had asked for, with
+  absolute input mapped against the same wrong geometry.
+
+  The placement now reads the layout the session is about to restore - the
+  snapshot taken before the hotplug - rather than the transient state KWin is
+  replaying, and consults the live layout only to drop outputs that have since
+  been unplugged. The outputs being restored are also given their previous
+  positions in the same transaction instead of only being enabled, so KWin no
+  longer keeps the position from the setup it replayed. Affects every KWin
+  virtual display, Hermes-KMS and EVDI alike.
+
 - A second client resuming a running app now gets its own resolution. `/resume`
   only configured the display when there was no virtual display, so an app that
   still owned one kept the mode the previous client negotiated: A streams at

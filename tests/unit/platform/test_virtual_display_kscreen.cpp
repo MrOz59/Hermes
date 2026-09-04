@@ -15,6 +15,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -131,6 +132,110 @@ TEST(KScreenLayout, WorksWithNoPreSessionOutputs) {
     " output.Virtual-1.enable output.Virtual-1.priority.1"
     " output.Virtual-1.position.0,0"
     " output.Virtual-1.mode.1920x1080@120"
+  );
+}
+
+namespace {
+
+  /** The desktop as KScreen reported it before the connector was hotplugged. */
+  const std::vector<VDISPLAY::kscreen_output_t> kPhysicalOnly {
+    {.name = "HDMI-A-1", .connected = true, .enabled = true, .priority = 1, .x = 0, .y = 0, .width = 1920, .height = 1080},
+  };
+
+  /**
+   * What KWin shows during the hotplug: it replays the setup saved for this
+   * output combination, which an exclusive session left with the monitor
+   * disabled and the virtual connector at the origin.
+   */
+  const std::vector<VDISPLAY::kscreen_output_t> kReplayedExclusiveSetup {
+    {.name = "HDMI-A-1", .connected = true, .enabled = false, .priority = 2, .x = 0, .y = 0, .width = 1920, .height = 1080},
+    {.name = "Virtual-1", .connected = true, .enabled = true, .priority = 1, .x = 0, .y = 0, .width = 854, .height = 480},
+  };
+
+}  // namespace
+
+TEST(KScreenPlacement, PlacesBesideAMonitorKWinHasTemporarilyDisabled) {
+  // The reported bug: KWin replayed a saved exclusive setup on the hotplug, the
+  // placement read that state, found no enabled output to append to and left
+  // the virtual output at 0,0. The same transaction re-enabled the monitor at
+  // the origin, so both sat there and the client received the physical desktop
+  // cropped to the mode it had asked for.
+  const auto position = VDISPLAY::kscreenVirtualOutputPosition(
+    "Virtual-1", kPhysicalOnly, kReplayedExclusiveSetup, VDISPLAY::virtual_display_layout_e::extend);
+  EXPECT_EQ(position.x, 1920);
+  EXPECT_EQ(position.y, 0);
+}
+
+TEST(KScreenPlacement, AppendsToTheRightOfEveryOutputBeingRestored) {
+  const std::vector<VDISPLAY::kscreen_output_t> before {
+    {.name = "DP-2", .connected = true, .enabled = true, .priority = 1, .x = 0, .y = 120, .width = 2560, .height = 1080},
+    {.name = "HDMI-A-1", .connected = true, .enabled = true, .priority = 2, .x = 2560, .y = 0, .width = 1920, .height = 1080},
+    {.name = "DVI-I-1", .connected = true, .enabled = false, .priority = 3, .x = 4480, .y = 0, .width = 1920, .height = 1080},
+  };
+  const auto position = VDISPLAY::kscreenVirtualOutputPosition(
+    "Virtual-1", before, before, VDISPLAY::virtual_display_layout_e::extend);
+  // Past the rightmost enabled output, and level with the topmost of them - the
+  // disabled one is not being restored, so it reserves no space.
+  EXPECT_EQ(position.x, 4480);
+  EXPECT_EQ(position.y, 0);
+}
+
+TEST(KScreenPlacement, IgnoresAnOutputThatHasSinceBeenUnplugged) {
+  // A monitor that left between the snapshot and the hotplug is not coming
+  // back, so reserving its width would strand the virtual output in a gap.
+  const std::vector<VDISPLAY::kscreen_output_t> before {
+    {.name = "HDMI-A-1", .connected = true, .enabled = true, .priority = 1, .x = 0, .y = 0, .width = 1920, .height = 1080},
+    {.name = "DP-2", .connected = true, .enabled = true, .priority = 2, .x = 1920, .y = 0, .width = 2560, .height = 1080},
+  };
+  const std::vector<VDISPLAY::kscreen_output_t> current {
+    {.name = "HDMI-A-1", .connected = true, .enabled = true, .priority = 1, .x = 0, .y = 0, .width = 1920, .height = 1080},
+    {.name = "Virtual-1", .connected = true, .enabled = true, .priority = 2, .x = 0, .y = 0, .width = 854, .height = 480},
+  };
+  EXPECT_EQ(
+    VDISPLAY::kscreenVirtualOutputPosition("Virtual-1", before, current, VDISPLAY::virtual_display_layout_e::extend).x,
+    1920
+  );
+}
+
+TEST(KScreenPlacement, FallsBackToTheCurrentLayoutWithoutASnapshot) {
+  // kscreen-doctor gave no answer before the hotplug - a session that came up
+  // with the compositor still assembling its outputs. The live layout is then
+  // the only thing to place against, and it still beats the origin.
+  const std::vector<VDISPLAY::kscreen_output_t> current {
+    {.name = "HDMI-A-1", .connected = true, .enabled = true, .priority = 1, .x = 0, .y = 0, .width = 1920, .height = 1080},
+    {.name = "Virtual-1", .connected = true, .enabled = true, .priority = 2, .x = 0, .y = 0, .width = 854, .height = 480},
+  };
+  EXPECT_EQ(
+    VDISPLAY::kscreenVirtualOutputPosition("Virtual-1", {}, current, VDISPLAY::virtual_display_layout_e::extend).x,
+    1920
+  );
+}
+
+TEST(KScreenPlacement, MirrorAnchorsOnThePrimaryOutput) {
+  // Mirror deliberately overlaps, so the desktop is cloned onto the virtual
+  // connector; it anchors on the primary rather than on the first output seen.
+  const std::vector<VDISPLAY::kscreen_output_t> before {
+    {.name = "DP-2", .connected = true, .enabled = true, .priority = 2, .x = 0, .y = 0, .width = 2560, .height = 1080},
+    {.name = "HDMI-A-1", .connected = true, .enabled = true, .priority = 1, .x = 2560, .y = 180, .width = 1920, .height = 1080},
+  };
+  const auto position = VDISPLAY::kscreenVirtualOutputPosition(
+    "Virtual-1", before, before, VDISPLAY::virtual_display_layout_e::mirror);
+  EXPECT_EQ(position.x, 2560);
+  EXPECT_EQ(position.y, 180);
+}
+
+TEST(KScreenLayout, PutsTheRestoredOutputsBackWhereTheyWere) {
+  // Enabling an output does not say where it goes, so KWin kept the position
+  // from the setup it replayed and a monitor came back on top of the virtual
+  // output. Naming the position makes the transaction the whole layout.
+  const std::map<std::string, VDISPLAY::kscreen_point_t> positions {{"DP-2", {0, 120}}};
+  EXPECT_EQ(
+    VDISPLAY::buildKScreenLayoutCommand("Virtual-1", kSinglePhysical, 2560, 0, 854, 480, 60, positions),
+    "kscreen-doctor"
+    " output.DP-2.enable output.DP-2.priority.1 output.DP-2.position.0,120"
+    " output.Virtual-1.enable output.Virtual-1.priority.2"
+    " output.Virtual-1.position.2560,0"
+    " output.Virtual-1.mode.854x480@60"
   );
 }
 

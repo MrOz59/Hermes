@@ -659,6 +659,54 @@ namespace VDISPLAY {
     int &environment_height
   );
 
+  /** @brief A point in KScreen's logical coordinate space. */
+  struct kscreen_point_t {
+    int x {0};  ///< Logical x.
+    int y {0};  ///< Logical y.
+  };
+
+  /** @brief One output as `kscreen-doctor -j` reports it. */
+  struct kscreen_output_t {
+    std::string name;  ///< Connector name, e.g. "HDMI-A-1".
+    bool connected {false};  ///< The connector exists in this session.
+    bool enabled {false};  ///< KWin is composing on it.
+    int priority {0};  ///< KScreen priority; 1 marks the primary output.
+    int x {0};  ///< Logical x.
+    int y {0};  ///< Logical y.
+    int width {0};  ///< Logical width.
+    int height {0};  ///< Logical height.
+  };
+
+  /**
+   * @brief Decide where the virtual output goes, in KScreen's logical space.
+   *
+   * The layout to place against is the one the session is about to restore -
+   * @p before, sampled before the connector was hotplugged - and not the one
+   * KWin happens to be showing in @p current. KWin keeps a saved setup per
+   * output combination and replays it when a connector appears: a combination
+   * last used by an exclusive session comes back with the physical monitor
+   * disabled and the virtual connector at the origin. Placing against that
+   * transient state put the virtual output at 0,0 too, and re-enabling the
+   * monitor in the same transaction left both there, so the client received
+   * the physical desktop cropped to the mode it had asked for.
+   *
+   * @p current is still consulted for presence: an output that has since been
+   * unplugged reserves no space. When it is empty - kscreen-doctor gave no
+   * answer - every output in @p before is taken as present, and when @p before
+   * itself yields no anchor the same rule is applied to @p current so a session
+   * that started without a usable snapshot still lands beside the desktop.
+   *
+   * Exposed so the placement can be checked without a running KDE session.
+   *
+   * @return the position for @p virtual_output.
+   */
+  kscreen_point_t kscreenVirtualOutputPosition(
+    const std::string &virtual_output,
+    const std::vector<kscreen_output_t> &before,
+    const std::vector<kscreen_output_t> &current,
+    virtual_display_layout_e layout
+  );
+
   /**
    * @brief Build the kscreen-doctor invocation that enables a virtual output,
    *        places it, and drives it at a requested mode.
@@ -677,6 +725,12 @@ namespace VDISPLAY {
    * @p mode_refresh_hz omits the mode, which is also how the caller retries a
    * layout that KWin rejected for the mode alone.
    *
+   * An output named in @p positions_before is also placed back where it was
+   * before the hotplug. Enabling one without saying where it goes leaves KWin
+   * free to keep the position from the setup it replayed for the new output
+   * combination, which is how a monitor came back on top of the virtual output
+   * rather than beside it.
+   *
    * Exposed so the invocation can be checked without a running KDE session.
    *
    * @return the complete command line.
@@ -688,7 +742,8 @@ namespace VDISPLAY {
     int target_y,
     int mode_width,
     int mode_height,
-    int mode_refresh_hz
+    int mode_refresh_hz,
+    const std::map<std::string, kscreen_point_t> &positions_before = {}
   );
 
   /** @brief What `kscreen-doctor -j` says about a mode on one output. */

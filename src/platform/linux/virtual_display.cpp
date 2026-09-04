@@ -2011,7 +2011,8 @@ namespace VDISPLAY {
     int target_y,
     int mode_width,
     int mode_height,
-    int mode_refresh_hz
+    int mode_refresh_hz,
+    const std::map<std::string, kscreen_point_t> &positions_before
   ) {
     if (!safe_output_name(virtual_output)) {
       // Every caller reads this name back from the compositor, which has no
@@ -2031,6 +2032,15 @@ namespace VDISPLAY {
       if (priority > 0) {
         command += " output." + output + ".priority." + std::to_string(priority);
         next_priority = std::max(next_priority, priority + 1);
+      }
+      // Enabling an output says nothing about where it lands, so KWin keeps
+      // whatever the setup it replayed for this output combination said - which
+      // is the origin for a combination last used exclusively. Put each one
+      // back where the user had it, so the layout this builds is the whole
+      // layout rather than a virtual output placed against a moving target.
+      if (const auto position = positions_before.find(output); position != positions_before.end()) {
+        command += " output." + output + ".position." +
+                   std::to_string(position->second.x) + ',' + std::to_string(position->second.y);
       }
     }
 
@@ -2054,6 +2064,69 @@ namespace VDISPLAY {
     }
 
     return command;
+  }
+
+  kscreen_point_t kscreenVirtualOutputPosition(
+    const std::string &virtual_output,
+    const std::vector<kscreen_output_t> &before,
+    const std::vector<kscreen_output_t> &current,
+    virtual_display_layout_e layout
+  ) {
+    std::set<std::string> present;
+    for (const auto &output : current) {
+      if (output.connected) {
+        present.insert(output.name);
+      }
+    }
+
+    kscreen_point_t position {};
+    bool anchored = false;
+
+    const auto place_against = [&](const std::vector<kscreen_output_t> &layout_outputs, bool check_presence) {
+      for (const auto &output : layout_outputs) {
+        if (output.name == virtual_output ||
+            !output.connected ||
+            !output.enabled ||
+            (check_presence && !present.empty() && !present.contains(output.name))) {
+          continue;
+        }
+
+        if (layout == virtual_display_layout_e::mirror) {
+          // Mirror overlaps the primary output so KWin clones the desktop onto
+          // the virtual connector: windows the compositor places on the physical
+          // monitor (a nested Gamescope, the panel, anything) then appear in the
+          // captured stream. This restores the pre-0.5.0 behaviour, per app.
+          //
+          // KScreen priority 1 marks the primary output. Before one is found,
+          // keep the first enabled output as the fallback anchor.
+          if (output.priority == 1 || !anchored) {
+            position = {output.x, output.y};
+            anchored = true;
+            if (output.priority == 1) {
+              return;
+            }
+          }
+          continue;
+        }
+
+        // Extend keeps the virtual desktop regions disjoint: overlap mirrors
+        // physical content into the stream and makes absolute input ambiguous.
+        // Append the virtual output to the right of everything else.
+        if (!anchored) {
+          position = {output.x + output.width, output.y};
+          anchored = true;
+        } else {
+          position.x = std::max(position.x, output.x + output.width);
+          position.y = std::min(position.y, output.y);
+        }
+      }
+    };
+
+    place_against(before, true);
+    if (!anchored) {
+      place_against(current, false);
+    }
+    return position;
   }
 
   kscreen_mode_state_e kscreenModeState(
@@ -2098,16 +2171,7 @@ namespace VDISPLAY {
   }
 
   namespace kscreen {
-    struct output_t {
-      std::string name;
-      bool connected {false};
-      bool enabled {false};
-      int priority {0};
-      int x {0};
-      int y {0};
-      int width {0};
-      int height {0};
-    };
+    using output_t = kscreen_output_t;
 
     struct layout_t {
       // Every physical output that was enabled before the virtual connector
@@ -2349,6 +2413,7 @@ namespace VDISPLAY {
      */
     static bool apply_pre_session_layout(
       const std::string &virtual_output,
+      const std::vector<output_t> &before,
       const std::map<std::string, int> &enabled_before,
       int mode_width,
       int mode_height,
@@ -2356,59 +2421,21 @@ namespace VDISPLAY {
       virtual_display_layout_e layout
     ) {
       const auto current = outputs();
-      int target_x = 0;
-      int target_y = 0;
-      bool have_existing_output = false;
+      const auto position = kscreenVirtualOutputPosition(virtual_output, before, current, layout);
+      const int target_x = position.x;
+      const int target_y = position.y;
 
-      // Mirror overlaps the primary output so KWin clones the desktop onto
-      // the virtual connector: windows the compositor places on the physical
-      // monitor (a nested Gamescope, the panel, anything) then appear in the
-      // captured stream. This restores the pre-0.5.0 behaviour, per app.
-      if (layout == virtual_display_layout_e::mirror) {
-        for (const auto &output : current) {
-          if (output.name == virtual_output ||
-              !output.connected ||
-              !output.enabled ||
-              !enabled_before.contains(output.name)) {
-            continue;
-          }
-          // KScreen priority 1 marks the primary output. Before one is
-          // found, keep the first enabled output as the fallback anchor.
-          if (output.priority == 1 || !have_existing_output) {
-            target_x = output.x;
-            target_y = output.y;
-            have_existing_output = true;
-            if (output.priority == 1) {
-              break;
-            }
-          }
-        }
-      } else {
-        // Keep the virtual desktop regions disjoint. KWin may replay a saved
-        // hotplug layout with the new connector at 0,0, directly overlapping the
-        // physical monitor. Besides mirroring physical content into the stream,
-        // overlap makes absolute input ambiguous. Append each new virtual output
-        // to the right of every output that was active before this hotplug.
-        for (const auto &output : current) {
-          if (output.name == virtual_output ||
-              !output.connected ||
-              !output.enabled ||
-              !enabled_before.contains(output.name)) {
-            continue;
-          }
-          if (!have_existing_output) {
-            target_y = output.y;
-            have_existing_output = true;
-          } else {
-            target_y = std::min(target_y, output.y);
-          }
-          target_x = std::max(target_x, output.x + output.width);
+      std::map<std::string, kscreen_point_t> positions_before;
+      for (const auto &output : before) {
+        if (output.name != virtual_output && enabled_before.contains(output.name)) {
+          positions_before[output.name] = {output.x, output.y};
         }
       }
 
       const bool has_mode = mode_width > 0 && mode_height > 0 && mode_refresh_hz > 0;
       const auto command = buildKScreenLayoutCommand(
-        virtual_output, enabled_before, target_x, target_y, mode_width, mode_height, mode_refresh_hz);
+        virtual_output, enabled_before, target_x, target_y, mode_width, mode_height, mode_refresh_hz,
+        positions_before);
       if (command.empty()) {
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] Refusing to build a layout around output name "
                            << virtual_output;
@@ -2421,7 +2448,8 @@ namespace VDISPLAY {
         // capture at all. Retry without it, and say what the session lost
         // rather than leaving a silent resolution mismatch.
         if (!has_mode || !run_layout_command(buildKScreenLayoutCommand(
-                           virtual_output, enabled_before, target_x, target_y, 0, 0, 0))) {
+                           virtual_output, enabled_before, target_x, target_y, 0, 0, 0,
+                           positions_before))) {
           return false;
         }
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] KWin rejected mode "
@@ -2481,8 +2509,7 @@ namespace VDISPLAY {
 
     static bool activate_evdi_output(
       const std::string &display_name,
-      const std::set<std::string> &outputs_before,
-      const std::map<std::string, int> &enabled_before,
+      const std::vector<output_t> &before,
       const std::string &connector_name,
       const char *backend_label,
       int mode_width,
@@ -2493,6 +2520,9 @@ namespace VDISPLAY {
       if (!available()) {
         return false;
       }
+
+      const auto outputs_before = connected_output_names(before);
+      const auto enabled_before = enabled_output_priorities(before);
 
       std::string virtual_output;
       for (int attempt = 0; attempt < 30 && virtual_output.empty(); ++attempt) {
@@ -2533,7 +2563,7 @@ namespace VDISPLAY {
           original_outputs.emplace(output, priority);
         }
       }
-      if (!apply_pre_session_layout(virtual_output, enabled_before, mode_width, mode_height, mode_refresh_hz, layout)) {
+      if (!apply_pre_session_layout(virtual_output, before, enabled_before, mode_width, mode_height, mode_refresh_hz, layout)) {
         return false;
       }
 
@@ -5743,8 +5773,6 @@ namespace VDISPLAY {
     }
 
     const auto kscreen_before = kscreen::outputs();
-    const auto outputs_before = kscreen::connected_output_names(kscreen_before);
-    const auto enabled_before = kscreen::enabled_output_priorities(kscreen_before);
 
     if (backend == VirtualDisplayBackend::HERMES_KMS) {
       hermes_kms::device_t device {};
@@ -5827,8 +5855,7 @@ namespace VDISPLAY {
             !vdinfo.connector_name.empty()) {
           kscreen::activate_evdi_output(
             vdinfo.name,
-            outputs_before,
-            enabled_before,
+            kscreen_before,
             vdinfo.connector_name,
             "Hermes-KMS",
             static_cast<int>(vdinfo.width),
@@ -5894,8 +5921,7 @@ namespace VDISPLAY {
             // prevents KWin from ever exposing the output to KScreen.
             kscreen::activate_evdi_output(
               vdinfo.name,
-              outputs_before,
-              enabled_before,
+              kscreen_before,
               evdi_connector_name(vdinfo.drm_card_index),
               "EVDI",
               static_cast<int>(vdinfo.width),

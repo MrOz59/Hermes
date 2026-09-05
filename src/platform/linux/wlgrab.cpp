@@ -21,8 +21,25 @@
 using namespace std::literals;
 
 namespace wl {
-  static int env_width;
-  static int env_height;
+  /**
+   * @brief Every monitor's rectangle in the compositor's logical coordinates,
+   * for wl::desktop_envelope().
+   *
+   * xdg_output reports position and size in logical pixels. A monitor whose
+   * logical size never arrived is taken at scale 1, so its mode size stands
+   * in for the logical one.
+   */
+  static std::vector<output_rect_t> output_rects(const std::vector<std::unique_ptr<monitor_t>> &monitors) {
+    std::vector<output_rect_t> rects;
+    rects.reserve(monitors.size());
+    for (const auto &monitor : monitors) {
+      const auto &viewport = monitor->viewport;
+      const int width = monitor->logical_width > 0 ? monitor->logical_width : viewport.width;
+      const int height = monitor->logical_height > 0 ? monitor->logical_height : viewport.height;
+      rects.push_back({viewport.offset_x, viewport.offset_y, width, height});
+    }
+    return rects;
+  }
 
   struct img_t: public platf::img_t {
     ~img_t() override {
@@ -163,13 +180,27 @@ namespace wl {
       width = monitor->viewport.width;
       height = monitor->viewport.height;
 
-      this->env_width = ::wl::env_width;
-      this->env_height = ::wl::env_height;
+      // The compositor spreads an absolute input device across the logical
+      // bounding box of every output, origin included. The box comes from
+      // this connection's monitor list rather than from a snapshot taken when
+      // displays were enumerated, since the layout may have changed since.
+      // Both the offset within it and its size are then expressed in this
+      // output's own capture pixels, which is how platf::display_t carries
+      // them on every capture path.
+      const auto envelope = desktop_envelope(output_rects(interface.monitors));
+      const output_rect_t streamed {offset_x, offset_y, monitor->logical_width, monitor->logical_height};
+      const auto geometry = input_geometry(envelope, streamed, width, height);
+      offset_x = geometry.offset_x;
+      offset_y = geometry.offset_y;
+      env_width = geometry.env_width;
+      env_height = geometry.env_height;
 
       BOOST_LOG(info) << "Selected monitor ["sv << monitor->description << "] for streaming"sv;
-      BOOST_LOG(debug) << "Offset: "sv << offset_x << 'x' << offset_y;
       BOOST_LOG(debug) << "Resolution: "sv << width << 'x' << height;
-      BOOST_LOG(debug) << "Desktop Resolution: "sv << env_width << 'x' << env_height;
+      BOOST_LOG(info) << "Desktop envelope "sv << envelope.width << 'x' << envelope.height << " at "sv << envelope.x << ',' << envelope.y
+                      << " (logical), streamed output "sv << streamed.width << 'x' << streamed.height << " at "sv << streamed.x << ',' << streamed.y
+                      << "; in its "sv << width << 'x' << height << " pixels: envelope "sv << env_width << 'x' << env_height
+                      << ", offset "sv << offset_x << ',' << offset_y;
 
       return 0;
     }
@@ -567,9 +598,6 @@ namespace platf {
       return {};
     }
 
-    wl::env_width = 0;
-    wl::env_height = 0;
-
     for (auto &monitor : interface.monitors) {
       monitor->listen(interface.output_manager);
     }
@@ -581,13 +609,13 @@ namespace platf {
     for (int x = 0; x < interface.monitors.size(); ++x) {
       auto monitor = interface.monitors[x].get();
 
-      wl::env_width = std::max(wl::env_width, (int) (monitor->viewport.offset_x + monitor->viewport.width));
-      wl::env_height = std::max(wl::env_height, (int) (monitor->viewport.offset_y + monitor->viewport.height));
-
       BOOST_LOG(info) << "Monitor " << x << " is "sv << monitor->name << ": "sv << monitor->description;
 
       display_names.emplace_back(std::to_string(x));
     }
+
+    const auto envelope = wl::desktop_envelope(wl::output_rects(interface.monitors));
+    BOOST_LOG(debug) << "Desktop envelope: "sv << envelope.width << 'x' << envelope.height << " at "sv << envelope.x << ',' << envelope.y << " (logical)"sv;
 
     BOOST_LOG(info) << "--------- End of Wayland monitor list ---------"sv;
 

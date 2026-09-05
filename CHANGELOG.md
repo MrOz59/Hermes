@@ -712,6 +712,27 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   instead of asking for one of its own, which is refused for the same
   all-or-nothing reason.
 
+- Absolute input on wlroots compositors is mapped in the compositor's logical
+  coordinate space. Hyprland and sway spread an absolute device across the
+  logical bounding box of all outputs, in scaled pixels and including a
+  negative origin; the envelope Hermes normalised against mixed each output's
+  logical position with its physical mode size and assumed the layout started
+  at 0,0. On a scaled desktop with a physical monitor and a virtual display
+  both active the cursor therefore reached a different area of the streamed
+  output than the client pointed at, and only turning the physical monitor off
+  made it line up. The envelope is now built from the logical sizes xdg_output
+  reports and, like the GNOME geometry above, expressed in the streamed
+  output's own pixels, so mouse, touch and pen share one mapping.
+
+  The Hyprland virtual output is placed at the logical right edge of the
+  layout instead of past it: the edge was logical x plus mode width, which left
+  a gap after a monitor at any scale other than 1. The output also keeps its
+  mode and scale across a hotplug through a monitor rule of its own. The
+  wlr-output-management state Hermes applies lives in its client connection and
+  is erased when that connection closes, so the next rule reload put the
+  headless output back on the catch-all rule and rescaled it mid-stream
+  ([#35]).
+
 - Five defects in the ext-image-copy-capture backend, found by reviewing it
   after it landed rather than before. The worst one disarmed the protection the
   backend was written around: `icc_capture()` overwrote the reinit that an
@@ -1292,6 +1313,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#28]: https://github.com/MrOz59/Hermes/issues/28
 [#29]: https://github.com/MrOz59/Hermes/issues/29
 [#34]: https://github.com/MrOz59/Hermes/issues/34
+[#35]: https://github.com/MrOz59/Hermes/issues/35
 [#36]: https://github.com/MrOz59/Hermes/issues/36
 
 ## [0.4.0] - 2026-07-02

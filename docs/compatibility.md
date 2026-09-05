@@ -486,6 +486,14 @@ a black stream with working audio and input. The compositor's device now comes
 from linux-dmabuf default feedback (protocol v4 and later); on a compositor below
 v4 the scan still runs, and `adapter_name = /dev/dri/renderDNN` names the right
 card by hand.
+**Absolute input on a wlroots-style compositor is mapped in the compositor's
+logical space.** Hyprland and its relatives spread an absolute pointer device
+across the bounding box of all outputs in logical (scaled) pixels, so on a
+scaled desktop with a physical monitor and a virtual display both active the
+streamed output's offset and the envelope are taken from xdg_output's logical
+layout and expressed in the streamed output's own pixels, the same way the
+GNOME path reads Mutter's logical monitor layout. KMS capture of a physical
+monitor at a scale other than 1 still has the old mismatch.
 
 **The development udev rule hides the card from every compositor.**
 `udev/99-hermes-kms-ignore-seat.rules` strips `TAG+="seat"` and `ID_SEAT` from

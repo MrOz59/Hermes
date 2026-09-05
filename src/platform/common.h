@@ -535,6 +535,8 @@ namespace platf {
     virtual ~display_t() = default;
 
     // Offsets for when streaming a specific monitor. By default, they are 0.
+    // The offset is relative to the desktop envelope's top-left corner and the
+    // envelope is the whole desktop, both in this display's capture pixels.
     int offset_x, offset_y;
     int env_width, env_height;
 

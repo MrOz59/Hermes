@@ -557,6 +557,21 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Hermes-KMS and Hestia trackers for problems that belong to them.
 
 ### Changed
+- CI now runs the test suite against a real compositor. The hard part of this
+  project is what a compositor does with the outputs Hermes asks it for, and no
+  test could see one: every Wayland case skipped itself on a runner with
+  nothing on `WAYLAND_DISPLAY`, so the layout arithmetic behind two reported
+  bugs was checked only against numbers written down by hand. The `test` job
+  now brings up a headless sway - the wlroots headless backend needs no GPU and
+  no seat - laid out the way the reports described, a 4K output at scale 1.6
+  beside a 1080p one, and runs the Wayland suites against it in a second pass
+  over the same binary. The pass fails if those tests skip, so a fixture that
+  quietly stops being applied turns the job red instead of leaving it green and
+  covering nothing.
+
+  Software rendering means no linux-dmabuf, so the dmabuf capture cases still
+  skip; this covers the geometry, which is where the bugs were.
+
 - The container image no longer needs `SYS_ADMIN` to stream the desktop. The
   image sets file capabilities on `sway` and `hermes` for Steam's
   pressure-vessel sandbox, and the effective bit on `sway` is not advisory:

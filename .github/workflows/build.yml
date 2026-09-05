@@ -92,7 +92,9 @@ jobs:
             nodejs \
             icu \
             numactl \
-            xorg-server-xvfb
+            xorg-server-xvfb \
+            sway \
+            jq
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -123,6 +125,108 @@ jobs:
         # xvfb so platf::init() finds an X11 capture source on the headless
         # runner (otherwise the platform-dependent suites fail their setup).
         run: xvfb-run -a ./build/tests/test_sunshine --gtest_color=yes
+
+      # The hard part of this project is what a compositor does with the
+      # outputs Hermes asks it for, and until now no test could see one: every
+      # Wayland case skipped itself on a runner with nothing on WAYLAND_DISPLAY.
+      # A wlroots compositor on the headless backend needs no GPU and no seat,
+      # so the layout the capture and input paths read - logical sizes, a
+      # fractional scale, an output beside another - can be laid out for real.
+      #
+      # Software rendering means no linux-dmabuf, so the dmabuf capture cases
+      # still skip; this covers the geometry, which is where the reported bugs
+      # were. The fixture mirrors the reported layout: a 4K output at scale 1.6
+      # (which is 1.6015625 in the 24.8 fixed point the protocol carries) with
+      # a 1080p output beside it.
+      - name: Start a headless compositor
+        run: |
+          # Arch ships sway with a file capability. execve() of a file whose
+          # permitted set holds a capability the process cannot receive fails
+          # outright with EPERM, and a container does not get SYS_NICE by
+          # default, so sway would never start. It does not need the capability
+          # here.
+          setcap -r /usr/bin/sway 2>/dev/null || true
+
+          # Not named wayland-anything: the search below looks for 'wayland-*'
+          # and find reports its own starting point first, so a runtime
+          # directory matching that glob becomes the answer and WAYLAND_DISPLAY
+          # ends up naming a directory. -mindepth 1 -type s settles it either
+          # way; the name is the belt to that pair of braces.
+          export XDG_RUNTIME_DIR=/tmp/hermes-test-runtime
+          mkdir -p "${XDG_RUNTIME_DIR}"
+          chmod 700 "${XDG_RUNTIME_DIR}"
+          echo 'exec sleep infinity' > /tmp/sway-fixture.config
+
+          # WLR_BACKENDS is plural; the singular form is ignored silently and
+          # wlroots then autodetects DRM and fails for lack of a seat.
+          WLR_BACKENDS=headless \
+          WLR_HEADLESS_OUTPUTS=2 \
+          WLR_LIBINPUT_NO_DEVICES=1 \
+          WLR_RENDERER=pixman \
+          XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
+            sway -c /tmp/sway-fixture.config > /tmp/sway.log 2>&1 &
+
+          for _ in $(seq 1 60); do
+            socket="$(find "${XDG_RUNTIME_DIR}" -mindepth 1 -maxdepth 1 -type s -name 'wayland-*' | head -n1)"
+            [ -n "${socket}" ] && break
+            sleep 0.5
+          done
+          if [ -z "${socket}" ]; then
+            echo "sway did not come up:"; cat /tmp/sway.log; exit 1
+          fi
+
+          export WAYLAND_DISPLAY="$(basename "${socket}")"
+
+          # swaymsg finds sway's IPC socket through SWAYSOCK, which sway exports
+          # only to its own children. It also appears a moment after the Wayland
+          # socket, so it needs a wait of its own: reading it once, right after
+          # the loop above, is a race that comes up empty and leaves the outputs
+          # at their defaults with nothing failing.
+          for _ in $(seq 1 40); do
+            SWAYSOCK="$(find "${XDG_RUNTIME_DIR}" -mindepth 1 -maxdepth 1 -type s -name 'sway-ipc.*.sock' | head -n1)"
+            [ -n "${SWAYSOCK}" ] && break
+            sleep 0.25
+          done
+          if [ -z "${SWAYSOCK}" ]; then
+            echo "sway is up but never exposed an IPC socket:"; cat /tmp/sway.log; exit 1
+          fi
+          export SWAYSOCK
+
+          swaymsg output HEADLESS-1 mode 3840x2160 scale 1.6 position 0 0
+          swaymsg output HEADLESS-2 mode 1920x1080 scale 1 position 2400 0
+          swaymsg -t get_outputs | jq -r '.[] | "\(.name) mode=\(.current_mode.width)x\(.current_mode.height) scale=\(.scale) logical=\(.rect.width)x\(.rect.height) at \(.rect.x),\(.rect.y)"'
+
+          {
+            echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
+            echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY}"
+            echo "SWAYSOCK=${SWAYSOCK}"
+          } >> "$GITHUB_ENV"
+
+      - name: Run the Wayland tests against it
+        # A second pass over the same binary, seconds rather than another build.
+        # It is kept separate from the run above so the X11 pass keeps testing
+        # what it always did: platf::init() prefers Wayland when both are set,
+        # which would silently move the platform suites off X11.
+        run: |
+          ./build/tests/test_sunshine --gtest_color=yes --gtest_filter='Wayland*' \
+            --gtest_output=json:/tmp/wayland-tests.json
+
+          # Every case in this suite skips itself when it cannot reach a
+          # compositor, which is right on a developer's machine and useless
+          # here: the whole point of the step above is that one is running. A
+          # fixture that quietly stops being applied - a socket that is not
+          # found, a scale that is not set - would leave this job green while
+          # covering nothing, which is the failure this suite exists to catch.
+          skipped="$(jq -r '
+            [.testsuites[] | select(.name == "WaylandLiveLayoutTest")
+             | .testsuite[] | select(.result != "COMPLETED") | .name] | join(", ")
+          ' /tmp/wayland-tests.json)"
+          if [ -n "${skipped}" ]; then
+            echo "::error::The compositor fixture is not reaching the tests. Skipped: ${skipped}"
+            echo "--- sway log ---"; cat /tmp/sway.log
+            exit 1
+          fi
+          echo "The live layout suite ran against the compositor."
 
   # ===========================================
   # Windows Build

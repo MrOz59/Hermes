@@ -1437,13 +1437,7 @@ namespace confighttp {
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    */
-  void getConfig(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-
-    print_req(request);
-
+  nlohmann::json computed_config_json() {
     nlohmann::json output_tree;
     output_tree["status"] = true;
     output_tree["platform"] = SUNSHINE_PLATFORM;
@@ -1459,11 +1453,33 @@ namespace confighttp {
     output_tree["hermesKmsDiagnostic"] = output_tree["hermesKmsInfo"]["diagnostic"];
     output_tree["clipboardInfo"] = clipboard_status_json();
 #endif
-    auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
-    for (auto &[name, value] : vars) {
-      output_tree[name] = value;
+    return output_tree;
+  }
+
+  nlohmann::json &overlay_config_file(nlohmann::json &response, const std::unordered_map<std::string, std::string> &file_values) {
+    for (const auto &[name, value] : file_values) {
+      // The response is authoritative for what it computed. config::parse_config
+      // yields strings and nothing else, so letting one of these through does
+      // not merely report a stale value - it changes the field's type, and the
+      // home page reads streamPorts as an array.
+      if (response.contains(name)) {
+        continue;
+      }
+      response[name] = value;
     }
-    send_response(response, output_tree);
+    return response;
+  }
+
+  void getConfig(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    auto output_tree = computed_config_json();
+    const auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
+    send_response(response, overlay_config_file(output_tree, vars));
   }
 
   /**
@@ -1476,6 +1492,10 @@ namespace confighttp {
   void getHestiaCapabilities(resp_https_t response, req_https_t request) {
     print_req(request);
 
+    send_response(response, hestia_capabilities_json());
+  }
+
+  nlohmann::json hestia_capabilities_json() {
     const nlohmann::json capabilities {
       {"ok", true},
       {"server_name", "Hermes"},
@@ -1527,7 +1547,7 @@ namespace confighttp {
       }},
     };
 
-    send_response(response, capabilities);
+    return capabilities;
   }
 
   void send_hestia_error(resp_https_t response, SimpleWeb::StatusCode status, const char *code, const char *message) {

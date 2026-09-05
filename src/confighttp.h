@@ -8,6 +8,7 @@
 #include <functional>
 #include <chrono>
 #include <string>
+#include <unordered_map>
 #include <string_view>
 
 // lib includes
@@ -32,6 +33,37 @@ namespace confighttp {
    *         such as a software-encoding fallback, do not block).
    */
   nlohmann::json hestia_preflight_json();
+
+  /**
+   * @brief The Hestia extension capabilities document.
+   *
+   * Exposed so the served document can be checked against the
+   * `capabilities.schema.json` this repository ships. The two had drifted -
+   * the document advertised a virtual display backend the schema does not
+   * allow - and every shipped Hestia rejected the whole document for it.
+   */
+  nlohmann::json hestia_capabilities_json();
+
+  /**
+   * @brief The fields the Web UI's config response computes for itself:
+   *        host status, platform and version. Never configuration.
+   *
+   * Every key here must also be in config::server_computed_keys(), which is
+   * what keeps a hermes.conf from overwriting one of them; a test asserts it.
+   */
+  nlohmann::json computed_config_json();
+
+  /**
+   * @brief Overlay a parsed hermes.conf onto @p response, in place.
+   *
+   * A key the response already carries is left alone. The Web UI posts the
+   * whole config response back and saveConfig() persists it, so a read-only
+   * field really does end up in the file - and a parsed value is always a
+   * string, which replaced a JSON array with `"[]"` and took the home page
+   * down with it.
+   * @return @p response, for chaining.
+   */
+  nlohmann::json &overlay_config_file(nlohmann::json &response, const std::unordered_map<std::string, std::string> &file_values);
 
   /**
    * @brief Whether an address may authenticate with the Game Mode local token.

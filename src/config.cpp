@@ -702,6 +702,24 @@ namespace config {
     );
   }
 
+  const std::set<std::string> &server_computed_keys() {
+    static const std::set<std::string> keys {
+      "clipboardInfo",
+      "evdiDiagnostic",
+      "evdiInfo",
+      "evdiSetupRequired",
+      "hermesKmsDiagnostic",
+      "hermesKmsInfo",
+      "platform",
+      "status",
+      "streamPorts",
+      "vdisplayStatus",
+      "version",
+      "version_commit",
+    };
+    return keys;
+  }
+
   std::unordered_map<std::string, std::string> parse_config(const ::std::string_view &file_content) {
     std::unordered_map<std::string, std::string> vars;
 
@@ -1431,11 +1449,9 @@ namespace config {
       vars.erase(it);
     }
 
-    vars.erase("clipboardInfo"s);
-    vars.erase("evdiInfo"s);
-    vars.erase("evdiDiagnostic"s);
-    vars.erase("evdiSetupRequired"s);
-    vars.erase("vdisplayStatus"s);
+    for (const auto &key : server_computed_keys()) {
+      vars.erase(key);
+    }
 
     if (sunshine.min_log_level <= 3) {
       for (auto &[var, _] : vars) {

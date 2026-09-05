@@ -594,6 +594,24 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- A `hermes.conf` key no longer replaces the field of the same name in the Web
+  UI's config response. `saveConfig()` persists whatever the config page posts
+  back and the page posts the whole response, so a read-only field such as
+  `streamPorts` really does end up in the file - and the merge then overwrote
+  the JSON array with the string the config parser produces. `"[]"` is truthy,
+  so the home page's `|| []` guard did not fire, `.filter` was not a function,
+  and the computed feeding the root render threw: `v-cloak` left the whole page
+  blank rather than partly drawn, which made it look like a server or auth
+  failure. Every other page was fine, because only the home page reads that
+  field. The response is now authoritative for what it computes, and the keys
+  it computes live in one list that both the config parser and the response
+  consult, so the two cannot drift apart again ([#40]).
+
+  The served Hestia capabilities document is also checked against the
+  `capabilities.schema.json` this repository ships, which is the contract that
+  had silently drifted in [#36]; a schema keyword the check does not implement
+  fails rather than passing quietly.
+
 - The virtual display no longer lands on top of the physical monitor under KDE.
   KWin keeps a saved setup per output combination and replays it when a
   connector appears, so a combination last used by an exclusive session came
@@ -1315,6 +1333,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#34]: https://github.com/MrOz59/Hermes/issues/34
 [#35]: https://github.com/MrOz59/Hermes/issues/35
 [#36]: https://github.com/MrOz59/Hermes/issues/36
+[#40]: https://github.com/MrOz59/Hermes/issues/40
 
 ## [0.4.0] - 2026-07-02
 

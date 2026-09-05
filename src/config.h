@@ -8,6 +8,7 @@
 #include <bitset>
 #include <chrono>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -316,4 +317,18 @@ namespace config {
 
   int parse(int argc, char *argv[]);
   std::unordered_map<std::string, std::string> parse_config(const std::string_view &file_content);
+
+  /**
+   * @brief Keys the Web UI's config response carries but that are never
+   *        configuration: server-computed status, platform and version fields.
+   *
+   * They end up in a real hermes.conf, because saveConfig() persists whatever
+   * the Web UI posts and the config page posts the whole response back. Two
+   * places have to know about them and used to disagree: the parser, which
+   * would otherwise report each as an unrecognized option, and the config
+   * response, where a parsed value - always a string - replaced the structured
+   * field of the same name and left the home page calling an array method on
+   * "[]". One list, so the two cannot drift apart again.
+   */
+  const std::set<std::string> &server_computed_keys();
 }  // namespace config

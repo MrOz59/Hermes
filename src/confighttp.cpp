@@ -1495,7 +1495,7 @@ namespace confighttp {
       }},
       {"features", {
         {"virtual_display", true},
-        {"virtual_display_backend", {"evdi", "hermes_kms", "none"}},
+        {"virtual_display_backend", {"evdi", "hermes_kms"}},
         {"hermes_kms_multi_output", {
           {"supported", true},
           {"experimental", true},

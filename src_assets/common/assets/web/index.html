@@ -110,6 +110,7 @@
   import ResourceCard from './ResourceCard.vue'
   import AnnouncementFeed from './AnnouncementFeed.vue'
   import HermesVersion from './hermes_version'
+  import { hostWarnings as computeHostWarnings } from './hostWarnings'
 
   console.log("Hello, Hermes!")
   const hermesApi = "https://api.github.com/repos/MrOz59/Hermes";
@@ -253,100 +254,10 @@
         return this.config?.version?.includes("dirty") ?? false;
       },
       hostWarnings() {
-        if (!this.config) return [];
-        const warnings = [];
-        const evdiInfo = this.config.evdiInfo || {};
-        const hermesKmsInfo = this.config.hermesKmsInfo || {};
-        const clipboardInfo = this.config.clipboardInfo || {};
-        const backend = this.config.virtual_display_backend;
-        // Only the EVDI backend gets EVDI's readiness warnings. Treating
-        // "not hermes_kms" as EVDI meant a host configured for no virtual-display
-        // device at all was told to go install one, and every remedy it was
-        // offered was a no-op there.
-        const evdiBackendActive = this.config.platform === 'linux' && backend === 'evdi';
-        const hermesKmsBackendActive = this.config.platform === 'linux' && backend === 'hermes_kms';
-
-        if (evdiBackendActive && evdiInfo.diagnostic && evdiInfo.diagnostic !== 'ready') {
-          warnings.push({
-            id: 'evdi-' + evdiInfo.diagnostic,
-            level: 'warning',
-            title: 'Virtual display is not ready',
-            message: `EVDI diagnostic: ${evdiInfo.diagnostic}. Hermes virtual-display sessions may fail until this is fixed. The Audio/Video tab has a step-by-step install guide.`,
-            href: './config#Audio/Video',
-            action: 'Open Audio/Video settings',
-          });
-        }
-
-        if (hermesKmsBackendActive && hermesKmsInfo.diagnostic && hermesKmsInfo.diagnostic !== 'ready') {
-          warnings.push({
-            id: 'hermes-kms-' + hermesKmsInfo.diagnostic,
-            level: 'warning',
-            title: 'Hermes-KMS driver is not ready',
-            message: `Hermes-KMS diagnostic: ${hermesKmsInfo.diagnostic}. Virtual-display sessions may fail until this is fixed. The Audio/Video tab has a step-by-step install guide for the Hermes-KMS driver.`,
-            href: './config#Audio/Video',
-            action: 'Open Audio/Video settings',
-          });
-        }
-
-        if (this.config.platform === 'linux' && clipboardInfo.diagnostic && !clipboardInfo.available) {
-          warnings.push({
-            id: 'clipboard-' + clipboardInfo.diagnostic,
-            level: 'warning',
-            title: 'Clipboard sync is not ready',
-            message: `Clipboard diagnostic: ${clipboardInfo.diagnostic}. Install wl-clipboard on Wayland or xclip on X11 if you want Hestia clipboard sync.`,
-            href: './config#Audio/Video',
-            action: 'Open clipboard setup',
-          });
-        }
-
-        const busyPorts = (this.config.streamPorts || []).filter(port => port.available === false);
-        if (busyPorts.length > 0) {
-          warnings.push({
-            id: 'stream-port-in-use',
-            level: 'danger',
-            title: 'A port Hermes needs to stream is already taken',
-            message: `${busyPorts.map(port => `${port.name} (${port.port})`).join(', ')} cannot be bound. `
-              + 'Streams will fail the moment a client connects. Another Hermes may still be running, or '
-              + 'another program has taken the port; changing the base port moves all of them at once.',
-            href: './config#Network',
-            action: 'Open network settings',
-          });
-        }
-
-        if (evdiInfo.captureFallbackActive) {
-          warnings.push({
-            id: 'evdi-capture-fallback',
-            level: 'danger',
-            title: 'Virtual-display isolation fell back',
-            message: 'The compositor did not activate the EVDI output, so Hermes is streaming a physical display to avoid black video.',
-            href: './config#Audio/Video',
-            action: 'Open EVDI diagnostics',
-          });
-        }
-
-        if (evdiInfo.activeDisplays?.some(display => display.zeroCopyCapture === false)) {
-          warnings.push({
-            id: 'evdi-cpu-buffer',
-            level: 'warning',
-            title: 'Virtual display uses a CPU capture copy',
-            message: 'EVDI has no render node for direct VAAPI import. Hermes can still use hardware encoding, but the virtual-display capture path copies frames through system memory and may add latency.',
-            href: './config#Audio/Video',
-            action: 'Open EVDI diagnostics',
-          });
-        }
-
-        if (this.config.platform === 'linux' && this.config.isolated_virtual_display_option && !evdiInfo.exclusiveLayoutSupported) {
-          warnings.push({
-            id: 'evdi-exclusive-layout',
-            level: 'warning',
-            title: 'Exclusive virtual-display layout is unavailable',
-            message: 'Hermes cannot currently control this compositor output layout automatically. Physical monitors may remain enabled during virtual-display sessions.',
-            href: './config#Audio/Video',
-            action: 'Open Audio/Video settings',
-          });
-        }
-
-        return warnings;
+        // The body lives in ./hostWarnings so it can be tested without a
+        // browser: it feeds the root render, and a value it could not cope
+        // with used to blank the whole page rather than drop one banner.
+        return computeHostWarnings(this.config);
       },
       /** Parse the text errors, calculating the text, the timestamp and the level */
       fancyLogs() {

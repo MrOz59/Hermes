@@ -557,6 +557,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Hermes-KMS and Hestia trackers for problems that belong to them.
 
 ### Changed
+- The Web UI has tests. It had none of any kind, which is how a computed
+  feeding the root render came to blank the whole home page over one field of
+  the wrong type: `hostWarnings` lived inline in `index.html`, where nothing
+  could reach it without a browser. It is now a module, and the banners it
+  produces are checked - including that a malformed field costs one banner
+  rather than the page. `npm test` runs them, and so does CI.
+
 - CI now runs the test suite against a real compositor. The hard part of this
   project is what a compositor does with the outputs Hermes asks it for, and no
   test could see one: every Wayland case skipped itself on a runner with
@@ -609,6 +616,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- The home page no longer goes blank when a field of the config response has
+  the wrong type. `hostWarnings` feeds the root render with no error boundary,
+  so a value it could not cope with left it undefined, the render dereferenced
+  `.length`, and `v-cloak` hid the torn-down tree - an entirely blank page
+  rather than a partial one, which reads as a server or auth failure. It no
+  longer trusts the shape of what it is given: a bad field costs its own banner
+  and nothing else ([#40]).
+
 - A `hermes.conf` key no longer replaces the field of the same name in the Web
   UI's config response. `saveConfig()` persists whatever the config page posts
   back and the page posts the whole response, so a read-only field such as

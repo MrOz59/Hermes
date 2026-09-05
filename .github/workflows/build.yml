@@ -119,6 +119,18 @@ jobs:
       - name: Build tests
         run: cmake --build build --target test_sunshine -j$(nproc)
 
+      # The Web UI had no test of any kind, which is how a computed feeding the
+      # root render came to blank the whole home page over one field of the
+      # wrong type. These run on their own vitest config: vite.config.js is
+      # driven by the CMake environment and builds the pages through ejs,
+      # neither of which a unit test needs.
+      - name: Run the Web UI tests
+        # npm install rather than npm ci: package-lock.json is gitignored here,
+        # and the web-ui CMake target installs the same way.
+        run: |
+          npm install
+          npm test
+
       - name: Run tests
         # The suite is a single GoogleTest binary (no ctest registration);
         # run it directly as documented in docs/contributing.md. Run under

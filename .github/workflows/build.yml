@@ -832,10 +832,22 @@ jobs:
       - name: List artifacts
         run: find artifacts/ -type f
 
+      # Moved through the API rather than with `git push`. The push is
+      # authenticated as the github-actions App, and GitHub refuses a ref push
+      # that carries a change to .github/workflows without the `workflows`
+      # permission - which GITHUB_TOKEN cannot be granted, because there is no
+      # such key in the `permissions:` block. So every commit that touches a
+      # workflow file failed to publish a nightly, with the packages built and
+      # the release never updated. Updating a ref to a commit that is already
+      # on the remote adds no file content, and is not subject to that check.
       - name: Move nightly tag to current commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git tag -f nightly "${GITHUB_SHA}"
-          git push -f origin "refs/tags/nightly"
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly" \
+              -f sha="${GITHUB_SHA}" -F force=true \
+            || gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/nightly" -f sha="${GITHUB_SHA}"
 
       - name: Clear stale nightly assets
         run: |

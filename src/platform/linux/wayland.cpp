@@ -5,6 +5,7 @@
 // standard includes
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -21,6 +22,8 @@
 #include <fcntl.h>
 #include <gbm.h>
 #include <poll.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <unistd.h>
 #include <wayland-client.h>
 #include <wayland-util.h>
@@ -88,7 +91,8 @@ namespace wl {
   /**
    * @brief Waits up to the specified timeout to dispatch new events on the wl_display.
    * @param timeout The timeout in milliseconds.
-   * @return `true` if new events were dispatched or `false` if the timeout expired.
+   * @return `true` if new events were dispatched, `false` if the timeout expired
+   *         or the connection is dead; connection_error() tells the two apart.
    */
   bool display_t::dispatch(std::chrono::milliseconds timeout) {
     // Check if any events are queued already. If not, flush
@@ -100,9 +104,14 @@ namespace wl {
       struct pollfd pfd = {};
       pfd.fd = wl_display_get_fd(display_internal.get());
       pfd.events = POLLIN;
-      if (poll(&pfd, 1, timeout.count()) == 1 && (pfd.revents & POLLIN)) {
-        // Read the new event(s)
-        wl_display_read_events(display_internal.get());
+      // A hang-up or error without POLLIN still has to reach read_events, so
+      // the connection error is recorded instead of looking like a timeout.
+      if (poll(&pfd, 1, timeout.count()) == 1 && (pfd.revents & (POLLIN | POLLHUP | POLLERR))) {
+        // Read the new event(s). -1 only ever means the connection is dead.
+        if (wl_display_read_events(display_internal.get()) < 0) {
+          connection_error();
+          return false;
+        }
       } else {
         // We timed out, so unlock the queue now
         wl_display_cancel_read(display_internal.get());
@@ -110,9 +119,30 @@ namespace wl {
       }
     }
 
-    // Dispatch any existing or new pending events
-    wl_display_dispatch_pending(display_internal.get());
+    // Dispatch any existing or new pending events. -1 means the connection is dead.
+    if (wl_display_dispatch_pending(display_internal.get()) < 0) {
+      connection_error();
+      return false;
+    }
     return true;
+  }
+
+  int display_t::connection_error() {
+    auto err = wl_display_get_error(display_internal.get());
+    if (err && !error_logged) {
+      error_logged = true;
+      if (err == EPROTO) {
+        const wl_interface *iface = nullptr;
+        std::uint32_t id = 0;
+        auto code = wl_display_get_protocol_error(display_internal.get(), &iface, &id);
+        BOOST_LOG(error) << "Wayland connection lost to a protocol error: "sv
+                         << (iface ? iface->name : "unknown") << '#' << id << " error "sv << code
+                         << ". Capture cannot continue on this connection."sv;
+      } else {
+        BOOST_LOG(error) << "Wayland connection lost: "sv << std::strerror(err);
+      }
+    }
+    return err;
   }
 
   wl_registry *display_t::registry() {
@@ -556,7 +586,8 @@ namespace wl {
       this->interface[WLR_EXPORT_DMABUF] = true;
     } else if (!std::strcmp(interface, zwp_linux_dmabuf_v1_interface.name)) {
       BOOST_LOG(info) << "Found interface: "sv << interface << '(' << id << ") version "sv << version;
-      dmabuf_interface = (zwp_linux_dmabuf_v1 *) wl_registry_bind(registry, id, &zwp_linux_dmabuf_v1_interface, version);
+      // Never bind a version newer than the generated code knows about.
+      dmabuf_interface = (zwp_linux_dmabuf_v1 *) wl_registry_bind(registry, id, &zwp_linux_dmabuf_v1_interface, std::min<std::uint32_t>(version, zwp_linux_dmabuf_v1_interface.version));
 
       this->interface[LINUX_DMABUF] = true;
     } else if (!std::strcmp(interface, ext_image_copy_capture_manager_v1_interface.name)) {
@@ -663,6 +694,114 @@ namespace wl {
     return device;
   }
 
+  namespace {
+    struct feedback_ctx_t {
+      dev_t main_device {};
+      bool have_main_device {false};
+      bool done {false};
+    };
+
+    void feedback_done(void *data, zwp_linux_dmabuf_feedback_v1 *) {
+      static_cast<feedback_ctx_t *>(data)->done = true;
+    }
+
+    void feedback_format_table(void *, zwp_linux_dmabuf_feedback_v1 *, std::int32_t fd, std::uint32_t) {
+      close(fd);
+    }
+
+    void feedback_main_device(void *data, zwp_linux_dmabuf_feedback_v1 *, wl_array *device) {
+      auto ctx = static_cast<feedback_ctx_t *>(data);
+      if (device->size == sizeof(dev_t)) {
+        std::memcpy(&ctx->main_device, device->data, sizeof(dev_t));
+        ctx->have_main_device = true;
+      }
+    }
+
+    void feedback_tranche_done(void *, zwp_linux_dmabuf_feedback_v1 *) {}
+
+    void feedback_tranche_target_device(void *, zwp_linux_dmabuf_feedback_v1 *, wl_array *) {}
+
+    void feedback_tranche_formats(void *, zwp_linux_dmabuf_feedback_v1 *, wl_array *) {}
+
+    void feedback_tranche_flags(void *, zwp_linux_dmabuf_feedback_v1 *, std::uint32_t) {}
+
+    const zwp_linux_dmabuf_feedback_v1_listener feedback_listener {
+      .done = feedback_done,
+      .format_table = feedback_format_table,
+      .main_device = feedback_main_device,
+      .tranche_done = feedback_tranche_done,
+      .tranche_target_device = feedback_tranche_target_device,
+      .tranche_formats = feedback_tranche_formats,
+      .tranche_flags = feedback_tranche_flags,
+    };
+
+    /**
+     * @brief The node to allocate on for the DRM device that owns a device number.
+     *
+     * A compositor names its GPU by number and may name either its primary or
+     * its render node, so the number is resolved through libdrm rather than
+     * used as a path. The answer is the render node, or the primary node for a
+     * driver that exposes no render node: GBM can allocate there too, and
+     * init_gbm() proves whichever node comes back before trusting it.
+     * @return The node's path, or an empty string when no DRM device owns the number.
+     */
+    std::string render_node_for_device(dev_t device_id) {
+      drmDevice *drm_device {nullptr};
+      if (drmGetDeviceFromDevId(device_id, 0, &drm_device) != 0) {
+        BOOST_LOG(warning) << "No DRM device found for device number "sv << major(device_id) << ':' << minor(device_id);
+        return {};
+      }
+      std::string node;
+      if (drm_device->available_nodes & (1 << DRM_NODE_RENDER)) {
+        node = drm_device->nodes[DRM_NODE_RENDER];
+      } else if (drm_device->available_nodes & (1 << DRM_NODE_PRIMARY)) {
+        node = drm_device->nodes[DRM_NODE_PRIMARY];
+      }
+      drmFreeDevice(&drm_device);
+      return node;
+    }
+  }  // namespace
+
+  std::string compositor_render_node(display_t &display, zwp_linux_dmabuf_v1 *dmabuf_interface) {
+    if (!display.get() || !dmabuf_interface) {
+      return {};
+    }
+    if (zwp_linux_dmabuf_v1_get_version(dmabuf_interface) < ZWP_LINUX_DMABUF_V1_GET_DEFAULT_FEEDBACK_SINCE_VERSION) {
+      BOOST_LOG(info) << "linux-dmabuf v"sv << zwp_linux_dmabuf_v1_get_version(dmabuf_interface)
+                      << " has no feedback; cannot learn which GPU the compositor renders on"sv;
+      return {};
+    }
+
+    feedback_ctx_t ctx;
+    auto feedback = zwp_linux_dmabuf_v1_get_default_feedback(dmabuf_interface);
+    zwp_linux_dmabuf_feedback_v1_add_listener(feedback, &feedback_listener, &ctx);
+    auto roundtrip = wl_display_roundtrip(display.get());
+    zwp_linux_dmabuf_feedback_v1_destroy(feedback);
+
+    if (roundtrip < 0) {
+      BOOST_LOG(warning) << "Wayland connection failed while reading linux-dmabuf feedback"sv;
+      return {};
+    }
+    if (!ctx.done) {
+      BOOST_LOG(warning) << "The compositor did not finish sending linux-dmabuf feedback"sv;
+      return {};
+    }
+    if (!ctx.have_main_device) {
+      BOOST_LOG(warning) << "The compositor sent no linux-dmabuf main device"sv;
+      return {};
+    }
+
+    auto node = render_node_for_device(ctx.main_device);
+    if (!node.empty()) {
+      BOOST_LOG(info) << "The compositor renders on "sv << node << " (linux-dmabuf feedback)"sv;
+    }
+    return node;
+  }
+
+  void dmabuf_t::set_render_node(std::string node) {
+    render_node = std::move(node);
+  }
+
   /**
    * @brief Pick the render node the capture buffers will be allocated on.
    *
@@ -676,8 +815,13 @@ namespace wl {
    * probe green, because an encoder probe never touches this path.
    *
    * The node is therefore taken, in order, from what the user configured, from
-   * what the wlroots compositor was told to render on, and finally from a scan
-   * that keeps the first device able to produce a buffer.
+   * what the compositor itself said it renders on (linux-dmabuf feedback, see
+   * compositor_render_node()), from what the wlroots compositor was told to
+   * render on, and finally from a scan that keeps the first device able to
+   * produce a buffer. That scan is the last resort for a reason: a buffer the
+   * wrong GPU produced perfectly well is still one the compositor cannot
+   * import, and on Hyprland that import failure is a fatal protocol error, not
+   * a failed frame.
    */
   bool dmabuf_t::init_gbm() {
     if (gbm_device) {
@@ -694,7 +838,24 @@ namespace wl {
         return false;
       }
       BOOST_LOG(info) << "GBM capture device: "sv << node << " (adapter_name)"sv;
+      // Compared by device, not by path: adapter_name may be a symlink to the
+      // node the compositor named, or that GPU's primary node.
+      struct stat st {};
+      if (!render_node.empty() && stat(node.c_str(), &st) == 0 && render_node_for_device(st.st_rdev) != render_node) {
+        BOOST_LOG(warning) << "adapter_name "sv << node << " is not the GPU the compositor renders on ("sv
+                           << render_node << "); the compositor may refuse buffers allocated there."sv;
+      }
       return true;
+    }
+
+    if (!render_node.empty()) {
+      gbm_device = open_usable_gbm_device(render_node.c_str(), drm_fd);
+      if (gbm_device) {
+        BOOST_LOG(info) << "GBM capture device: "sv << render_node << " (named by the compositor)"sv;
+        return true;
+      }
+      BOOST_LOG(warning) << "The compositor renders on "sv << render_node
+                         << ", which cannot allocate capture buffers; searching the other render nodes."sv;
     }
 
     // A wlroots compositor renders the captured output on this node whenever the
@@ -1332,15 +1493,10 @@ namespace wl {
 
   void dmabuf_t::icc_session_dmabuf_device(ext_image_copy_capture_session_v1 *session, struct wl_array *device) {
     icc_begin_constraints();
-    // This is the one thing screencopy never tells us: the compositor names the
-    // device it renders on, which is the answer init_gbm() otherwise has to
-    // guess at. Trust it, but prove it the same way - a named device that cannot
-    // allocate is still no use, and falling through to the search leaves the
-    // hybrid-GPU case working rather than trading one wrong node for another.
-    if (gbm_device) {
-      return;
-    }
-
+    // The compositor names the device it renders on, per session, which is the
+    // answer init_gbm() otherwise has to guess at. It is trusted the same way
+    // as the linux-dmabuf feedback answer: init_gbm() proves the node can
+    // allocate and falls through to the search when it cannot.
     if (device->size != sizeof(dev_t)) {
       BOOST_LOG(warning) << "Capture session named a device of "sv << device->size
                          << " bytes, expected "sv << sizeof(dev_t) << "; searching instead."sv;
@@ -1349,31 +1505,7 @@ namespace wl {
 
     dev_t device_id;
     std::memcpy(&device_id, device->data, sizeof(dev_t));
-
-    drmDevice *drm_device {nullptr};
-    if (drmGetDeviceFromDevId(device_id, 0, &drm_device) != 0) {
-      BOOST_LOG(warning) << "Capture session named a DRM device that could not be opened; searching instead."sv;
-      return;
-    }
-
-    const char *node {nullptr};
-    if (drm_device->available_nodes & (1 << DRM_NODE_RENDER)) {
-      node = drm_device->nodes[DRM_NODE_RENDER];
-    } else if (drm_device->available_nodes & (1 << DRM_NODE_PRIMARY)) {
-      node = drm_device->nodes[DRM_NODE_PRIMARY];
-    }
-
-    if (node) {
-      gbm_device = open_usable_gbm_device(node, drm_fd);
-      if (gbm_device) {
-        BOOST_LOG(info) << "GBM capture device: "sv << node << " (named by the compositor)"sv;
-      } else {
-        BOOST_LOG(warning) << "The compositor renders on "sv << node
-                           << ", which cannot allocate capture buffers; searching the other render nodes."sv;
-      }
-    }
-
-    drmFreeDevice(&drm_device);
+    set_render_node(render_node_for_device(device_id));
   }
 
   void dmabuf_t::icc_session_dmabuf_format(ext_image_copy_capture_session_v1 *session, std::uint32_t format, struct wl_array *modifiers) {

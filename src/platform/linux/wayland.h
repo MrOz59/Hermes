@@ -22,6 +22,13 @@
 // local includes
 #include "graphics.h"
 
+// Declared at global scope so a translation unit that never includes <gbm.h>
+// agrees with one that does about the type of dmabuf_t's members; otherwise
+// `struct gbm_device *` below declares a wl::gbm_device of its own and LTO
+// reports the mismatch.
+struct gbm_device;
+struct gbm_bo;
+
 /**
  * The classes defined in this macro block should only be used by
  * cpp files whose compilation depends on SUNSHINE_BUILD_WAYLAND
@@ -56,6 +63,11 @@ namespace wl {
     dmabuf_t &operator=(dmabuf_t &&) = delete;
 
     void listen(zwlr_screencopy_manager_v1 *screencopy_manager, zwp_linux_dmabuf_v1 *dmabuf_interface, wl_output *output, bool blend_cursor = false);
+    /**
+     * @brief Name the render node the compositor renders on, so init_gbm()
+     * allocates there. See compositor_render_node().
+     */
+    void set_render_node(std::string node);
     static void buffer_params_created(void *data, struct zwp_linux_buffer_params_v1 *params, struct wl_buffer *wl_buffer);
     static void buffer_params_failed(void *data, struct zwp_linux_buffer_params_v1 *params);
 
@@ -156,6 +168,8 @@ namespace wl {
     // gbm_create_device() borrows the fd, it does not adopt it, so the device
     // cannot be the only thing holding on to it.
     int drm_fd {-1};
+    // Render node the compositor renders on, when it told us; empty otherwise.
+    std::string render_node;
     struct gbm_bo *current_bo {nullptr};
     struct wl_buffer *current_wl_buffer {nullptr};
     bool y_invert {false};
@@ -251,8 +265,17 @@ namespace wl {
     // Roundtrip with Wayland connection
     void roundtrip();
 
-    // Wait up to the timeout to read and dispatch new events
+    // Wait up to the timeout to read and dispatch new events. Returns false on
+    // a timeout and on a dead connection; connection_error() tells the two apart.
     bool dispatch(std::chrono::milliseconds timeout);
+
+    /**
+     * @brief The errno-style code of the connection's fatal error, 0 for none.
+     * A protocol error (EPROTO) is fatal for the whole connection: no further
+     * event is ever delivered, so waiting on one looks exactly like a timeout.
+     * The first call after the error logs it, later calls only report it.
+     */
+    int connection_error();
 
     // Get the registry associated with the display
     // No need to manually free the registry
@@ -264,9 +287,21 @@ namespace wl {
 
   private:
     display_internal_t display_internal;
+    bool error_logged {false};
   };
 
   std::vector<std::unique_ptr<monitor_t>> monitors(const char *display_name = nullptr);
+
+  /**
+   * @brief Ask the compositor which GPU it renders on.
+   *
+   * linux-dmabuf default feedback (protocol v4 and later) names the device the
+   * compositor imports buffers into; screencopy itself never says. Performs a
+   * roundtrip on the display.
+   * @return The render node of that device, or an empty string when the
+   *         compositor did not say or the protocol is too old.
+   */
+  std::string compositor_render_node(display_t &display, zwp_linux_dmabuf_v1 *dmabuf_interface);
   /**
    * Configure a virtual output through wlroots' output-management protocol.
    * Returns false when the compositor does not expose that protocol or rejects

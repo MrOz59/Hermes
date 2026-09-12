@@ -616,6 +616,31 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- The `.deb` no longer declares dependencies that do not describe it. The
+  package's `Depends` was a hand-written list, and it was wrong in both
+  directions: it pulled in `libboost-all-dev`, a build-time `-dev` metapackage
+  worth hundreds of megabytes that nothing needs at runtime, because Boost is
+  linked statically here - and it named neither ICU nor miniupnpc, which the
+  binary genuinely does load. Several other entries only resolved through
+  virtual-package provides left over from Ubuntu's time_t transition
+  (`libssl3` is now `libssl3t64`, `libcurl4` is `libcurl4t64`).
+
+  The list is now generated with `dpkg-shlibdeps` from what the binary actually
+  links, the way a normal Debian build does it. An omission was the dangerous
+  half of the old list: apt installed the package without complaint and the
+  binary then failed to start on a release whose sonames had moved, which is
+  much harder to diagnose than a refused install.
+
+- The `.deb` is built for each supported Ubuntu LTS rather than only 24.04, for
+  the same reason as the Fedora packages: 24.04 carries `libicu74` and
+  `libminiupnpc17`, and 26.04 carries `libicu78` and `libminiupnpc21`. Each
+  package names its release in the filename - `hermes_<version>_ubuntu26.04_
+  amd64.deb`. The builds now run in plain `ubuntu:<release>` containers instead
+  of on the CI runner image, so a package can only depend on what that release
+  actually ships; a runner image carries a great deal of extra software, and
+  anything the build happened to link from it would have become a dependency
+  that real users do not have.
+
 - The `.rpm` installs on a current Fedora again. CI built one package, on Fedora
   40, and an RPM carries as its dependencies the exact library sonames it linked
   against at build time - so the package demanded `libicuuc.so.74` and

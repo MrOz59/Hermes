@@ -434,24 +434,50 @@ jobs:
   # ===========================================
   # Debian/Ubuntu Package (.deb)
   # ===========================================
+  # One package per supported Ubuntu LTS, for the same reason the RPM job
+  # builds per Fedora release: the libraries a package links move between
+  # releases. The build runs in a plain `ubuntu:<release>` container rather than
+  # on the runner image, so the binary can only link what that release actually
+  # ships - a runner image carries a great deal of extra software, and anything
+  # the build picked up from it would become a dependency users do not have.
+  #
+  # Add a row when a new LTS ships and drop it at EOL:
+  # https://wiki.ubuntu.com/Releases
   build-deb:
     needs: [test, version]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 24.04 stays on CUDA 12.6: its NVIDIA repo still carries 12.x, and
+          # 12.x still generates code for pre-Turing cards. 26.04's repo starts
+          # at 13.3, and CUDA 13 dropped those architectures - see the RPM job.
+          # nvcc's host-compiler cap (crt/host_config.h): 12.6 refuses GCC > 13
+          # (24.04 ships 13), 13.4 refuses GCC > 16 (26.04 ships 15).
+          - ubuntu: "24.04"
+            repo: ubuntu2404
+            cuda: "12-6"
+          - ubuntu: "26.04"
+            repo: ubuntu2604
+            cuda: "13-4"
+    container:
+      image: ubuntu:${{ matrix.ubuntu }}
     env:
+      DEBIAN_FRONTEND: noninteractive
       BRANCH: ${{ github.ref_name }}
       BUILD_VERSION: ${{ needs.version.outputs.build_version }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
+      # Before the checkout: a bare container has no git, and the submodule
+      # checkout needs one.
       - name: Install Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          apt-get update
+          apt-get install -y \
+            ca-certificates \
+            git \
+            wget \
             build-essential \
             cmake \
             ninja-build \
@@ -485,23 +511,41 @@ jobs:
             libqt6svg6-dev \
             qt6-base-dev \
             dpkg-dev \
-            debhelper \
-            nodejs \
-            npm
+            debhelper
+
+      # Node comes from setup-node, not apt: Ubuntu 24.04 still ships Node 18,
+      # which went EOL in April 2025, while 26.04 ships 22. Pinning one version
+      # keeps both packages' Web UI built by the same toolchain - the same major
+      # the Fedora containers provide.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       # Install the CUDA toolkit so the .deb ships NVIDIA NVENC, matching the
-      # Arch and RPM packages. Pulled from NVIDIA's Ubuntu 24.04 repo. The
+      # Arch and RPM packages, from the release's own NVIDIA repo. The
       # `cuda-toolkit-*` metapackage is the compiler toolkit only (nvcc, headers,
       # cudart) without the driver stack, which is all the build needs.
       - name: Install CUDA toolkit
         run: |
           # Fetch the keyring into /tmp, not the checkout, so it is not picked
           # up by the `*.deb` upload glob and published alongside the package.
-          wget -q -O /tmp/cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i /tmp/cuda-keyring.deb
-          sudo apt-get update
-          sudo apt-get install -y cuda-toolkit-12-6
+          keyring="https://developer.download.nvidia.com/compute/cuda/repos"
+          keyring="${keyring}/${{ matrix.repo }}/x86_64/cuda-keyring_1.1-1_all.deb"
+          wget -q -O /tmp/cuda-keyring.deb "${keyring}"
+          dpkg -i /tmp/cuda-keyring.deb
+          apt-get update
+          apt-get install -y cuda-toolkit-${{ matrix.cuda }}
           echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Fix git safe directory
+        run: git config --global --add safe.directory /__w/Apollo-Linux/Apollo-Linux
 
       - name: Configure CMake
         run: |
@@ -546,6 +590,33 @@ jobs:
           # Copy icons
           cp src_assets/linux/misc/icons/*.svg ${PKGDIR}/usr/share/icons/hicolor/scalable/apps/ 2>/dev/null || true
 
+          # Derive the dependencies from what the binary actually links, the
+          # way debhelper does for a normal Debian build. The hand-written list
+          # this replaces was wrong in both directions: it required
+          # libboost-all-dev - a build-time -dev metapackage, and Boost is
+          # linked statically here anyway - while naming neither libicu nor
+          # libminiupnpc, the two libraries whose sonames actually move between
+          # releases (24.04 has libicu74/libminiupnpc17, 26.04 libicu78/
+          # libminiupnpc21). A missing entry is the worse half of that: apt
+          # installs the package without complaint and the binary then fails to
+          # start, which is far harder to diagnose than a refused install.
+          #
+          # dpkg-shlibdeps reads debian/control for the package name, so give it
+          # a throwaway one rather than a full debian/ source tree.
+          BIN_PATH="$(readlink -f ${PKGDIR}/usr/bin/hermes)"
+          mkdir -p .shlibdeps/debian
+          printf 'Source: hermes\nPackage: hermes\nArchitecture: amd64\n' \
+            > .shlibdeps/debian/control
+          DEB_DEPENDS="$(cd .shlibdeps \
+            && dpkg-shlibdeps -O --ignore-missing-info "${BIN_PATH}" \
+            | sed 's/^shlibs:Depends=//')"
+          rm -rf .shlibdeps
+          if [ -z "${DEB_DEPENDS}" ]; then
+            echo "dpkg-shlibdeps produced no dependencies" >&2
+            exit 1
+          fi
+          echo "Generated Depends: ${DEB_DEPENDS}"
+
           # Create control file
           cat > ${PKGDIR}/DEBIAN/control << EOF
           Package: hermes
@@ -553,7 +624,7 @@ jobs:
           Section: net
           Priority: optional
           Architecture: amd64
-          Depends: libssl3, libboost-all-dev, libpulse0, libopus0, libdrm2, libwayland-client0, libx11-6, libva2, libcurl4, libqt6widgets6, libqt6svg6, libevdev2, libcap2
+          Depends: ${DEB_DEPENDS}
           Recommends: evdi-dkms
           Maintainer: Hermes
           Description: Self-hosted game stream host with Linux virtual display support
@@ -601,13 +672,17 @@ jobs:
           Categories=Network;RemoteAccess;
           EOF
 
-          # Build package
-          dpkg-deb --build ${PKGDIR} hermes_${VERSION}_amd64.deb
+          # Build package. The release goes in the filename so the two builds
+          # are told apart on the release page - the control Version stays the
+          # plain upstream version, so neither package looks like an upgrade of
+          # the other.
+          dpkg-deb --build ${PKGDIR} \
+            hermes_${VERSION}_ubuntu${{ matrix.ubuntu }}_amd64.deb
 
       - name: Upload DEB Package
         uses: actions/upload-artifact@v4
         with:
-          name: hermes-deb
+          name: hermes-deb-ubuntu${{ matrix.ubuntu }}
           # Only the Hermes package, not build-time debs (e.g. cuda-keyring).
           path: "hermes_*.deb"
           retention-days: 30

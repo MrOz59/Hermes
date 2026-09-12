@@ -368,7 +368,7 @@ module is built and how the package is installed.
 | Distribution | Status | Notes |
 | --- | --- | --- |
 | CachyOS / Arch | Verified | Development target. In-tree PKGBUILDs. |
-| Debian / Ubuntu | Expected to work | `.deb` built in CI; not exercised as a desktop. |
+| Debian / Ubuntu | Expected to work | One `.deb` per supported LTS (24.04, 26.04), built in CI; not exercised as a desktop. Match the `ubuntuNN.NN` in the filename to your release. |
 | Fedora | Expected to work | One `.rpm` per supported release (43, 44), built in CI; not exercised as a desktop. Match the `.fcNN` in the filename to your release. |
 | Bazzite / Silverblue / SteamOS | Partial | See below. |
 

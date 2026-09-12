@@ -1,0 +1,462 @@
+diff --git a/src/platform/linux/kmsgrab.cpp b/src/platform/linux/kmsgrab.cpp
+index 89987125..1e889b56 100644
+--- a/src/platform/linux/kmsgrab.cpp
++++ b/src/platform/linux/kmsgrab.cpp
+@@ -2101,6 +2101,24 @@ namespace platf {
+                       << env_width << 'x' << env_height;
+     }
+ 
++    bool wait_hermes_capture_size(int fd, int &width, int &height) {
++      // Output configuration is asynchronous. Both encoders need the actual
++      // scanout and its first framebuffer, including after a modeset/reinit.
++      constexpr uint32_t timeout_ms = 1000;
++      if (VDISPLAY::hermesKmsCaptureSize(fd, width, height, timeout_ms)) {
++        return true;
++      }
++      const int capture_error = errno;
++      if (capture_error == ETIMEDOUT) {
++        BOOST_LOG(error) << "Hermes-KMS capture: timed out after "sv << timeout_ms
++                         << "ms waiting for active scanout and its framebuffer."sv;
++      } else {
++        BOOST_LOG(error) << "Hermes-KMS capture: GET_STATUS failed: "sv
++                         << std::strerror(capture_error) << " (errno="sv << capture_error << ')';
++      }
++      return false;
++    }
++
+     // Zero-copy capture of a Hermes-KMS virtual display.
+     //
+     // Unlike the KMS path, this never reads the scanout through drmModeGetFB +
+@@ -2131,8 +2149,7 @@ namespace platf {
+ 
+         int w = 0;
+         int h = 0;
+-        if (!VDISPLAY::hermesKmsCaptureSize(hermes_fd, w, h) || w <= 0 || h <= 0) {
+-          BOOST_LOG(error) << "Hermes-KMS capture: no active scanout geometry yet."sv;
++        if (!wait_hermes_capture_size(hermes_fd, w, h)) {
+           return -1;
+         }
+ 
+@@ -2474,8 +2491,7 @@ namespace platf {
+ 
+         int w = 0;
+         int h = 0;
+-        if (!VDISPLAY::hermesKmsCaptureSize(hermes_fd, w, h) || w <= 0 || h <= 0) {
+-          BOOST_LOG(error) << "Hermes-KMS capture: no active scanout geometry yet."sv;
++        if (!wait_hermes_capture_size(hermes_fd, w, h)) {
+           return -1;
+         }
+ 
+diff --git a/src/platform/linux/virtual_display.cpp b/src/platform/linux/virtual_display.cpp
+index 84617d2e..a689987f 100644
+--- a/src/platform/linux/virtual_display.cpp
++++ b/src/platform/linux/virtual_display.cpp
+@@ -55,6 +55,7 @@
+ 
+ // local includes
+ #include "card_broker.h"
++#include "hermes_kms_capture.h"
+ #include "misc.h"
+ #include "src/config.h"
+ #include "src/logging.h"
+@@ -550,9 +551,6 @@ namespace VDISPLAY {
+     constexpr uint64_t cap_zero_copy_target = 1ULL << 33;
+     constexpr uint64_t cap_sync_file = 1ULL << 35;
+ 
+-    constexpr uint64_t status_output_enabled = 1ULL << 0;
+-    constexpr uint64_t status_connected = 1ULL << 1;
+-
+     constexpr uint32_t set_output_connected = 1U << 0;
+     constexpr uint32_t set_output_owner_assigned = 1U << 1;
+     constexpr uint32_t device_role_session = 2U;
+@@ -577,40 +575,6 @@ namespace VDISPLAY {
+       uint32_t output_count;
+     };
+ 
+-    struct status_t {
+-      uint64_t flags;
+-      uint64_t frame_sequence;
+-      uint64_t last_update_ns;
+-      uint64_t last_enable_ns;
+-      uint64_t last_disable_ns;
+-      uint32_t connector_id;
+-      uint32_t crtc_id;
+-      uint32_t plane_id;
+-      uint32_t encoder_id;
+-      uint32_t requested_width;
+-      uint32_t requested_height;
+-      uint32_t requested_refresh_hz;
+-      uint32_t active_width;
+-      uint32_t active_height;
+-      uint32_t active_refresh_hz;
+-      uint32_t framebuffer_id;
+-      uint32_t framebuffer_width;
+-      uint32_t framebuffer_height;
+-      uint32_t framebuffer_format;
+-      uint32_t framebuffer_plane_count;
+-      uint32_t framebuffer_pitch[4];
+-      uint32_t framebuffer_offset[4];
+-      uint32_t reserved_alignment;
+-      uint64_t framebuffer_modifier;
+-      uint64_t session_id;
+-      int32_t owner_pid;
+-      uint32_t reserved0;
+-      /// Descriptors bound to this output's live session besides the owner's
+-      /// own (uapi >= 13); reset to zero by a revocation or a new session.
+-      uint64_t bound_fd_count;
+-      uint64_t reserved[5];
+-    };
+-
+     struct identity_t {
+       char driver_name[name_len];
+       char output_name[name_len];
+@@ -7078,18 +7042,25 @@ namespace VDISPLAY {
+     return false;
+   }
+ 
+-  bool hermesKmsCaptureSize(int render_fd, int &width, int &height) {
++  bool hermesKmsCaptureSize(int render_fd, int &width, int &height, uint32_t timeout_ms) {
++    width = height = 0;
+     if (render_fd < 0) {
++      errno = EBADF;
+       return false;
+     }
+-    hermes_kms::status_t status {};
+-    if (::ioctl(render_fd, hermes_kms::ioctl_get_status, &status) != 0) {
++    const int error = hermes_kms::wait_for_scanout(
++      width, height, std::chrono::milliseconds {timeout_ms},
++      [render_fd](hermes_kms::status_t &status) {
++        return ::ioctl(render_fd, hermes_kms::ioctl_get_status, &status) == 0 ? 0 : errno;
++      },
++      [] { return std::chrono::steady_clock::now(); },
++      [](auto deadline) { std::this_thread::sleep_until(deadline); }
++    );
++    if (error) {
++      errno = error;
+       return false;
+     }
+-    // Prefer the live scanout geometry; fall back to the requested mode.
+-    width = status.active_width ? static_cast<int>(status.active_width) : static_cast<int>(status.requested_width);
+-    height = status.active_height ? static_cast<int>(status.active_height) : static_cast<int>(status.requested_height);
+-    return width > 0 && height > 0;
++    return true;
+   }
+ 
+   bool hermesKmsAcquireFrame(int render_fd, uint64_t after_sequence,
+diff --git a/src/platform/linux/virtual_display.h b/src/platform/linux/virtual_display.h
+index d37f9aed..4f236c54 100644
+--- a/src/platform/linux/virtual_display.h
++++ b/src/platform/linux/virtual_display.h
+@@ -974,8 +974,14 @@ namespace VDISPLAY {
+                                    int &offset_x, int &offset_y,
+                                    int &environment_width, int &environment_height);
+ 
+-  /** Query the active scanout geometry. @return true on success. */
+-  bool hermesKmsCaptureSize(int render_fd, int &width, int &height);
++  /**
++   * Query a live scanout with an available framebuffer, optionally waiting up to
++   * timeout_ms for the compositor. Never substitute the requested mode for an
++   * unready scanout. A zero timeout performs a single query. On failure dimensions
++   * are cleared and errno distinguishes EAGAIN (not ready), ETIMEDOUT, and driver
++   * errors such as EACCES (unauthorized capture).
++   */
++  bool hermesKmsCaptureSize(int render_fd, int &width, int &height, uint32_t timeout_ms = 0);
+ 
+   /**
+    * Acquire the current scanout frame as DMA-BUFs. Blocks up to @p timeout_ms
+diff --git a/src/platform/linux/hermes_kms_capture.h b/src/platform/linux/hermes_kms_capture.h
+new file mode 100644
+index 00000000..360dbce8
+--- /dev/null
++++ b/src/platform/linux/hermes_kms_capture.h
+@@ -0,0 +1,97 @@
++/**
++ * @file src/platform/linux/hermes_kms_capture.h
++ * @brief Hermes-KMS scanout readiness shared by capture and its regression tests.
++ */
++#pragma once
++
++#include <algorithm>
++#include <cerrno>
++#include <chrono>
++#include <cstdint>
++#include <limits>
++
++namespace VDISPLAY::hermes_kms {
++
++  constexpr uint64_t status_output_enabled = 1ULL << 0;
++  constexpr uint64_t status_connected = 1ULL << 1;
++  constexpr uint64_t status_scanout_active = 1ULL << 2;
++  constexpr uint64_t status_frame_valid = 1ULL << 3;
++  constexpr uint64_t status_dmabuf_export_ready = 1ULL << 4;
++
++  struct status_t {
++    uint64_t flags;
++    uint64_t frame_sequence;
++    uint64_t last_update_ns;
++    uint64_t last_enable_ns;
++    uint64_t last_disable_ns;
++    uint32_t connector_id;
++    uint32_t crtc_id;
++    uint32_t plane_id;
++    uint32_t encoder_id;
++    uint32_t requested_width;
++    uint32_t requested_height;
++    uint32_t requested_refresh_hz;
++    uint32_t active_width;
++    uint32_t active_height;
++    uint32_t active_refresh_hz;
++    uint32_t framebuffer_id;
++    uint32_t framebuffer_width;
++    uint32_t framebuffer_height;
++    uint32_t framebuffer_format;
++    uint32_t framebuffer_plane_count;
++    uint32_t framebuffer_pitch[4];
++    uint32_t framebuffer_offset[4];
++    uint32_t reserved_alignment;
++    uint64_t framebuffer_modifier;
++    uint64_t session_id;
++    int32_t owner_pid;
++    uint32_t reserved0;
++    /// Descriptors bound to this output's live session besides the owner's
++    /// own (uapi >= 13); reset to zero by a revocation or a new session.
++    uint64_t bound_fd_count;
++    uint64_t reserved[5];
++  };
++
++  /**
++   * Wait for a real scanout, not merely the mode accepted at hotplug time.
++   * Query returns zero or an errno; clock/sleep injection keeps the deadline
++   * and delayed-compositor tests deterministic without touching a live display.
++   * A zero timeout performs one query, for callers with their own polling loop.
++   */
++  template<class Query, class Now, class SleepUntil>
++  int wait_for_scanout(int &width, int &height, std::chrono::milliseconds timeout, Query query, Now now, SleepUntil sleep_until) {
++    using namespace std::chrono_literals;
++    width = height = 0;
++    const auto deadline = now() + timeout;
++    constexpr auto ready_flags = status_output_enabled | status_connected |
++                                 status_scanout_active | status_frame_valid |
++                                 status_dmabuf_export_ready;
++    for (;;) {
++      status_t status {};
++      const int error = query(status);
++      if (error == 0) {
++        if ((status.flags & ready_flags) == ready_flags && status.active_width && status.active_height && status.framebuffer_width && status.framebuffer_height) {
++          if (status.active_width > static_cast<uint32_t>(std::numeric_limits<int>::max()) || status.active_height > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
++            return EOVERFLOW;
++          }
++          width = static_cast<int>(status.active_width);
++          height = static_cast<int>(status.active_height);
++          return 0;
++        }
++      } else if (error != EINTR && error != EAGAIN && error != ENODATA) {
++        // In particular EACCES is not a compositor delay: never hide a failed
++        // session binding behind a timeout or a missing-geometry diagnostic.
++        return error;
++      }
++      if (timeout == 0ms) {
++        return error ? error : EAGAIN;
++      }
++      const auto current = now();
++      if (current >= deadline) {
++        return ETIMEDOUT;
++      }
++      sleep_until(std::min(deadline, current + 50ms));
++    }
++  }
++
++}  // namespace VDISPLAY::hermes_kms
+diff --git a/tests/unit/platform/test_hermes_scanout.cpp b/tests/unit/platform/test_hermes_scanout.cpp
+new file mode 100644
+index 00000000..858b0798
+--- /dev/null
++++ b/tests/unit/platform/test_hermes_scanout.cpp
+@@ -0,0 +1,187 @@
++/**
++ * @file tests/unit/platform/test_hermes_scanout.cpp
++ * @brief Regression coverage for delayed compositor scanout (issue #41).
++ */
++#include "../../tests_common.h"
++
++#include <functional>
++#include <src/platform/linux/hermes_kms_capture.h>
++#include <src/platform/linux/virtual_display.h>
++
++namespace {
++  using namespace std::chrono_literals;
++  using namespace VDISPLAY::hermes_kms;
++
++  status_t ready_scanout() {
++    status_t status {};
++    status.flags = status_output_enabled | status_connected | status_scanout_active |
++                   status_frame_valid | status_dmabuf_export_ready;
++    status.requested_width = 1280;
++    status.requested_height = 720;
++    status.active_width = status.framebuffer_width = 1280;
++    status.active_height = status.framebuffer_height = 720;
++    return status;
++  }
++
++  class HermesScanout: public testing::Test {
++  protected:
++    std::chrono::steady_clock::time_point time {};
++    status_t status = ready_scanout();
++    int width = 99;
++    int height = 99;
++    int queries = 0;
++    int sleeps = 0;
++    std::function<int(status_t &)> query = [this](status_t &out) {
++      out = status;
++      return 0;
++    };
++
++    int wait(std::chrono::milliseconds timeout = 1000ms) {
++      return wait_for_scanout(
++        width,
++        height,
++        timeout,
++        [this](status_t &out) {
++          ++queries;
++          return query(out);
++        },
++        [this] {
++          return time;
++        },
++        [this](auto deadline) {
++          EXPECT_GT(deadline, time);
++          ++sleeps;
++          time = deadline;
++        }
++      );
++    }
++  };
++
++  TEST_F(HermesScanout, ReadyOutputStartsImmediately) {
++    EXPECT_EQ(wait(), 0);
++    EXPECT_EQ(width, 1280);
++    EXPECT_EQ(height, 720);
++    EXPECT_EQ(queries, 1);
++    EXPECT_EQ(sleeps, 0);
++  }
++
++  TEST_F(HermesScanout, WaitsForTheCompositorsFirstFramebuffer) {
++    // A mode accepted by KScreen is not yet a framebuffer capture can use.
++    query = [this](status_t &out) {
++      out = status;
++      if (time.time_since_epoch() < 350ms) {
++        out.flags = status_output_enabled | status_connected | status_scanout_active;
++        out.framebuffer_width = out.framebuffer_height = 0;
++      }
++      return 0;
++    };
++    EXPECT_EQ(wait(), 0);
++    EXPECT_EQ(time.time_since_epoch(), 350ms);
++    EXPECT_EQ(width, 1280);
++    EXPECT_EQ(height, 720);
++  }
++
++  TEST_F(HermesScanout, RequestedModeAloneNeverCountsAsReady) {
++    status.flags = status_output_enabled | status_connected;
++    status.active_width = status.active_height = 0;
++    EXPECT_EQ(wait(), ETIMEDOUT);
++    EXPECT_EQ(time.time_since_epoch(), 1000ms);
++    EXPECT_EQ(width, 0);
++    EXPECT_EQ(height, 0);
++  }
++
++  TEST_F(HermesScanout, RequiresEveryReadinessFlag) {
++    for (const auto flag : {status_output_enabled, status_connected, status_scanout_active, status_frame_valid, status_dmabuf_export_ready}) {
++      status = ready_scanout();
++      status.flags &= ~flag;
++      EXPECT_EQ(wait(0ms), EAGAIN) << flag;
++      EXPECT_EQ(width, 0);
++      EXPECT_EQ(height, 0);
++    }
++    EXPECT_EQ(sleeps, 0);
++  }
++
++  TEST_F(HermesScanout, RequiresRealGeometryEvenWithReadyFlags) {
++    for (auto member : {&status_t::active_width, &status_t::active_height, &status_t::framebuffer_width, &status_t::framebuffer_height}) {
++      status = ready_scanout();
++      status.*member = 0;
++      EXPECT_EQ(wait(0ms), EAGAIN);
++    }
++  }
++
++  TEST_F(HermesScanout, UsesTheActiveModeWhenTheCompositorRejectsTheRequestedMode) {
++    status.active_width = status.framebuffer_width = 1920;
++    status.active_height = status.framebuffer_height = 1080;
++    EXPECT_EQ(wait(), 0);
++    EXPECT_EQ(width, 1920);
++    EXPECT_EQ(height, 1080);
++    EXPECT_EQ(sleeps, 0);
++  }
++
++  TEST_F(HermesScanout, AccessDeniedAndDeviceErrorsFailImmediately) {
++    for (const int error : {EACCES, ENODEV, EBADF, EIO, ENOTTY}) {
++      query = [error](status_t &) {
++        return error;
++      };
++      EXPECT_EQ(wait(), error);
++      EXPECT_EQ(width, 0);
++      EXPECT_EQ(height, 0);
++    }
++    EXPECT_EQ(sleeps, 0);
++    EXPECT_EQ(queries, 5);
++  }
++
++  TEST_F(HermesScanout, TransientErrorsCanRecoverWithinTheOriginalDeadline) {
++    query = [this](status_t &out) {
++      if (queries == 1) {
++        return EINTR;
++      }
++      if (queries == 2) {
++        return EAGAIN;
++      }
++      if (queries == 3) {
++        return ENODATA;
++      }
++      out = status;
++      return 0;
++    };
++    EXPECT_EQ(wait(), 0);
++    EXPECT_EQ(time.time_since_epoch(), 150ms);
++  }
++
++  TEST_F(HermesScanout, RepeatedInterruptionsDoNotExtendTheDeadline) {
++    query = [](status_t &) {
++      return EINTR;
++    };
++    EXPECT_EQ(wait(125ms), ETIMEDOUT);
++    EXPECT_EQ(time.time_since_epoch(), 125ms);
++    EXPECT_EQ(sleeps, 3);
++  }
++
++  TEST_F(HermesScanout, AccountsForTimeSpentQueryingTheDriver) {
++    query = [this](status_t &) {
++      time += 40ms;
++      return EAGAIN;
++    };
++    EXPECT_EQ(wait(120ms), ETIMEDOUT);
++    EXPECT_EQ(queries, 2);
++    EXPECT_EQ(sleeps, 1);
++  }
++
++  TEST_F(HermesScanout, RejectsUnrepresentableDimensions) {
++    status.active_width = UINT32_MAX;
++    EXPECT_EQ(wait(), EOVERFLOW);
++    EXPECT_EQ(width, 0);
++    EXPECT_EQ(height, 0);
++    EXPECT_EQ(sleeps, 0);
++  }
++
++  TEST(HermesScanoutApi, InvalidDescriptorReportsItsActualError) {
++    int width = 1280;
++    int height = 720;
++    EXPECT_FALSE(VDISPLAY::hermesKmsCaptureSize(-1, width, height, 1000));
++    EXPECT_EQ(errno, EBADF);
++    EXPECT_EQ(width, 0);
++    EXPECT_EQ(height, 0);
++  }
++}  // namespace

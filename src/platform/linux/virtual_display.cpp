@@ -55,6 +55,7 @@
 
 // local includes
 #include "card_broker.h"
+#include "hermes_kms_capture.h"
 #include "misc.h"
 #include "src/config.h"
 #include "src/logging.h"
@@ -550,9 +551,6 @@ namespace VDISPLAY {
     constexpr uint64_t cap_zero_copy_target = 1ULL << 33;
     constexpr uint64_t cap_sync_file = 1ULL << 35;
 
-    constexpr uint64_t status_output_enabled = 1ULL << 0;
-    constexpr uint64_t status_connected = 1ULL << 1;
-
     constexpr uint32_t set_output_connected = 1U << 0;
     constexpr uint32_t set_output_owner_assigned = 1U << 1;
     constexpr uint32_t device_role_session = 2U;
@@ -575,40 +573,6 @@ namespace VDISPLAY {
       uint32_t preferred_height;
       uint32_t max_refresh_hz;
       uint32_t output_count;
-    };
-
-    struct status_t {
-      uint64_t flags;
-      uint64_t frame_sequence;
-      uint64_t last_update_ns;
-      uint64_t last_enable_ns;
-      uint64_t last_disable_ns;
-      uint32_t connector_id;
-      uint32_t crtc_id;
-      uint32_t plane_id;
-      uint32_t encoder_id;
-      uint32_t requested_width;
-      uint32_t requested_height;
-      uint32_t requested_refresh_hz;
-      uint32_t active_width;
-      uint32_t active_height;
-      uint32_t active_refresh_hz;
-      uint32_t framebuffer_id;
-      uint32_t framebuffer_width;
-      uint32_t framebuffer_height;
-      uint32_t framebuffer_format;
-      uint32_t framebuffer_plane_count;
-      uint32_t framebuffer_pitch[4];
-      uint32_t framebuffer_offset[4];
-      uint32_t reserved_alignment;
-      uint64_t framebuffer_modifier;
-      uint64_t session_id;
-      int32_t owner_pid;
-      uint32_t reserved0;
-      /// Descriptors bound to this output's live session besides the owner's
-      /// own (uapi >= 13); reset to zero by a revocation or a new session.
-      uint64_t bound_fd_count;
-      uint64_t reserved[5];
     };
 
     struct identity_t {
@@ -7078,18 +7042,25 @@ namespace VDISPLAY {
     return false;
   }
 
-  bool hermesKmsCaptureSize(int render_fd, int &width, int &height) {
+  bool hermesKmsCaptureSize(int render_fd, int &width, int &height, uint32_t timeout_ms) {
+    width = height = 0;
     if (render_fd < 0) {
+      errno = EBADF;
       return false;
     }
-    hermes_kms::status_t status {};
-    if (::ioctl(render_fd, hermes_kms::ioctl_get_status, &status) != 0) {
+    const int error = hermes_kms::wait_for_scanout(
+      width, height, std::chrono::milliseconds {timeout_ms},
+      [render_fd](hermes_kms::status_t &status) {
+        return ::ioctl(render_fd, hermes_kms::ioctl_get_status, &status) == 0 ? 0 : errno;
+      },
+      [] { return std::chrono::steady_clock::now(); },
+      [](auto deadline) { std::this_thread::sleep_until(deadline); }
+    );
+    if (error) {
+      errno = error;
       return false;
     }
-    // Prefer the live scanout geometry; fall back to the requested mode.
-    width = status.active_width ? static_cast<int>(status.active_width) : static_cast<int>(status.requested_width);
-    height = status.active_height ? static_cast<int>(status.active_height) : static_cast<int>(status.requested_height);
-    return width > 0 && height > 0;
+    return true;
   }
 
   bool hermesKmsAcquireFrame(int render_fd, uint64_t after_sequence,

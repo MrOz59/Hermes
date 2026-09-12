@@ -974,8 +974,14 @@ namespace VDISPLAY {
                                    int &offset_x, int &offset_y,
                                    int &environment_width, int &environment_height);
 
-  /** Query the active scanout geometry. @return true on success. */
-  bool hermesKmsCaptureSize(int render_fd, int &width, int &height);
+  /**
+   * Query a live scanout with an available framebuffer, optionally waiting up to
+   * timeout_ms for the compositor. Never substitute the requested mode for an
+   * unready scanout. A zero timeout performs a single query. On failure dimensions
+   * are cleared and errno distinguishes EAGAIN (not ready), ETIMEDOUT, and driver
+   * errors such as EACCES (unauthorized capture).
+   */
+  bool hermesKmsCaptureSize(int render_fd, int &width, int &height, uint32_t timeout_ms = 0);
 
   /**
    * Acquire the current scanout frame as DMA-BUFs. Blocks up to @p timeout_ms

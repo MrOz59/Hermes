@@ -2101,6 +2101,24 @@ namespace platf {
                       << env_width << 'x' << env_height;
     }
 
+    bool wait_hermes_capture_size(int fd, int &width, int &height) {
+      // Output configuration is asynchronous. Both encoders need the actual
+      // scanout and its first framebuffer, including after a modeset/reinit.
+      constexpr uint32_t timeout_ms = 1000;
+      if (VDISPLAY::hermesKmsCaptureSize(fd, width, height, timeout_ms)) {
+        return true;
+      }
+      const int capture_error = errno;
+      if (capture_error == ETIMEDOUT) {
+        BOOST_LOG(error) << "Hermes-KMS capture: timed out after "sv << timeout_ms
+                         << "ms waiting for active scanout and its framebuffer."sv;
+      } else {
+        BOOST_LOG(error) << "Hermes-KMS capture: GET_STATUS failed: "sv
+                         << std::strerror(capture_error) << " (errno="sv << capture_error << ')';
+      }
+      return false;
+    }
+
     // Zero-copy capture of a Hermes-KMS virtual display.
     //
     // Unlike the KMS path, this never reads the scanout through drmModeGetFB +
@@ -2131,8 +2149,7 @@ namespace platf {
 
         int w = 0;
         int h = 0;
-        if (!VDISPLAY::hermesKmsCaptureSize(hermes_fd, w, h) || w <= 0 || h <= 0) {
-          BOOST_LOG(error) << "Hermes-KMS capture: no active scanout geometry yet."sv;
+        if (!wait_hermes_capture_size(hermes_fd, w, h)) {
           return -1;
         }
 
@@ -2474,8 +2491,7 @@ namespace platf {
 
         int w = 0;
         int h = 0;
-        if (!VDISPLAY::hermesKmsCaptureSize(hermes_fd, w, h) || w <= 0 || h <= 0) {
-          BOOST_LOG(error) << "Hermes-KMS capture: no active scanout geometry yet."sv;
+        if (!wait_hermes_capture_size(hermes_fd, w, h)) {
           return -1;
         }
 

@@ -634,12 +634,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 - The `.deb` is built for each supported Ubuntu LTS rather than only 24.04, for
   the same reason as the Fedora packages: 24.04 carries `libicu74` and
   `libminiupnpc17`, and 26.04 carries `libicu78` and `libminiupnpc21`. Each
-  package names its release in the filename - `hermes_<version>_ubuntu26.04_
-  amd64.deb`. The builds now run in plain `ubuntu:<release>` containers instead
-  of on the CI runner image, so a package can only depend on what that release
-  actually ships; a runner image carries a great deal of extra software, and
-  anything the build happened to link from it would have become a dependency
-  that real users do not have.
+  package names its release in the filename, for example
+  `hermes_<version>_ubuntu26.04_amd64.deb`. The builds now run in plain
+  `ubuntu:<release>` containers instead of on the CI runner image, so a package
+  can only depend on what that release actually ships; a runner image carries a
+  great deal of extra software, and anything the build happened to link from it
+  would have become a dependency that real users do not have.
 
 - The `.rpm` installs on a current Fedora again. CI built one package, on Fedora
   40, and an RPM carries as its dependencies the exact library sonames it linked

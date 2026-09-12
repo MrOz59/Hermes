@@ -330,6 +330,45 @@ namespace platf {
         return *alarm->status() ? PA_INVALID_INDEX : module;
       }
 
+      /**
+       * @brief Whether a sink of this name is present right now.
+       *
+       * Asked separately from find_sink_module() because presence and
+       * ownership are not the same question: a sink that is there can still
+       * report no owner module - PipeWire's PulseAudio server does that for
+       * the devices it did not load itself - so a module index is the wrong
+       * thing to read an answer out of.
+       */
+      bool sink_exists(const std::string &name) {
+        auto alarm = safe::make_alarm<int>();
+        bool found = false;
+
+        cb_t<pa_sink_info *> f = [&](ctx_t::pointer ctx, const pa_sink_info *sink_info, int eol) {
+          if (!sink_info) {
+            if (!eol) {
+              BOOST_LOG(error) << "Couldn't get pulseaudio sink info: "sv << pa_strerror(pa_context_errno(ctx));
+              alarm->ring(-1);
+              return;
+            }
+            alarm->ring(0);
+            return;
+          }
+
+          if (sink_info->name && name == sink_info->name) {
+            found = true;
+          }
+        };
+
+        op_t op {pa_context_get_sink_info_list(ctx.get(), cb<pa_sink_info *>, &f)};
+        if (!op) {
+          BOOST_LOG(error) << "Couldn't create sink info operation: "sv << pa_strerror(pa_context_errno(ctx.get()));
+          return false;
+        }
+
+        alarm->wait();
+        return *alarm->status() ? false : found;
+      }
+
       bool create_session_sink(const std::string &name, const std::uint8_t *mapping, int channels) override {
         // One that is already there counts as created. A client reconnecting to
         // a session whose sink outlived it should be given that sink back
@@ -535,8 +574,12 @@ namespace platf {
       }
 
       bool is_sink_available(const std::string &sink) override {
-        BOOST_LOG(warning) << "audio_control_t::is_sink_available() unimplemented: "sv << sink;
-        return true;
+        // A monitor's audio device leaves with the monitor: disable the output
+        // and the sound server drops the sink, then builds a new one under the
+        // same name once the output is back. Callers use this to wait out that
+        // gap, so answering "yes" unconditionally is the one answer that makes
+        // the wait pointless.
+        return !sink.empty() && sink_exists(sink);
       }
 
       int set_sink(const std::string &sink) override {

@@ -2146,6 +2146,14 @@ namespace proc {
           // display exclusively - through the global ISOLATED DISPLAY setting
           // or the app's virtual-display-layout.
           if (virtual_display_ready_for_capture && want_exclusive) {
+            // Read the host's default sink before the monitors go dark, not
+            // after. A monitor's audio device leaves with the monitor, and the
+            // sound server hands the default to whatever is still there - so a
+            // session that looks afterwards records the substitute and restores
+            // that, leaving the user on the wrong speakers once the stream
+            // ends. terminate() releases this once the monitors are back.
+            audio::hold_host_sink();
+
             // Apply the isolated display settings
 #ifdef _WIN32
             VDISPLAY::changeDisplaySettings2(vdisplayName.c_str(), render_width, render_height, target_fps, true);
@@ -2691,9 +2699,10 @@ namespace proc {
       used_virtual_display && _launch_session->session_scoped_virtual_display;
     if (used_virtual_display && !session_scoped_virtual_display) {
 #ifndef _WIN32
-      if (config::video.isolated_virtual_display_option) {
-        VDISPLAY::restoreExclusiveVirtualDisplay();
-      }
+      // Unconditionally: exclusive mode is also reachable per app, through the
+      // app's virtual-display-layout, and those sessions have to give the
+      // monitors back too. The call knows whether it took them.
+      VDISPLAY::restoreExclusiveVirtualDisplay();
 #endif
       if (VDISPLAY::removeVirtualDisplay(_launch_session->display_guid)) {
         BOOST_LOG(info) << "Virtual Display removed successfully";
@@ -2705,6 +2714,12 @@ namespace proc {
     } else if (session_scoped_virtual_display) {
       BOOST_LOG(debug) << "Session-scoped virtual display cleanup is owned by the streaming session.";
     }
+
+    // Only now are the monitors on their way back - on KWin it is removing the
+    // virtual display that re-enables them - so this is the earliest the sink
+    // that left with them can be restored. The release does the waiting itself
+    // and returns straight away; a no-op when nothing was held.
+    audio::release_host_sink();
 
     // Only show the Stopped notification if we actually have an app to stop
     // Since terminate() is always run when a new app has started

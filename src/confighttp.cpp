@@ -34,6 +34,7 @@
 #include <Simple-Web-Server/server_https.hpp>
 
 // local includes
+#include "audio.h"
 #include "config.h"
 #include "confighttp.h"
 #include "crypto.h"
@@ -1846,6 +1847,10 @@ namespace confighttp {
 #ifdef __linux__
         VDISPLAY::restoreExclusiveVirtualDisplay();
 #endif
+        // The monitors are coming back, so whatever sink left with them can be
+        // waited for and put back as the default. terminate() does this for the
+        // branch above.
+        audio::release_host_sink();
         display_device::revert_configuration();
       }
 

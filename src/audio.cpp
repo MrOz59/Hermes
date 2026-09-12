@@ -3,6 +3,8 @@
  * @brief Definitions for audio capture and encoding.
  */
 // standard includes
+#include <condition_variable>
+#include <mutex>
 #include <thread>
 
 // lib includes
@@ -272,6 +274,146 @@ namespace audio {
   audio_ctx_ref_t get_audio_ctx_ref() {
     static auto control_shared {safe::make_shared<audio_ctx_t>(start_audio_control, stop_audio_control)};
     return control_shared.ref();
+  }
+
+  bool host_sink_restore_pending(const audio_ctx_t &ctx) {
+    if (ctx.sink.host.empty() && config::audio.sink.empty()) {
+      return false;
+    }
+
+    return !is_audio_ctx_sink_available(ctx);
+  }
+
+  namespace {
+    /**
+     * How long release_host_sink() waits for the recorded sink to come back
+     * before restoring anyway. A monitor that is coming out of an exclusive
+     * session takes a second or two to re-register its audio device; one that
+     * is not coming back at all must not hold the context for ever.
+     */
+    constexpr auto HOST_SINK_WAIT_INTERVAL = 2s;
+    constexpr int HOST_SINK_WAIT_ATTEMPTS = 15;
+
+    /**
+     * @brief The single hold behind hold_host_sink()/release_host_sink().
+     */
+    struct host_sink_hold_t {
+      std::mutex mutex;
+
+      /// Woken when a hold is taken back, to cut a pending wait short.
+      std::condition_variable cancelled;
+
+      /// The held context. Its presence is what "a hold is taken" means.
+      audio_ctx_ref_t ref;
+
+      /// The thread waiting for `ref`'s sink to come back, if one is running.
+      std::thread waiter;
+
+      /// Whether that thread is still meant to drop the hold when it is done.
+      bool releasing {false};
+
+      ~host_sink_hold_t() {
+        {
+          std::lock_guard lock {mutex};
+          releasing = false;
+        }
+        cancelled.notify_all();
+        if (waiter.joinable()) {
+          waiter.join();
+        }
+      }
+    };
+
+    /**
+     * @note Deliberately not a namespace-scope object: it has to be constructed
+     *       after the audio context's own static, so that it is destroyed
+     *       before it and the waiter is joined while the context it holds is
+     *       still alive. hold_host_sink() is what orders the two.
+     */
+    host_sink_hold_t &host_sink_hold() {
+      static host_sink_hold_t hold;
+      return hold;
+    }
+
+    /**
+     * @brief Wait for the held context's sink, then drop the hold.
+     */
+    void wait_for_host_sink() {
+      auto &hold = host_sink_hold();
+      std::unique_lock lock {hold.mutex};
+
+      for (int attempt = 0; attempt < HOST_SINK_WAIT_ATTEMPTS && hold.releasing; ++attempt) {
+        const auto *ctx = hold.ref ? hold.ref.get() : nullptr;
+        if (!ctx || !host_sink_restore_pending(*ctx)) {
+          break;
+        }
+        hold.cancelled.wait_for(lock, HOST_SINK_WAIT_INTERVAL, [&hold]() {
+          return !hold.releasing;
+        });
+      }
+
+      if (!hold.releasing) {
+        // A new session took the hold back while we were waiting.
+        return;
+      }
+
+      hold.releasing = false;
+      auto ref = std::move(hold.ref);
+      hold.ref = {};
+      lock.unlock();
+
+      // Dropped outside the lock: the last reference is the one that talks to
+      // the sound server to put the default sink back.
+      ref = {};
+    }
+  }  // namespace
+
+  void hold_host_sink() {
+    // Take the context first. That constructs its static before the hold's, so
+    // the hold is destroyed first at exit and joins its waiter while the
+    // context is still there to be dropped.
+    auto ref = get_audio_ctx_ref();
+    auto &hold = host_sink_hold();
+
+    std::unique_lock lock {hold.mutex};
+    if (hold.releasing) {
+      // The previous session's release is still waiting for its sink. That
+      // context holds the default recorded before any display went dark, which
+      // is the one this session wants as well - keep it rather than let it go
+      // and read a default that is about to be moved again.
+      hold.releasing = false;
+      lock.unlock();
+      hold.cancelled.notify_all();
+      return;
+    }
+
+    if (!hold.ref) {
+      hold.ref = std::move(ref);
+      lock.unlock();
+      BOOST_LOG(debug) << "Holding the host audio sink across the display change"sv;
+    }
+  }
+
+  void release_host_sink() {
+    auto &hold = host_sink_hold();
+
+    std::thread finished;
+    {
+      std::lock_guard lock {hold.mutex};
+      if (!hold.ref || hold.releasing) {
+        return;
+      }
+
+      hold.releasing = true;
+      // Either never started, or already past its own `releasing = false`, so
+      // joining it below costs nothing.
+      finished = std::move(hold.waiter);
+      hold.waiter = std::thread {wait_for_host_sink};
+    }
+
+    if (finished.joinable()) {
+      finished.join();
+    }
   }
 
   bool create_session_sink(const std::string &name, int channels) {

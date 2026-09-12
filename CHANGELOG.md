@@ -616,6 +616,27 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- A session that uses the virtual display exclusively no longer leaves the host
+  on the wrong speakers. Blanking the physical monitors takes their audio
+  devices with them - a sink that belongs to an HDMI or DisplayPort output goes
+  away with the output - and the sound server hands the default to whatever is
+  still there, a network receiver in the reported case. Hermes read the host's
+  default sink well after that had happened, so what it recorded as "the sink to
+  put back" was already the substitute, and it dutifully restored the substitute
+  when the stream ended. It also issued that restore before the monitors were
+  back, so even the right name would have named a sink that did not exist yet.
+
+  The default is now read before the monitors are allowed to go dark, and the
+  restore waits for that sink to reappear - up to thirty seconds, cancelled
+  early if another session starts - instead of firing into the gap. A session
+  that starts while a previous one's restore is still waiting keeps the
+  already-recorded default rather than reading a new one. `is_sink_available()`
+  on Linux, which the wait is built on, was a stub that always answered yes; it
+  now asks PulseAudio. Exclusive mode requested per app, through the app's
+  virtual-display-layout rather than the global setting, also gives the monitors
+  back at the end of the session - it previously only did so when the global
+  setting happened to be on as well ([#41]).
+
 - The home page no longer goes blank when a field of the config response has
   the wrong type. `hostWarnings` feeds the root render with no error boundary,
   so a value it could not cope with left it undefined, the render dereferenced
@@ -1364,6 +1385,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#35]: https://github.com/MrOz59/Hermes/issues/35
 [#36]: https://github.com/MrOz59/Hermes/issues/36
 [#40]: https://github.com/MrOz59/Hermes/issues/40
+[#41]: https://github.com/MrOz59/Hermes/issues/41
 
 ## [0.4.0] - 2026-07-02
 

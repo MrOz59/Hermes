@@ -136,4 +136,49 @@ namespace audio {
    * @examples_end
    */
   bool is_audio_ctx_sink_available(const audio_ctx_t &ctx);
+
+  /**
+   * @brief Whether releasing the host sink still has something to wait for.
+   *
+   * The question release_host_sink() asks between sleeps. False means restore
+   * now - either nothing was recorded to go back to, or what was recorded is
+   * present again. True means the recorded sink is still missing, and a restore
+   * issued now would name a sink the sound server cannot resolve: which is what
+   * happens for the seconds it takes a monitor coming out of an exclusive
+   * session to register its audio device again.
+   */
+  bool host_sink_restore_pending(const audio_ctx_t &ctx);
+
+  /**
+   * @brief Record the host's default sink before a display change can move it.
+   *
+   * A monitor's audio device belongs to the monitor: turn the output off - which
+   * is what the exclusive virtual display does to the local screens - and the
+   * sound server drops that sink and moves the default onto whatever is left. A
+   * session that reads the default after that has already missed the sink the
+   * user was listening on, and will faithfully restore the replacement when it
+   * ends.
+   *
+   * Taking the audio context here reads the default while it is still the
+   * user's own, and holds the context open so the restore is timed by
+   * release_host_sink() rather than by whenever the last stream happens to end.
+   *
+   * Holding a hold that is already held does nothing. A hold that is never
+   * released lasts until Hermes exits.
+   */
+  void hold_host_sink();
+
+  /**
+   * @brief Let go of a hold_host_sink() hold and restore the sink it recorded.
+   *
+   * The sink a disabled output took with it does not come back the instant the
+   * monitor does, so the restore is not issued until the recorded sink is
+   * present again, or until the wait for it runs out. This returns straight
+   * away; the waiting is done on a thread of its own.
+   *
+   * A hold taken again while that wait is running cancels it and keeps the
+   * context, which is what a second session starting before the first one's
+   * monitors are back should do.
+   */
+  void release_host_sink();
 }  // namespace audio

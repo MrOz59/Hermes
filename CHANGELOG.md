@@ -616,6 +616,25 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- The `.rpm` installs on a current Fedora again. CI built one package, on Fedora
+  40, and an RPM carries as its dependencies the exact library sonames it linked
+  against at build time - so the package demanded `libicuuc.so.74` and
+  `libminiupnpc.so.17` from every machine it landed on, and dnf refused it on
+  every Fedora that has moved past those. Fedora 40 went end of life in May 2025,
+  so that was all of them.
+
+  Packages are now built once per supported Fedora release, currently 43 and 44,
+  and each is stamped with the release it was built on: install
+  `hermes-<version>-1.fc44.x86_64.rpm` on Fedora 44. The set of releases is a
+  matrix in the build workflow, so keeping up with Fedora is a row to add and a
+  row to drop rather than a rewrite.
+
+  Each release builds against the CUDA toolkit from its own NVIDIA repo, which
+  for both is CUDA 13. CUDA 13 dropped code generation for compute capabilities
+  below 7.5, so the NVENC paths that go through CUDA cover Turing and newer in
+  these packages; pre-Turing NVIDIA cards fall back to VA-API, as they already
+  did in the Arch package. NVIDIA publishes no 12.x toolkit for these releases.
+
 - A session that uses the virtual display exclusively no longer leaves the host
   on the wrong speakers. Blanking the physical monitors takes their audio
   devices with them - a sink that belongs to an HDMI or DisplayPort output goes

@@ -616,11 +616,33 @@ jobs:
   # ===========================================
   # Fedora RPM Build
   # ===========================================
+  # One package per supported Fedora release, not one package for "Fedora".
+  # rpmbuild derives a package's Requires from the sonames the binary actually
+  # linked against, so a build picks up whatever ICU and miniupnpc the build
+  # container shipped (libicuuc.so.74, libminiupnpc.so.17 on Fedora 40) and then
+  # refuses to install anywhere those have moved on. A single build on an
+  # already-EOL release left every current Fedora unable to install it.
+  #
+  # Add a row when Fedora branches a new release and drop it when that release
+  # goes EOL: https://docs.fedoraproject.org/en-US/releases/eol/
   build-rpm:
     needs: [test, version]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `cuda` is the newest toolkit in that release's NVIDIA repo whose
+          # nvcc accepts the release's own default GCC, so the build needs no
+          # compat compiler. The cap lives in crt/host_config.h of the toolkit:
+          # 13.2 refuses GCC > 15 (Fedora 43 ships 15), 13.4 refuses GCC > 16
+          # (Fedora 44 ships 16). Check it before bumping either number.
+          - fedora: "43"
+            cuda: "13-2"
+          - fedora: "44"
+            cuda: "13-4"
     container:
-      image: fedora:40
+      image: fedora:${{ matrix.fedora }}
     env:
       BRANCH: ${{ github.ref_name }}
       BUILD_VERSION: ${{ needs.version.outputs.build_version }}
@@ -662,33 +684,25 @@ jobs:
             npm
 
       # Install the CUDA toolkit so the .rpm ships NVIDIA NVENC, matching the
-      # Arch and DEB packages. NVIDIA has no Fedora 40 repo yet; the fedora39
-      # packages work on 40. nvcc 12.6 rejects Fedora 40's default GCC 14, so
-      # install gcc13-c++ and point nvcc at it via NVCC_PREPEND_FLAGS.
+      # Arch and DEB packages. Each release gets the toolkit from its own NVIDIA
+      # repo, which is what lets the distro's default GCC drive nvcc: no compat
+      # compiler, and no mixing of two toolchains in one link.
+      #
+      # These are CUDA 13 toolkits, and CUDA 13 dropped codegen for compute
+      # capabilities below 7.5 — cmake/compile_definitions/linux.cmake already
+      # narrows the architecture list when it sees 13.x. So the CUDA paths in
+      # this package cover Turing and newer; pre-Turing NVIDIA cards fall back
+      # to VA-API the same way they do in the Arch package, whose `cuda` is also
+      # 13.x. NVIDIA publishes no 12.x toolkit for these releases.
       - name: Install CUDA toolkit
         run: |
-          dnf install -y dnf-plugins-core gcc13-c++
-          dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/fedora39/x86_64/cuda-fedora39.repo
-          dnf install -y cuda-toolkit-12-6
+          dnf install -y dnf-plugins-core
+          repo="https://developer.download.nvidia.com/compute/cuda/repos"
+          repo="${repo}/fedora${{ matrix.fedora }}/x86_64/cuda-fedora${{ matrix.fedora }}.repo"
+          # dnf5 (Fedora 41 onwards) dropped `config-manager --add-repo`.
+          dnf config-manager addrepo --from-repofile="${repo}"
+          dnf install -y cuda-toolkit-${{ matrix.cuda }}
           echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
-          # nvcc 12.6 rejects Fedora 40's default GCC 14. Build the *entire*
-          # project (C, C++, and nvcc host side) with the gcc13 compat compiler
-          # so compilation and the final link use one consistent toolchain —
-          # mixing gcc13 objects with a gcc14 link fails on __cxa_call_terminate.
-          # Resolve the binary names rather than assuming them, since Fedora's
-          # versioned gcc naming varies.
-          gcc13="$(command -v gcc-13 || command -v gcc13 || true)"
-          gxx13="$(command -v g++-13 || command -v g++13 || true)"
-          if [ -z "$gcc13" ] || [ -z "$gxx13" ]; then
-            echo "gcc13 compilers not found after install" >&2
-            exit 1
-          fi
-          echo "Using gcc13 toolchain: $gcc13 / $gxx13"
-          {
-            echo "CC=$gcc13"
-            echo "CXX=$gxx13"
-            echo "NVCC_PREPEND_FLAGS=-ccbin $gxx13"
-          } >> "${GITHUB_ENV}"
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -740,6 +754,11 @@ jobs:
           URL:            https://github.com/MrOz59/Hermes
           Source0:        hermes-%{version}.tar.gz
 
+          # The binary is built by the job above and only copied in %install, so
+          # there are no sources for a debuginfo package to point at. Left on,
+          # rpmbuild would emit a second .rpm that ships as a release asset.
+          %global debug_package %{nil}
+
           %description
           Hermes is an Apollo-derived game streaming server with low-latency
           Linux virtual displays via Hermes-KMS (EVDI also supported).
@@ -764,10 +783,13 @@ jobs:
           rpmbuild -bb ~/rpmbuild/SPECS/hermes.spec
           cp ~/rpmbuild/RPMS/*/*.rpm .
 
+      # The release jobs collect artifacts/**/*, so each leg needs its own
+      # artifact name; the packages themselves are already distinct, since
+      # %{?dist} stamps the release as .fc43 / .fc44.
       - name: Upload RPM
         uses: actions/upload-artifact@v4
         with:
-          name: hermes-rpm
+          name: hermes-rpm-fc${{ matrix.fedora }}
           path: "*.rpm"
           retention-days: 30
           if-no-files-found: error

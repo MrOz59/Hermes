@@ -369,7 +369,7 @@ module is built and how the package is installed.
 | --- | --- | --- |
 | CachyOS / Arch | Verified | Development target. In-tree PKGBUILDs. |
 | Debian / Ubuntu | Expected to work | `.deb` built in CI; not exercised as a desktop. |
-| Fedora | Expected to work | `.rpm` built in CI; not exercised as a desktop. |
+| Fedora | Expected to work | One `.rpm` per supported release (43, 44), built in CI; not exercised as a desktop. Match the `.fcNN` in the filename to your release. |
 | Bazzite / Silverblue / SteamOS | Partial | See below. |
 
 ### Image-based distributions

@@ -286,13 +286,22 @@ namespace audio {
 
   namespace {
     /**
-     * How long release_host_sink() waits for the recorded sink to come back
-     * before restoring anyway. A monitor that is coming out of an exclusive
-     * session takes a second or two to re-register its audio device; one that
-     * is not coming back at all must not hold the context for ever.
+     * How long release_host_sink() waits for the recorded sink to come back.
+     *
+     * The wait is not free: until it ends the host's default is still the
+     * virtual sink the stream was recorded from, so the host plays into
+     * silence. That is what bounds both numbers. A monitor coming out of an
+     * exclusive session re-registers its audio device in a second or two, so
+     * ten seconds is a generous ceiling - and a device that is not coming back
+     * at all, a headset unplugged mid-session, costs ten seconds of quiet
+     * rather than the half-minute a display-sized timeout would.
+     *
+     * Polled often rather than slowly for the same reason: the common case
+     * ends when the sink reappears, not when the timeout expires, and every
+     * poll it is late by is silence.
      */
-    constexpr auto HOST_SINK_WAIT_INTERVAL = 2s;
-    constexpr int HOST_SINK_WAIT_ATTEMPTS = 15;
+    constexpr auto HOST_SINK_WAIT_INTERVAL = 500ms;
+    constexpr int HOST_SINK_WAIT_ATTEMPTS = 20;
 
     /**
      * @brief The single hold behind hold_host_sink()/release_host_sink().
@@ -342,14 +351,28 @@ namespace audio {
       auto &hold = host_sink_hold();
       std::unique_lock lock {hold.mutex};
 
+      bool waited_out = false;
+      std::string waited_for;
       for (int attempt = 0; attempt < HOST_SINK_WAIT_ATTEMPTS && hold.releasing; ++attempt) {
         const auto *ctx = hold.ref ? hold.ref.get() : nullptr;
         if (!ctx || !host_sink_restore_pending(*ctx)) {
           break;
         }
+        waited_out = attempt + 1 == HOST_SINK_WAIT_ATTEMPTS;
+        waited_for = ctx->sink.host.empty() ? config::audio.sink : ctx->sink.host;
         hold.cancelled.wait_for(lock, HOST_SINK_WAIT_INTERVAL, [&hold]() {
           return !hold.releasing;
         });
+      }
+
+      if (waited_out && hold.releasing) {
+        // Unplugged for good, most likely, rather than slow to come back. The
+        // restore below will fail on the name, and dropping the context takes
+        // the virtual sinks with it - at which point the sound server picks a
+        // default of its own, which is the right answer once the device the
+        // user chose is gone.
+        BOOST_LOG(warning) << "Gave up waiting for audio sink ["sv << waited_for
+                           << "] to come back; leaving the default where the sound server puts it"sv;
       }
 
       if (!hold.releasing) {

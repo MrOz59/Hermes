@@ -173,8 +173,14 @@ namespace audio {
    *
    * The sink a disabled output took with it does not come back the instant the
    * monitor does, so the restore is not issued until the recorded sink is
-   * present again, or until the wait for it runs out. This returns straight
-   * away; the waiting is done on a thread of its own.
+   * present again, or until the wait for it runs out after ten seconds. This
+   * returns straight away; the waiting is done on a thread of its own.
+   *
+   * The wait is bounded that tightly because the host's default is still the
+   * virtual sink until it ends. A device that never comes back - a headset
+   * unplugged during the session - therefore costs that much quiet and no
+   * more, and then leaves the choice of default to the sound server, which is
+   * the right answer once the device the user picked is gone.
    *
    * A hold taken again while that wait is running cancels it and keeps the
    * context, which is what a second session starting before the first one's

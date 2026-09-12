@@ -627,8 +627,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   back, so even the right name would have named a sink that did not exist yet.
 
   The default is now read before the monitors are allowed to go dark, and the
-  restore waits for that sink to reappear - up to thirty seconds, cancelled
-  early if another session starts - instead of firing into the gap. A session
+  restore waits for that sink to reappear - up to ten seconds, cancelled early
+  if another session starts - instead of firing into the gap. The wait is
+  bounded that tightly because the host's default is still the stream's virtual
+  sink until it ends: a device that never comes back, such as a headset
+  unplugged during the session, costs that much quiet and then leaves the
+  choice of default to the sound server. A session
   that starts while a previous one's restore is still waiting keeps the
   already-recorded default rather than reading a new one. `is_sink_available()`
   on Linux, which the wait is built on, was a stub that always answered yes; it

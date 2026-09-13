@@ -616,6 +616,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- The `.deb` and `.rpm` jobs marked `/__w/Apollo-Linux/Apollo-Linux` as a git
+  safe directory, a path that stopped existing when the repository was renamed,
+  so the step did nothing. They now use `${GITHUB_WORKSPACE}`, as the other two
+  jobs already did.
+
 - NVENC works on pre-Turing NVIDIA cards again, in every Linux package. Hermes
   compiles its own RGBA-to-NV12 kernel, so the toolkit that builds a package
   decides which cards that package can encode on — and CUDA 13 dropped code

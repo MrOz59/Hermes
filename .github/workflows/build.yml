@@ -554,7 +554,7 @@ jobs:
           fetch-depth: 0
 
       - name: Fix git safe directory
-        run: git config --global --add safe.directory /__w/Apollo-Linux/Apollo-Linux
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
       # Install the CUDA toolkit so the .deb ships NVIDIA NVENC, matching the
       # Arch and RPM packages. Only nvcc, its runtime and the headers it needs
@@ -783,7 +783,7 @@ jobs:
           fetch-depth: 0
 
       - name: Fix git safe directory
-        run: git config --global --add safe.directory /__w/Apollo-Linux/Apollo-Linux
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
       # Install the CUDA toolkit so the .rpm ships NVIDIA NVENC, matching the
       # Arch and DEB packages. cmake/compile_definitions/linux.cmake reads the

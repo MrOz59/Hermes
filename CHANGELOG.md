@@ -557,6 +557,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Hermes-KMS and Hestia trackers for problems that belong to them.
 
 ### Changed
+- The API reference matches the server again. It documented 19 of the 40 routes
+  and one that no longer exists (`DELETE /api/apps/{index}`, replaced by
+  `POST /api/apps/delete`), and said every call authenticates with the admin
+  password. The Hestia v1 surface, the metrics endpoint, the login and OTP
+  routes, the EVDI and Hermes-KMS driver status endpoints and the clipboard
+  routes are now listed, each with the authentication it actually requires: the
+  Web UI routes take the admin account, `/api/hestia/v1/*` takes the paired
+  client certificate plus a per-client permission, and `capabilities` takes
+  nothing at all, deliberately, so a client can detect Hermes before pairing.
+
 - The Web UI has tests. It had none of any kind, which is how a computed
   feeding the root render came to blank the whole home page over one field of
   the wrong type: `hostWarnings` lived inline in `index.html`, where nothing
@@ -616,6 +626,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- `getMetrics` had been inserted between `getApps`'s documentation block and
+  `getApps` itself, so Doxygen attributed "Get the list of available
+  applications" and the `/api/apps` example to the metrics handler and left
+  `getApps` undocumented — which is why the API page's `GET /api/apps` entry
+  rendered empty. `GET /api/config` rendered empty for the same reason.
+
 - The `.deb` and `.rpm` jobs marked `/__w/Apollo-Linux/Apollo-Linux` as a git
   safe directory, a path that stopped existing when the repository was renamed,
   so the step did nothing. They now use `${GITHUB_WORKSPACE}`, as the other two

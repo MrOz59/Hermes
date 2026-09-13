@@ -996,14 +996,14 @@ namespace confighttp {
   }
 
   /**
-   * @brief Get the list of available applications.
+   * @brief Get the live runtime status: encoder, session, and pipeline counters.
+   *        The same view the Hestia diagnostics return, behind the normal Web UI
+   *        session auth so the dashboard can poll it.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    *
-   * @api_examples{/api/apps| GET| null}
+   * @api_examples{/api/metrics| GET| null}
    */
-  // Web UI metrics endpoint: same runtime view as the Hestia diagnostics, but
-  // behind the normal web-UI session auth so the dashboard can poll it.
   void getMetrics(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
       return;
@@ -1013,6 +1013,13 @@ namespace confighttp {
     send_response(response, hestia_runtime_status_json());
   }
 
+  /**
+   * @brief Get the list of available applications.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/apps| GET| null}
+   */
   void getApps(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
       return;
@@ -1471,6 +1478,14 @@ namespace confighttp {
     return response;
   }
 
+  /**
+   * @brief Get the current configuration: the computed values Hermes is running
+   *        with, overlaid with what the configuration file sets explicitly.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/config| GET| null}
+   */
   void getConfig(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
       return;

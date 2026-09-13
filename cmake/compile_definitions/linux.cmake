@@ -50,25 +50,35 @@ if(${SUNSHINE_ENABLE_CUDA})
 
         # nvcc will not accept a host compiler as new as the one the rest of the
         # build uses, so CUDAHOSTCXX generally points at an older GCC. CMake
-        # collects that compiler's own library directory as an implicit link
-        # directory of the CUDA language and then puts it on the link line of
-        # every target, ahead of the default paths - where its libstdc++ shadows
-        # the one the C++ objects were compiled against. The link then fails on
-        # whatever the newer libstdc++ added: two majors apart, GCC 16 against a
-        # GCC 14 host compiler, that is the out-of-line std::format symbols.
+        # collects that compiler's own library directories as implicit link
+        # directories of the CUDA language and then puts them on the link line
+        # of every target, ahead of the default paths - where its libstdc++
+        # shadows the one the C++ objects were compiled against. The link then
+        # fails on whatever the newer libstdc++ added: two majors apart, GCC 16
+        # against a GCC 14 host compiler, that is the out-of-line std::format
+        # symbols.
         #
-        # Only the toolkit's own directories are wanted here. The C++ compiler's
-        # runtime is already carried by CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES, so
-        # dropping every GCC directory is safe even when both languages share a
-        # compiler.
-        set(cuda_implicit_link_dirs "")
+        # Keep the toolkit's own directories, and those the C++ compiler already
+        # reports - the system paths, and its own runtime, which is the one that
+        # has to win. Everything else in the list belongs to the host compiler.
+        # Matching GCC's directory layout by name is not enough: a compiler
+        # unpacked under a prefix contributes that prefix's plain lib directory
+        # too, which looks like any other.
+        get_filename_component(cuda_toolkit_root "${CMAKE_CUDA_COMPILER}" DIRECTORY)
+        get_filename_component(cuda_toolkit_root "${cuda_toolkit_root}" DIRECTORY)
+
+        set(cuda_link_dirs "")
         foreach(dir IN LISTS CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES)
-            if(NOT dir MATCHES "/lib/gcc/")
-                list(APPEND cuda_implicit_link_dirs "${dir}")
+            cmake_path(IS_PREFIX cuda_toolkit_root "${dir}" NORMALIZE from_toolkit)
+            if(from_toolkit OR dir IN_LIST CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES)
+                list(APPEND cuda_link_dirs "${dir}")
             endif()
         endforeach()
-        set(CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES "${cuda_implicit_link_dirs}")
-        unset(cuda_implicit_link_dirs)
+        set(CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES "${cuda_link_dirs}")
+        message(STATUS "CUDA implicit link directories: ${CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES}")
+
+        unset(cuda_link_dirs)
+        unset(cuda_toolkit_root)
 
         message(STATUS "CUDA Compiler Version: ${CMAKE_CUDA_COMPILER_VERSION}")
         set(CMAKE_CUDA_ARCHITECTURES "")

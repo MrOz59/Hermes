@@ -1,24 +1,23 @@
 # GameStream Migration
-Nvidia announced that their GameStream service for Nvidia Games clients will be discontinued in February 2023.
-Luckily, Sunshine performance is now equal to or better than Nvidia GameStream.
+Nvidia discontinued their GameStream service for Nvidia Games clients in February 2023. A self-hosted host such as
+Hermes performs as well as or better than Nvidia GameStream did.
 
 ## Migration
-We have developed a simple migration tool to help you migrate your GameStream games and apps to Sunshine automatically.
-Please check out our [GSMS](https://github.com/LizardByte/GSMS) project if you're interested in an automated
-migration option. GSMS offers the ability to migrate your custom and auto-detected games and apps. The
-working directory, command, and image are all set in Sunshine's `apps.json` file. The box-art image is also copied
-to a specified directory.
+Upstream's [GSMS](https://github.com/LizardByte/GSMS) migrates custom and auto-detected GameStream games and apps
+automatically, writing the working directory, command and image into an `apps.json` and copying the box art to a
+directory you choose. It writes Sunshine's `apps.json`, which Hermes reads the same way; point it at
+`~/.config/hermes/apps.json`, or copy the entries across.
 
 ## Internet Streaming
-If you are using the Moonlight Internet Hosting Tool, you can remove it from your system when you migrate to Sunshine.
-To stream over the Internet with Sunshine and a UPnP-capable router, enable the UPnP option in the Sunshine Web UI.
+If you are using the Moonlight Internet Hosting Tool, you can remove it from your system when you migrate.
+To stream over the Internet with a UPnP-capable router, enable the UPnP option in the Web UI.
 
 > [!NOTE]
-> Running Sunshine together with versions of the Moonlight Internet Hosting Tool prior to v5.6 will cause UPnP
+> Running Hermes together with versions of the Moonlight Internet Hosting Tool prior to v5.6 will cause UPnP
 > port forwarding to become unreliable. Either uninstall the tool entirely or update it to v5.6 or later.
 
 ## Limitations
-Sunshine does have some limitations, as compared to Nvidia GameStream.
+Hermes does have some limitations, as compared to Nvidia GameStream.
 
 * Automatic game/application list.
 * Changing game settings automatically to optimize streaming.

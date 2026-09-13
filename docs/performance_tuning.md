@@ -1,6 +1,12 @@
 # Performance Tuning
 In addition to the options available in the [Configuration](configuration.md) section, there are a few additional
-system options that can be used to help improve the performance of Sunshine.
+system options that can be used to help improve the performance of Hermes.
+
+> [!NOTE]
+> The two notes below are Windows settings, inherited from upstream. For the
+> Linux host, the settings that matter most are the capture backend and the
+> virtual display — see [Compatibility](compatibility.md) — and the AMD
+> low-latency encoder note in [Troubleshooting](troubleshooting.md).
 
 ## AMD
 

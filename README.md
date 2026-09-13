@@ -50,8 +50,10 @@ simply works — those are what move an entry from "expected to work" to
 - Create and activate a real virtual display. Hermes-KMS is the default for
   its lower latency; EVDI is a fully supported alternative and the automatic
   choice where Hermes-KMS is unavailable.
-- Use KDE/KScreen or Wayland output-management integration to make the
-  compositor actually render into the virtual display.
+- Make the compositor actually render into the virtual display, through
+  whichever interface it offers: KScreen on KWin, wlr-output-management on the
+  wlroots family, or Mutter's DisplayConfig on GNOME — where exclusive mode and
+  mirroring now work as well.
 - Avoid falling back silently to the physical monitor when virtual-display
   setup fails.
 - Report missing host dependencies and diagnostics clearly.
@@ -122,13 +124,23 @@ The unreleased branch has two distinct opt-in experiments:
 sudo modprobe hermes_kms initial_enabled=0 outputs=2
 ```
 
-- `hermes_kms_isolated_sessions = true` is the new independent-session
-  prototype. One Hermes server starts a separate compositor, application
-  process tree, capture path, and tagged virtual input set for each client.
-  Application profiles run directly in a DRM Gamescope session; desktop
-  profiles run Weston with its desktop shell and panel. It requires the
-  development Hermes-KMS UAPI 9 driver with one independent DRM card per
-  client:
+- `hermes_kms_isolated_sessions = true` is the independent-session prototype.
+  **It is under re-evaluation and is not recommended.** It will change in ways
+  that are not backwards compatible, so a setup built on it now is likely to
+  need rebuilding, and several things are known to be unfinished: a session
+  composites in software rather than on the GPU, nothing bounds what a session
+  may consume, a session given a Unix account of its own still hears the host's
+  audio, and Remote Input is disabled. A full desktop and simultaneous real
+  clients have not been validated. What follows describes what is built, not a
+  feature that is ready to use.
+
+  One Hermes server starts a separate compositor, application process tree,
+  capture path, and tagged virtual input set for each client. Application
+  profiles run directly in a DRM Gamescope session; desktop profiles run Weston
+  with its desktop shell and panel, or another compositor named by
+  `hermes_kms_session_compositor`. It requires a Hermes-KMS driver at UAPI v11
+  or newer — released drivers are older, so this means a 0.4.x development
+  build — with one independent DRM card per client:
 
 ```bash
 sudo modprobe hermes_kms initial_enabled=0 devices=2 outputs=1
@@ -167,6 +179,11 @@ without modifying host rules.
 Hermes-KMS is an out-of-tree kernel module distributed via DKMS, so it rebuilds
 automatically for every kernel update (the same way `evdi-dkms` works). The
 source lives at <https://github.com/MrOz59/Hermes-KMS>.
+
+> **Build it from the driver's `main` branch.** Hermes requires UAPI v11 or
+> newer from the module and refuses an older device with
+> `UAPI <n> is too old` in the log. The driver's last tagged release, 0.3.2, is
+> below that floor; `main` (0.4.x) is not, and is what the commands below build.
 
 **Option A — DKMS from a clone** (any distro with `dkms` and kernel headers):
 
@@ -244,6 +261,37 @@ guide when either virtual-display driver (EVDI or Hermes-KMS) is missing.
 Gamescope is not required for either virtual-display path. If installed,
 Hermes exposes an optional `Gamescope Steam Session` app entry that runs Steam
 Big Picture inside Gamescope on top of the virtual display.
+
+## Installing
+
+Every push to `main` refreshes the rolling **nightly** prerelease, and a tagged
+version publishes a normal release, both at
+<https://github.com/MrOz59/Hermes/releases>. CI builds these Linux packages:
+
+| Distribution | Asset | Installs |
+|:-------------|:------|:---------|
+| Arch / CachyOS | `hermes-streaming-<version>-1-x86_64.pkg.tar.zst` | `sudo pacman -U ./hermes-streaming-*.pkg.tar.zst` |
+| Ubuntu 24.04, 26.04 | `hermes_<version>_ubuntu<release>_amd64.deb` | `sudo apt install ./hermes_<version>_ubuntu<release>_amd64.deb` |
+| Fedora 43, 44 | `hermes-<version>-1.fc<release>.x86_64.rpm` | `sudo dnf install ./hermes-<version>-1.fc<release>.x86_64.rpm` |
+
+Match the release in the filename to the one you run: a `.deb` or `.rpm` is
+built inside that release's own container, so its dependencies are the sonames
+that release ships and it will refuse to install on another. Arch and CachyOS
+are the configuration Hermes is developed on; the others are built in CI and not
+exercised as a desktop — see [docs/compatibility.md](docs/compatibility.md).
+
+Every package installs the binary as `/usr/bin/hermes` and a `hermes.service`
+systemd **user** unit:
+
+```bash
+systemctl --user enable --now hermes
+```
+
+The nightly packages are rebuilt on every push and may be unstable. There is no
+repository to subscribe to yet, so upgrading means downloading the newer asset.
+The virtual display also needs the [Hermes-KMS](https://github.com/MrOz59/Hermes-KMS)
+kernel module, which is installed separately — see
+[Installing the Hermes-KMS driver](#installing-the-hermes-kms-driver) above.
 
 ## CachyOS/Arch package build
 
@@ -368,9 +416,12 @@ Reference forks:
 
 ## Repositories
 
-- Hermes (this host): <https://github.com/MrOz59/Apollo-Linux>
+- Hermes (this host): <https://github.com/MrOz59/Hermes>
 - Hermes-KMS (virtual display driver): <https://github.com/MrOz59/Hermes-KMS>
 - Hestia (desktop client): <https://github.com/MrOz59/Hestia>
 
 Report issues for the host at
-<https://github.com/MrOz59/Apollo-Linux/issues>.
+<https://github.com/MrOz59/Hermes/issues/new/choose>. The forms ask for the
+three things a report needs to be actionable: the Hermes version, one
+copy-paste block of host information, and a debug-level log. See
+[.github/CONTRIBUTING.md](.github/CONTRIBUTING.md) for what each form is for.

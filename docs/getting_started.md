@@ -1,362 +1,131 @@
 # Getting Started
 
-The recommended method for running Sunshine is to use the [binaries](#binaries) included in the
-[latest release][latest-release], unless otherwise specified.
+Hermes is a Linux game-streaming host. The recommended way to run it is one of
+the packages built for each release — see [Binaries](#binaries).
 
-[Pre-releases](https://github.com/LizardByte/Sunshine/releases) are also available. These should be considered beta,
-and release artifacts may be missing when merging changes on a faster cadence.
+> [!NOTE]
+> Hermes is developed on CachyOS with KDE Plasma (Wayland) on AMD, and that is
+> the only configuration continuously exercised. Other distributions,
+> compositors and GPUs are supported as far as their code paths allow;
+> [Compatibility](compatibility.md) records what has actually been verified,
+> what shares a verified code path but has never been run, and what is known
+> broken.
 
 ## Binaries
 
-Binaries of Sunshine are created for each release. They are available for Linux, macOS, and Windows.
-Binaries can be found in the [latest release][latest-release].
+Packages are built in CI and published at
+[Releases](https://github.com/MrOz59/Hermes/releases):
+
+- a **tagged release** for each version;
+- a rolling **nightly** prerelease, refreshed on every push to `main`. It
+  carries the newest fixes and may be unstable.
+
+| Distribution | Asset |
+|:-------------|:------|
+| Arch / CachyOS | `hermes-streaming-{version}-1-x86_64.pkg.tar.zst` |
+| Ubuntu 24.04, 26.04 | `hermes_{version}_ubuntu{release}_amd64.deb` |
+| Fedora 43, 44 | `hermes-{version}-1.fc{release}.x86_64.rpm` |
+
+Match the release in the filename to the one you run. Each `.deb` and `.rpm` is
+built inside that release's own container, so its dependencies are the sonames
+that release ships; a package built for another release will refuse to install.
+
+> [!IMPORTANT]
+> No AppImage, Flatpak, Homebrew or macOS package is published, and no Windows
+> installer is attached to a release — CI builds a Windows binary on every run,
+> but only as a workflow artifact. The code for those platforms is inherited
+> from upstream Sunshine and still builds (see [Building](building.md)); none of
+> it is exercised here. Third-party packages of *Sunshine* are not packages of
+> Hermes.
+
+### CUDA compatibility
+
+CUDA is used for NVENC and NVFBC on NVIDIA GPUs. Every Linux package above is
+built against CUDA 12.9.1, whose minimum NVIDIA driver is 575.57.08, and covers
+compute capabilities 50, 52, 53, 60, 61, 62, 70, 72, 75, 80, 86, 87, 89, 90,
+100, 101, 103, 120 and 121.
 
 > [!NOTE]
-> Some third party packages also exist.
-> See [Third Party Packages](third_party_packages.md) for more information.
-> No support will be provided for third party packages!
+> See [CUDA GPUS](https://developer.nvidia.com/cuda-gpus) to cross-reference
+> Compute Capability to your GPU. Installing the CUDA toolkit yourself is only
+> necessary when building from source — a package already carries what it needs.
 
 ## Install
 
-### Docker
+### Arch / CachyOS
 
-> [!WARNING]
-> The Docker images are not recommended for most users.
-
-Docker images are available on [Dockerhub.io](https://hub.docker.com/repository/docker/lizardbyte/sunshine)
-and [ghcr.io](https://github.com/orgs/LizardByte/packages?repo_name=sunshine).
-
-See [Docker](../DOCKER_README.md) for more information.
-
-### Linux
-**CUDA Compatibility**
-
-CUDA is used for NVFBC capture.
-
-> [!NOTE]
-> See [CUDA GPUS](https://developer.nvidia.com/cuda-gpus) to cross-reference Compute Capability to your GPU.
-> The table below applies to packages provided by LizardByte. If you use an official LizardByte package, then you do not
-> need to install CUDA.
-
-<table>
-    <caption>CUDA Compatibility</caption>
-    <tr>
-        <th>CUDA Version</th>
-        <th>Min Driver</th>
-        <th>CUDA Compute Capabilities</th>
-        <th>Package</th>
-    </tr>
-    <tr>
-        <td rowspan="8">12.9.1</td>
-        <td rowspan="8">575.57.08</td>
-        <td rowspan="8">50;52;60;61;62;70;72;75;80;86;87;89;90;100;101;103;120;121</td>
-        <td>sunshine.AppImage</td>
-    </tr>
-    <tr>
-        <td>sunshine-ubuntu-22.04-{arch}.deb</td>
-    </tr>
-    <tr>
-        <td>sunshine-ubuntu-24.04-{arch}.deb</td>
-    </tr>
-    <tr>
-        <td>sunshine-debian-trixie-{arch}.deb</td>
-    </tr>
-    <tr>
-        <td>sunshine_{arch}.flatpak</td>
-    </tr>
-    <tr>
-        <td>Sunshine (copr - Fedora 41)</td>
-    </tr>
-    <tr>
-        <td>Sunshine (copr - Fedora 42)</td>
-    </tr>
-    <tr>
-        <td>sunshine.pkg.tar.zst</td>
-    </tr>
-</table>
-
-#### AppImage
-
-> [!CAUTION]
-> Use distro-specific packages instead of the AppImage if they are available.
-
-According to AppImageLint the supported distro matrix of the AppImage is below.
-
-- ✖ Debian bullseye
-- ✔ Debian bookworm
-- ✔ Debian trixie
-- ✔ Debian sid
-- ✔ Ubuntu plucky
-- ✔ Ubuntu noble
-- ✔ Ubuntu jammy
-- ✖ Ubuntu focal
-- ✖ Ubuntu bionic
-- ✖ Ubuntu xenial
-- ✖ Ubuntu trusty
-- ✖ Rocky Linux 8
-- ✖ Rocky Linux 9
-
-##### Install
-1. Download [sunshine.AppImage](https://github.com/LizardByte/Sunshine/releases/latest/download/sunshine.AppImage)
-   into your home directory.
-   ```bash
-   cd ~
-   wget https://github.com/LizardByte/Sunshine/releases/latest/download/sunshine.AppImage
-   ```
-2. Open terminal and run the following command.
-   ```bash
-   ./sunshine.AppImage --install
-   ```
-
-##### Run
 ```bash
-./sunshine.AppImage --install && ./sunshine.AppImage
+sudo pacman -U ./hermes-streaming-*.pkg.tar.zst
 ```
 
-##### Uninstall
+The package is named `hermes-streaming` because the `hermes` name in the AUR
+belongs to an unrelated PAM authentication project — do not install that one. It
+installs `/usr/bin/hermes`, `/usr/share/hermes` and a `hermes.service` user
+unit, so it can sit side by side with the `apollo` (AUR) and `sunshine`
+packages. Only one of the three can *run* at a time: they all bind ports
+47984/47989/47990, and whichever starts second exits, which shows up in the
+browser as `Failed to fetch` on the login page.
+
+To build the package from the source tree instead, see
+[CachyOS/Arch package build](../README.md) in the overview.
+
+Uninstall:
 ```bash
-./sunshine.AppImage --remove
+sudo pacman -R hermes-streaming
 ```
 
-#### ArchLinux
+### Debian / Ubuntu
 
-> [!CAUTION]
-> Use AUR packages at your own risk.
-
-##### Install Prebuilt Packages
-Follow the instructions at LizardByte's [pacman-repo](https://github.com/LizardByte/pacman-repo) to add
-the repository. Then run the following command.
 ```bash
-pacman -S sunshine
+sudo apt install ./hermes_{version}_ubuntu{release}_amd64.deb
 ```
 
-##### Install PKGBUILD Archive
-Open terminal and run the following command.
+`apt install` on the file rather than `dpkg -i`, so dependencies are resolved.
+The post-install script applies `cap_sys_admin` to the binary, which KMS capture
+needs.
+
+Uninstall:
 ```bash
-wget https://github.com/LizardByte/Sunshine/releases/latest/download/sunshine.pkg.tar.gz
-tar -xvf sunshine.pkg.tar.gz
-cd sunshine
-
-# install optional dependencies
-pacman -S cuda  # Nvidia GPU encoding support
-pacman -S libva-mesa-driver  # AMD GPU encoding support
-
-makepkg -si
+sudo apt remove hermes
 ```
 
-##### Uninstall
+### Fedora
+
 ```bash
-pacman -R sunshine
+sudo dnf install ./hermes-{version}-1.fc{release}.x86_64.rpm
 ```
 
-#### Debian/Ubuntu
-##### Install
-Download `sunshine-{distro}-{distro-version}-{arch}.deb` and run the following command.
+Uninstall:
 ```bash
-sudo dpkg -i ./sunshine-{distro}-{distro-version}-{arch}.deb
+sudo dnf remove hermes
 ```
 
-> [!NOTE]
-> The `{distro-version}` is the version of the distro we built the package on. The `{arch}` is the
-> architecture of your operating system.
+### Build from source
 
-> [!TIP]
-> You can double-click the deb file to see details about the package and begin installation.
+See [Building](building.md). Arch and CachyOS users can build the same package
+CI publishes with `makepkg -sf` from the repository root.
 
-##### Uninstall
-```bash
-sudo apt remove sunshine
-```
+### Image-based distributions (Bazzite, Silverblue, SteamOS)
 
-#### Fedora
+`/usr` is read-only there, so no package lands on the installed system.
+`packaging/container` holds a runtime image that runs Hermes on a headless sway
+session; only the kernel module has to exist on the host. See
+`packaging/container/README.md`.
 
-> [!TIP]
-> The package name is case-sensitive.
+### The virtual display driver
 
-##### Install
-1. Enable copr repository.
-   ```bash
-   sudo dnf copr enable lizardbyte/stable
-   ```
+A virtual display needs a kernel module, installed separately from Hermes:
 
-   or
-   ```bash
-   sudo dnf copr enable lizardbyte/beta
-   ```
+- **Hermes-KMS** (default, zero-copy) — <https://github.com/MrOz59/Hermes-KMS>,
+  installed through DKMS. The overview covers the install and the
+  `initial_enabled=0` module option it needs.
+- **EVDI** — the supported alternative, selected automatically when Hermes-KMS
+  is unavailable. On Arch it lives in the AUR (`paru -S evdi`), not the official
+  repositories, so no package depends on it.
 
-2. Install the package.
-   ```bash
-   sudo dnf install Sunshine
-   ```
+The Audio/Video settings tab shows a live diagnostic and a step-by-step install
+guide when either driver is missing.
 
-##### Uninstall
-```bash
-sudo dnf remove Sunshine
-```
-
-#### Flatpak
-
-> [!CAUTION]
-> Use distro-specific packages instead of the Flatpak if they are available.
-
-Using this package requires that you have [Flatpak](https://flatpak.org/setup) installed.
-
-##### Download (local option)
-1. Download `sunshine_{arch}.flatpak` and run the following command.
-
-   > [!NOTE]
-   > Replace `{arch}` with your system architecture.
-
-##### Install (system level)
-**Flathub**
-```bash
-flatpak install --system flathub dev.lizardbyte.app.Sunshine
-```
-
-**Local**
-```bash
-flatpak install --system ./sunshine_{arch}.flatpak
-```
-
-##### Install (user level)
-**Flathub**
-```bash
-flatpak install --user flathub dev.lizardbyte.app.Sunshine
-```
-
-**Local**
-```bash
-flatpak install --user ./sunshine_{arch}.flatpak
-```
-
-##### Additional installation (required)
-```bash
-flatpak run --command=additional-install.sh dev.lizardbyte.app.Sunshine
-```
-
-##### Run with NVFBC capture (X11 Only)
-```bash
-flatpak run dev.lizardbyte.app.Sunshine
-```
-
-##### Run with KMS capture (Wayland & X11)
-```bash
-sudo -i PULSE_SERVER=unix:/run/user/$(id -u $whoami)/pulse/native flatpak run dev.lizardbyte.app.Sunshine
-```
-
-##### Uninstall
-```bash
-flatpak run --command=remove-additional-install.sh dev.lizardbyte.app.Sunshine
-flatpak uninstall --delete-data dev.lizardbyte.app.Sunshine
-```
-
-#### Homebrew
-
-> [!IMPORTANT]
-> The Homebrew package is experimental on Linux.
-
-This package requires that you have [Homebrew](https://docs.brew.sh/Installation) installed.
-
-##### Install
-```bash
-brew update
-brew upgrade
-brew tap LizardByte/homebrew
-brew install sunshine
-```
-
-##### Uninstall
-```bash
-brew uninstall sunshine
-```
-
-### macOS
-
-> [!IMPORTANT]
-> Sunshine on macOS is experimental. Gamepads do not work.
-
-#### Homebrew
-This package requires that you have [Homebrew](https://docs.brew.sh/Installation) installed.
-
-##### Install
-```bash
-brew tap LizardByte/homebrew
-brew install sunshine
-```
-
-##### Uninstall
-```bash
-brew uninstall sunshine
-```
-
-> [!TIP]
-> For beta you can replace `sunshine` with `sunshine-beta` in the above commands.
-
-### Windows
-
-#### Installer (recommended)
-
-1. Download and install
-   [Sunshine-Windows-AMD64-installer.exe](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-installer.exe)
-
-> [!CAUTION]
-> You should carefully select or unselect the options you want to install. Do not blindly install or
-> enable features.
-
-To uninstall, find Sunshine in the list <a href="ms-settings:installed-apps">here</a> and select "Uninstall" from the
-overflow menu. Different versions of Windows may provide slightly different steps for uninstall.
-
-#### Standalone (lite version)
-
-> [!WARNING]
-> By using this package instead of the installer, performance will be reduced. This package is not
-> recommended for most users. No support will be provided!
-
-1. Download and extract
-   [Sunshine-Windows-AMD64-portable.zip](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-portable.zip)
-2. Open command prompt as administrator
-3. Firewall rules
-
-   Install:
-   ```bash
-   cd /d {path to extracted directory}
-   scripts/add-firewall-rule.bat
-   ```
-
-   Uninstall:
-   ```bash
-   cd /d {path to extracted directory}
-   scripts/delete-firewall-rule.bat
-   ```
-
-4. Virtual Gamepad Support
-
-   Install:
-   ```bash
-   cd /d {path to extracted directory}
-   scripts/install-gamepad.bat
-   ```
-
-   Uninstall:
-   ```bash
-   cd /d {path to extracted directory}
-   scripts/uninstall-gamepad.bat
-   ```
-
-5. Windows service
-
-   Install:
-   ```bash
-   cd /d {path to extracted directory}
-   scripts/install-service.bat
-   scripts/autostart-service.bat
-   ```
-
-   Uninstall:
-   ```bash
-   cd /d {path to extracted directory}
-   scripts/uninstall-service.bat
-   ```
 
 ## Initial Setup
 After installation, some initial setup is required.
@@ -370,30 +139,33 @@ After installation, some initial setup is required.
 
 > [!NOTE]
 > `cap_sys_admin` may as well be root, except you don't need to be root to run the program. This is necessary to
-> allow Sunshine to use KMS capture.
+> allow Hermes to use KMS capture.
+
+Every package applies this in its post-install script, so this step is only
+needed for a binary you built yourself, or after the capability was removed.
 
 ##### Enable
 ```bash
-sudo setcap cap_sys_admin+p $(readlink -f $(which sunshine))
+sudo setcap cap_sys_admin+p $(readlink -f $(which hermes))
 ```
 
 #### X11 Capture
 For X11 capture to work, you may need to disable the capabilities that were set for KMS capture.
 
 ```bash
-sudo setcap -r $(readlink -f $(which sunshine))
+sudo setcap -r $(readlink -f $(which hermes))
 ```
 
 #### Service
 
 **Start once**
 ```bash
-systemctl --user start sunshine
+systemctl --user start hermes
 ```
 
 **Start on boot**
 ```bash
-systemctl --user enable sunshine
+systemctl --user enable hermes
 ```
 
 **Session environment**
@@ -407,13 +179,13 @@ unit. On most desktops the compositor publishes them at login and there is
 nothing to do.
 
 If capture, audio, or launching apps (Steam/Lutris) fails when started as a
-service but works when you run `sunshine` from a terminal, your desktop is
+service but works when you run `hermes` from a terminal, your desktop is
 probably not exporting the session environment to systemd. Import it once for
 the current session and restart the service:
 
 ```bash
 systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR XDG_SESSION_TYPE DBUS_SESSION_BUS_ADDRESS
-systemctl --user restart sunshine
+systemctl --user restart hermes
 ```
 
 To make this persistent, add the same `import-environment` line to your
@@ -461,9 +233,14 @@ The console is not required for streaming; it is only needed when somebody has
 to act on the host itself.
 
 ### macOS
-The first time you start Sunshine, you will be asked to grant access to screen recording and your microphone.
 
-Sunshine can only access microphones on macOS due to system limitations. To stream system audio use
+> [!NOTE]
+> Hermes publishes no macOS package; this section describes the inherited
+> upstream behaviour for anyone building it there.
+
+The first time you start it, you will be asked to grant access to screen recording and your microphone.
+
+Only microphones can be accessed on macOS due to system limitations. To stream system audio use
 [Soundflower](https://github.com/mattingalls/Soundflower) or
 [BlackHole](https://github.com/ExistentialAudio/BlackHole).
 
@@ -476,20 +253,25 @@ Sunshine can only access microphones on macOS due to system limitations. To stre
 ## Usage
 
 ### Basic usage
-If Sunshine is not installed/running as a service, then start Sunshine with the following command, unless a start
-command is listed in the specified package [install](#install) instructions above.
-
-> [!NOTE]
-> A service is a process that runs in the background. This is the default when installing Sunshine from the
-> Windows installer. Running multiple instances of Sunshine is not advised.
+The packages install a `hermes.service` systemd **user** unit, which is the
+normal way to run it:
 
 ```bash
-sunshine
+systemctl --user enable --now hermes
+```
+
+To run it in the foreground instead — useful when reading the log of a failing
+start — stop the service first, since running two instances is not advised and
+the second one fails to bind its ports:
+
+```bash
+systemctl --user stop hermes
+hermes
 ```
 
 ### Specify config file
 ```bash
-sunshine <directory of conf file>/hermes.conf
+hermes <directory of conf file>/hermes.conf
 ```
 
 > [!NOTE]
@@ -498,30 +280,32 @@ sunshine <directory of conf file>/hermes.conf
 > [!TIP]
 > The configuration file specified will be created if it doesn't exist.
 
-### Start Sunshine over SSH (Linux/X11)
+### Start Hermes over SSH (Linux/X11)
 Assuming you are already logged into the host, you can use this command
 
 ```bash
-ssh <user>@<ip_address> 'export DISPLAY=:0; sunshine'
+ssh <user>@<ip_address> 'export DISPLAY=:0; hermes'
 ```
 
 If you are logged into the host with only a tty (teletypewriter), you can use `startx` to start the X server prior to
-executing Sunshine. You nay need to add `sleep` between `startx` and `sunshine` to allow more time for the display to
+executing Hermes. You may need to add `sleep` between `startx` and `hermes` to allow more time for the display to
 be ready.
 
 ```bash
-ssh <user>@<ip_address> 'startx &; export DISPLAY=:0; sunshine'
+ssh <user>@<ip_address> 'startx &; export DISPLAY=:0; hermes'
 ```
 
 > [!TIP]
 > You could also use the `~/.bash_profile` or `~/.bashrc` files to set up the `DISPLAY` variable.
 
-@seealso{See [Remote SSH Headless Setup](https://app.lizardbyte.dev/2023-09-14-remote-ssh-headless-sunshine-setup)
-on how to set up a headless streaming server without autologin and dummy plugs (X11 + NVidia GPUs)}
+@seealso{Upstream's [Remote SSH Headless Setup](https://app.lizardbyte.dev/2023-09-14-remote-ssh-headless-sunshine-setup)
+guide covers a headless streaming server without autologin or dummy plugs (X11 + NVIDIA GPUs). It was written for
+Sunshine, so substitute the binary and unit names. On Wayland, Hermes-KMS replaces the dummy plug — see
+[Compatibility](compatibility.md).}
 
 ### Configuration
 
-Sunshine is configured via the web ui, which is available on [https://localhost:47990](https://localhost:47990)
+Hermes is configured via the web ui, which is available on [https://localhost:47990](https://localhost:47990)
 by default. You may replace *localhost* with your internal ip address.
 
 > [!NOTE]
@@ -544,17 +328,9 @@ by default. You may replace *localhost* with your internal ip address.
 ### Arguments
 To get a list of available arguments, run the following command.
 
-@tabs{
-   @tab{ General | ```bash
-      sunshine --help
-      ```}
-   @tab{ AppImage | ```bash
-      ./sunshine.AppImage --help
-      ```}
-   @tab{ Flatpak | ```bash
-      flatpak run --command=sunshine dev.lizardbyte.app.Sunshine --help
-      ```}
-}
+```bash
+hermes --help
+```
 
 ### Shortcuts
 All shortcuts start with `Ctrl+Alt+Shift`, just like Moonlight.
@@ -568,11 +344,11 @@ All shortcuts start with `Ctrl+Alt+Shift`, just like Moonlight.
 * You can use Environment variables in place of values
 * `$(HOME)` will be replaced by the value of `$HOME`
 * `$$` will be replaced by `$`, e.g. `$$(HOME)` will be become `$(HOME)`
-* `env` - Adds or overwrites Environment variables for the commands/applications run by Sunshine.
+* `env` - Adds or overwrites Environment variables for the commands/applications run by Hermes.
   This can only be changed by modifying the `apps.json` file directly.
 
 ### Considerations
-* On Windows, Sunshine uses the Desktop Duplication API which only supports capturing from the GPU used for display.
+* On Windows, Hermes uses the Desktop Duplication API which only supports capturing from the GPU used for display.
   If you want to capture and encode on the eGPU, connect a display or HDMI dummy display dongle to it and run the games
   on that display.
 * When an application is started, if there is an application already running, it will be terminated.
@@ -586,8 +362,8 @@ All shortcuts start with `Ctrl+Alt+Shift`, just like Moonlight.
 * The "Desktop" app works the same as any other application except it has no commands. It does not start an application,
   instead it simply starts a stream. If you removed it and would like to get it back, just add a new application with
   the name "Desktop" and "desktop.png" as the image path.
-* For the Linux flatpak you must prepend commands with `flatpak-spawn --host`.
-* If inputs (mouse, keyboard, gamepads...) aren't working after connecting, add the user running sunshine to the `input` group.
+* In a Flatpak build you must prepend commands with `flatpak-spawn --host`.
+* If inputs (mouse, keyboard, gamepads...) aren't working after connecting, add the user running hermes to the `input` group.
 
 ### HDR Support
 Streaming HDR content is officially supported on Windows hosts and experimentally supported for Linux hosts.
@@ -634,9 +410,9 @@ Tutorials and Guides are community generated. Want to contribute? Reach out to u
 
 <div class="section_buttons">
 
-| Previous                 |                      Next |
-|:-------------------------|--------------------------:|
-| [Overview](../README.md) | [Changelog](changelog.md) |
+| Previous                 |                              Next |
+|:-------------------------|----------------------------------:|
+| [Overview](../README.md) | [Compatibility](compatibility.md) |
 
 </div>
 
@@ -645,4 +421,3 @@ Tutorials and Guides are community generated. Want to contribute? Reach out to u
   [TOC]
 </details>
 
-[latest-release]: https://github.com/LizardByte/Sunshine/releases/latest

@@ -1,6 +1,9 @@
 # Contributing
-Read our contribution guide in our organization level
-[docs](https://docs.lizardbyte.dev/latest/developers/contributing.html).
+Read [CONTRIBUTING.md](https://github.com/MrOz59/Hermes/blob/main/.github/CONTRIBUTING.md)
+first: it covers which branch a pull request targets (`main` for fixes, `dev`
+for the transport and virtual-display migration), how issues are reported, and
+the changelog entry every change carries. This page covers the project's
+internals — the Web UI, localization and the test suites.
 
 ## Recommended Tools
 
@@ -31,44 +34,29 @@ Read our contribution guide in our organization level
 }
 
 ### Localization
-Sunshine and related LizardByte projects are being localized into various languages.
-The default language is `en` (English).
+The strings Hermes ships are inherited from Sunshine's localization, and the default language is `en` (English).
 
-![](https://app.lizardbyte.dev/dashboard/crowdin/LizardByte_graph.svg)
-
-@admonition{Community | We are looking for language coordinators to help approve translations.
-The goal is to have the bars above filled with green!
-If you are interesting, please reach out to us on our Discord server.}
-
-#### CrowdIn
-The translations occur on [CrowdIn][crowdin-url].
-Anyone is free to contribute to the localization there.
+> [!IMPORTANT]
+> Upstream's CrowdIn integration is **not wired up in this fork**: there is no localization workflow in
+> `.github/workflows`, so nothing here pushes templates to CrowdIn or opens translation PRs. Add new English strings to
+> `en.json` as shown below; translations for them arrive when a fork-side localization route exists, or through a pull
+> request that edits a language file directly.
 
 ##### Translation Basics
-* The brand names *LizardByte* and *Sunshine* should never be translated.
+* The brand names *Hermes*, *Hestia* and *Sunshine* should never be translated.
 * Other brand names should never be translated. Examples include *AMD*, *Intel*, and *NVIDIA*.
-
-##### CrowdIn Integration
-How does it work?
-
-When a change is made to Sunshine source code, a workflow generates new translation templates
-that get pushed to CrowdIn automatically.
-
-When translations are updated on CrowdIn, a push gets made to the *l10n_master* branch and a PR is made against the
-*master* branch. Once the PR is merged, all updated translations are part of the project and will be included in the
-next release.
 
 #### Extraction
 
 ##### Web UI
-Sunshine uses [Vue I18n](https://vue-i18n.intlify.dev) for localizing the UI.
+Hermes uses [Vue I18n](https://vue-i18n.intlify.dev) for localizing the UI.
 The following is a simple example of how to use it.
 
 * Add the string to the `./src_assets/common/assets/web/public/assets/locale/en.json` file, in English.
   ```json
   {
    "index": {
-     "welcome": "Hello, Sunshine!"
+     "welcome": "Hello, Hermes!"
    }
   }
   ```
@@ -77,11 +65,9 @@ The following is a simple example of how to use it.
   > The JSON keys should be sorted alphabetically. You can use [jsonabc](https://novicelab.org/jsonabc)
   > to sort the keys.
 
-  > [!IMPORTANT]
-  > Due to the integration with Crowdin, it is important to only add strings to the *en.json* file,
-  > and to not modify any other language files. After the PR is merged, the translations can take place
-  > on [CrowdIn][crowdin-url]. Once the translations are complete, a PR will be made
-  > to merge the translations into Sunshine.
+  > [!NOTE]
+  > Add new strings only to *en.json*. The other language files come from upstream's translation process; editing
+  > them here makes the next merge from upstream conflict.
 
 * Use the string in the Vue component.
   ```html
@@ -117,14 +103,8 @@ some situations. For example the system tray icon could be localized as it is us
 > The below is for information only. Contributors should never include manually updated template files, or
 > manually compiled language files in Pull Requests.
 
-Strings are automatically extracted from the code to the `locale/sunshine.po` template file. The generated file is
-used by CrowdIn to generate language specific template files. The file is generated using the
-`.github/workflows/localize.yml` workflow and is run on any push event into the `master` branch. Jobs are only run if
-any of the following paths are modified.
-
-```yaml
-- 'src/**'
-```
+Strings are extracted from the code to the `locale/sunshine.po` template file. Upstream generates it from a
+`localize.yml` workflow; this fork has no such workflow, so extract locally when you add a translatable C++ string.
 
 When testing locally it may be desirable to manually extract, initialize, update, and compile strings. Python is
 required for this, along with the python dependencies in the `./scripts/requirements.txt` file. Additionally,
@@ -141,16 +121,63 @@ required for this, along with the python dependencies in the `./scripts/requirem
   ```
 
 > [!IMPORTANT]
-> Due to the integration with CrowdIn, it is important to not include any extracted or compiled files in
-> Pull Requests. The files are automatically generated and updated by the workflow. Once the PR is merged, the
-> translations can take place on [CrowdIn][crowdin-url]. Once the translations are
-> complete, a PR will be made to merge the translations into Sunshine.
+> Do not include extracted or compiled localization files in pull requests.
 
 ### Testing
 
+There are two suites, and the `test` job in
+[.github/workflows/build.yml](https://github.com/MrOz59/Hermes/blob/main/.github/workflows/build.yml)
+runs both on every push and pull request. Nothing else is gated: this fork has no
+clang-format lint job and no coverage upload, so run these locally before opening a PR.
+
+#### C++ unit tests
+Hermes uses [Google Test](https://github.com/google/googletest), included as a submodule. The test sources are in
+`./tests`. They are built by the normal build process when `BUILD_TESTS` is `ON`, and can be turned off with `OFF`.
+
+Configure and build the same way CI does:
+
+```bash
+cmake -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DSUNSHINE_ENABLE_WAYLAND=ON \
+  -DSUNSHINE_ENABLE_X11=ON \
+  -DSUNSHINE_ENABLE_DRM=ON \
+  -DSUNSHINE_ENABLE_CUDA=OFF \
+  -DBUILD_TESTS=ON
+cmake --build build --target test_sunshine -j$(nproc)
+```
+
+The suite is a single GoogleTest binary with no ctest registration, so run it directly. On a headless machine run it
+under `xvfb`, so `platf::init()` finds an X11 capture source — without one the platform-dependent suites fail their
+setup rather than skipping:
+
+```bash
+xvfb-run -a ./build/tests/test_sunshine --gtest_color=yes
+```
+
+To see all available options, run the tests with the `--help` flag.
+
+```bash
+./build/tests/test_sunshine --help
+```
+
+Cases that need hardware the machine does not have skip themselves. The Wayland suites need a compositor on
+`WAYLAND_DISPLAY`; CI starts a headless wlroots compositor for them, and without one they skip.
+
+> [!TIP]
+> See the googletest [FAQ](https://google.github.io/googletest/faq.html) for more information on how to use Google Test.
+
+#### Web UI tests
+The Web UI is tested with [Vitest](https://vitest.dev), on its own config: `vite.config.js` is driven by the CMake
+environment and builds the pages through ejs, neither of which a unit test needs.
+
+```bash
+npm install
+npm test
+```
+
 #### Clang Format
-Source code is tested against the `.clang-format` file for linting errors. The workflow file responsible for clang
-format testing is `.github/workflows/cpp-clang-format-lint.yml`.
+Source code follows the `.clang-format` file. Nothing enforces it in CI, so format before committing.
 
 Option 1:
 ```bash
@@ -161,42 +188,6 @@ Option 2 (will modify files):
 ```bash
 python ./scripts/update_clang_format.py
 ```
-
-#### Unit Testing
-Sunshine uses [Google Test](https://github.com/google/googletest) for unit testing. Google Test is included in the
-repo as a submodule. The test sources are located in the `./tests` directory.
-
-The tests need to be compiled into an executable, and then run. The tests are built using the normal build process, but
-can be disabled by setting the `BUILD_TESTS` CMake option to `OFF`.
-
-To run the tests, execute the following command.
-
-```bash
-./build/tests/test_sunshine
-```
-
-To see all available options, run the tests with the `--help` flag.
-
-```bash
-./build/tests/test_sunshine --help
-```
-
-> [!TIP]
-> See the googletest [FAQ](https://google.github.io/googletest/faq.html) for more information on how to use Google Test.
-
-We use [gcovr](https://www.gcovr.com) to generate code coverage reports,
-and [Codecov](https://about.codecov.io) to analyze the reports for all PRs and commits.
-
-Codecov will fail a PR if the total coverage is reduced too much, or if not enough of the diff is covered by tests.
-In some cases, the code cannot be covered when running the tests inside of GitHub runners. For example, any test that
-needs access to the GPU will not be able to run. In these cases, the coverage can be omitted by adding comments to the
-code. See the [gcovr documentation](https://gcovr.com/en/stable/guide/exclusion-markers.html#exclusion-markers) for
-more information.
-
-Even if your changes cannot be covered in the CI, we still encourage you to write the tests for them. This will allow
-maintainers to run the tests locally.
-
-[crowdin-url]: https://translate.lizardbyte.dev
 
 <div class="section_buttons">
 

@@ -1,9 +1,13 @@
 # Guides
 
-@admonition{Community | A collection of guides written by the community is available on our
-[blog](https://app.lizardbyte.dev/blog).
-Feel free to contribute your own tips and trips by making a PR to
-[LizardByte.github.io](https://github.com/LizardByte/LizardByte.github.io).}
+Hermes has no guide collection of its own yet. The closest thing is
+[Compatibility](compatibility.md), which records how Hermes behaves per
+distribution, compositor and GPU, and what to check when it does not.
+
+@admonition{Community | Upstream LizardByte keeps a collection of community
+guides on its [blog](https://app.lizardbyte.dev/blog). They are written for
+Sunshine, so binary names, unit names and paths differ; the streaming concepts
+carry over.}
 
 <div class="section_buttons">
 

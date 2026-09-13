@@ -339,6 +339,11 @@ third-party tool, you can use *QRes* as an example.
 
 #### Experimental independent Linux sessions
 
+> [!WARNING]
+> Independent client sessions are under re-evaluation and are **not
+> recommended**. They will change in ways that are not backwards compatible, so
+> an app configuration built on the fields below is likely to need rebuilding.
+
 When `hermes_kms_isolated_sessions` is enabled, each application can select a
 `session-type` in the Web UI or `apps.json`:
 
@@ -366,7 +371,8 @@ compositor automatically.
 
 > [!CAUTION]
 > Because Flatpak packages run in a sandboxed environment and do not normally have access to the
-> host, the Flatpak of Sunshine requires commands to be prefixed with `flatpak-spawn --host`.
+> host, a Flatpak build requires commands to be prefixed with `flatpak-spawn --host`. Hermes
+> publishes no Flatpak of its own; this applies to a Flatpak you build from `packaging/linux/flatpak`.
 
 #### Windows
 **Elevating Commands (Windows)**

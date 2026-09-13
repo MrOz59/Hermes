@@ -1,5 +1,5 @@
 # Building
-Sunshine binaries are built using [CMake](https://cmake.org) and requires `cmake` > 3.25.
+Hermes binaries are built using [CMake](https://cmake.org) and requires `cmake` > 3.25.
 
 ## Building Locally
 
@@ -15,13 +15,19 @@ It is recommended to use one of the following compilers:
 ### Dependencies
 
 #### Linux
-Dependencies vary depending on the distribution. You can reference our
-[linux_build.sh](https://github.com/LizardByte/Sunshine/blob/master/scripts/linux_build.sh) script for a list of
-dependencies we use in Debian-based and Fedora-based distributions. Please submit a PR if you would like to extend the
-script to support other distributions.
+Dependencies vary depending on the distribution. The lists CI actually installs are the most reliable reference:
+the `Install Dependencies` steps of the `build-deb` (Ubuntu) and `build-rpm` (Fedora) jobs in
+[.github/workflows/build.yml](https://github.com/MrOz59/Hermes/blob/main/.github/workflows/build.yml), and the
+`depends`/`makedepends` arrays in the [PKGBUILD](https://github.com/MrOz59/Hermes/blob/main/PKGBUILD) for Arch.
+[scripts/linux_build.sh](https://github.com/MrOz59/Hermes/blob/main/scripts/linux_build.sh) is the inherited upstream
+helper for Debian- and Fedora-based distributions. Please submit a PR if you would like to extend it to other
+distributions.
+
+`libsystemd` is an optional dependency: with it a GNOME session notices the desktop layout changing mid-stream, and
+without it everything else still builds and works.
 
 ##### CUDA Toolkit
-Sunshine requires CUDA Toolkit for NVFBC capture. There are two caveats to CUDA:
+Hermes requires CUDA Toolkit for NVFBC capture. There are two caveats to CUDA:
 
 1. The version installed depends on the version of GCC.
 2. The version of CUDA you use will determine compatibility with various GPU generations.
@@ -137,8 +143,8 @@ visible to CMake.
 Ensure [git](https://git-scm.com) is installed on your system, then clone the repository using the following command:
 
 ```bash
-git clone https://github.com/ClassicOldSong/Apollo.git --recurse-submodules
-cd Apollo
+git clone https://github.com/MrOz59/Hermes.git --recurse-submodules
+cd Hermes
 mkdir build
 ```
 
@@ -151,7 +157,7 @@ ninja -C build
 
 > [!TIP]
 > Available build options can be found in
-> [options.cmake](https://github.com/LizardByte/Sunshine/blob/master/cmake/prep/options.cmake).
+> [options.cmake](https://github.com/MrOz59/Hermes/blob/main/cmake/prep/options.cmake).
 
 ### Package
 

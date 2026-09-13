@@ -557,6 +557,30 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Hermes-KMS and Hestia trackers for problems that belong to them.
 
 ### Changed
+- The documentation says Hermes where it meant Hermes. Most of `docs/` came
+  across from upstream unedited, and the parts a new user reads first were
+  telling them to install and run a different program: Getting Started's whole
+  install section fetched LizardByte's Sunshine — the AppImage, the Flatpak, the
+  copr repository, `pacman -S sunshine` — and never mentioned the packages this
+  project actually publishes; Troubleshooting's first entry, resetting a
+  forgotten Web UI password, ran `sunshine --creds`; Building cloned
+  `ClassicOldSong/Apollo`. The install, setup and usage sections now describe
+  the real artifacts (one `.deb` per supported Ubuntu LTS, one `.rpm` per
+  supported Fedora, the Arch package, and the rolling nightly), the real binary
+  and unit names, and say plainly that no AppImage, Flatpak, Homebrew, macOS or
+  Windows package is published — a third-party *sunshine* package is a different
+  program, not a repackaged Hermes.
+
+  The inherited pages that describe upstream's infrastructure now say so instead
+  of implying it is ours: the changelog page embedded Sunshine's changelog and
+  now carries this one, Docker pointed at `lizardbyte/sunshine` images and now
+  explains the difference between `docker/` (build images) and
+  `packaging/container` (the runnable one), Third-Party Packages listed
+  Chocolatey/Scoop/nixpkgs/Solus builds of Sunshine, and Contributing described
+  a CrowdIn integration, a clang-format lint job and a Codecov gate that do not
+  exist in this fork — it now documents the two suites CI does run, and how to
+  run both locally.
+
 - The API reference matches the server again. It documented 19 of the 40 routes
   and one that no longer exists (`DELETE /api/apps/{index}`, replaced by
   `POST /api/apps/delete`), and said every call authenticates with the admin
@@ -566,6 +590,19 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Web UI routes take the admin account, `/api/hestia/v1/*` takes the paired
   client certificate plus a per-client permission, and `capabilities` takes
   nothing at all, deliberately, so a client can detect Hermes before pairing.
+
+- `server_cmd` is documented. It has been configurable in the Web UI and
+  advertised to clients holding the `server_cmd` permission for as long as the
+  fork has existed, while being the one setting absent from the configuration
+  reference — including the part worth knowing before enabling it, that the
+  command runs with the Hermes process's privileges at a remote client's
+  request.
+
+- The compatibility record is part of the documentation site. It is the document
+  the README and the issue forms point people at, and it was the one page
+  Doxygen never built, because it was missing from the input list. The site also
+  called itself Sunshine and loaded a logo from two files that do not exist in
+  this repository.
 
 - The Web UI has tests. It had none of any kind, which is how a computed
   feeding the root render came to blank the whole home page over one field of
@@ -626,6 +663,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- Exclusive mode is no longer documented as impossible on GNOME. It was
+  implemented through Mutter's `ApplyMonitorsConfig` in this same unreleased
+  cycle, and the configuration reference still said Mutter exposes no interface
+  Hermes can drive and that the physical outputs stay on — the one place a user
+  checks before trying it.
+
 - The KMS capture failure message told the user to run `setcap` on
   `$(which sunshine)`, a binary no Hermes package installs, and then referred
   them to upstream's AppImage and Flatpak instructions for packages this project

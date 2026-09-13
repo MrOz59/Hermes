@@ -5,27 +5,25 @@
 ### Forgotten Credentials
 If you forgot your credentials to the web UI, try this.
 
-@tabs{
-  @tab{General | ```bash
-    sunshine --creds {new-username} {new-password}
-    ```
-  }
-  @tab{AppImage | ```bash
-    ./sunshine.AppImage --creds {new-username} {new-password}
-    ```
-  }
-  @tab{Flatpak | ```bash
-    flatpak run --command=sunshine dev.lizardbyte.app.Sunshine --creds {new-username} {new-password}
-    ```
-  }
-}
+Stop the service first, so the running process does not write the old state
+back over the new credentials:
+
+```bash
+systemctl --user stop hermes
+hermes --creds {new-username} {new-password}
+systemctl --user start hermes
+```
 
 > [!TIP]
 > Remember to replace `{new-username}` and `{new-password}` with your new credentials.
 > Do not include the curly braces.
 
+> [!NOTE]
+> This keeps your paired clients. Deleting `hermes_state.json` also clears the
+> password, but unpairs every client with it.
+
 ### Unusual Mouse Behavior
-If you experience unusual mouse behavior, try attaching a physical mouse to the Sunshine host.
+If you experience unusual mouse behavior, try attaching a physical mouse to the Hermes host.
 
 ### Web UI Access
 Can't access the web UI?
@@ -37,7 +35,7 @@ One trick might be to change Steam settings and check or uncheck the configurati
 controllers and leave only support for Generic controllers.
 
 Also, if you have many controllers already directly connected to the host, it might help to disable them so that the
-Sunshine-provided controller (connected to the guest) is the "first" one. In Linux this can be achieved on USB
+Hermes-provided controller (connected to the guest) is the "first" one. In Linux this can be achieved on USB
 devices by finding the device in `/sys/bus/usb/devices/` and writing `0` to the `authorized` file.
 
 ### Network performance test
@@ -48,7 +46,7 @@ consistency (low latency with low variance, minimal or no packet loss).
 
 The network can be tested using the multi-platform tool [iPerf3](https://iperf.fr).
 
-On the Sunshine host `iperf3` is started in server mode:
+On the Hermes host `iperf3` is started in server mode:
 
 ```bash
 iperf3 -s
@@ -73,9 +71,9 @@ If you are testing a remote connection (over the internet), you will need to
 forward the port 5201 (TCP and UDP) from your host.
 
 ### Packet loss (Buffer overrun)
-If the host PC (running Sunshine) has a much faster connection to the network
+If the host PC (running Hermes) has a much faster connection to the network
 than the slowest segment of the network path to the client device (running
-Moonlight), massive packet loss can occur: Sunshine emits its stream in bursts
+Moonlight), massive packet loss can occur: Hermes emits its stream in bursts
 every 16 ms (for 60 fps), but those bursts can't be passed on fast enough to the
 client and must be buffered by one of the network devices inbetween. If the
 bitrate is high enough, these buffers will overflow and data will be discarded.
@@ -87,7 +85,7 @@ client having only a 100 Mbps interface.
 As a workaround the transmission speed of the host NIC can be reduced: 1 Gbps
 instead of 2.5 or 100 Mbps instead of 1 Gbps. A technically more advanced
 solution would be to configure traffic shaping rules at the OS level, so that
-only Sunshine's traffic is slowed down.
+only Hermes' traffic is slowed down.
 
 Such a solution on Linux could look like that:
 
@@ -102,7 +100,7 @@ sudo tc qdisc add dev <NIC> root handle 1: htb default 1
 sudo tc class add dev <NIC> parent 1: classid 1:1 htb \
     rate 10000mbit ceil 10000mbit burst 32k
 
-# 4) Create class 1:10 for Sunshine game stream at 1 Gbit/s
+# 4) Create class 1:10 for the Hermes game stream at 1 Gbit/s
 sudo tc class add dev <NIC> parent 1: classid 1:10 htb \
     rate 1000mbit ceil 1000mbit burst 32k
 
@@ -112,11 +110,12 @@ sudo tc filter add dev <NIC> protocol ip parent 1: prio 1 \
     match ip sport 47998 0xffff flowid 1:10
 ```
 
-In that way only the Sunshine traffic is limited by 1 Gbit. This is not persistent on reboots.
+In that way only the Hermes traffic is limited by 1 Gbit. This is not persistent on reboots.
 If you use a different port for the game stream, you need to adjust the last command.
 
-Sunshine versions > 0.23.1 include improved networking code that should
-alleviate or even solve this issue (without reducing the NIC speed).
+Hermes carries the improved networking code from upstream Sunshine 0.23.1 and
+later, which should alleviate or even solve this issue (without reducing the
+NIC speed).
 
 ### Packet loss (MTU)
 Although unlikely, some guests might work better with a lower
@@ -135,12 +134,12 @@ Due to legal concerns, Mesa has disabled hardware decoding and encoding by defau
 Error: Could not open codec [h264_vaapi]: Function not implemented
 ```
 
-If you see the above error in the Sunshine logs, compiling *Mesa* manually may be required. See the official Mesa3D
+If you see the above error in the Hermes logs, compiling *Mesa* manually may be required. See the official Mesa3D
 [Compiling and Installing](https://docs.mesa3d.org/install.html) documentation for instructions.
 
 > [!IMPORTANT]
 > You must re-enable the disabled encoders. You can do so by passing the following argument to the build
-> system. You may also want to enable decoders, however, that is not required for Sunshine and is not covered here.
+> system. You may also want to enable decoders, however, that is not required for Hermes and is not covered here.
 > ```bash
 > -Dvideo-codecs=h264enc,h265enc
 > ```
@@ -163,13 +162,8 @@ sudo usermod -aG input $USER
 If screencasting fails with KMS, you may need to run the following to force unprivileged screencasting.
 
 ```bash
-sudo setcap -r $(readlink -f $(which sunshine))
+sudo setcap -r $(readlink -f $(which hermes))
 ```
-
-> [!NOTE]
-> The above command will not work with the AppImage or Flatpak packages. Please refer to the
-> [AppImage setup](md_docs_2getting__started.html#appimage) or
-> [Flatpak setup](md_docs_2getting__started.html#flatpak) for more specific instructions.
 
 ### KMS streaming fails on Nvidia GPUs
 If KMS screen capture results in a black screen being streamed, you may need to
@@ -196,7 +190,7 @@ by running them with a special
 ```bash
 export AMD_DEBUG=lowlatencyenc
 ```
-Sunshine sets this variable automatically, no manual
+Hermes sets this variable automatically, no manual
 configuration is needed.
 
 To check whether low-latency mode is being used, one can watch the VCLK and DCLK
@@ -226,7 +220,7 @@ launchctl load -w /Library/LaunchAgents/org.freedesktop.dbus-session.plist
 Verify that you've installed [Nefarius Virtual Gamepad](https://github.com/nefarius/ViGEmBus/releases/latest).
 
 ### Permission denied
-Since Sunshine runs as a service on Windows, it may not have the same level of access that your regular user account
+Since Hermes runs as a service on Windows, it may not have the same level of access that your regular user account
 has. You may get permission denied errors when attempting to launch a game or application from a non-system drive.
 
 You will need to modify the security permissions on your disk. Ensure that user/principal SYSTEM has full

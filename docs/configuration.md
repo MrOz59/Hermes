@@ -261,6 +261,41 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### server_cmd
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Named commands a client may run on the host during a session —
+            "Server Commands" in the Web UI. They are not run by Hermes on its
+            own: the names are advertised to a paired client that holds the
+            <code>server_cmd</code> permission, which then asks for one by name.
+            A client without that permission is not told they exist.
+            @note{Also reachable over the Hestia API as
+            <code>GET /api/hestia/v1/commands</code> and
+            <code>POST /api/hestia/v1/commands/run</code>, with the same
+            permission.}
+            @warning{A server command runs with the privileges of the Hermes
+            process, chosen by whoever configures the host and triggered by a
+            remote client. Grant the permission only to clients you would trust
+            with those commands.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            []
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            server_cmd = [{"name":"Bubbles","cmd":"bubbles.scr","elevated":false}]
+            @endcode</td>
+    </tr>
+</table>
+
 ### notify_pre_releases
 
 <table>
@@ -2062,12 +2097,17 @@ editing the `conf` file in a text editor. Use the examples as reference.
             <code>extend</code> or <code>mirror</code> keep the physical
             outputs on even when this option is enabled.}
             @note{On Linux, this requires a compositor Hermes can drive:
-            KDE/KWin through KScreen, or a Wayland compositor implementing the
-            wlr-output-management protocol. GNOME is not supported here —
-            Mutter exposes neither, so exclusive mode logs a warning and the
-            physical outputs stay on. Hermes does use Mutter's own
-            DisplayConfig interface to negotiate the virtual display's mode,
-            but that is a separate mechanism and does not enable this option.}
+            KDE/KWin through KScreen, a Wayland compositor implementing the
+            wlr-output-management protocol, or GNOME through Mutter's own
+            DisplayConfig interface. On a compositor that offers none of them,
+            exclusive mode logs a warning and the physical outputs stay on.}
+            @note{On GNOME the layout is applied as <i>temporary</i> after
+            Mutter's own <code>VERIFY</code> accepts it, and the layout found at
+            the start is submitted again when the session ends. Before the
+            monitors go dark Hermes also writes a physical-only layout to
+            <code>$XDG_STATE_HOME/hermes/saved-mutter-layout</code> and replays
+            it at the next start, so a crash mid-session cannot leave a desktop
+            with every screen off.}
         </td>
     </tr>
     <tr>

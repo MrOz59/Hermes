@@ -22,12 +22,12 @@
 # doxygen -x_noenv [configFile]
 
 # project metadata
-DOCSET_BUNDLE_ID = dev.lizardbyte.Sunshine
-DOCSET_PUBLISHER_ID = dev.lizardbyte.Sunshine.documentation
-PROJECT_BRIEF = "Self-hosted game stream host for Moonlight."
-PROJECT_ICON = ../sunshine.ico
-PROJECT_LOGO = ../sunshine.png
-PROJECT_NAME = Sunshine
+DOCSET_BUNDLE_ID = io.github.mroz59.Hermes
+DOCSET_PUBLISHER_ID = io.github.mroz59.Hermes.documentation
+PROJECT_BRIEF = "Self-hosted game stream host for Hestia and Artemis."
+PROJECT_ICON = ../apollo.ico
+PROJECT_LOGO = ../apollo.png
+PROJECT_NAME = Hermes
 
 # project specific settings
 DOT_GRAPH_MAX_NODES = 60
@@ -42,6 +42,7 @@ WARN_IF_UNDOCUMENTED = NO
 USE_MDFILE_AS_MAINPAGE = ../README.md
 INPUT = ../README.md \
         getting_started.md \
+        compatibility.md \
         changelog.md \
         ../DOCKER_README.md \
         third_party_packages.md \

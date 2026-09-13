@@ -539,3 +539,16 @@ A useful report includes:
   `cat /sys/module/hermes_kms/parameters/initial_enabled`;
 - for display-adoption problems, the compositor's view of its outputs
   (`kscreen-doctor -o`, `wlr-randr`, or Mutter's `GetCurrentState` over D-Bus).
+
+<div class="section_buttons">
+
+| Previous                              |                      Next |
+|:--------------------------------------|--------------------------:|
+| [Getting Started](getting_started.md) | [Changelog](changelog.md) |
+
+</div>
+
+<details style="display: none;">
+  <summary></summary>
+  [TOC]
+</details>

@@ -616,30 +616,39 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
-- NVENC works again on pre-Turing NVIDIA cards in the Fedora 43 and Ubuntu 26.04
-  packages. CUDA 13 dropped code generation for every compute capability below
-  7.5, and both of those releases are given nothing but CUDA 13 by NVIDIA's own
-  package repositories. Hermes compiles its own RGBA-to-NV12 kernel, so a card
-  the toolkit refuses to target has no kernel image to run: capture succeeded,
-  the encoder opened, and the first frame died with
-  `cudaErrorNoKernelImageForDevice`. With VA-API unavailable on the proprietary
-  driver and software encoding refused for Hermes-KMS capture, that left a
-  GTX 1060 with no working encoder at all.
+- NVENC works on pre-Turing NVIDIA cards again, in every Linux package. Hermes
+  compiles its own RGBA-to-NV12 kernel, so the toolkit that builds a package
+  decides which cards that package can encode on — and CUDA 13 dropped code
+  generation for every compute capability below 7.5. A GTX 1060 captured fine,
+  opened the encoder fine, and then died on the first frame with
+  `cudaErrorNoKernelImageForDevice`; with VA-API unavailable on the proprietary
+  driver and software encoding refused for Hermes-KMS capture, that left the
+  card with no working encoder at all. Maxwell, Pascal and Volta were all
+  affected.
 
-  Those two builds now take CUDA 12.9 from NVIDIA's redistributable archives -
-  plain tarballs, unrelated to whatever the release happens to package - and
-  drive nvcc with the compat GCC each distro still carries, since only that one
-  translation unit goes through nvcc and it is C++17 against a handful of
-  standard headers. The architecture list goes back to covering Maxwell through
-  Blackwell; the only target lost is `sm_110`, a datacenter part. The toolkit
-  also needs its `crt/math_functions.h` corrected for glibc 2.41's C23 math
-  functions, which `scripts/install_cuda_redist.sh` handles.
+  Every package now builds against CUDA 12.9, the last toolkit that still emits
+  those architectures, so all five cover the same range: compute 5.0 through
+  12.1, Maxwell to Blackwell. The only target lost is `sm_110`, a datacenter
+  part. This also closes a gap in the other direction — the Ubuntu 24.04 package
+  was on CUDA 12.6, which predates `sm_120`, so it had never supported the
+  RTX 50 series.
 
-  Fedora 44 and Arch are not fixed and cannot be with this approach: nvcc 12.9
-  refuses GCC newer than 14, neither release packages one that old any more, and
-  no toolkit both accepts their compilers and still emits pre-Turing code. Those
-  two packages remain Turing-and-newer for NVENC. Upstream Sunshine's own
-  packages split on exactly the same line ([#43]).
+  The toolkit no longer comes from the distributions, which is what made this
+  unfixable a release at a time: NVIDIA publishes 12.x for neither Fedora 43/44
+  nor Ubuntu 26.04, and Arch has moved to 13.x.
+  `scripts/install_cuda_redist.sh` fetches nvcc, the runtime and the CCCL
+  headers from NVIDIA's redistributable archives — about 84 MB against the 4 GB
+  of the runfile installer — and corrects `crt/math_functions.h` for the C23
+  math functions glibc 2.41 declares `noexcept`, which nvcc otherwise rejects.
+
+  nvcc 12.9 refuses any host compiler newer than GCC 14, and all four releases
+  now ship something newer, so `scripts/install_cuda_host_gcc.sh` finds one for
+  nvcc alone: from the distribution where it is still packaged, from the last
+  Fedora release that carried it where it is not, and from the Arch archive —
+  unpacked under a prefix, not installed — for Arch, which keeps no compat
+  compilers at all. Only `src/platform/linux/cuda.cu` goes through nvcc, at
+  C++17 against a handful of standard headers, so every other translation unit
+  stays on the compiler its release ships ([#43]).
 
 - The `.deb` no longer declares dependencies that do not describe it. The
   package's `Depends` was a hand-written list, and it was wrong in both

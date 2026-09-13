@@ -13,6 +13,22 @@ env:
   BUILD_TYPE: Release
   COMMIT: ${{ github.sha }}
 
+  # Every Linux package builds its CUDA against the same toolkit, so they all
+  # encode on the same set of NVIDIA cards. It cannot come from the distros:
+  # Hermes compiles its own RGBA-to-NV12 kernel, CUDA 13 dropped code generation
+  # for every compute capability below 7.5, and CUDA 13 is all that NVIDIA's
+  # repositories offer for the current releases - which left Maxwell through
+  # Volta with no kernel image at all and NVENC failing on the first frame.
+  # 12.9 is the last toolkit that still emits those architectures, and it costs
+  # only sm_110, a datacenter part; scripts/install_cuda_redist.sh fetches it
+  # from the redistributable archives, which no release gets to decide for us.
+  #
+  # nvcc 12.9 refuses a host compiler newer than GCC 14, and every one of these
+  # releases now ships something newer, so scripts/install_cuda_host_gcc.sh
+  # finds a GCC 14 for nvcc alone. Only cuda.cu goes through it.
+  CUDA_VERSION: "12.9.1"
+  CUDA_HOST_GCC: "14"
+
 jobs:
   # ===========================================
   # Build version (VERSION file + commit stamp)
@@ -330,10 +346,9 @@ jobs:
       BUILD_VERSION: ${{ needs.version.outputs.build_version }}
 
     steps:
-      # Cache the downloaded pacman packages so the large `cuda` toolkit
-      # (~2-3 GB compressed) is not re-downloaded on every run. pacman keeps
-      # downloaded packages in /var/cache/pacman/pkg by default; we only pay
-      # the extraction cost on a cache hit, not the download.
+      # Cache the downloaded pacman packages so a run pays the extraction cost
+      # rather than the download; pacman keeps them in /var/cache/pacman/pkg.
+      # The CUDA toolkit is no longer among them - see the CUDA step below.
       - name: Cache pacman packages
         uses: actions/cache@v4
         with:
@@ -345,10 +360,13 @@ jobs:
       - name: Setup Arch Linux
         run: |
           pacman -Syu --noconfirm
-          # cuda provides nvcc so the package ships NVIDIA NVENC hardware
-          # encoding; the CMake build fails without it (CUDA_FAIL_ON_MISSING=ON).
+          # nvcc does not come from pacman here - the CUDA step below explains
+          # why - but the build still fails without it (CUDA_FAIL_ON_MISSING=ON).
+          # wget and zstd are what the two CUDA scripts need to fetch and unpack.
           pacman -S --noconfirm --needed \
             base-devel \
+            wget \
+            zstd \
             git \
             git-lfs \
             cmake \
@@ -376,8 +394,7 @@ jobs:
             npm \
             nodejs \
             icu \
-            numactl \
-            cuda
+            numactl
 
           # Create build user (makepkg can't run as root)
           useradd -m builder
@@ -402,18 +419,32 @@ jobs:
           chown -R builder:builder .
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
+      # Arch's own `cuda` package is 13.x, which would leave this package
+      # unable to encode on anything older than Turing; see the CUDA_VERSION
+      # comment at the top of the workflow. Both halves are installed system
+      # wide as root, world-readable, so the unprivileged makepkg build below
+      # can use them.
+      - name: Install CUDA toolkit
+        run: |
+          host_cxx="$(scripts/install_cuda_host_gcc.sh "${CUDA_HOST_GCC}")"
+          scripts/install_cuda_redist.sh "${CUDA_VERSION}"
+          echo "CUDA_HOST_CXX=${host_cxx}" >> "${GITHUB_ENV}"
+
       # Build the real Arch package straight from the PKGBUILD, so CI and a
       # local `makepkg -si` produce the exact same
       # hermes-streaming-*.pkg.tar.zst (same paths, service, deps). makepkg
       # refuses to run as root, hence the `builder` user created above.
       - name: Build package with makepkg
         run: |
-          # The Arch `cuda` package installs nvcc under /opt/cuda/bin, which is
-          # not on the default PATH; CMake's check_language(CUDA) needs to find
-          # it so NVENC is compiled in.
+          # nvcc is not on the default PATH, and CMake's check_language(CUDA)
+          # has to find it or NVENC is silently left out. CUDAHOSTCXX is what
+          # points nvcc at a compiler it accepts; the PKGBUILD takes both from
+          # the environment, so a local `makepkg` against Arch's own toolkit
+          # still works unchanged.
           # `su` does not carry the job environment across, so the build vars
           # are passed explicitly rather than inherited.
-          su builder -c "export PATH=/opt/cuda/bin:\$PATH \
+          su builder -c "export PATH=/usr/local/cuda/bin:\$PATH \
+            CUDAHOSTCXX='${CUDA_HOST_CXX}' \
             BRANCH='${BRANCH}' \
             BUILD_VERSION='${BUILD_VERSION}' \
             COMMIT='${COMMIT}'; \
@@ -450,26 +481,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 24.04 takes CUDA 12.6 from its own NVIDIA repo, which still generates
-          # code for pre-Turing cards. 26.04's repo starts at 13.3, and CUDA 13
-          # dropped every compute capability below 7.5, so that build pulls 12.9
-          # from NVIDIA's redistributable archives instead - see
-          # scripts/install_cuda_redist.sh for why, and the RPM job for the one
-          # target where even that is not possible.
-          #
-          # nvcc's host-compiler cap (crt/host_config.h) decides which compiler
-          # can drive it: 12.6 refuses GCC > 13 and 24.04 ships 13, so the
-          # release's own compiler does; 12.9 refuses GCC > 14 and 26.04 ships
-          # 15, so g++-14 drives nvcc while the rest of the build stays on the
-          # default. Only cuda.cu goes through nvcc, and it is C++17 against a
-          # handful of standard headers, so it does not need the newer compiler
-          # the C++23 target does.
+          # Both releases build their CUDA the same way; see the CUDA_VERSION
+          # comment at the top of the workflow.
           - ubuntu: "24.04"
-            repo: ubuntu2404
-            cuda: "12-6"
           - ubuntu: "26.04"
-            cuda_redist: "12.9.1"
-            cuda_host_gcc: "14"
     container:
       image: ubuntu:${{ matrix.ubuntu }}
     env:
@@ -542,30 +557,15 @@ jobs:
         run: git config --global --add safe.directory /__w/Apollo-Linux/Apollo-Linux
 
       # Install the CUDA toolkit so the .deb ships NVIDIA NVENC, matching the
-      # Arch and RPM packages. Either source is the compiler toolkit alone -
-      # nvcc, headers, cudart - without the driver stack, which is all the build
-      # needs; CMake links libcudart statically, so none of it follows into the
-      # package. This runs after the checkout because the redistributable path
-      # needs a script out of the tree.
+      # Arch and RPM packages. Only nvcc, its runtime and the headers it needs
+      # are fetched, never the driver stack; CMake links libcudart statically,
+      # so nothing of the toolkit follows into the package. Runs after the
+      # checkout because both halves are scripts out of the tree.
       - name: Install CUDA toolkit
         run: |
-          if [ -n "${{ matrix.cuda_redist }}" ]; then
-            # This release's NVIDIA repo carries no 12.x, so the toolkit comes
-            # from the redistributable archives, with a host compiler its nvcc
-            # still accepts.
-            apt-get install -y g++-${{ matrix.cuda_host_gcc }}
-            scripts/install_cuda_redist.sh "${{ matrix.cuda_redist }}"
-            echo "CUDAHOSTCXX=/usr/bin/g++-${{ matrix.cuda_host_gcc }}" >> "${GITHUB_ENV}"
-          else
-            # Fetch the keyring into /tmp, not the checkout, so it is not picked
-            # up by the `*.deb` upload glob and published alongside the package.
-            keyring="https://developer.download.nvidia.com/compute/cuda/repos"
-            keyring="${keyring}/${{ matrix.repo }}/x86_64/cuda-keyring_1.1-1_all.deb"
-            wget -q -O /tmp/cuda-keyring.deb "${keyring}"
-            dpkg -i /tmp/cuda-keyring.deb
-            apt-get update
-            apt-get install -y cuda-toolkit-${{ matrix.cuda }}
-          fi
+          host_cxx="$(scripts/install_cuda_host_gcc.sh "${CUDA_HOST_GCC}")"
+          scripts/install_cuda_redist.sh "${CUDA_VERSION}"
+          echo "CUDAHOSTCXX=${host_cxx}" >> "${GITHUB_ENV}"
           echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
 
       - name: Configure CMake
@@ -728,24 +728,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # CUDA 13 dropped code generation for every compute capability below
-          # 7.5, so a 13.x build leaves Maxwell through Volta with no kernel
-          # image and NVENC fails at runtime. NVIDIA's Fedora repos carry 12.x
-          # only up to fedora41, so 12.9 comes from the redistributable archives
-          # instead (scripts/install_cuda_redist.sh).
-          #
-          # What decides whether a release can use it is nvcc's host-compiler
-          # cap in crt/host_config.h: 12.9 refuses GCC > 14. Fedora 43 still
-          # packages gcc14, so it gets the wider architecture list. Fedora 44
-          # dropped it - gcc15 is the oldest it ships - and no toolkit both
-          # accepts GCC 15 and still emits pre-Turing code, so that package is
-          # Turing-and-newer and its NVIDIA users below that fall back to
-          # VA-API. Upstream Sunshine's COPR builds split on the same line.
+          # Both releases build their CUDA the same way; see the CUDA_VERSION
+          # comment at the top of the workflow. Fedora 43 still packages gcc14,
+          # Fedora 44 does not, and install_cuda_host_gcc.sh covers the second
+          # case by taking the compat compiler from the release that has it.
           - fedora: "43"
-            cuda_redist: "12.9.1"
-            cuda_host_gcc: "14"
           - fedora: "44"
-            cuda: "13-4"
     container:
       image: fedora:${{ matrix.fedora }}
     env:
@@ -805,20 +793,9 @@ jobs:
       # needs a script out of the tree.
       - name: Install CUDA toolkit
         run: |
-          if [ -n "${{ matrix.cuda_redist }}" ]; then
-            dnf install -y \
-              gcc${{ matrix.cuda_host_gcc }} \
-              gcc${{ matrix.cuda_host_gcc }}-c++
-            scripts/install_cuda_redist.sh "${{ matrix.cuda_redist }}"
-            echo "CUDAHOSTCXX=/usr/bin/g++-${{ matrix.cuda_host_gcc }}" >> "${GITHUB_ENV}"
-          else
-            dnf install -y dnf-plugins-core
-            repo="https://developer.download.nvidia.com/compute/cuda/repos"
-            repo="${repo}/fedora${{ matrix.fedora }}/x86_64/cuda-fedora${{ matrix.fedora }}.repo"
-            # dnf5 (Fedora 41 onwards) dropped `config-manager --add-repo`.
-            dnf config-manager addrepo --from-repofile="${repo}"
-            dnf install -y cuda-toolkit-${{ matrix.cuda }}
-          fi
+          host_cxx="$(scripts/install_cuda_host_gcc.sh "${CUDA_HOST_GCC}")"
+          scripts/install_cuda_redist.sh "${CUDA_VERSION}"
+          echo "CUDAHOSTCXX=${host_cxx}" >> "${GITHUB_ENV}"
           echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
 
       - name: Configure CMake

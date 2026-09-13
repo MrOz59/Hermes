@@ -626,6 +626,15 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- The KMS capture failure message told the user to run `setcap` on
+  `$(which sunshine)`, a binary no Hermes package installs, and then referred
+  them to upstream's AppImage and Flatpak instructions for packages this project
+  does not publish. It now names `hermes`, says the packages already apply the
+  capability in their post-install script, and points at this repository's
+  troubleshooting guide. The Web UI's "see more" link under the application list
+  pointed at Sunshine's app-examples page rather than the one in this
+  repository, which is the one that documents `virtual-display-layout`.
+
 - `getMetrics` had been inserted between `getApps`'s documentation block and
   `getApps` itself, so Doxygen attributed "Get the list of available
   applications" and the `/api/apps` example to the metrics handler and left

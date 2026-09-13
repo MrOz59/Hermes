@@ -616,6 +616,31 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- NVENC works again on pre-Turing NVIDIA cards in the Fedora 43 and Ubuntu 26.04
+  packages. CUDA 13 dropped code generation for every compute capability below
+  7.5, and both of those releases are given nothing but CUDA 13 by NVIDIA's own
+  package repositories. Hermes compiles its own RGBA-to-NV12 kernel, so a card
+  the toolkit refuses to target has no kernel image to run: capture succeeded,
+  the encoder opened, and the first frame died with
+  `cudaErrorNoKernelImageForDevice`. With VA-API unavailable on the proprietary
+  driver and software encoding refused for Hermes-KMS capture, that left a
+  GTX 1060 with no working encoder at all.
+
+  Those two builds now take CUDA 12.9 from NVIDIA's redistributable archives -
+  plain tarballs, unrelated to whatever the release happens to package - and
+  drive nvcc with the compat GCC each distro still carries, since only that one
+  translation unit goes through nvcc and it is C++17 against a handful of
+  standard headers. The architecture list goes back to covering Maxwell through
+  Blackwell; the only target lost is `sm_110`, a datacenter part. The toolkit
+  also needs its `crt/math_functions.h` corrected for glibc 2.41's C23 math
+  functions, which `scripts/install_cuda_redist.sh` handles.
+
+  Fedora 44 and Arch are not fixed and cannot be with this approach: nvcc 12.9
+  refuses GCC newer than 14, neither release packages one that old any more, and
+  no toolkit both accepts their compilers and still emits pre-Turing code. Those
+  two packages remain Turing-and-newer for NVENC. Upstream Sunshine's own
+  packages split on exactly the same line ([#43]).
+
 - The `.deb` no longer declares dependencies that do not describe it. The
   package's `Depends` was a hand-written list, and it was wrong in both
   directions: it pulled in `libboost-all-dev`, a build-time `-dev` metapackage
@@ -1434,6 +1459,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#36]: https://github.com/MrOz59/Hermes/issues/36
 [#40]: https://github.com/MrOz59/Hermes/issues/40
 [#41]: https://github.com/MrOz59/Hermes/issues/41
+[#43]: https://github.com/MrOz59/Hermes/issues/43
 
 ## [0.4.0] - 2026-07-02
 

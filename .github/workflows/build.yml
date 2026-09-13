@@ -450,17 +450,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 24.04 stays on CUDA 12.6: its NVIDIA repo still carries 12.x, and
-          # 12.x still generates code for pre-Turing cards. 26.04's repo starts
-          # at 13.3, and CUDA 13 dropped those architectures - see the RPM job.
-          # nvcc's host-compiler cap (crt/host_config.h): 12.6 refuses GCC > 13
-          # (24.04 ships 13), 13.4 refuses GCC > 16 (26.04 ships 15).
+          # 24.04 takes CUDA 12.6 from its own NVIDIA repo, which still generates
+          # code for pre-Turing cards. 26.04's repo starts at 13.3, and CUDA 13
+          # dropped every compute capability below 7.5, so that build pulls 12.9
+          # from NVIDIA's redistributable archives instead - see
+          # scripts/install_cuda_redist.sh for why, and the RPM job for the one
+          # target where even that is not possible.
+          #
+          # nvcc's host-compiler cap (crt/host_config.h) decides which compiler
+          # can drive it: 12.6 refuses GCC > 13 and 24.04 ships 13, so the
+          # release's own compiler does; 12.9 refuses GCC > 14 and 26.04 ships
+          # 15, so g++-14 drives nvcc while the rest of the build stays on the
+          # default. Only cuda.cu goes through nvcc, and it is C++17 against a
+          # handful of standard headers, so it does not need the newer compiler
+          # the C++23 target does.
           - ubuntu: "24.04"
             repo: ubuntu2404
             cuda: "12-6"
           - ubuntu: "26.04"
-            repo: ubuntu2604
-            cuda: "13-4"
+            cuda_redist: "12.9.1"
+            cuda_host_gcc: "14"
     container:
       image: ubuntu:${{ matrix.ubuntu }}
     env:
@@ -478,6 +487,7 @@ jobs:
             ca-certificates \
             git \
             wget \
+            xz-utils \
             build-essential \
             cmake \
             ninja-build \
@@ -522,22 +532,6 @@ jobs:
         with:
           node-version: '22'
 
-      # Install the CUDA toolkit so the .deb ships NVIDIA NVENC, matching the
-      # Arch and RPM packages, from the release's own NVIDIA repo. The
-      # `cuda-toolkit-*` metapackage is the compiler toolkit only (nvcc, headers,
-      # cudart) without the driver stack, which is all the build needs.
-      - name: Install CUDA toolkit
-        run: |
-          # Fetch the keyring into /tmp, not the checkout, so it is not picked
-          # up by the `*.deb` upload glob and published alongside the package.
-          keyring="https://developer.download.nvidia.com/compute/cuda/repos"
-          keyring="${keyring}/${{ matrix.repo }}/x86_64/cuda-keyring_1.1-1_all.deb"
-          wget -q -O /tmp/cuda-keyring.deb "${keyring}"
-          dpkg -i /tmp/cuda-keyring.deb
-          apt-get update
-          apt-get install -y cuda-toolkit-${{ matrix.cuda }}
-          echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -546,6 +540,33 @@ jobs:
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory /__w/Apollo-Linux/Apollo-Linux
+
+      # Install the CUDA toolkit so the .deb ships NVIDIA NVENC, matching the
+      # Arch and RPM packages. Either source is the compiler toolkit alone -
+      # nvcc, headers, cudart - without the driver stack, which is all the build
+      # needs; CMake links libcudart statically, so none of it follows into the
+      # package. This runs after the checkout because the redistributable path
+      # needs a script out of the tree.
+      - name: Install CUDA toolkit
+        run: |
+          if [ -n "${{ matrix.cuda_redist }}" ]; then
+            # This release's NVIDIA repo carries no 12.x, so the toolkit comes
+            # from the redistributable archives, with a host compiler its nvcc
+            # still accepts.
+            apt-get install -y g++-${{ matrix.cuda_host_gcc }}
+            scripts/install_cuda_redist.sh "${{ matrix.cuda_redist }}"
+            echo "CUDAHOSTCXX=/usr/bin/g++-${{ matrix.cuda_host_gcc }}" >> "${GITHUB_ENV}"
+          else
+            # Fetch the keyring into /tmp, not the checkout, so it is not picked
+            # up by the `*.deb` upload glob and published alongside the package.
+            keyring="https://developer.download.nvidia.com/compute/cuda/repos"
+            keyring="${keyring}/${{ matrix.repo }}/x86_64/cuda-keyring_1.1-1_all.deb"
+            wget -q -O /tmp/cuda-keyring.deb "${keyring}"
+            dpkg -i /tmp/cuda-keyring.deb
+            apt-get update
+            apt-get install -y cuda-toolkit-${{ matrix.cuda }}
+          fi
+          echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
 
       - name: Configure CMake
         run: |
@@ -707,13 +728,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # `cuda` is the newest toolkit in that release's NVIDIA repo whose
-          # nvcc accepts the release's own default GCC, so the build needs no
-          # compat compiler. The cap lives in crt/host_config.h of the toolkit:
-          # 13.2 refuses GCC > 15 (Fedora 43 ships 15), 13.4 refuses GCC > 16
-          # (Fedora 44 ships 16). Check it before bumping either number.
+          # CUDA 13 dropped code generation for every compute capability below
+          # 7.5, so a 13.x build leaves Maxwell through Volta with no kernel
+          # image and NVENC fails at runtime. NVIDIA's Fedora repos carry 12.x
+          # only up to fedora41, so 12.9 comes from the redistributable archives
+          # instead (scripts/install_cuda_redist.sh).
+          #
+          # What decides whether a release can use it is nvcc's host-compiler
+          # cap in crt/host_config.h: 12.9 refuses GCC > 14. Fedora 43 still
+          # packages gcc14, so it gets the wider architecture list. Fedora 44
+          # dropped it - gcc15 is the oldest it ships - and no toolkit both
+          # accepts GCC 15 and still emits pre-Turing code, so that package is
+          # Turing-and-newer and its NVIDIA users below that fall back to
+          # VA-API. Upstream Sunshine's COPR builds split on the same line.
           - fedora: "43"
-            cuda: "13-2"
+            cuda_redist: "12.9.1"
+            cuda_host_gcc: "14"
           - fedora: "44"
             cuda: "13-4"
     container:
@@ -758,27 +788,6 @@ jobs:
             nodejs \
             npm
 
-      # Install the CUDA toolkit so the .rpm ships NVIDIA NVENC, matching the
-      # Arch and DEB packages. Each release gets the toolkit from its own NVIDIA
-      # repo, which is what lets the distro's default GCC drive nvcc: no compat
-      # compiler, and no mixing of two toolchains in one link.
-      #
-      # These are CUDA 13 toolkits, and CUDA 13 dropped codegen for compute
-      # capabilities below 7.5 — cmake/compile_definitions/linux.cmake already
-      # narrows the architecture list when it sees 13.x. So the CUDA paths in
-      # this package cover Turing and newer; pre-Turing NVIDIA cards fall back
-      # to VA-API the same way they do in the Arch package, whose `cuda` is also
-      # 13.x. NVIDIA publishes no 12.x toolkit for these releases.
-      - name: Install CUDA toolkit
-        run: |
-          dnf install -y dnf-plugins-core
-          repo="https://developer.download.nvidia.com/compute/cuda/repos"
-          repo="${repo}/fedora${{ matrix.fedora }}/x86_64/cuda-fedora${{ matrix.fedora }}.repo"
-          # dnf5 (Fedora 41 onwards) dropped `config-manager --add-repo`.
-          dnf config-manager addrepo --from-repofile="${repo}"
-          dnf install -y cuda-toolkit-${{ matrix.cuda }}
-          echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -787,6 +796,30 @@ jobs:
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory /__w/Apollo-Linux/Apollo-Linux
+
+      # Install the CUDA toolkit so the .rpm ships NVIDIA NVENC, matching the
+      # Arch and DEB packages. cmake/compile_definitions/linux.cmake reads the
+      # toolkit's version and narrows the architecture list on its own, so which
+      # toolkit lands here is what decides the package's GPU coverage - see the
+      # matrix above. Runs after the checkout because the redistributable path
+      # needs a script out of the tree.
+      - name: Install CUDA toolkit
+        run: |
+          if [ -n "${{ matrix.cuda_redist }}" ]; then
+            dnf install -y \
+              gcc${{ matrix.cuda_host_gcc }} \
+              gcc${{ matrix.cuda_host_gcc }}-c++
+            scripts/install_cuda_redist.sh "${{ matrix.cuda_redist }}"
+            echo "CUDAHOSTCXX=/usr/bin/g++-${{ matrix.cuda_host_gcc }}" >> "${GITHUB_ENV}"
+          else
+            dnf install -y dnf-plugins-core
+            repo="https://developer.download.nvidia.com/compute/cuda/repos"
+            repo="${repo}/fedora${{ matrix.fedora }}/x86_64/cuda-fedora${{ matrix.fedora }}.repo"
+            # dnf5 (Fedora 41 onwards) dropped `config-manager --add-repo`.
+            dnf config-manager addrepo --from-repofile="${repo}"
+            dnf install -y cuda-toolkit-${{ matrix.cuda }}
+          fi
+          echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
 
       - name: Configure CMake
         run: |

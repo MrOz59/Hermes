@@ -48,6 +48,28 @@ if(${SUNSHINE_ENABLE_CUDA})
         # Marking it implicit makes CMake drop it from the command line.
         list(APPEND CMAKE_CUDA_IMPLICIT_INCLUDE_DIRECTORIES "/usr/include")
 
+        # nvcc will not accept a host compiler as new as the one the rest of the
+        # build uses, so CUDAHOSTCXX generally points at an older GCC. CMake
+        # collects that compiler's own library directory as an implicit link
+        # directory of the CUDA language and then puts it on the link line of
+        # every target, ahead of the default paths - where its libstdc++ shadows
+        # the one the C++ objects were compiled against. The link then fails on
+        # whatever the newer libstdc++ added: two majors apart, GCC 16 against a
+        # GCC 14 host compiler, that is the out-of-line std::format symbols.
+        #
+        # Only the toolkit's own directories are wanted here. The C++ compiler's
+        # runtime is already carried by CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES, so
+        # dropping every GCC directory is safe even when both languages share a
+        # compiler.
+        set(cuda_implicit_link_dirs "")
+        foreach(dir IN LISTS CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES)
+            if(NOT dir MATCHES "/lib/gcc/")
+                list(APPEND cuda_implicit_link_dirs "${dir}")
+            endif()
+        endforeach()
+        set(CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES "${cuda_implicit_link_dirs}")
+        unset(cuda_implicit_link_dirs)
+
         message(STATUS "CUDA Compiler Version: ${CMAKE_CUDA_COMPILER_VERSION}")
         set(CMAKE_CUDA_ARCHITECTURES "")
 

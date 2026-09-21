@@ -11,6 +11,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+- Explain that explicit per-app Mirror/Extend layouts override global exclusive mode, and that overlapping differently sized outputs can crop the desktop.
+
 ### Notice
 
 - **Independent client sessions are being re-evaluated and are not recommended.**

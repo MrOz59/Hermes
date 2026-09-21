@@ -32,6 +32,7 @@
   // same answer rather than a second heuristic. Compiles to "yes" where Wayland
   // is not built, which leaves the search as it was.
   #include "platform/linux/wayland.h"
+  #include "platform/linux/gamescope.h"
 #endif
 
 // lib includes
@@ -605,10 +606,7 @@ namespace proc {
       env["HERMES_DRM_DEVICE"] = runtime.drm_device_path;
       env["HERMES_WAYLAND_DISPLAY"] = runtime.wayland_display;
 
-      if (!session.enable_hdr) {
-        env["DXVK_HDR"] = "0";
-        env["PROTON_ENABLE_HDR"] = "0";
-      }
+      platf::gamescope::set_hdr_environment(env, session.enable_hdr);
     }
 
     bool isolated_runtime_running(const std::shared_ptr<isolated_runtime_t> &runtime) {
@@ -1242,20 +1240,40 @@ namespace proc {
         BOOST_LOG(error) << "[IsolatedSession] Application profile requires a command.";
         return -1;
       }
-      if (boost::process::v1::search_path("gamescope").empty()) {
-        BOOST_LOG(error) << "[IsolatedSession] Application profile requires gamescope.";
+      if (access(HERMES_GAMESCOPE_EXECUTABLE, X_OK) != 0 ||
+          !std::filesystem::is_regular_file(std::filesystem::path {HERMES_GAMESCOPE_LAYER_DIR} /
+                                           "VkLayer_FROG_gamescope_wsi.x86_64.json")) {
+        BOOST_LOG(error) << "[IsolatedSession] Application profile requires the packaged Hermes Gamescope and matching WSI layer: "
+                         << HERMES_GAMESCOPE_EXECUTABLE;
         return -1;
       }
 
+      // Allocate the composed scanout on the rendering GPU through GBM and
+      // present it on this session's virtual card. Keep cursor composition in
+      // the captured primary plane. These settings belong only to this child.
+      runtime->env["gamescope_drm_gbm_scanout"] = "1";
+      runtime->env["gamescope_drm_cursor_plane"] = "0";
+      const auto layer_override = runtime->env["VK_IMPLICIT_LAYER_PATH"].to_string();
+      const auto layer_additions = runtime->env["VK_ADD_IMPLICIT_LAYER_PATH"].to_string();
+      if (!layer_override.empty()) {
+        runtime->env["VK_IMPLICIT_LAYER_PATH"] = std::string {HERMES_GAMESCOPE_LAYER_DIR} + ':' + layer_override;
+      } else {
+        runtime->env["VK_ADD_IMPLICIT_LAYER_PATH"] = std::string {HERMES_GAMESCOPE_LAYER_DIR} +
+                                                   (layer_additions.empty() ? "" : ':' + layer_additions);
+      }
+
       launch_command = std::format(
-        "gamescope --backend=drm -W {} -H {} -w {} -h {} -r {} "
-        "--xwayland-count 1 --expose-wayland --force-windows-fullscreen{} -- {}",
+        "\"{}\" --backend=drm --drm-device \"{}\" --force-composition -W {} -H {} -w {} -h {} -r {} "
+        "--xwayland-count 1 --expose-wayland --force-windows-fullscreen{}{} -- {}",
+        HERMES_GAMESCOPE_EXECUTABLE,
+        runtime->drm_device_path,
         width,
         height,
         width,
         height,
         refresh_hz,
         connector.empty() ? std::string {} : " -O " + connector,
+        platf::gamescope::hdr_arguments(launch_session->enable_hdr),
         app.cmd
       );
     } else {
@@ -2286,6 +2304,9 @@ namespace proc {
       _env["DXVK_HDR"] = "0";
       _env["PROTON_ENABLE_HDR"] = "0";
     }
+#ifndef _WIN32
+    platf::gamescope::set_hdr_environment(_env, launch_session->enable_hdr);
+#endif
 
     int channelCount = launch_session->surround_info & 65535;
     switch (channelCount) {
@@ -2409,12 +2430,17 @@ namespace proc {
           const std::string gamescope_backend = (configured_backend.empty() || configured_backend == "auto") ?
                                                    "wayland" :
                                                    configured_backend;
-          launch_command = std::format("gamescope --backend={} -W {} -H {} -r {} -o {} -f -e -F fsr --fsr-sharpness 4 -- {}",
+          if (launch_session->enable_hdr && !platf::gamescope::supports_hdr_backend(gamescope_backend)) {
+            BOOST_LOG(error) << "Gamescope HDR requires the wayland or drm backend; select wayland for KDE.";
+            return -1;
+          }
+          launch_command = std::format("gamescope --backend={} -W {} -H {} -r {} -o {} -f -e -F fsr --fsr-sharpness 4{} -- {}",
                                        gamescope_backend,
                                        launch_session->width,
                                        launch_session->height,
                                        gamescope_fps,
                                        gamescope_fps,
+                                       platf::gamescope::hdr_arguments(launch_session->enable_hdr),
                                        _app.cmd);
         }
 #endif

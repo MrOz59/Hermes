@@ -2,6 +2,15 @@
 
 add_compile_definitions(SUNSHINE_PLATFORM="linux")
 
+# The isolated compositor is packaged separately from the host's Gamescope.
+set(HERMES_GAMESCOPE_EXECUTABLE "${CMAKE_INSTALL_PREFIX}/libexec/hermes/gamescope" CACHE FILEPATH
+        "Gamescope with the Hermes-KMS GBM scanout integration")
+set(HERMES_GAMESCOPE_LAYER_DIR "${CMAKE_INSTALL_PREFIX}/share/hermes-gamescope/vulkan/implicit_layer.d" CACHE PATH
+        "Matching isolated Gamescope WSI manifests")
+add_compile_definitions(
+        "HERMES_GAMESCOPE_EXECUTABLE=\"${HERMES_GAMESCOPE_EXECUTABLE}\""
+        "HERMES_GAMESCOPE_LAYER_DIR=\"${HERMES_GAMESCOPE_LAYER_DIR}\"")
+
 # AppImage
 if(${SUNSHINE_BUILD_APPIMAGE})
     # use relative assets path for AppImage

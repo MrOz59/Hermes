@@ -12,6 +12,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 - Preserve the existing shader directory symlink when reconfiguring instead of recreating it and risking deletion of source shaders.
+- Treat capture=kwin as KMS when using Hermes-KMS and report actionable capture initialization errors instead of misleading encoder failures.
 
 ### Notice
 

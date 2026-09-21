@@ -1121,6 +1121,15 @@ std::string get_local_ip_for_gateway() {
   }
 
   std::unique_ptr<deinit_t> init() {
+    // Some existing Hermes-KMS configurations name the compositor here.
+    // KWin is not a capture backend: leaving this value unresolved disables
+    // every source and makes startup report all hardware encoders unavailable.
+    if (config::video.capture == "kwin" && config::video.virtual_display_backend == "hermes_kms") {
+      BOOST_LOG(warning) << "capture=kwin names a compositor, not a capture backend; using kms for Hermes-KMS. "
+                           "Select KMS under Force a Specific Capture Method to save this setting.";
+      config::video.capture = "kms";
+    }
+
     // enable low latency mode for AMD
     // https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/30039
     set_env("AMD_DEBUG", "lowlatencyenc");
@@ -1176,7 +1185,9 @@ std::string get_local_ip_for_gateway() {
 #endif
 
     if (sources.none()) {
-      BOOST_LOG(error) << "Unable to initialize capture method"sv;
+      BOOST_LOG(error) << "Unable to initialize capture method [" << config::video.capture
+                       << "]. Linux capture values are auto (empty), kms, wlr, x11 or nvfbc; "
+                          "the selected backend must also be available. Encoder probing requires a working capture source.";
       return nullptr;
     }
 

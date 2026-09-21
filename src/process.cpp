@@ -2078,6 +2078,11 @@ namespace proc {
         const bool vd_layout_explicit = vd_layout == "extend" || vd_layout == "mirror";
         const bool want_exclusive = vd_layout == "exclusive" ||
                                     (config::video.isolated_virtual_display_option && !vd_layout_explicit);
+        if (config::video.isolated_virtual_display_option && vd_layout_explicit) {
+          BOOST_LOG(info) << "[VDISPLAY] Application layout '" << vd_layout
+                          << "' overrides the global exclusive-display setting; physical outputs remain enabled. "
+                             "Select Auto or Exclusive in this application's Virtual Display Layout to disable them.";
+        }
 
 #ifdef _WIN32
         std::wstring vdisplayName = VDISPLAY::createVirtualDisplay(

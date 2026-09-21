@@ -110,9 +110,9 @@ TEST(HermesHdrCuda, CpuUploadToCudaAndNvencMain10) {
   if (!std::getenv("HERMES_HDR_TEST_CUDA")) {
     GTEST_SKIP() << "Set HERMES_HDR_TEST_CUDA=1 for synthetic CUDA/NVENC HDR testing on CUDA device 0";
   }
-  ASSERT_EQ(gbm::init(), 0);
   constexpr int width = 128, height = 64;
-  auto converter = cuda::make_avcodec_gl_ram_encode_device(width, height, DRM_FORMAT_XRGB2101010);
+  // The CPU-copy path's converter for DRM_FORMAT_XRGB2101010 scanout.
+  auto converter = cuda::make_avcodec_encode_device(width, height, false, cuda::pixel::layout_e::rgb10);
   ASSERT_TRUE(converter);
   const auto unref = [](AVBufferRef *p) {
     av_buffer_unref(&p);

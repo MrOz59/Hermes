@@ -2703,15 +2703,10 @@ namespace platf {
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
-          if (pix_fmt == pix_fmt_e::nv12 &&
-              (source_fourcc == DRM_FORMAT_XRGB8888 || source_fourcc == DRM_FORMAT_ARGB8888)) {
-            return cuda::make_avcodec_encode_device(width, height, false);
-          }
-          if (pix_fmt != pix_fmt_e::nv12 && pix_fmt != pix_fmt_e::p010) {
-            BOOST_LOG(error) << "Hermes-KMS CUDA capture supports NV12 and P010 conversion only.";
-            return nullptr;
-          }
-          return cuda::make_avcodec_gl_ram_encode_device(width, height, source_fourcc);
+          // One CUDA kernel decodes the frame's layout and writes NV12 or
+          // P010 from pinned memory; no OpenGL context, and no GL-CUDA
+          // interop to synchronize on every frame.
+          return cuda::make_avcodec_encode_device(width, height, false, hermes_cuda_layout(source_fourcc));
         }
 #endif
 #ifdef SUNSHINE_BUILD_VAAPI

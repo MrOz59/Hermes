@@ -48,10 +48,6 @@ namespace cuda {
    */
   std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_gl_encode_device(int width, int height, int offset_x, int offset_y);
 
-  // CPU scanout upload followed by GL RGB-to-P010/NV12 and CUDA transfer.
-  // Avoids importing NVIDIA's problematic system-memory DMA-BUFs.
-  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_gl_ram_encode_device(int width, int height, std::uint32_t fourcc);
-
   int init();
 
   /**

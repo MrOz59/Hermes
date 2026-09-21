@@ -13,10 +13,12 @@ converts RGB to BT.2020 non-constant-luminance YUV, and uses a ten-bit encoder
 profile. It does not decode and reapply PQ during the RGB-to-YUV matrix operation.
 
 AMD uses the existing DMA-BUF/GL/VAAPI path. NVIDIA retains Hermes's existing CPU
-copy of linear scanout. Ten-bit CPU images are uploaded without unpacking or
-truncating the RGB channels, then converted on the GPU to P010 and transferred to
-CUDA for NVENC. Ordinary eight-bit SDR retains the prior CUDA conversion path.
-NVIDIA/KWin zero-copy development is deferred.
+copy of linear scanout, because NVIDIA's EGL import of these buffers samples the
+wrong pages. The copied frame is uploaded from page-locked memory, and one CUDA
+kernel decodes the packed ten-bit pixels, without truncating the RGB channels,
+and writes P010 for NVENC; there is no OpenGL context or GL/CUDA interop on this
+path. Ordinary eight-bit SDR to NV12 keeps its original CUDA kernel. NVIDIA/KWin
+zero-copy development is deferred.
 
 Both limited- and full-range P010 are supported. P010 samples occupy bits 15:6;
 the low six bits remain zero. Shader arithmetic and sampling use high precision.
@@ -73,6 +75,14 @@ It checks all four ten-bit layouts, padded strides, unpack state restoration,
 gray ramps, saturated colours, limited/full range and P010 packing. Intermediate
 values permit one ten-bit code of normalized texture-sampling variation; black,
 white and neutral chroma are exact. Without the environment variable it skips.
+
+The NVIDIA converter's arithmetic is covered on any machine by `CudaPixel.*`.
+On an NVIDIA GPU, a CUDA build also runs the converter itself and a one-frame
+HEVC Main10 encode, keeping the bitstream for `ffprobe`:
+
+```sh
+HERMES_HDR_TEST_CUDA=1 test_sunshine --gtest_filter='HermesHdrCuda.*'
+```
 
 Before release, validate live KDE HDR toggles, metadata-only updates, reconnects,
 cursor appearance, multi-output isolation and sustained sessions. Inspect the

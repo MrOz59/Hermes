@@ -30,16 +30,30 @@ chains. The host did not record loss-stat payloads for these sessions.
 
 ## Code paths and limits of existing metrics
 
-- NVIDIA Hermes-KMS SDR/BGRA8 uses the existing RAM-to-CUDA conversion. Ten-bit
-  HDR uses RAM upload to GL, RGB-to-P010 shaders, CUDA/GL resource mapping, plane
-  copies on the CUDA stream, and NVENC. Those extra conversion/interop stages are
-  a credible source of additional host latency, particularly while the game
-  competes for GPU time. The existing aggregate metric cannot isolate their cost.
-- `display_hermes_ram_t::snapshot()` stamps the frame after fence waits, DMA-BUF
-  mapping/synchronization, CPU copy and cursor composition. The reported "Frame
-  processing latency" therefore excludes those capture costs; it is not total
-  display-to-client latency. The `capture-metric/hermes-kms-cpu` metric measures
-  the acquire ioctl, not the complete CPU capture operation.
+The measurements above were taken on the path as it was when #45 was written.
+Two of the stages it describes have changed since; the numbers below are from a
+real Hermes-KMS buffer on a Ryzen 7 5700X, reading a frame the CPU had not
+cached, as it would be right after the compositor wrote it.
+
+- The CPU copy mapped the whole scanout DMA-BUF for every frame. That memory is
+  mapped one 4 KiB page per fault, so at 1440p the copy cost 6.5 ms, about 5 ms
+  of it 3,600 page faults, and at 4K 21.5 ms. Mappings are now kept across
+  frames and the copy runs in 2 MiB blocks: 1.5 ms at 1440p, 3 ms at 4K.
+- NVIDIA ten-bit HDR used a RAM upload to GL, RGB-to-P010 shaders, CUDA/GL
+  resource mapping and plane copies on the CUDA stream. It now uploads from
+  page-locked memory to one CUDA kernel that writes P010, the same shape as the
+  SDR path, with no OpenGL context and no per-frame GL/CUDA synchronization.
+  This has not yet been measured on NVIDIA hardware.
+- `display_hermes_ram_t::snapshot()` used to stamp the frame after fence waits,
+  DMA-BUF mapping/synchronization, CPU copy and cursor composition, so the
+  reported "Frame processing latency" above excludes those capture costs. It now
+  stamps the frame once its fence has signalled, so the copy and cursor
+  composition count. Neither is total display-to-client latency. The
+  `capture-metric/hermes-kms-cpu` metric measures the acquire ioctl, not the
+  complete CPU capture operation.
+- On AMD, HEVC Main10 costs the same as Main (5.1 and 5.2 ms per 1440p frame on
+  an RX 6700 XT's VCN 3 at 75 Mbps), and the HDR path stays zero-copy, so the
+  host-side cost above is specific to NVIDIA.
 - `stream.cpp::videoBroadcastThread()` uses the same packetization and FEC path
   for SDR and HDR. Its packet pacing target is approximately 800 Mbps, independent
   of the configured stream bitrate, with batches up to roughly 64 KiB. A lower

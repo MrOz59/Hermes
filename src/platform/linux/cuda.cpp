@@ -491,33 +491,27 @@ namespace cuda {
      * @return 0 on success or -1 on failure.
      */
     int convert(platf::img_t &img) override {
-      if (ram_input) {
-        if (sws.load_ram(img, input_fourcc)) {
+      auto &descriptor = (egl::img_descriptor_t &) img;
+
+      if (descriptor.sequence == 0) {
+        // For dummy images, use a blank RGB texture instead of importing a DMA-BUF
+        rgb = egl::create_blank(img);
+      } else if (descriptor.sequence > sequence) {
+        sequence = descriptor.sequence;
+
+        rgb = egl::rgb_t {};
+
+        auto rgb_opt = egl::import_source(display.get(), descriptor.sd);
+
+        if (!rgb_opt) {
           return -1;
         }
-      } else {
-        auto &descriptor = (egl::img_descriptor_t &) img;
 
-        if (descriptor.sequence == 0) {
-          // For dummy images, use a blank RGB texture instead of importing a DMA-BUF
-          rgb = egl::create_blank(img);
-        } else if (descriptor.sequence > sequence) {
-          sequence = descriptor.sequence;
-
-          rgb = egl::rgb_t {};
-
-          auto rgb_opt = egl::import_source(display.get(), descriptor.sd);
-
-          if (!rgb_opt) {
-            return -1;
-          }
-
-          rgb = std::move(*rgb_opt);
-        }
-
-        // Perform the color conversion and scaling in GL
-        sws.load_vram(descriptor, offset_x, offset_y, rgb->tex[0]);
+        rgb = std::move(*rgb_opt);
       }
+
+      // Perform the color conversion and scaling in GL
+      sws.load_vram(descriptor, offset_x, offset_y, rgb->tex[0]);
       if (sws.convert(nv12->buf)) {
         return -1;
       }
@@ -583,8 +577,6 @@ namespace cuda {
     registered_resource_t uv_res;
 
     int offset_x, offset_y;
-    bool ram_input {false};
-    std::uint32_t input_fourcc {};
   };
 
   std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram, pixel::layout_e layout) {
@@ -628,19 +620,6 @@ namespace cuda {
     }
 
     return cuda;
-  }
-
-  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_gl_ram_encode_device(int width, int height, std::uint32_t fourcc) {
-    if (init()) {
-      return nullptr;
-    }
-    auto device = std::make_unique<gl_cuda_vram_t>();
-    device->ram_input = true;
-    device->input_fourcc = fourcc;
-    if (device->init(width, height, 0, 0)) {
-      return nullptr;
-    }
-    return device;
   }
 
   namespace nvfbc {

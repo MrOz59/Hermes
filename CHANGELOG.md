@@ -46,8 +46,10 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   10-bit pixels in CUDA and writes P010 as well as NV12, keeping all 1024
   levels of each channel, and the cursor is blended at 10 bits. A change of
   scanout format restarts capture instead of feeding the encoder the wrong
-  layout. This carries no HDR metadata: a PQ-encoded output still needs the
-  driver's frame colour information before it can be streamed as HDR.
+  layout. With a driver that reports frame colour (Hermes-KMS UAPI 14), a PQ
+  output is streamed as HDR10 through the same CUDA converter; HDR on NVIDIA
+  no longer goes through an OpenGL context and a GL/CUDA interop step on every
+  frame.
 - `HERMES_KMS_FORCE_CPU_COPY=1` sends VAAPI sessions on a Hermes-KMS display
   through the CPU-copy capture NVIDIA sessions use, instead of the zero-copy
   import. It exists for testing: the NVIDIA path can now be exercised and

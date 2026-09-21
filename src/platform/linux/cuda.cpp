@@ -224,8 +224,13 @@ namespace cuda {
       this->frame = frame;
 
       auto hwframe_ctx = (AVHWFramesContext *) hw_frames_ctx->data;
-      if (hwframe_ctx->sw_format != AV_PIX_FMT_NV12) {
-        BOOST_LOG(error) << "cuda::cuda_t doesn't support any format other than AV_PIX_FMT_NV12"sv;
+      int output_bits;
+      if (hwframe_ctx->sw_format == AV_PIX_FMT_NV12) {
+        output_bits = 8;
+      } else if (hwframe_ctx->sw_format == AV_PIX_FMT_P010) {
+        output_bits = 10;
+      } else {
+        BOOST_LOG(error) << "cuda::cuda_t supports only AV_PIX_FMT_NV12 and AV_PIX_FMT_P010"sv;
         return -1;
       }
 
@@ -245,7 +250,7 @@ namespace cuda {
 
       cuda_ctx->stream = stream.get();
 
-      auto sws_opt = sws_t::make(width, height, frame->width, frame->height, width * 4);
+      auto sws_opt = sws_t::make(width, height, frame->width, frame->height, width * 4, layout, output_bits);
       if (!sws_opt) {
         return -1;
       }
@@ -253,6 +258,7 @@ namespace cuda {
       sws = std::move(*sws_opt);
 
       linear_interpolation = width != frame->width || height != frame->height;
+      sws.linear = linear_interpolation;
 
       return 0;
     }
@@ -260,7 +266,7 @@ namespace cuda {
     void apply_colorspace() override {
       sws.apply_colorspace(colorspace);
 
-      auto tex = tex_t::make(height, width * 4);
+      auto tex = tex_t::make(height, width * 4, layout);
       if (!tex) {
         return;
       }
@@ -297,6 +303,9 @@ namespace cuda {
     // When height and width don't change, it's not necessary to use linear interpolation
     bool linear_interpolation;
 
+    /// Channel layout of the frames this device converts.
+    pixel::layout_e layout {pixel::layout_e::bgra8};
+
     sws_t sws;
   };
 
@@ -311,7 +320,7 @@ namespace cuda {
         return -1;
       }
 
-      auto tex_opt = tex_t::make(height, width * 4);
+      auto tex_opt = tex_t::make(height, width * 4, layout);
       if (!tex_opt) {
         return -1;
       }
@@ -562,7 +571,7 @@ namespace cuda {
     int offset_x, offset_y;
   };
 
-  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram) {
+  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram, pixel::layout_e layout) {
     if (init()) {
       return nullptr;
     }
@@ -573,6 +582,7 @@ namespace cuda {
       cuda = std::make_unique<cuda_vram_t>();
     } else {
       cuda = std::make_unique<cuda_ram_t>();
+      cuda->layout = layout;
     }
 
     if (cuda->init(width, height)) {

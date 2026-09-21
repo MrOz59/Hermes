@@ -7063,6 +7063,20 @@ namespace VDISPLAY {
     return true;
   }
 
+  bool hermesKmsScanoutFormat(int render_fd, uint32_t &fourcc) {
+    fourcc = 0;
+    if (render_fd < 0) {
+      errno = EBADF;
+      return false;
+    }
+    hermes_kms::status_t status {};
+    if (::ioctl(render_fd, hermes_kms::ioctl_get_status, &status) != 0) {
+      return false;
+    }
+    fourcc = status.framebuffer_format;
+    return true;
+  }
+
   bool hermesKmsAcquireFrame(int render_fd, uint64_t after_sequence,
                              uint32_t timeout_ms, HermesKmsFrame &out) {
     if (render_fd < 0) {

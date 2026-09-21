@@ -37,6 +37,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   token remains valid from this machine and private/local networks.
 
 ### Added
+- NVIDIA sessions on a Hermes-KMS display accept 10-bit scanout and can encode
+  10-bit video. The CPU-copy capture used to stop with "unexpected frame
+  layout" as soon as the compositor scanned out XRGB2101010, XBGR2101010 or
+  their alpha variants, and its CUDA converter wrote NV12 only, so NVENC on
+  this path could never produce Main10. The converter now decodes packed
+  10-bit pixels in CUDA and writes P010 as well as NV12, keeping all 1024
+  levels of each channel, and the cursor is blended at 10 bits. A change of
+  scanout format restarts capture instead of feeding the encoder the wrong
+  layout. This carries no HDR metadata: a PQ-encoded output still needs the
+  driver's frame colour information before it can be streamed as HDR.
 - `HERMES_KMS_FORCE_CPU_COPY=1` sends VAAPI sessions on a Hermes-KMS display
   through the CPU-copy capture NVIDIA sessions use, instead of the zero-copy
   import. It exists for testing: the NVIDIA path can now be exercised and

@@ -14,6 +14,7 @@
   #include <vector>
 
   // local includes
+  #include "cuda_pixel.h"
   #include "src/video_colorspace.h"
 
 namespace platf {
@@ -27,7 +28,15 @@ namespace cuda {
     std::vector<std::string> display_names();
   }
 
-  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram);
+  /**
+   * @brief Create a CUDA encoding device.
+   * @param width Width of captured frames.
+   * @param height Height of captured frames.
+   * @param vram Frames arrive as CUDA textures rather than in host memory.
+   * @param layout Channel layout of host-memory frames; ignored for VRAM.
+   * @return FFmpeg encoding device context.
+   */
+  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram, pixel::layout_e layout = pixel::layout_e::bgra8);
 
   /**
    * @brief Create a GL->CUDA encoding device for consuming captured dmabufs.
@@ -92,7 +101,14 @@ namespace cuda {
 
   class tex_t {
   public:
-    static std::optional<tex_t> make(int height, int pitch);
+    /**
+     * @param height Rows of the image.
+     * @param pitch Bytes per row, four per pixel for every layout.
+     * @param layout Channel layout of the pixels copied in. 8-bit BGRA is
+     *               sampled as normalized floats; packed 10-bit words as
+     *               unsigned integers the kernel decodes, and filters itself.
+     */
+    static std::optional<tex_t> make(int height, int pitch, pixel::layout_e layout = pixel::layout_e::bgra8);
 
     tex_t();
     tex_t(tex_t &&);
@@ -104,6 +120,7 @@ namespace cuda {
     int copy(std::uint8_t *src, int height, int pitch);
 
     cudaArray_t array;
+    pixel::layout_e layout {pixel::layout_e::bgra8};
 
     struct texture {
       cudaTextureObject_t point;
@@ -124,6 +141,12 @@ namespace cuda {
      */
     static std::optional<sws_t> make(int in_width, int in_height, int out_width, int out_height, int pitch);
 
+    /**
+     * layout -- the channel layout of the input texture
+     * output_bits -- 8 for NV12, 10 for P010
+     */
+    static std::optional<sws_t> make(int in_width, int in_height, int out_width, int out_height, int pitch, pixel::layout_e layout, int output_bits);
+
     // Converts loaded image into a CUDevicePtr
     int convert(std::uint8_t *Y, std::uint8_t *UV, std::uint32_t pitchY, std::uint32_t pitchUV, cudaTextureObject_t texture, stream_t::pointer stream);
     int convert(std::uint8_t *Y, std::uint8_t *UV, std::uint32_t pitchY, std::uint32_t pitchUV, cudaTextureObject_t texture, stream_t::pointer stream, const viewport_t &viewport);
@@ -133,6 +156,16 @@ namespace cuda {
     int load_ram(platf::img_t &img, cudaArray_t array);
 
     ptr_t color_matrix;
+
+    /// video::new_color_vectors_from_colorspace() for output_bits, used by every
+    /// conversion except 8-bit BGRA to NV12, which keeps its original kernel.
+    ptr_t code_matrix;
+
+    pixel::layout_e layout {pixel::layout_e::bgra8};
+    int output_bits {8};
+
+    /// Scaling is in effect; packed 10-bit input is then filtered in the kernel.
+    bool linear {false};
 
     int threadsPerBlock;
 

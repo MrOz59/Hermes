@@ -984,6 +984,12 @@ namespace VDISPLAY {
   bool hermesKmsCaptureSize(int render_fd, int &width, int &height, uint32_t timeout_ms = 0);
 
   /**
+   * DRM fourcc of the framebuffer currently scanned out, from one GET_STATUS.
+   * @return false with errno set when the status cannot be read.
+   */
+  bool hermesKmsScanoutFormat(int render_fd, uint32_t &fourcc);
+
+  /**
    * Acquire the current scanout frame as DMA-BUFs. Blocks up to @p timeout_ms
    * for a frame newer than @p after_sequence (pass 0 to take whatever is
    * current). On success @p out owns the returned fds; the caller must call

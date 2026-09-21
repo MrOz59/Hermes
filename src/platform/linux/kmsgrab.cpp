@@ -4,12 +4,14 @@
  */
 // standard includes
 #include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <errno.h>
 #include <fcntl.h>
 #include <filesystem>
 #include <limits>
+#include <string>
 #include <thread>
 #include <unistd.h>
 
@@ -594,7 +596,40 @@ namespace platf {
       img.data = img.buffer.data();
     }
 
-    inline void blend_hermes_cursor(img_t &img, const cursor_t &cursor) {
+    /// "XR30" for a printable fourcc, its hex value otherwise.
+    std::string hermes_fourcc_name(uint32_t fourcc) {
+      std::string name;
+      for (unsigned int i = 0; i < 4; ++i) {
+        const auto c = static_cast<char>((fourcc >> (8 * i)) & 0xff);
+        if (c < 0x20 || c > 0x7e) {
+          char hex[16];
+          std::snprintf(hex, sizeof(hex), "0x%08x", fourcc);
+          return hex;
+        }
+        name += c;
+      }
+      return name;
+    }
+
+    /// A frame word packing 10-bit R, G and B, in either channel order.
+    constexpr bool hermes_ten_bit_format(uint32_t fourcc) {
+      return fourcc == DRM_FORMAT_XRGB2101010 || fourcc == DRM_FORMAT_ARGB2101010 ||
+             fourcc == DRM_FORMAT_XBGR2101010 || fourcc == DRM_FORMAT_ABGR2101010;
+    }
+
+    /// Formats the CPU-copy capture can hand to an encoder: 32-bit words of
+    /// 8-bit BGRA, or of packed 10-bit RGB.
+    constexpr bool hermes_cpu_copy_format(uint32_t fourcc) {
+      return fourcc == DRM_FORMAT_XRGB8888 || fourcc == DRM_FORMAT_ARGB8888 || hermes_ten_bit_format(fourcc);
+    }
+
+    /**
+     * Blend the premultiplied ARGB8888 cursor into a CPU-copied frame.
+     * @param fourcc Format of the frame. In a 10-bit frame each 8-bit cursor
+     *               channel is scaled to ten bits and blended into the packed
+     *               word, keeping the frame's two padding bits.
+     */
+    inline void blend_hermes_cursor(img_t &img, const cursor_t &cursor, uint32_t fourcc = DRM_FORMAT_ARGB8888) {
       if (!cursor.visible || !img.data || img.pixel_pitch != 4 || img.row_pitch <= 0 ||
           img.width <= 0 || img.height <= 0 || !cursor.src_w || !cursor.src_h ||
           cursor.src_w > std::numeric_limits<std::size_t>::max() / 4U) {
@@ -627,6 +662,10 @@ namespace platf {
 
       const std::size_t source_x = static_cast<std::size_t>(left - cursor.x);
       const std::size_t source_y = static_cast<std::size_t>(top - cursor.y);
+      const bool ten_bit = hermes_ten_bit_format(fourcc);
+      // Bit offsets of the cursor's B, G and R bytes inside a 10-bit word.
+      const bool red_high = fourcc == DRM_FORMAT_XRGB2101010 || fourcc == DRM_FORMAT_ARGB2101010;
+      const unsigned int shifts[3] {red_high ? 0U : 20U, 10U, red_high ? 20U : 0U};
       for (std::int32_t y = top; y < bottom; ++y) {
         const auto *source = cursor.pixels.data() +
                              (source_y + static_cast<std::size_t>(y - top)) * cursor_pitch +
@@ -635,7 +674,20 @@ namespace platf {
                             static_cast<std::size_t>(left) * 4U;
         for (std::int32_t x = left; x < right; ++x, source += 4, destination += 4) {
           const unsigned int alpha = source[3];
-          if (alpha == 255U) {
+          if (ten_bit) {
+            if (!alpha) {
+              continue;
+            }
+            std::uint32_t word;
+            std::memcpy(&word, destination, sizeof(word));
+            std::uint32_t blended = word & 0xc0000000U;
+            for (unsigned int channel = 0; channel < 3; ++channel) {
+              const unsigned int below = (word >> shifts[channel]) & 1023U;
+              const unsigned int value = (source[channel] * 1023U + below * (255U - alpha) + 127U) / 255U;
+              blended |= std::min(value, 1023U) << shifts[channel];
+            }
+            std::memcpy(destination, &blended, sizeof(blended));
+          } else if (alpha == 255U) {
             std::memcpy(destination, source, 4);
           } else if (alpha) {
             // DRM cursor pixels use premultiplied alpha.
@@ -671,6 +723,25 @@ namespace platf {
       cursor.src_h = height;
       cursor.pixels = pixels;
       blend_hermes_cursor(img, cursor);
+    }
+
+    void blend_hermes_cursor_for_test(
+      img_t &img,
+      std::int32_t x,
+      std::int32_t y,
+      std::uint32_t width,
+      std::uint32_t height,
+      const std::vector<std::uint8_t> &pixels,
+      uint32_t fourcc
+    ) {
+      cursor_t cursor {};
+      cursor.visible = true;
+      cursor.x = x;
+      cursor.y = y;
+      cursor.src_w = width;
+      cursor.src_h = height;
+      cursor.pixels = pixels;
+      blend_hermes_cursor(img, cursor, fourcc);
     }
 #endif
 
@@ -937,6 +1008,20 @@ namespace platf {
         data = nullptr;
       }
     };
+
+    /// Channel layout the CUDA converter decodes for a CPU-copied format.
+    cuda::pixel::layout_e hermes_cuda_layout(uint32_t fourcc) {
+      switch (fourcc) {
+        case DRM_FORMAT_XRGB2101010:
+        case DRM_FORMAT_ARGB2101010:
+          return cuda::pixel::layout_e::rgb10;
+        case DRM_FORMAT_XBGR2101010:
+        case DRM_FORMAT_ABGR2101010:
+          return cuda::pixel::layout_e::bgr10;
+        default:
+          return cuda::pixel::layout_e::bgra8;
+      }
+    }
 #endif
 
     void print(plane_t::pointer plane, fb_t::pointer fb, crtc_t::pointer crtc) {
@@ -2518,6 +2603,16 @@ namespace platf {
           return -1;
         }
 
+        if (!VDISPLAY::hermesKmsScanoutFormat(hermes_fd, source_fourcc)) {
+          BOOST_LOG(error) << "Hermes-KMS CPU capture: GET_STATUS failed: "sv << strerror(errno);
+          return -1;
+        }
+        if (!hermes_cpu_copy_format(source_fourcc)) {
+          BOOST_LOG(error) << "Hermes-KMS CPU capture: scanout format "sv << hermes_fourcc_name(source_fourcc)
+                           << " is not supported; the compositor must scan out XRGB8888, ARGB8888 or packed 10-bit RGB."sv;
+          return -1;
+        }
+
         width = img_width = w;
         height = img_height = h;
         img_offset_x = 0;
@@ -2525,7 +2620,8 @@ namespace platf {
         resolve_hermes_input_geometry(display_name, w, h, offset_x, offset_y, env_width, env_height);
         layout_generation = VDISPLAY::displayLayoutGeneration();
 
-        BOOST_LOG(info) << "Hermes-KMS CPU-copy capture ready: "sv << w << 'x' << h;
+        BOOST_LOG(info) << "Hermes-KMS CPU-copy capture ready: "sv << w << 'x' << h << ' '
+                        << hermes_fourcc_name(source_fourcc);
         return 0;
       }
 
@@ -2569,11 +2665,18 @@ namespace platf {
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
-          return cuda::make_avcodec_encode_device(width, height, false);
+          return cuda::make_avcodec_encode_device(width, height, false, hermes_cuda_layout(source_fourcc));
         }
 #endif
 #ifdef SUNSHINE_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
+          // Only reachable through HERMES_KMS_FORCE_CPU_COPY; the VAAPI upload
+          // reads 8-bit BGRA.
+          if (hermes_ten_bit_format(source_fourcc)) {
+            BOOST_LOG(error) << "Hermes-KMS CPU capture: the VAAPI upload supports 8-bit scanout only, not "sv
+                             << hermes_fourcc_name(source_fourcc) << '.';
+            return nullptr;
+          }
           return va::make_avcodec_encode_device(width, height, false);
         }
 #endif
@@ -2622,7 +2725,13 @@ namespace platf {
         }
         accumulate_capture_metric("hermes-kms-cpu", frame.acquire_ns);
 
-        if (frame.width != img_width || frame.height != img_height) {
+        // The encoder was built for one channel layout; a compositor that
+        // switches formats (8-bit to 10-bit, say) needs a new one.
+        if (frame.width != img_width || frame.height != img_height || frame.fourcc != source_fourcc) {
+          if (frame.fourcc != source_fourcc) {
+            BOOST_LOG(info) << "Hermes-KMS CPU capture: scanout format changed from "sv
+                            << hermes_fourcc_name(source_fourcc) << " to "sv << hermes_fourcc_name(frame.fourcc);
+          }
           frame.close();
           return platf::capture_e::reinit;
         }
@@ -2632,7 +2741,7 @@ namespace platf {
         const bool valid_layout =
           frame.plane_count == 1 &&
           frame.dma_buf_fd[0] >= 0 &&
-          (frame.fourcc == DRM_FORMAT_XRGB8888 || frame.fourcc == DRM_FORMAT_ARGB8888) &&
+          hermes_cpu_copy_format(frame.fourcc) &&
           (frame.modifier == DRM_FORMAT_MOD_LINEAR || frame.modifier == DRM_FORMAT_MOD_INVALID) &&
           static_cast<std::size_t>(frame.pitch[0]) >= row_bytes;
         const bool valid_destination =
@@ -2758,7 +2867,7 @@ namespace platf {
 
         const cursor_t &cursor_for_frame = pending_cursor ? *pending_cursor : captured_cursor;
         if (cursor_requested && cursor_for_frame.visible) {
-          blend_hermes_cursor(*img_out, cursor_for_frame);
+          blend_hermes_cursor(*img_out, cursor_for_frame, source_fourcc);
         }
 
         last_sequence = frame.sequence;
@@ -2808,6 +2917,8 @@ namespace platf {
       std::optional<bool> last_cursor_requested;
       /// CPU mappings of the scanout buffers the compositor rotates through.
       platf::dmabuf::mapping_cache_t mappings;
+      /// DRM fourcc every frame of this capture must have.
+      uint32_t source_fourcc {0};
       bool warned_pageable {false};
     };
 

@@ -565,6 +565,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Hermes-KMS and Hestia trackers for problems that belong to them.
 
 ### Changed
+- NVIDIA sessions on a Hermes-KMS display upload each captured frame by DMA
+  from page-locked memory. The CPU copy used to land in pageable memory, which
+  the CUDA driver copies a second time into a staging buffer of its own before
+  a transfer that stays below PCIe speed. The frames are allocated in the
+  primary context FFmpeg's NVENC uses, and given FFmpeg's context flags first
+  so the encoder can still open it.
 - NVIDIA capture of a Hermes-KMS display copies each frame in about a quarter
   of the time. The CPU-copy path mapped the whole scanout buffer again for
   every frame, and the driver maps that memory in one 4 KiB page per fault: at

@@ -6,6 +6,7 @@
 
 #if defined(SUNSHINE_BUILD_CUDA)
   // standard includes
+  #include <cstddef>
   #include <cstdint>
   #include <memory>
   #include <optional>
@@ -39,6 +40,22 @@ namespace cuda {
   std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_gl_encode_device(int width, int height, int offset_x, int offset_y);
 
   int init();
+
+  /**
+   * @brief Allocate page-locked host memory for frames the encoder uploads.
+   *
+   * Uploads from pageable memory are staged through a driver buffer: an extra
+   * CPU copy of every frame and a transfer below PCIe speed. Page-locked
+   * frames are copied by DMA directly. The allocation is portable and made in
+   * the primary context of device 0, the context FFmpeg's NVENC uses; if that
+   * context is not active yet it is given FFmpeg's flags first, because FFmpeg
+   * refuses an active primary context with any others.
+   * @return The allocation, or nullptr when CUDA is unavailable.
+   */
+  void *alloc_host(std::size_t size);
+
+  /** @brief Free memory from alloc_host(). */
+  void free_host(void *ptr);
 }  // namespace cuda
 
 typedef struct cudaArray *cudaArray_t;

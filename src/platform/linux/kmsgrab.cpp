@@ -929,6 +929,16 @@ namespace platf {
       }
     };
 
+#ifdef SUNSHINE_BUILD_CUDA
+    /// A CPU-copied frame in page-locked memory, which the CUDA upload reads by DMA.
+    struct cuda_host_img_t: public img_t {
+      ~cuda_host_img_t() override {
+        cuda::free_host(data);
+        data = nullptr;
+      }
+    };
+#endif
+
     void print(plane_t::pointer plane, fb_t::pointer fb, crtc_t::pointer crtc) {
       if (crtc) {
         BOOST_LOG(debug) << "crtc("sv << crtc->x << ", "sv << crtc->y << ')';
@@ -2520,13 +2530,34 @@ namespace platf {
       }
 
       std::shared_ptr<img_t> alloc_img() override {
+        const auto row_pitch = static_cast<std::size_t>(width) * std::size_t {4};
+        const auto size = static_cast<std::size_t>(height) * row_pitch;
+        const auto describe = [&](img_t &img) {
+          img.width = width;
+          img.height = height;
+          img.pixel_pitch = 4;
+          img.row_pitch = static_cast<std::int32_t>(row_pitch);
+        };
+
+#ifdef SUNSHINE_BUILD_CUDA
+        if (mem_type == mem_type_e::cuda) {
+          if (auto *pinned = static_cast<std::uint8_t *>(cuda::alloc_host(size))) {
+            std::memset(pinned, 0, size);
+            auto img = std::make_shared<cuda_host_img_t>();
+            describe(*img);
+            img->data = pinned;
+            return img;
+          }
+          if (!warned_pageable) {
+            BOOST_LOG(warning) << "Hermes-KMS CPU capture: page-locked frames unavailable; uploads use pageable memory."sv;
+            warned_pageable = true;
+          }
+        }
+#endif
+
         auto img = std::make_shared<kms_img_t>();
-        img->width = width;
-        img->height = height;
-        img->pixel_pitch = 4;
-        const auto row_pitch = static_cast<std::size_t>(width) * static_cast<std::size_t>(img->pixel_pitch);
-        img->row_pitch = static_cast<std::int32_t>(row_pitch);
-        img->data = new std::uint8_t[static_cast<std::size_t>(height) * row_pitch];
+        describe(*img);
+        img->data = new std::uint8_t[size];
 
         return img;
       }
@@ -2777,6 +2808,7 @@ namespace platf {
       std::optional<bool> last_cursor_requested;
       /// CPU mappings of the scanout buffers the compositor rotates through.
       platf::dmabuf::mapping_cache_t mappings;
+      bool warned_pageable {false};
     };
 
   }  // namespace kms

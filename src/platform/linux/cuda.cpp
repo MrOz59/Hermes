@@ -4,8 +4,10 @@
  */
 // standard includes
 #include <bitset>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <mutex>
 #include <thread>
 
 // lib includes
@@ -97,6 +99,108 @@ namespace cuda {
     CU_CHECK(cdf->cuInit(0), "Couldn't initialize cuda");
 
     return 0;
+  }
+
+  // Not in the ffnvcodec headers.
+  constexpr unsigned int cuMemHostAllocPortable = 0x01;
+
+  /**
+   * cuMemHostAlloc and cuMemFreeHost, taken from the libcuda ffnvcodec opened:
+   * the ffnvcodec headers release builds compile against predate both.
+   * Call only once `cdf` is loaded.
+   */
+  struct host_memory_functions_t {
+    CUresult (*alloc)(void **ptr, std::size_t size, unsigned int flags);
+    CUresult (*free)(void *ptr);
+  };
+
+  const host_memory_functions_t *host_memory_functions() {
+    static const host_memory_functions_t functions = [] {
+      host_memory_functions_t loaded {};
+      loaded.alloc = reinterpret_cast<decltype(loaded.alloc)>(dlsym(cdf->lib, "cuMemHostAlloc"));
+      loaded.free = reinterpret_cast<decltype(loaded.free)>(dlsym(cdf->lib, "cuMemFreeHost"));
+      return loaded;
+    }();
+    return functions.alloc && functions.free ? &functions : nullptr;
+  }
+
+  // FFmpeg's hwcontext_cuda opens device 0's primary context (Hermes passes no
+  // device) with these flags, and refuses an active one that has others.
+  constexpr unsigned int ffmpegPrimaryContextFlags = CU_CTX_SCHED_BLOCKING_SYNC;
+
+  void *alloc_host(std::size_t size) {
+    {
+      static std::mutex init_mutex;
+      std::lock_guard lock {init_mutex};
+      if (!cdf && init()) {
+        return nullptr;
+      }
+    }
+    const auto *host_memory = host_memory_functions();
+    if (!host_memory) {
+      return nullptr;
+    }
+
+    CUdevice device;
+    if (CU_CHECK_IGNORE(cdf->cuDeviceGet(&device, 0), "Couldn't get the CUDA device for page-locked frames")) {
+      return nullptr;
+    }
+
+    unsigned int flags = 0;
+    int active = 0;
+    if (CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxGetState(device, &flags, &active), "Couldn't query the primary CUDA context")) {
+      return nullptr;
+    }
+    // Activating the context with the driver's default flags first would make
+    // FFmpeg reject it for the whole session.
+    if (!active && flags != ffmpegPrimaryContextFlags &&
+        CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxSetFlags(device, ffmpegPrimaryContextFlags), "Couldn't set the primary CUDA context flags")) {
+      return nullptr;
+    }
+
+    CUcontext context;
+    if (CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxRetain(&context, device), "Couldn't retain the primary CUDA context")) {
+      return nullptr;
+    }
+
+    void *ptr = nullptr;
+    if (!CU_CHECK_IGNORE(cdf->cuCtxPushCurrent(context), "Couldn't make the primary CUDA context current")) {
+      if (CU_CHECK_IGNORE(host_memory->alloc(&ptr, size, cuMemHostAllocPortable), "Couldn't allocate a page-locked frame")) {
+        ptr = nullptr;
+      }
+      CUcontext popped;
+      CU_CHECK_IGNORE(cdf->cuCtxPopCurrent(&popped), "Couldn't restore the CUDA context");
+    }
+
+    // A live allocation keeps its retain on the context; see free_host().
+    if (!ptr) {
+      CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxRelease(device), "Couldn't release the primary CUDA context");
+    }
+    return ptr;
+  }
+
+  void free_host(void *ptr) {
+    const auto *host_memory = ptr && cdf ? host_memory_functions() : nullptr;
+    if (!host_memory) {
+      return;
+    }
+
+    CUdevice device;
+    if (CU_CHECK_IGNORE(cdf->cuDeviceGet(&device, 0), "Couldn't get the CUDA device to free a page-locked frame")) {
+      return;
+    }
+    CUcontext context;
+    if (CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxRetain(&context, device), "Couldn't retain the primary CUDA context")) {
+      return;
+    }
+    if (!CU_CHECK_IGNORE(cdf->cuCtxPushCurrent(context), "Couldn't make the primary CUDA context current")) {
+      CU_CHECK_IGNORE(host_memory->free(ptr), "Couldn't free a page-locked frame");
+      CUcontext popped;
+      CU_CHECK_IGNORE(cdf->cuCtxPopCurrent(&popped), "Couldn't restore the CUDA context");
+    }
+    // This call's retain, then the one alloc_host() kept for the allocation.
+    CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxRelease(device), "Couldn't release the primary CUDA context");
+    CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxRelease(device), "Couldn't release the primary CUDA context");
   }
 
   class cuda_t: public platf::avcodec_encode_device_t {

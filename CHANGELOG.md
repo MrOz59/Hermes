@@ -11,6 +11,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+- Propagate client HDR settings to Gamescope and integrate a separately packaged GBM scanout compositor for isolated application sessions. Live isolated HDR validation remains pending.
+
 ### Notice
 
 - **Independent client sessions are being re-evaluated and are not recommended.**

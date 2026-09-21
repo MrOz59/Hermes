@@ -13,6 +13,21 @@ FPS="${FPS%.*}"
 
 WIDTH="${HERMES_CLIENT_WIDTH:-${APOLLO_CLIENT_WIDTH:-1280}}"
 HEIGHT="${HERMES_CLIENT_HEIGHT:-${APOLLO_CLIENT_HEIGHT:-800}}"
+HDR="${HERMES_CLIENT_HDR:-${APOLLO_CLIENT_HDR:-${SUNSHINE_CLIENT_HDR:-false}}}"
+HDR_ARGS=()
+case "${HDR,,}" in
+  true|1)
+    HDR_ARGS+=(--hdr-enabled)
+    export DXVK_HDR=1 PROTON_ENABLE_HDR=1
+    ;;
+  false|0)
+    export DXVK_HDR=0 PROTON_ENABLE_HDR=0
+    ;;
+  *)
+    echo "Invalid client HDR value: $HDR (expected true/false or 1/0)" >&2
+    exit 2
+    ;;
+esac
 
 # Backend: "auto" (or unset) nests in the current Wayland compositor. Set
 # HERMES_GAMESCOPE_BACKEND to wayland/sdl/drm to override.
@@ -35,6 +50,11 @@ fi
     exec steam -bigpicture
   fi
 
+  if [ "${#HDR_ARGS[@]}" -ne 0 ] && [ "$BACKEND" != wayland ] && [ "$BACKEND" != drm ]; then
+    echo "Gamescope HDR requires wayland or drm; select wayland for KDE." >&2
+    exit 2
+  fi
+
   exec gamescope \
     --backend="$BACKEND" \
     -W "$WIDTH" \
@@ -45,5 +65,6 @@ fi
     -e \
     -F fsr \
     --fsr-sharpness 4 \
+    "${HDR_ARGS[@]}" \
     -- steam -bigpicture
 } >> "$LOG" 2>&1

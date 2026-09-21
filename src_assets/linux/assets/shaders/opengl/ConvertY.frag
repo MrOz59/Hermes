@@ -1,10 +1,10 @@
 #version 300 es
 
 #ifdef GL_ES
-precision lowp float;
+precision highp float;
 #endif
 
-uniform sampler2D image;
+uniform highp sampler2D image;
 
 layout(shared) uniform ColorMatrix {
   vec4 color_vec_y;
@@ -20,7 +20,7 @@ layout(location = 0) out float color;
 void main()
 {
 	vec3 rgb = texture(image, tex).rgb;
-	float y = dot(color_vec_y.xyz, rgb);
+	float y = dot(color_vec_y, vec4(rgb, 1.0));
 
-	color = y * range_y.x + range_y.y;
+	color = clamp(floor(y), 0.0, range_y.y) * range_y.x;
 }

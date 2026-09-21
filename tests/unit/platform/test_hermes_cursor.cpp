@@ -5,6 +5,7 @@
 #include "../../tests_common.h"
 
 #include <cstdint>
+#include <cstring>
 #include <drm_fourcc.h>
 #include <src/platform/common.h>
 #include <vector>
@@ -17,17 +18,8 @@ namespace platf::kms {
     std::int32_t y,
     std::uint32_t width,
     std::uint32_t height,
-    const std::vector<std::uint8_t> &pixels
-  );
-
-  void blend_hermes_cursor_for_test(
-    img_t &img,
-    std::int32_t x,
-    std::int32_t y,
-    std::uint32_t width,
-    std::uint32_t height,
     const std::vector<std::uint8_t> &pixels,
-    std::uint32_t fourcc
+    uint32_t fourcc = DRM_FORMAT_ARGB8888
   );
 }
 
@@ -188,7 +180,7 @@ TEST(HermesCursorComposition, BlendsIntoRedHighTenBitWordsKeepingPadding) {
   platf::img_t image;
   describe_words(image, frame, 3, 1);
 
-  platf::kms::blend_hermes_cursor_for_test(image, 0, 0, 3, 1, ten_bit_cursor, DRM_FORMAT_XRGB2101010);
+  platf::kms::blend_hermes_cursor_for_test(image, true, 0, 0, 3, 1, ten_bit_cursor, DRM_FORMAT_XRGB2101010);
 
   // 8-bit channels scale to ten bits: 255 -> 1023, 51 -> 205. Half cover:
   // (src * 1023 + dst * 127 + 127) / 255.
@@ -207,9 +199,36 @@ TEST(HermesCursorComposition, BlendsIntoBlueHighTenBitWords) {
   platf::img_t image;
   describe_words(image, frame, 3, 1);
 
-  platf::kms::blend_hermes_cursor_for_test(image, 0, 0, 3, 1, ten_bit_cursor, DRM_FORMAT_XBGR2101010);
+  platf::kms::blend_hermes_cursor_for_test(image, true, 0, 0, 3, 1, ten_bit_cursor, DRM_FORMAT_XBGR2101010);
 
   EXPECT_EQ(frame[0], word10(1023, 0, 205));
   EXPECT_EQ(frame[1], word10(7, 8, 9));
   EXPECT_EQ(frame[2], word10(249, 257, 498));
+}
+
+TEST(HermesCursorComposition, PreservesTenBitPixelsAndChannelOrder) {
+  for (const auto format : {DRM_FORMAT_XRGB2101010, DRM_FORMAT_ARGB2101010, DRM_FORMAT_XBGR2101010, DRM_FORMAT_ABGR2101010}) {
+    const bool bgr = format == DRM_FORMAT_XBGR2101010 || format == DRM_FORMAT_ABGR2101010;
+    const uint32_t original = 73U | (517U << 10) | (999U << 20) | 0xc0000000U;
+    std::vector<std::uint8_t> frame(12);
+    for (int i = 0; i < 3; ++i) {
+      std::memcpy(frame.data() + 4 * i, &original, 4);
+    }
+    platf::img_t image;
+    describe(image, frame, 3, 1);
+    const std::vector<std::uint8_t> cursor {0, 0, 0, 0, 255, 0, 0, 255, 64, 32, 16, 128};
+    platf::kms::blend_hermes_cursor_for_test(image, true, 0, 0, 3, 1, cursor, format);
+    uint32_t pixels[3];
+    std::memcpy(pixels, frame.data(), sizeof(pixels));
+    EXPECT_EQ(pixels[0], original);
+    EXPECT_EQ(pixels[1], 0xc0000000U | (1023U << (bgr ? 20 : 0)));
+    // Independent integer reference for premultiplied cursor samples in the
+    // compositor's output encoding, with rounding into each ten-bit channel.
+    const unsigned blue = bgr ? 16 : 64;
+    const unsigned red = bgr ? 64 : 16;
+    EXPECT_EQ(pixels[2] & 1023U, (blue * 1023U + 73U * 127U + 127U) / 255U);
+    EXPECT_EQ((pixels[2] >> 10) & 1023U, (32U * 1023U + 517U * 127U + 127U) / 255U);
+    EXPECT_EQ((pixels[2] >> 20) & 1023U, (red * 1023U + 999U * 127U + 127U) / 255U);
+    EXPECT_EQ(pixels[2] >> 30, 3U);
+  }
 }

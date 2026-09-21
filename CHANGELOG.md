@@ -14,6 +14,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 - Preserve the existing shader directory symlink when reconfiguring instead of recreating it and risking deletion of source shaders.
 - Treat capture=kwin as KMS when using Hermes-KMS and report actionable capture initialization errors instead of misleading encoder failures.
 - Explain that explicit per-app Mirror/Extend layouts override global exclusive mode, and that overlapping differently sized outputs can crop the desktop.
+- Add frame-associated Hermes-KMS HDR10 capture, ten-bit pixel conversion and NVENC upload, with explicit SDR/HDR transition handling and validation tools.
 
 ### Notice
 

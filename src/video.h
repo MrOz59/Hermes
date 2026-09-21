@@ -55,6 +55,8 @@ namespace video {
     // Experimental Hermes-KMS multi-output: an empty value preserves the
     // legacy process-wide capture selection.
     std::string display_name;
+    // Internal capability probing encodes synthetic frames, never a stream.
+    bool encoder_probe {false};
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);

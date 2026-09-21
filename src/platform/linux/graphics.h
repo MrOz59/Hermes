@@ -291,6 +291,7 @@ namespace egl {
       }
     }
 
+    bool cursor_premultiplied {false};
     surface_descriptor_t sd;
 
     // Increment sequence when new rgb_t needs to be created
@@ -308,7 +309,7 @@ namespace egl {
     // Make an area of the image black
     int blank(gl::frame_buf_t &fb, int offsetX, int offsetY, int width, int height);
 
-    void load_ram(platf::img_t &img);
+    int load_ram(platf::img_t &img, std::uint32_t fourcc = 0);
     void load_vram(img_descriptor_t &img, int offset_x, int offset_y, int texture);
 
     void apply_colorspace(const video::sunshine_colorspace_t &colorspace);
@@ -331,6 +332,8 @@ namespace egl {
 
     // Pointer to the texture to be converted to nv12
     int loaded_texture;
+    float black_y {16.0f / 255.0f};
+    float black_uv {128.0f / 255.0f};
 
     // Store latest cursor for load_vram
     std::uint64_t serial;

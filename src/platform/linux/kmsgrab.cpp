@@ -585,6 +585,7 @@ namespace platf {
         img.buffer = captured_cursor.pixels;
         img.serial = captured_cursor.serial;
       }
+      img.cursor_premultiplied = true;
       img.x = captured_cursor.x;
       img.y = captured_cursor.y;
       img.src_w = captured_cursor.src_w;
@@ -713,29 +714,11 @@ namespace platf {
       std::int32_t y,
       std::uint32_t width,
       std::uint32_t height,
-      const std::vector<std::uint8_t> &pixels
-    ) {
-      cursor_t cursor {};
-      cursor.visible = visible;
-      cursor.x = x;
-      cursor.y = y;
-      cursor.src_w = width;
-      cursor.src_h = height;
-      cursor.pixels = pixels;
-      blend_hermes_cursor(img, cursor);
-    }
-
-    void blend_hermes_cursor_for_test(
-      img_t &img,
-      std::int32_t x,
-      std::int32_t y,
-      std::uint32_t width,
-      std::uint32_t height,
       const std::vector<std::uint8_t> &pixels,
       uint32_t fourcc
     ) {
       cursor_t cursor {};
-      cursor.visible = true;
+      cursor.visible = visible;
       cursor.x = x;
       cursor.y = y;
       cursor.src_w = width;
@@ -2230,6 +2213,18 @@ namespace platf {
           display_vram_t(mem_type) {
       }
 
+      bool is_hdr() override {
+        return source_color.pq();
+      }
+
+      bool get_hdr_metadata(SS_HDR_METADATA &metadata) override {
+        return source_color.copy_hdr_metadata(metadata);
+      }
+
+      VDISPLAY::hermes_kms::color_t source_color;
+      bool probe_only {false};
+      uint32_t source_fourcc {};
+
       ~display_hermes_vram_t() override {
         if (hermes_fd >= 0) {
           ::close(hermes_fd);
@@ -2238,6 +2233,7 @@ namespace platf {
       }
 
       int init(const std::string &display_name, const ::video::config_t &config) {
+        probe_only = config.encoder_probe;
         BOOST_LOG(info) << "Hermes-KMS zero-copy capture path selected for ["sv << display_name << ']';
 
         hermes_fd = VDISPLAY::hermesKmsOpenCapture(display_name);
@@ -2248,6 +2244,19 @@ namespace platf {
         int w = 0;
         int h = 0;
         if (!wait_hermes_capture_size(hermes_fd, w, h)) {
+          return -1;
+        }
+
+        if (!VDISPLAY::hermesKmsCaptureColor(hermes_fd, source_color, source_fourcc)) {
+          BOOST_LOG(error) << "Hermes-KMS: cannot acquire initial colour state: " << strerror(errno);
+          return -1;
+        }
+        if (source_color.pq() && !config.dynamicRange && !config.encoder_probe) {
+          BOOST_LOG(error) << "Hermes-KMS output is HDR but the client requested SDR. Disable HDR on this KDE output or enable HDR in the client.";
+          return -1;
+        }
+        if (source_color.known() && source_color.colorspace == VDISPLAY::hermes_kms::colorspace_bt2020_rgb && !source_color.pq()) {
+          BOOST_LOG(error) << "Hermes-KMS: BT.2020 SDR capture requires a matching SDR colour conversion path.";
           return -1;
         }
 
@@ -2414,7 +2423,7 @@ namespace platf {
               hermes_fd,
               last_sequence,
               (cursor_requested || cursor_mode_changed) ? 0U : timeout_ms,
-              frame)) {
+              frame, source_color.known())) {
           // A real timeout re-emits the previous image. Authorization changes,
           // device removal and malformed replies must instead rebuild capture.
           return hermes_acquire_failure("zero-copy", errno);
@@ -2424,7 +2433,11 @@ namespace platf {
         // copy_to() which likewise excludes its wait_for_update().
         accumulate_capture_metric("hermes-kms", frame.acquire_ns);
 
-        if (frame.width != img_width || frame.height != img_height) {
+        if (frame.width != img_width || frame.height != img_height ||
+            frame.fourcc != source_fourcc || !(frame.color == source_color)) {
+          // Rebuild before handing a differently encoded frame to the encoder.
+          // The display's immutable colour snapshot also supplies its HDR SEI.
+
           frame.close();
           return platf::capture_e::reinit;
         }
@@ -2522,6 +2535,9 @@ namespace platf {
       }
 
       capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) {
+        if (probe_only) {
+          return capture_e::error;  // Probe objects may encode dummy images only.
+        }
         while (true) {
           std::shared_ptr<platf::img_t> img_out;
           auto status = snapshot(pull_free_image_cb, img_out, 200ms, *cursor);
@@ -2572,6 +2588,18 @@ namespace platf {
           display_t(mem_type) {
       }
 
+      bool is_hdr() override {
+        return source_color.pq();
+      }
+
+      bool get_hdr_metadata(SS_HDR_METADATA &metadata) override {
+        return source_color.copy_hdr_metadata(metadata);
+      }
+
+      VDISPLAY::hermes_kms::color_t source_color;
+      bool probe_only {false};
+      uint32_t source_fourcc {};
+
       ~display_hermes_ram_t() override {
         if (hermes_fd >= 0) {
           ::close(hermes_fd);
@@ -2579,7 +2607,8 @@ namespace platf {
         }
       }
 
-      int init(const std::string &display_name, const ::video::config_t & /* config */) {
+      int init(const std::string &display_name, const ::video::config_t &config) {
+        probe_only = config.encoder_probe;
         BOOST_LOG(info) << "Hermes-KMS CPU-copy capture path selected for ["sv << display_name << ']';
 
         hermes_fd = VDISPLAY::hermesKmsOpenCapture(display_name);
@@ -2593,6 +2622,19 @@ namespace platf {
           return -1;
         }
 
+        if (!VDISPLAY::hermesKmsCaptureColor(hermes_fd, source_color, source_fourcc)) {
+          BOOST_LOG(error) << "Hermes-KMS: cannot acquire initial colour state: " << strerror(errno);
+          return -1;
+        }
+        if (source_color.pq() && !config.dynamicRange && !config.encoder_probe) {
+          BOOST_LOG(error) << "Hermes-KMS output is HDR but the client requested SDR. Disable HDR on this KDE output or enable HDR in the client.";
+          return -1;
+        }
+        if (source_color.known() && source_color.colorspace == VDISPLAY::hermes_kms::colorspace_bt2020_rgb && !source_color.pq()) {
+          BOOST_LOG(error) << "Hermes-KMS: BT.2020 SDR capture requires a matching SDR colour conversion path.";
+          return -1;
+        }
+
         constexpr auto bytes_per_pixel = std::size_t {4};
         if (static_cast<std::size_t>(w) >
               static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) / bytes_per_pixel ||
@@ -2603,10 +2645,6 @@ namespace platf {
           return -1;
         }
 
-        if (!VDISPLAY::hermesKmsScanoutFormat(hermes_fd, source_fourcc)) {
-          BOOST_LOG(error) << "Hermes-KMS CPU capture: GET_STATUS failed: "sv << strerror(errno);
-          return -1;
-        }
         if (!hermes_cpu_copy_format(source_fourcc)) {
           BOOST_LOG(error) << "Hermes-KMS CPU capture: scanout format "sv << hermes_fourcc_name(source_fourcc)
                            << " is not supported; the compositor must scan out XRGB8888, ARGB8888 or packed 10-bit RGB."sv;
@@ -2653,7 +2691,7 @@ namespace platf {
 
         auto img = std::make_shared<kms_img_t>();
         describe(*img);
-        img->data = new std::uint8_t[size];
+        img->data = new std::uint8_t[size] {};
 
         return img;
       }
@@ -2665,7 +2703,15 @@ namespace platf {
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
-          return cuda::make_avcodec_encode_device(width, height, false, hermes_cuda_layout(source_fourcc));
+          if (pix_fmt == pix_fmt_e::nv12 &&
+              (source_fourcc == DRM_FORMAT_XRGB8888 || source_fourcc == DRM_FORMAT_ARGB8888)) {
+            return cuda::make_avcodec_encode_device(width, height, false);
+          }
+          if (pix_fmt != pix_fmt_e::nv12 && pix_fmt != pix_fmt_e::p010) {
+            BOOST_LOG(error) << "Hermes-KMS CUDA capture supports NV12 and P010 conversion only.";
+            return nullptr;
+          }
+          return cuda::make_avcodec_gl_ram_encode_device(width, height, source_fourcc);
         }
 #endif
 #ifdef SUNSHINE_BUILD_VAAPI
@@ -2720,14 +2766,16 @@ namespace platf {
               hermes_fd,
               last_sequence,
               (cursor_requested || cursor_mode_changed) ? 0U : timeout_ms,
-              frame)) {
+              frame, source_color.known())) {
           return hermes_acquire_failure("CPU-copy", errno);
         }
         accumulate_capture_metric("hermes-kms-cpu", frame.acquire_ns);
 
-        // The encoder was built for one channel layout; a compositor that
-        // switches formats (8-bit to 10-bit, say) needs a new one.
-        if (frame.width != img_width || frame.height != img_height || frame.fourcc != source_fourcc) {
+        // The encoder was built for one channel layout and one colour
+        // description; a compositor that switches either needs a new one.
+        // The display's immutable colour snapshot also supplies its HDR SEI.
+        if (frame.width != img_width || frame.height != img_height ||
+            frame.fourcc != source_fourcc || !(frame.color == source_color)) {
           if (frame.fourcc != source_fourcc) {
             BOOST_LOG(info) << "Hermes-KMS CPU capture: scanout format changed from "sv
                             << hermes_fourcc_name(source_fourcc) << " to "sv << hermes_fourcc_name(frame.fourcc);
@@ -2883,6 +2931,9 @@ namespace platf {
       }
 
       capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
+        if (probe_only) {
+          return capture_e::error;  // Probe objects may encode dummy images only.
+        }
         while (true) {
           std::shared_ptr<platf::img_t> img_out;
           auto status = snapshot(pull_free_image_cb, img_out, 200ms, *cursor);
@@ -2917,8 +2968,6 @@ namespace platf {
       std::optional<bool> last_cursor_requested;
       /// CPU mappings of the scanout buffers the compositor rotates through.
       platf::dmabuf::mapping_cache_t mappings;
-      /// DRM fourcc every frame of this capture must have.
-      uint32_t source_fourcc {0};
       bool warned_pageable {false};
     };
 

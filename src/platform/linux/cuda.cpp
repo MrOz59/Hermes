@@ -491,34 +491,46 @@ namespace cuda {
      * @return 0 on success or -1 on failure.
      */
     int convert(platf::img_t &img) override {
-      auto &descriptor = (egl::img_descriptor_t &) img;
-
-      if (descriptor.sequence == 0) {
-        // For dummy images, use a blank RGB texture instead of importing a DMA-BUF
-        rgb = egl::create_blank(img);
-      } else if (descriptor.sequence > sequence) {
-        sequence = descriptor.sequence;
-
-        rgb = egl::rgb_t {};
-
-        auto rgb_opt = egl::import_source(display.get(), descriptor.sd);
-
-        if (!rgb_opt) {
+      if (ram_input) {
+        if (sws.load_ram(img, input_fourcc)) {
           return -1;
         }
+      } else {
+        auto &descriptor = (egl::img_descriptor_t &) img;
 
-        rgb = std::move(*rgb_opt);
+        if (descriptor.sequence == 0) {
+          // For dummy images, use a blank RGB texture instead of importing a DMA-BUF
+          rgb = egl::create_blank(img);
+        } else if (descriptor.sequence > sequence) {
+          sequence = descriptor.sequence;
+
+          rgb = egl::rgb_t {};
+
+          auto rgb_opt = egl::import_source(display.get(), descriptor.sd);
+
+          if (!rgb_opt) {
+            return -1;
+          }
+
+          rgb = std::move(*rgb_opt);
+        }
+
+        // Perform the color conversion and scaling in GL
+        sws.load_vram(descriptor, offset_x, offset_y, rgb->tex[0]);
       }
-
-      // Perform the color conversion and scaling in GL
-      sws.load_vram(descriptor, offset_x, offset_y, rgb->tex[0]);
-      sws.convert(nv12->buf);
+      if (sws.convert(nv12->buf)) {
+        return -1;
+      }
 
       auto fmt_desc = av_pix_fmt_desc_get(sw_format);
 
       // Map the GL textures to read for CUDA
       CUgraphicsResource resources[2] = {y_res.get(), uv_res.get()};
       CU_CHECK(cdf->cuGraphicsMapResources(2, resources, stream.get()), "Couldn't map GL textures in CUDA");
+
+      auto unmap = util::fail_guard([&]() {
+        CU_CHECK_IGNORE(cdf->cuGraphicsUnmapResources(2, resources, stream.get()), "Couldn't unmap GL textures from CUDA");
+      });
 
       // Copy from the GL textures to the target CUDA frame
       for (int i = 0; i < 2; i++) {
@@ -532,11 +544,13 @@ namespace cuda {
         cpy.WidthInBytes = (frame->width * fmt_desc->comp[i].step) >> (i ? fmt_desc->log2_chroma_w : 0);
         cpy.Height = frame->height >> (i ? fmt_desc->log2_chroma_h : 0);
 
-        CU_CHECK_IGNORE(cdf->cuMemcpy2DAsync(&cpy, stream.get()), "Couldn't copy texture to CUDA frame");
+        CU_CHECK(cdf->cuMemcpy2DAsync(&cpy, stream.get()), "Couldn't copy texture to CUDA frame");
       }
 
-      // Unmap the textures to allow modification from GL again
-      CU_CHECK(cdf->cuGraphicsUnmapResources(2, resources, stream.get()), "Couldn't unmap GL textures from CUDA");
+      // Unmap the textures to allow modification from GL again.
+      const auto result = cdf->cuGraphicsUnmapResources(2, resources, stream.get());
+      unmap.disable();
+      CU_CHECK(result, "Couldn't unmap GL textures from CUDA");
       return 0;
     }
 
@@ -569,6 +583,8 @@ namespace cuda {
     registered_resource_t uv_res;
 
     int offset_x, offset_y;
+    bool ram_input {false};
+    std::uint32_t input_fourcc {};
   };
 
   std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram, pixel::layout_e layout) {
@@ -612,6 +628,19 @@ namespace cuda {
     }
 
     return cuda;
+  }
+
+  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_gl_ram_encode_device(int width, int height, std::uint32_t fourcc) {
+    if (init()) {
+      return nullptr;
+    }
+    auto device = std::make_unique<gl_cuda_vram_t>();
+    device->ram_input = true;
+    device->input_fourcc = fourcc;
+    if (device->init(width, height, 0, 0)) {
+      return nullptr;
+    }
+    return device;
   }
 
   namespace nvfbc {

@@ -755,8 +755,22 @@ namespace egl {
     return nv12;
   }
 
+  // The shaders round in code-value space before packing into UNORM textures.
+  // P010 stores each 10-bit code in bits 15:6, not across all 16 bits.
+  static video::color_t gl_color_matrix(const video::sunshine_colorspace_t &colorspace) {
+    auto matrix = *video::new_color_vectors_from_colorspace(colorspace);
+    const float scale = colorspace.bit_depth == 10 ? 64.0f / 65535.0f : 1.0f / 255.0f;
+    const float maximum = colorspace.bit_depth == 10 ? 1023.0f : 255.0f;
+    matrix.range_y[0] = matrix.range_uv[0] = scale;
+    matrix.range_y[1] = matrix.range_uv[1] = maximum;
+    return matrix;
+  }
+
   void sws_t::apply_colorspace(const video::sunshine_colorspace_t &colorspace) {
-    auto color_p = video::color_vectors_from_colorspace(colorspace);
+    auto matrix = gl_color_matrix(colorspace);
+    auto color_p = &matrix;
+    black_y = (colorspace.full_range ? 0.0f : (colorspace.bit_depth == 10 ? 64.0f : 16.0f)) * matrix.range_y[0];
+    black_uv = (colorspace.bit_depth == 10 ? 512.0f : 128.0f) * matrix.range_uv[0];
 
     std::string_view members[] {
       util::view(color_p->color_vec_y),
@@ -869,7 +883,8 @@ namespace egl {
     gl::ctx.UseProgram(sws.program[1].handle());
     gl::ctx.Uniform1fv(loc_width_i, 1, &width_i);
 
-    auto color_p = video::color_vectors_from_colorspace(video::colorspace_e::rec601, false);
+    auto matrix = gl_color_matrix({video::colorspace_e::rec601, false, 8});
+    auto color_p = &matrix;
     std::pair<const char *, std::string_view> members[] {
       std::make_pair("color_vec_y", util::view(color_p->color_vec_y)),
       std::make_pair("color_vec_u", util::view(color_p->color_vec_u)),
@@ -894,6 +909,8 @@ namespace egl {
     sws.program[1].bind(sws.color_matrix);
 
     gl::ctx.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Dithering must not fill the unused low bits of P010 surfaces.
+    gl::ctx.Disable(GL_DITHER);
 
     gl_drain_errors;
 
@@ -948,11 +965,45 @@ namespace egl {
     return make(in_width, in_height, out_width, out_height, std::move(tex));
   }
 
-  void sws_t::load_ram(platf::img_t &img) {
+  int sws_t::load_ram(platf::img_t &img, std::uint32_t fourcc) {
+    GLenum format = GL_BGRA;
+    GLenum type = GL_UNSIGNED_BYTE;
+    switch (fourcc) {
+      case 0:  // Existing RAM capture callers supply BGRA8.
+      case fourcc_code('X', 'R', '2', '4'):
+      case fourcc_code('A', 'R', '2', '4'):
+        break;
+      case fourcc_code('X', 'R', '3', '0'):
+      case fourcc_code('A', 'R', '3', '0'):
+        type = GL_UNSIGNED_INT_2_10_10_10_REV;
+        break;
+      case fourcc_code('X', 'B', '3', '0'):
+      case fourcc_code('A', 'B', '3', '0'):
+        format = GL_RGBA;
+        type = GL_UNSIGNED_INT_2_10_10_10_REV;
+        break;
+      default:
+        BOOST_LOG(error) << "Unsupported RGB upload fourcc: " << fourcc;
+        return -1;
+    }
+    if (!img.data || img.width != in_width || img.height != in_height ||
+        img.pixel_pitch != 4 || img.row_pitch < static_cast<int64_t>(img.width) * 4 ||
+        img.row_pitch % 4) {
+      BOOST_LOG(error) << "Invalid RGB upload dimensions or stride";
+      return -1;
+    }
     loaded_texture = tex[0];
-
+    GLint previous_alignment;
+    gl::ctx.GetIntegerv(GL_UNPACK_ALIGNMENT, &previous_alignment);
+    gl::ctx.PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    GLint previous_row_length;
+    gl::ctx.GetIntegerv(GL_UNPACK_ROW_LENGTH, &previous_row_length);
+    gl::ctx.PixelStorei(GL_UNPACK_ROW_LENGTH, img.row_pitch / 4);
     gl::ctx.BindTexture(GL_TEXTURE_2D, loaded_texture);
-    gl::ctx.TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, img.width, img.height, GL_BGRA, GL_UNSIGNED_BYTE, img.data);
+    gl::ctx.TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, img.width, img.height, format, type, img.data);
+    gl::ctx.PixelStorei(GL_UNPACK_ROW_LENGTH, previous_row_length);
+    gl::ctx.PixelStorei(GL_UNPACK_ALIGNMENT, previous_alignment);
+    return gl::ctx.GetError() == GL_NO_ERROR ? 0 : -1;
   }
 
   void sws_t::load_vram(img_descriptor_t &img, int offset_x, int offset_y, int texture) {
@@ -992,6 +1043,7 @@ namespace egl {
         gl::ctx.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, img.src_w, img.src_h, 0, GL_BGRA, GL_UNSIGNED_BYTE, img.data);
       }
 
+      gl::ctx.BlendFunc(img.cursor_premultiplied ? GL_ONE : GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
       gl::ctx.Enable(GL_BLEND);
 
       gl::ctx.DrawBuffers(1, &attachment);
@@ -1008,6 +1060,7 @@ namespace egl {
       gl::ctx.DrawArrays(GL_TRIANGLES, 0, 3);
 
       gl::ctx.Disable(GL_BLEND);
+      gl::ctx.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
       gl::ctx.BindTexture(GL_TEXTURE_2D, 0);
       gl::ctx.BindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1034,6 +1087,9 @@ namespace egl {
       }
 #endif
 
+      // Clear the entire target, including letterboxing, with encoded black.
+      const float black[] = {x == 0 ? black_y : black_uv, black_uv, 0.0f, 0.0f};
+      gl::ctx.ClearBufferfv(GL_COLOR, 0, black);
       gl::ctx.UseProgram(program[x].handle());
       gl::ctx.Viewport(offsetX / (x + 1), offsetY / (x + 1), out_width / (x + 1), out_height / (x + 1));
       gl::ctx.DrawArrays(GL_TRIANGLES, 0, 3);

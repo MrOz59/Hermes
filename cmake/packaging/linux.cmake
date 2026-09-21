@@ -13,8 +13,12 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.3.0")
     # empty directory named after them
     cmake_policy(SET CMP0205 NEW)
 endif()
-file(CREATE_LINK "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/assets/shaders"
-        "${CMAKE_BINARY_DIR}/assets/shaders" COPY_ON_ERROR SYMBOLIC)
+# Do not replace an existing directory symlink: CMake versions that remove
+# its contents while replacing it can delete the source shaders on reconfigure.
+if(NOT IS_SYMLINK "${CMAKE_BINARY_DIR}/assets/shaders")
+    file(CREATE_LINK "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/assets/shaders"
+            "${CMAKE_BINARY_DIR}/assets/shaders" COPY_ON_ERROR SYMBOLIC)
+endif()
 
 install(PROGRAMS "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-gamescope-launch"
         DESTINATION "bin")

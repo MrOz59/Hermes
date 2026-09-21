@@ -11,6 +11,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+- Preserve the existing shader directory symlink when reconfiguring instead of recreating it and risking deletion of source shaders.
+
 ### Notice
 
 - **Independent client sessions are being re-evaluated and are not recommended.**

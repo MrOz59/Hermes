@@ -561,6 +561,18 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Hermes-KMS and Hestia trackers for problems that belong to them.
 
 ### Changed
+- NVIDIA capture of a Hermes-KMS display copies each frame in about a quarter
+  of the time. The CPU-copy path mapped the whole scanout buffer again for
+  every frame, and the driver maps that memory in one 4 KiB page per fault: at
+  1440p that was 3,600 faults and about 5 of the 6.5 ms the capture took, and
+  at 4K it was 21 ms, longer than a 60 fps frame lasts. Scanout buffers are now
+  mapped once and reused while the compositor rotates through them, and a
+  whole-frame copy is split into 2 MiB blocks, because a single copy of a 4K
+  frame fell onto glibc's large-copy strategy, which reads these mappings at a
+  third of the speed. On a Ryzen 7 5700X the capture now takes 1.5 ms at 1440p
+  and 3 ms at 4K. The frame is also timestamped when it becomes ready instead
+  of after the copy, so the processing latency reported to the client includes
+  the capture step it used to leave out.
 - The documentation says Hermes where it meant Hermes. Most of `docs/` came
   across from upstream unedited, and the parts a new user reads first were
   telling them to install and run a different program: Getting Started's whole

@@ -24,6 +24,7 @@
 
 // local includes
 #include "cuda.h"
+#include "dmabuf_mapping.h"
 #include "graphics.h"
 #include "src/config.h"
 #include "src/logging.h"
@@ -2643,6 +2644,11 @@ namespace platf {
           }
         }
 
+        // The frame exists from here on. Stamp it now, so the copy below is
+        // part of the reported processing latency instead of hiding before
+        // the timestamp the way it used to.
+        const auto frame_ready = std::chrono::steady_clock::now();
+
         std::optional<cursor_t> pending_cursor;
         uint64_t pending_cursor_sequence = last_cursor_sequence;
         if (cursor_ready) {
@@ -2675,29 +2681,18 @@ namespace platf {
         }
         const auto map_len = last_row_offset + row_bytes;
 
-        struct stat dmabuf_stat {};
-        if (::fstat(frame.dma_buf_fd[0], &dmabuf_stat) < 0) {
-          const int stat_errno = errno;
-          BOOST_LOG(error) << "Hermes-KMS CPU capture: could not determine DMA-BUF size: "sv
-                           << strerror(stat_errno);
-          frame.close();
-          return platf::capture_e::error;
-        }
-        if (dmabuf_stat.st_size <= 0) {
-          BOOST_LOG(error) << "Hermes-KMS CPU capture: DMA-BUF reports an invalid zero size."sv;
-          frame.close();
-          return platf::capture_e::error;
-        }
-        if (static_cast<std::uintmax_t>(map_len) > static_cast<std::uintmax_t>(dmabuf_stat.st_size)) {
-          BOOST_LOG(error) << "Hermes-KMS CPU capture: frame metadata exceeds the DMA-BUF ("sv
-                           << map_len << " > "sv << dmabuf_stat.st_size << ')';
-          frame.close();
-          return platf::capture_e::error;
-        }
-
-        void *map = ::mmap(nullptr, map_len, PROT_READ, MAP_SHARED, frame.dma_buf_fd[0], 0);
-        if (map == MAP_FAILED) {
-          BOOST_LOG(error) << "Hermes-KMS CPU capture: mmap failed: "sv << strerror(errno);
+        // Mapped once per scanout buffer, not once per frame: see
+        // platf::dmabuf::mapping_cache_t for what a per-frame mmap cost.
+        const std::uint8_t *map = mappings.map(frame.dma_buf_fd[0], map_len);
+        if (!map) {
+          const int map_errno = errno;
+          if (map_errno == EINVAL) {
+            BOOST_LOG(error) << "Hermes-KMS CPU capture: frame metadata exceeds the DMA-BUF (needs "sv
+                             << map_len << " bytes)"sv;
+          } else {
+            BOOST_LOG(error) << "Hermes-KMS CPU capture: could not map the DMA-BUF: "sv
+                             << strerror(map_errno);
+          }
           frame.close();
           return platf::capture_e::error;
         }
@@ -2707,37 +2702,23 @@ namespace platf {
           const int sync_errno = errno;
           BOOST_LOG(error) << "Hermes-KMS CPU capture: DMA_BUF_SYNC_START failed: "sv
                            << strerror(sync_errno);
-          ::munmap(map, map_len);
           frame.close();
           return platf::capture_e::error;
         }
 
-        const auto *src = static_cast<const std::uint8_t *>(map) + frame.offset[0];
-        auto *dst = img_out->data;
-        const auto destination_pitch = static_cast<std::size_t>(img_out->row_pitch);
-        if (source_pitch == row_bytes && destination_pitch == row_bytes) {
-          std::memcpy(dst, src, row_bytes * frame_height);
-        } else {
-          for (std::size_t y = 0; y < frame_height; ++y) {
-            std::memcpy(dst + y * destination_pitch, src + y * source_pitch, row_bytes);
-          }
-        }
-
-        const int sync_end_result = hermes_dma_buf_sync(
-          frame.dma_buf_fd[0],
-          DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ
+        platf::dmabuf::copy_rows(
+          img_out->data,
+          static_cast<std::size_t>(img_out->row_pitch),
+          map + frame.offset[0],
+          source_pitch,
+          row_bytes,
+          frame_height
         );
-        const int sync_end_errno = errno;
-        const int unmap_result = ::munmap(map, map_len);
-        const int unmap_errno = errno;
-        if (sync_end_result < 0) {
+
+        if (hermes_dma_buf_sync(frame.dma_buf_fd[0], DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ) < 0) {
+          const int sync_errno = errno;
           BOOST_LOG(error) << "Hermes-KMS CPU capture: DMA_BUF_SYNC_END failed: "sv
-                           << strerror(sync_end_errno);
-          frame.close();
-          return platf::capture_e::error;
-        }
-        if (unmap_result < 0) {
-          BOOST_LOG(error) << "Hermes-KMS CPU capture: munmap failed: "sv << strerror(unmap_errno);
+                           << strerror(sync_errno);
           frame.close();
           return platf::capture_e::error;
         }
@@ -2755,7 +2736,7 @@ namespace platf {
         }
         last_cursor_requested = cursor_requested;
 
-        img_out->frame_timestamp = std::chrono::steady_clock::now();
+        img_out->frame_timestamp = frame_ready;
         return platf::capture_e::ok;
       }
 
@@ -2792,6 +2773,8 @@ namespace platf {
       uint64_t last_sequence {0};
       uint64_t last_cursor_sequence {0};
       std::optional<bool> last_cursor_requested;
+      /// CPU mappings of the scanout buffers the compositor rotates through.
+      platf::dmabuf::mapping_cache_t mappings;
     };
 
   }  // namespace kms

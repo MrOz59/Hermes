@@ -21,6 +21,7 @@
 
 // local includes
 #include "src/uuid.h"
+#include "hermes_kms_color.h"
 
 namespace VDISPLAY {
 
@@ -776,6 +777,18 @@ namespace VDISPLAY {
     int refresh_hz
   );
 
+  /** KScreen exposes hdr/wcg keys only when the output supports them. */
+  struct kscreen_hdr_state_t {
+    bool hdr_supported;
+    bool hdr;
+    bool wcg_supported;
+    bool wcg;
+  };
+  std::optional<kscreen_hdr_state_t> kscreenHdrState(const std::string &json_text, const std::string &output);
+
+  /** Match only the owned KDE virtual output to the connecting client's HDR request. */
+  bool configureVirtualDisplayHdr(const std::string &displayName, bool hdr);
+
   /** Record whether capture was routed away from an uncomposited virtual output. */
   void setVirtualDisplayCaptureFallbackActive(bool active);
 
@@ -904,6 +917,7 @@ namespace VDISPLAY {
    * master and no KMS access are required, so it coexists with the compositor.
    */
   struct HermesKmsFrame {
+    hermes_kms::color_t color;
     int width {0};
     int height {0};
     uint32_t fourcc {0};
@@ -989,8 +1003,12 @@ namespace VDISPLAY {
    * current). On success @p out owns the returned fds; the caller must call
    * out.close() when done. @return true on success.
    */
+  // Query one coherent initial frame/colour snapshot without exporting fds.
+  // A legacy driver returns unknown colour state; never infer HDR from fourcc.
+  bool hermesKmsCaptureColor(int render_fd, hermes_kms::color_t &color, uint32_t &fourcc);
+
   bool hermesKmsAcquireFrame(int render_fd, uint64_t after_sequence,
-                             uint32_t timeout_ms, HermesKmsFrame &out);
+                             uint32_t timeout_ms, HermesKmsFrame &out, bool capture_color = false);
 
   /** Wait until the primary frame or cursor stream advances. */
   bool hermesKmsWaitUpdate(int render_fd, uint64_t after_frame_sequence,

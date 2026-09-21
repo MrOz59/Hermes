@@ -612,7 +612,7 @@ namespace VDISPLAY {
       uint64_t session_id;
     };
 
-    struct acquire_frame_t {
+    struct alignas(8) acquire_frame_t {
       uint64_t flags;
       uint64_t sequence;
       uint64_t timestamp_ns;
@@ -631,8 +631,16 @@ namespace VDISPLAY {
       uint32_t damage_y1;
       uint32_t damage_x2;
       uint32_t damage_y2;
-      uint64_t reserved[6];
+      alignas(8) uint64_t reserved[6];
     };
+
+    struct acquire_frame2_t {
+      acquire_frame_t frame;
+      color_t color;
+    };
+    static_assert(sizeof(acquire_frame_t) == 176);
+    static_assert(sizeof(acquire_frame2_t) == 224);
+    static_assert(offsetof(acquire_frame2_t, color) == 176);
 
     struct wait_frame_t {
       uint64_t flags;
@@ -787,6 +795,7 @@ namespace VDISPLAY {
     constexpr unsigned long ioctl_get_caps = DRM_IOR(DRM_COMMAND_BASE + 0x01, caps_t);
     constexpr unsigned long ioctl_get_status = DRM_IOR(DRM_COMMAND_BASE + 0x02, status_t);
     constexpr unsigned long ioctl_set_output = DRM_IOWR(DRM_COMMAND_BASE + 0x03, set_output_t);
+    constexpr unsigned long ioctl_acquire_frame2 = DRM_IOWR(DRM_COMMAND_BASE + 0x0c, acquire_frame2_t);
     constexpr unsigned long ioctl_acquire_frame = DRM_IOWR(DRM_COMMAND_BASE + 0x04, acquire_frame_t);
     constexpr unsigned long ioctl_get_identity = DRM_IOR(DRM_COMMAND_BASE + 0x05, identity_t);
     constexpr unsigned long ioctl_wait_frame = DRM_IOWR(DRM_COMMAND_BASE + 0x06, wait_frame_t);
@@ -2199,6 +2208,29 @@ namespace VDISPLAY {
       BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not parse the mode list: " << error.what();
     }
     return kscreen_mode_state_e::unknown_output;
+  }
+
+  std::optional<kscreen_hdr_state_t> kscreenHdrState(const std::string &json_text, const std::string &output) {
+    if (!safe_output_name(output)) {
+      return std::nullopt;
+    }
+    try {
+      const auto data = nlohmann::json::parse(json_text);
+      for (const auto &entry : data.at("outputs")) {
+        if (entry.value("name", std::string {}) != output) {
+          continue;
+        }
+        if (!entry.value("connected", false) || !entry.value("enabled", true)) {
+          return std::nullopt;
+        }
+        // libkscreen omits hdr/wcg when the corresponding capability is absent.
+        return kscreen_hdr_state_t {entry.contains("hdr"), entry.value("hdr", false),
+                                    entry.contains("wcg"), entry.value("wcg", false)};
+      }
+    } catch (const std::exception &) {
+      // Missing/malformed state must not select another output or imply success.
+    }
+    return std::nullopt;
   }
 
   namespace kscreen {
@@ -6557,6 +6589,62 @@ namespace VDISPLAY {
     return true;
   }
 
+  bool configureVirtualDisplayHdr(const std::string &displayName, bool hdr) {
+    if (config::video.virtual_display_backend != "hermes_kms" ||
+        window_system != window_system_e::WAYLAND || !kscreen::is_active(displayName)) {
+      return true;  // Other compositors retain their own color configuration.
+    }
+    std::string output;
+    {
+      std::lock_guard<std::mutex> lock(kscreen::layouts_mutex);
+      const auto it = kscreen::layouts.find(displayName);
+      if (it == kscreen::layouts.end()) {
+        return false;
+      }
+      output = it->second.virtual_output;
+    }
+    const auto state = kscreenHdrState(kscreen::command_output("kscreen-doctor -j"), output);
+    if (!state || (hdr && !state->hdr_supported)) {
+      BOOST_LOG(error) << "[VDISPLAY/KScreen] Cannot configure " << output
+                       << " for the client's HDR request; check Hermes-KMS hdr_enable and color_depth.";
+      return false;
+    }
+    std::string command = "kscreen-doctor";
+    bool changed = false;
+    if (state->hdr_supported && state->hdr != hdr) {
+      command += " output." + output + (hdr ? ".hdr.enable" : ".hdr.disable");
+      changed = true;
+    }
+    if (state->wcg_supported && state->wcg != hdr) {
+      command += " output." + output + (hdr ? ".wcg.enable" : ".wcg.disable");
+      changed = true;
+    }
+    if (changed && !kscreen::run_layout_command(command)) {
+      return false;
+    }
+    // KScreen accepting a request is not proof that a new scanout is ready.
+    // Wait for frame-associated metadata before encoder probing reads it.
+    const int capture_fd = hermesKmsOpenCapture(displayName);
+    if (capture_fd < 0) {
+      return false;
+    }
+    auto close_capture = util::fail_guard([capture_fd]() { ::close(capture_fd); });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds {1500};
+    do {
+      hermes_kms::color_t color;
+      uint32_t fourcc = 0;
+      if (hermesKmsCaptureColor(capture_fd, color, fourcc) &&
+          (color.known() ? (color.pq() == hdr && (hdr || color.colorspace != hermes_kms::colorspace_bt2020_rgb)) : !hdr)) {
+        BOOST_LOG(info) << "[VDISPLAY/KScreen] " << output << " scanout confirmed " << (hdr ? "HDR" : "SDR");
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds {20});
+    } while (std::chrono::steady_clock::now() < deadline);
+    BOOST_LOG(error) << "[VDISPLAY/KScreen] " << output << " did not commit the requested "
+                     << (hdr ? "HDR" : "SDR") << " scanout before capture.";
+    return false;
+  }
+
   bool enableExclusiveVirtualDisplay(const std::string &displayName) {
     if (window_system == window_system_e::WAYLAND && kscreen::is_active(displayName)) {
       const bool enabled = kscreen::make_exclusive(displayName);
@@ -7063,14 +7151,39 @@ namespace VDISPLAY {
     return true;
   }
 
+  bool hermesKmsCaptureColor(int render_fd, hermes_kms::color_t &color, uint32_t &fourcc) {
+    color = {};
+    fourcc = 0;
+    hermes_kms::caps_t caps {};
+    if (::ioctl(render_fd, hermes_kms::ioctl_get_caps, &caps) != 0) {
+      return false;
+    }
+    hermes_kms::acquire_frame2_t capture {};
+    if (caps.flags & hermes_kms::cap_frame_color) {
+      if (::ioctl(render_fd, hermes_kms::ioctl_acquire_frame2, &capture) != 0) {
+        return false;
+      }
+      if (!capture.color.supported()) {
+        errno = EPROTO;
+        return false;
+      }
+      color = capture.color;
+    } else if (::ioctl(render_fd, hermes_kms::ioctl_acquire_frame, &capture.frame) != 0) {
+      return false;
+    }
+    fourcc = capture.frame.format;
+    return true;
+  }
+
   bool hermesKmsAcquireFrame(int render_fd, uint64_t after_sequence,
-                             uint32_t timeout_ms, HermesKmsFrame &out) {
+                             uint32_t timeout_ms, HermesKmsFrame &out, bool capture_color) {
     if (render_fd < 0) {
       errno = EBADF;
       return false;
     }
 
     out.close();
+    out.color = {};
 
     // Block for a frame newer than what the caller last saw. A zero timeout
     // returns immediately; the caller then uses whatever frame is current.
@@ -7086,17 +7199,20 @@ namespace VDISPLAY {
 
     // Time only the acquire ioctl (DMA-BUF export), excluding the wait above,
     // so callers can measure the actual zero-copy cost.
-    hermes_kms::acquire_frame_t frame {};
+    hermes_kms::acquire_frame2_t capture {};
+    auto &frame = capture.frame;
     const auto acquire_t0 = std::chrono::steady_clock::now();
     int acquire_ret = -1;
     for (unsigned int attempt = 0; attempt < 4; ++attempt) {
-      frame = {};
+      capture = {};
       frame.flags = hermes_kms::frame_request_dmabuf | hermes_kms::frame_request_sync_file;
       for (auto &fd : frame.dma_buf_fd) {
         fd = -1;
       }
       frame.sync_file_fd = -1;
-      acquire_ret = ::ioctl(render_fd, hermes_kms::ioctl_acquire_frame, &frame);
+      acquire_ret = capture_color ?
+                      ::ioctl(render_fd, hermes_kms::ioctl_acquire_frame2, &capture) :
+                      ::ioctl(render_fd, hermes_kms::ioctl_acquire_frame, &frame);
       if (acquire_ret == 0 || errno != ESTALE) {
         break;
       }
@@ -7108,7 +7224,8 @@ namespace VDISPLAY {
       return false;
     }
 
-    if (!(frame.flags & hermes_kms::frame_dmabuf_valid) ||
+    if ((capture_color && !capture.color.supported()) ||
+        !(frame.flags & hermes_kms::frame_dmabuf_valid) ||
         !(frame.flags & hermes_kms::frame_sync_file_valid) ||
         !frame.plane_count || frame.plane_count > 4 || frame.sync_file_fd < 0) {
       // No usable DMA-BUFs; release anything we got back.
@@ -7124,6 +7241,7 @@ namespace VDISPLAY {
       return false;
     }
 
+    out.color = capture.color;
     out.width = static_cast<int>(frame.width);
     out.height = static_cast<int>(frame.height);
     out.fourcc = frame.format;

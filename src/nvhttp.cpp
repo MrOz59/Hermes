@@ -1660,6 +1660,13 @@ namespace nvhttp {
         }
       }
 
+      if (!VDISPLAY::configureVirtualDisplayHdr(proc::proc.display_name, launch_session->enable_hdr)) {
+        tree.put("root.resume", 0);
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", "The virtual display could not apply the requested HDR/SDR mode.");
+        return;
+      }
+
       if (video::probe_encoders()) {
         tree.put("root.resume", 0);
         tree.put("root.<xmlattr>.status_code", 503);

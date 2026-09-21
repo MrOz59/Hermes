@@ -2185,6 +2185,13 @@ namespace proc {
           }
 #endif
 
+#ifndef _WIN32
+          if (virtual_display_ready_for_capture &&
+              !VDISPLAY::configureVirtualDisplayHdr(this->display_name, launch_session->enable_hdr)) {
+            return -1;
+          }
+#endif
+
           // When using virtual display, we don't care which display user configured to use.
           // So we always set output_name to the newly created virtual display as a workaround for
           // empty name when probing graphics cards.

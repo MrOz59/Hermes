@@ -11,6 +11,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+- Add frame-associated Hermes-KMS HDR10 capture, ten-bit pixel conversion and NVENC upload, with explicit SDR/HDR transition handling and validation tools.
+
 ### Notice
 
 - **Independent client sessions are being re-evaluated and are not recommended.**

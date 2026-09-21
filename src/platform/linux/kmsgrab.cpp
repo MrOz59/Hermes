@@ -4,6 +4,8 @@
  */
 // standard includes
 #include <array>
+#include <cstdlib>
+#include <cstring>
 #include <errno.h>
 #include <fcntl.h>
 #include <filesystem>
@@ -2801,7 +2803,16 @@ namespace platf {
       // wrong pages beyond the first ones (diagonal-stripe corruption), so
       // route CUDA sessions through the always-correct CPU copy. VAAPI keeps
       // the validated zero-copy import.
-      if (hwdevice_type == mem_type_e::cuda) {
+      //
+      // HERMES_KMS_FORCE_CPU_COPY=1 sends VAAPI sessions down the CPU copy as
+      // well, so the path NVIDIA users depend on can be exercised and
+      // measured on hardware that does not need it.
+      const char *force_cpu_copy = std::getenv("HERMES_KMS_FORCE_CPU_COPY");
+      const bool forced_cpu_copy = force_cpu_copy && !std::strcmp(force_cpu_copy, "1");
+      if (forced_cpu_copy && hwdevice_type != mem_type_e::cuda) {
+        BOOST_LOG(warning) << "HERMES_KMS_FORCE_CPU_COPY=1: using the CPU-copy capture path instead of zero-copy."sv;
+      }
+      if (hwdevice_type == mem_type_e::cuda || forced_cpu_copy) {
         auto disp = std::make_shared<kms::display_hermes_ram_t>(hwdevice_type);
         if (!disp->init(display_name, config)) {
           return disp;

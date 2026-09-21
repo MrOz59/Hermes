@@ -37,6 +37,10 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   token remains valid from this machine and private/local networks.
 
 ### Added
+- `HERMES_KMS_FORCE_CPU_COPY=1` sends VAAPI sessions on a Hermes-KMS display
+  through the CPU-copy capture NVIDIA sessions use, instead of the zero-copy
+  import. It exists for testing: the NVIDIA path can now be exercised and
+  measured on AMD and Intel hardware.
 - A GNOME session now notices the desktop layout changing under it. Every
   decision the display backend makes — which mode to drive, where the output
   sits, what the offsets for absolute input are — comes from reading the monitor

@@ -27,7 +27,7 @@ All four RGB2101010 channel layouts and padded CPU row strides are handled.
 Colour and format changes trigger capture/encoder reinitialization before the
 first changed frame is submitted. Static metadata keeps the DRM units and
 unspecified zero values. Ten-bit storage alone never implies HDR. A legacy driver
-cannot supply the new HDR contract; keep HDR disabled when using that driver.
+cannot supply the new HDR contract, so with one an HDR request streams SDR.
 
 ## Setup and compatibility
 
@@ -97,6 +97,12 @@ output's HDR and wide-gamut settings to the incoming client's HDR request. It
 waits for frame-associated metadata to confirm the new encoding before probing
 encoders. This prevents KDE's remembered HDR setting from breaking a subsequent
 SDR mobile session. Physical output color settings are not changed.
+
+An HDR request streams SDR, with a warning in the log, when the output does not
+offer HDR (the driver was loaded without `hdr_enable=1`) or the driver does not
+report frame colour (UAPI below 14). The output is switched to SDR, as for an SDR
+client, so the session starts as it did before HDR capture existed instead of
+being refused.
 
 Encoder capability probes use synthetic images, including SDR/H.264 probes on
 an HDR output. Their internal probe-only display cannot enter real capture.

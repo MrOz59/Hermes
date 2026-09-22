@@ -15,6 +15,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 - Treat capture=kwin as KMS when using Hermes-KMS and report actionable capture initialization errors instead of misleading encoder failures.
 - Explain that explicit per-app Mirror/Extend layouts override global exclusive mode, and that overlapping differently sized outputs can crop the desktop.
 - Add frame-associated Hermes-KMS HDR10 capture, ten-bit pixel conversion and NVENC upload, with explicit SDR/HDR transition handling and validation tools.
+- A client that asks for HDR on a Hermes-KMS output that cannot provide it (a driver loaded without `hdr_enable=1`, or one that does not report frame colour) streams SDR with a warning instead of being refused with a 503.
 
 ### Notice
 

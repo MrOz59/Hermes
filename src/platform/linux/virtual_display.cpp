@@ -6589,6 +6589,19 @@ namespace VDISPLAY {
     return true;
   }
 
+  hdr_launch_mode_t virtualDisplayHdrMode(bool requested, const kscreen_hdr_state_t &state, bool driver_reports_frame_color) {
+    if (!requested) {
+      return {false, nullptr};
+    }
+    if (!state.hdr_supported) {
+      return {false, "the virtual output does not offer HDR (Hermes-KMS needs hdr_enable=1 color_depth=10)"};
+    }
+    if (!driver_reports_frame_color) {
+      return {false, "this Hermes-KMS driver does not report each frame's colour (UAPI 14), so HDR frames cannot be recognized"};
+    }
+    return {true, nullptr};
+  }
+
   bool configureVirtualDisplayHdr(const std::string &displayName, bool hdr) {
     if (config::video.virtual_display_backend != "hermes_kms" ||
         window_system != window_system_e::WAYLAND || !kscreen::is_active(displayName)) {
@@ -6604,11 +6617,23 @@ namespace VDISPLAY {
       output = it->second.virtual_output;
     }
     const auto state = kscreenHdrState(kscreen::command_output("kscreen-doctor -j"), output);
-    if (!state || (hdr && !state->hdr_supported)) {
-      BOOST_LOG(error) << "[VDISPLAY/KScreen] Cannot configure " << output
-                       << " for the client's HDR request; check Hermes-KMS hdr_enable and color_depth.";
+    if (!state) {
+      BOOST_LOG(error) << "[VDISPLAY/KScreen] Cannot read the HDR state of " << output << '.';
       return false;
     }
+    // The capture descriptor says whether the driver reports frame colour,
+    // and afterwards confirms the scanout.
+    const int capture_fd = hermesKmsOpenCapture(displayName);
+    if (capture_fd < 0) {
+      return false;
+    }
+    auto close_capture = util::fail_guard([capture_fd]() { ::close(capture_fd); });
+    const auto mode = virtualDisplayHdrMode(hdr, *state, hermesKmsReportsFrameColor(capture_fd));
+    if (mode.sdr_reason) {
+      BOOST_LOG(warning) << "[VDISPLAY/KScreen] The client asked for HDR, but " << mode.sdr_reason
+                         << "; streaming SDR.";
+    }
+    hdr = mode.hdr;
     std::string command = "kscreen-doctor";
     bool changed = false;
     if (state->hdr_supported && state->hdr != hdr) {
@@ -6624,11 +6649,6 @@ namespace VDISPLAY {
     }
     // KScreen accepting a request is not proof that a new scanout is ready.
     // Wait for frame-associated metadata before encoder probing reads it.
-    const int capture_fd = hermesKmsOpenCapture(displayName);
-    if (capture_fd < 0) {
-      return false;
-    }
-    auto close_capture = util::fail_guard([capture_fd]() { ::close(capture_fd); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds {1500};
     do {
       hermes_kms::color_t color;
@@ -7149,6 +7169,12 @@ namespace VDISPLAY {
       return false;
     }
     return true;
+  }
+
+  bool hermesKmsReportsFrameColor(int render_fd) {
+    hermes_kms::caps_t caps {};
+    return ::ioctl(render_fd, hermes_kms::ioctl_get_caps, &caps) == 0 &&
+           (caps.flags & hermes_kms::cap_frame_color);
   }
 
   bool hermesKmsCaptureColor(int render_fd, hermes_kms::color_t &color, uint32_t &fourcc) {

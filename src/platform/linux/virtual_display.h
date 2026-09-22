@@ -786,6 +786,21 @@ namespace VDISPLAY {
   };
   std::optional<kscreen_hdr_state_t> kscreenHdrState(const std::string &json_text, const std::string &output);
 
+  /** What a virtual output streams for a client's HDR request. */
+  struct hdr_launch_mode_t {
+    bool hdr;
+    /// Why an HDR request streams SDR instead; null when nothing fell back.
+    const char *sdr_reason;
+  };
+
+  /**
+   * Stream HDR only when the output offers it and the driver reports each
+   * frame's colour, which is how capture tells PQ pixels from SDR ones.
+   * Otherwise an HDR request streams SDR, as it did before HDR capture
+   * existed, rather than refusing the session.
+   */
+  hdr_launch_mode_t virtualDisplayHdrMode(bool requested, const kscreen_hdr_state_t &state, bool driver_reports_frame_color);
+
   /** Match only the owned KDE virtual output to the connecting client's HDR request. */
   bool configureVirtualDisplayHdr(const std::string &displayName, bool hdr);
 
@@ -1006,6 +1021,9 @@ namespace VDISPLAY {
   // Query one coherent initial frame/colour snapshot without exporting fds.
   // A legacy driver returns unknown colour state; never infer HDR from fourcc.
   bool hermesKmsCaptureColor(int render_fd, hermes_kms::color_t &color, uint32_t &fourcc);
+
+  /** Whether the driver behind a capture descriptor reports frame colour (UAPI 14). */
+  bool hermesKmsReportsFrameColor(int render_fd);
 
   bool hermesKmsAcquireFrame(int render_fd, uint64_t after_sequence,
                              uint32_t timeout_ms, HermesKmsFrame &out, bool capture_color = false);

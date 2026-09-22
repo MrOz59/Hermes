@@ -38,6 +38,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   token remains valid from this machine and private/local networks.
 
 ### Added
+- The host log now says when a client stops being reachable. A client sends a
+  ping every 100 ms besides its input, so Hermes reports every gap of 150 ms or
+  more in what it receives ("sent nothing for 657 ms while the host kept
+  streaming"), notes when a key-frame request follows such a gap, and
+  summarizes the gaps when the session ends. Until now a stream that stuttered
+  and lost audio together left nothing in the host's log to show that the
+  client's network link, not the host, had stopped: in one such HDR session
+  every key-frame request came a few milliseconds after the client had gone
+  silent for up to 660 ms, over and over, while the host's audio and video
+  never paused.
 - NVIDIA sessions on a Hermes-KMS display accept 10-bit scanout and can encode
   10-bit video. The CPU-copy capture used to stop with "unexpected frame
   layout" as soon as the compositor scanned out XRGB2101010, XBGR2101010 or

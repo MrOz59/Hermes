@@ -11,11 +11,12 @@
 
 // local includes
 #include "cuda.h"
+#include "pyrowave.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
-#include "virtual_display.h"
 #include "src/video.h"
 #include "vaapi.h"
+#include "virtual_display.h"
 #include "wayland.h"
 
 using namespace std::literals;
@@ -405,6 +406,12 @@ namespace wl {
       return 0;
     }
 
+#ifdef HAVE_PYROWAVE
+    std::unique_ptr<platf::avcodec_encode_device_t> make_pyrowave_encode_device() override {
+      return pyrowave::make_ram_encode_device(width, height);
+    }
+#endif
+
     std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(platf::pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_VAAPI
       if (mem_type == platf::mem_type_e::vaapi) {
@@ -524,6 +531,12 @@ namespace wl {
 
       return img;
     }
+
+#ifdef HAVE_PYROWAVE
+    std::unique_ptr<platf::avcodec_encode_device_t> make_pyrowave_encode_device() override {
+      return pyrowave::make_gpu_encode_device(width, height, 0, 0);
+    }
+#endif
 
     std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(platf::pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_VAAPI

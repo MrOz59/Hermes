@@ -26,6 +26,18 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   unlock only when needed. The option is off by default because it unlocks the
   entire host desktop, not only the streamed display; failure is non-fatal and
   application launch continues normally.
+- Experimental support for PyroWave, the intra-only wavelet codec Valve uses
+  for Steam Remote Play, for Hestia clients on a high-bandwidth LAN. It is
+  offered only when Hermes is built with the optional `pyrowave-shared`
+  library and `pyrowave` is enabled, and streams SDR YUV 4:2:0. On Linux the
+  captured frame is converted to YCbCr on the GPU and read by the encoder
+  through Vulkan: in place on a VAAPI (AMD, Intel) host, and after an upload
+  from the CPU copy Hermes-KMS displays use on NVIDIA. Measured on an RX 6700
+  XT, a 1080p frame takes 0.55 ms from capture to bitstream in place and
+  1.7 ms through the upload, against 7.3 ms when converted on the CPU, which
+  remains the fallback. A frame larger than forward error correction can
+  cover (about 1.2 MB, so above roughly 550 Mbps at 60 fps) is sent without
+  it.
 
 ### Fixed
 - Touch and pen now land where they are aimed on a host with more than one

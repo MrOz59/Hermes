@@ -22,6 +22,10 @@ find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 pkg_check_modules(CURL REQUIRED libcurl)
 
+# PyroWave is an experimental, optional Vulkan codec. Builds without the
+# library retain the existing H.264/HEVC/AV1 paths unchanged.
+pkg_check_modules(PYROWAVE QUIET IMPORTED_TARGET pyrowave-shared)
+
 # miniupnp
 pkg_check_modules(MINIUPNP miniupnpc REQUIRED)
 include_directories(SYSTEM ${MINIUPNP_INCLUDE_DIRS})

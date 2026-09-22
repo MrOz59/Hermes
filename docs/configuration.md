@@ -2685,6 +2685,43 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### pyrowave
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Advertise the experimental PyroWave Vulkan codec to compatible Hestia clients. The codec is intra-only,
+            currently supports SDR YUV 4:2:0, and is intended for high-bandwidth LAN streaming. This option is only
+            effective when Hermes was built with the optional @code{pyrowave-shared} dependency and a compatible
+            Vulkan device is available.
+            <br><br>
+            On Linux the captured image is converted to YCbCr with OpenGL and the encoder reads the result through
+            Vulkan. On a host that encodes with VAAPI (AMD and Intel) the capture's GPU buffers are used in place,
+            without a copy through system memory. On a host that encodes with NVENC, Hermes-KMS virtual displays are
+            captured with a CPU copy and uploaded to the GPU for the conversion. If the GPU cannot share buffers
+            between OpenGL and Vulkan, a capture into system memory is converted on the CPU instead, which costs
+            several milliseconds per frame and more than a 4K frame at 60 fps allows.
+            <br><br>
+            A frame larger than the stream's forward error correction can protect (about 1.2 MB with the default
+            @code{fec_percentage}) is sent without it, so bitrates above roughly 550 Mbps at 60 fps are more
+            sensitive to packet loss.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            pyrowave = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### hevc_mode
 
 <table>

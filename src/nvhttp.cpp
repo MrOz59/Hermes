@@ -1062,6 +1062,9 @@ namespace nvhttp {
         codec_mode_flags |= SCM_AV1_HIGH10_444;
       }
     }
+    if (config::video.pyrowave && video::pyrowave_available()) {
+      codec_mode_flags |= video::PYROWAVE_SERVER_CODEC_MODE;
+    }
     tree.put("root.ServerCodecModeSupport", codec_mode_flags);
 
     tree.put("root.PairStatus", pair_status);

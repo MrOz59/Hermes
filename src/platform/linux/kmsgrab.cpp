@@ -30,6 +30,7 @@
 #include "cuda.h"
 #include "dmabuf_mapping.h"
 #include "graphics.h"
+#include "pyrowave.h"
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
@@ -1719,6 +1720,12 @@ namespace platf {
         return capture_e::ok;
       }
 
+#ifdef HAVE_PYROWAVE
+      std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() override {
+        return pyrowave::make_ram_encode_device(width, height);
+      }
+#endif
+
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
@@ -1900,6 +1907,12 @@ namespace platf {
         }
       }
 
+#ifdef HAVE_PYROWAVE
+      std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() override {
+        return pyrowave::make_ram_encode_device(width, height);
+      }
+#endif
+
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e) override {
 #ifdef SUNSHINE_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
@@ -1937,6 +1950,12 @@ namespace platf {
       display_vram_t(mem_type_e mem_type):
           display_t(mem_type) {
       }
+
+#ifdef HAVE_PYROWAVE
+      std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() override {
+        return pyrowave::make_gpu_encode_device(width, height, dup(card.render_fd.el), img_offset_x, img_offset_y);
+      }
+#endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_VAAPI
@@ -2363,6 +2382,14 @@ namespace platf {
         return fd;
       }
 
+#ifdef HAVE_PYROWAVE
+      std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() override {
+        // The same real GPU the VAAPI path encodes on; the Hermes render node
+        // only exports.
+        return pyrowave::make_gpu_encode_device(width, height, dup(encode_render_fd.el), img_offset_x, img_offset_y);
+      }
+#endif
+
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
@@ -2699,6 +2726,15 @@ namespace platf {
       int dummy_img(platf::img_t *img) override {
         return 0;
       }
+
+#ifdef HAVE_PYROWAVE
+      std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() override {
+        // The route NVIDIA hosts take: their EGL import of Hermes-KMS buffers
+        // is unreliable, so the frame arrives here by CPU copy and is
+        // uploaded to the real GPU for conversion.
+        return pyrowave::make_ram_encode_device(width, height, file_t {display_hermes_vram_t::open_real_render_node()}, source_fourcc);
+      }
+#endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_CUDA

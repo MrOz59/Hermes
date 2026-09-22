@@ -160,6 +160,18 @@ else()
     message(STATUS "libsystemd not found; GNOME display-layout changes will not be noticed mid-session")
 endif()
 
+# PyroWave converts captured frames on the GPU into planes allocated with GBM,
+# which the encoder's Vulkan device imports. Without the library the codec is
+# not offered at all (see dependencies/common.cmake).
+if(PYROWAVE_FOUND)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GBM REQUIRED gbm)
+    list(APPEND PLATFORM_LIBRARIES ${GBM_LIBRARIES})
+    list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/pyrowave.h"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/pyrowave.cpp")
+endif()
+
 # drm
 if(${SUNSHINE_ENABLE_DRM})
     find_package(LIBCAP REQUIRED)

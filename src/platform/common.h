@@ -513,6 +513,16 @@ namespace platf {
       return nullptr;
     }
 
+    /**
+     * @brief Make a device that converts captured frames into PyroWave's GPU planes.
+     *
+     * Only captures that hand frames over as GPU buffers can feed PyroWave
+     * without a copy through system memory, so the default is none.
+     */
+    virtual std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() {
+      return nullptr;
+    }
+
     virtual bool is_hdr() {
       return false;
     }

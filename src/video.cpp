@@ -6,6 +6,7 @@
 #include <atomic>
 #include <bitset>
 #include <list>
+#include <mutex>
 #include <thread>
 
 // lib includes
@@ -30,6 +31,17 @@ extern "C" {
 #include "platform/common.h"
 #include "sync.h"
 #include "video.h"
+
+#ifdef HAVE_PYROWAVE
+  // pyrowave.h refuses to compile unless the Vulkan types come first.
+  // clang-format off
+  #include <vulkan/vulkan.h>
+  #include <pyrowave.h>
+  // clang-format on
+  #ifdef __linux__
+    #include "platform/linux/pyrowave.h"
+  #endif
+#endif
 
 #ifdef _WIN32
   #include "platform/windows/virtual_display.h"
@@ -312,6 +324,135 @@ namespace video {
     ASYNC_TEARDOWN = 1 << 11,  ///< Encoder supports async teardown on a different thread
   };
 
+#ifdef HAVE_PYROWAVE
+  namespace {
+    bool pyrowave_succeeded(pyrowave_result result, std::string_view operation) {
+      if (result == PYROWAVE_SUCCESS) {
+        return true;
+      }
+
+      BOOST_LOG(error) << "PyroWave "sv << operation << " failed with status "sv << static_cast<int>(result);
+      return false;
+    }
+  }  // namespace
+
+  /**
+   * Where a PyroWave frame comes from. On the GPU path the capture was
+   * converted into images the encoder reads in place; otherwise it was
+   * converted to YUV 4:2:0 in system memory and is uploaded by the encoder.
+   */
+  struct pyrowave_gpu_source_t {
+  #ifdef __linux__
+    pyrowave::gpu_encode_device_t *device {};
+  #endif
+
+    explicit operator bool() const {
+  #ifdef __linux__
+      return device != nullptr;
+  #else
+      return false;
+  #endif
+    }
+  };
+
+  class pyrowave_encode_session_t: public encode_session_t {
+  public:
+    pyrowave_encode_session_t(
+      std::unique_ptr<platf::avcodec_encode_device_t> encode_device,
+      pyrowave_gpu_source_t gpu,
+      pyrowave_device pyrowave_device_handle,
+      bool owns_device,
+      pyrowave_encoder pyrowave_encoder_handle,
+      size_t maximum_frame_bytes
+    ):
+        device {std::move(encode_device)},
+        gpu {gpu},
+        pyrowave_device_handle {pyrowave_device_handle},
+        owns_device {owns_device},
+        pyrowave_encoder_handle {pyrowave_encoder_handle},
+        maximum_frame_bytes {maximum_frame_bytes},
+        bitstream(maximum_frame_bytes) {
+    }
+
+    ~pyrowave_encode_session_t() override {
+      // The encoder before the device it was created on. On the GPU path the
+      // device belongs to the encode device, which is destroyed after this.
+      if (pyrowave_encoder_handle) {
+        pyrowave_encoder_destroy(pyrowave_encoder_handle);
+      }
+      if (owns_device && pyrowave_device_handle) {
+        pyrowave_device_destroy(pyrowave_device_handle);
+      }
+    }
+
+    int convert(platf::img_t &img) override {
+      return device ? device->convert(img) : -1;
+    }
+
+    void request_idr_frame() override {
+      // PyroWave is intra-only, so every encoded frame is independently decodable.
+    }
+
+    void request_normal_frame() override {
+    }
+
+    void invalidate_ref_frames(int64_t, int64_t) override {
+    }
+
+    std::unique_ptr<platf::avcodec_encode_device_t> device;
+    pyrowave_gpu_source_t gpu;
+    pyrowave_device pyrowave_device_handle {};
+    bool owns_device {};
+    pyrowave_encoder pyrowave_encoder_handle {};
+    size_t maximum_frame_bytes {};
+    /// Reused every frame; only the bytes a frame actually used are copied out.
+    std::vector<uint8_t> bitstream;
+  };
+#endif
+
+  std::size_t pyrowave_frame_budget(const config_t &config) {
+    // Older clients send the frame rate in thousandths.
+    const int fps = std::max(1, config.framerate > 1000 ? config.framerate / 1000 : config.framerate);
+    const std::size_t bitrate_frame_bytes = static_cast<std::size_t>(std::max(1, config.bitrate)) * 1000u / 8u / static_cast<std::size_t>(fps);
+    const std::size_t raw_frame_bytes = static_cast<std::size_t>(std::max(0, config.width)) * static_cast<std::size_t>(std::max(0, config.height)) * 3u / 2u;
+    return std::min(raw_frame_bytes, std::max<std::size_t>(16u * 1024u, bitrate_frame_bytes));
+  }
+
+  bool pyrowave_available() {
+#ifdef HAVE_PYROWAVE
+    static std::once_flag probe_once;
+    static bool available = false;
+    std::call_once(probe_once, []() {
+      uint32_t major = 0;
+      uint32_t minor = 0;
+      uint32_t patch = 0;
+      pyrowave_get_api_version(&major, &minor, &patch);
+      // Every 0.x release shares the soname, yet 0.x promises no ABI
+      // stability, so until 1.0 only the minor version Hermes was built
+      // against is safe to call into.
+      const bool compatible = major == PYROWAVE_API_VERSION_MAJOR &&
+                              (major == 0 ? minor == PYROWAVE_API_VERSION_MINOR : minor >= PYROWAVE_API_VERSION_MINOR);
+      if (!compatible) {
+        BOOST_LOG(error) << "Incompatible PyroWave API "sv
+                         << major << '.' << minor << '.' << patch
+                         << " (need "sv << PYROWAVE_API_VERSION_MAJOR << '.'
+                         << PYROWAVE_API_VERSION_MINOR << ".x)"sv;
+        return;
+      }
+
+      pyrowave_device device {};
+      if (!pyrowave_succeeded(pyrowave_create_default_device(&device), "Vulkan device probe"sv)) {
+        return;
+      }
+      pyrowave_device_destroy(device);
+      available = true;
+    });
+    return available;
+#else
+    return false;
+#endif
+  }
+
   class avcodec_encode_session_t: public encode_session_t {
   public:
     avcodec_encode_session_t() = default;
@@ -483,6 +624,7 @@ namespace video {
   int start_capture_sync(capture_thread_sync_ctx_t &ctx);
   void end_capture_sync(capture_thread_sync_ctx_t &ctx);
   int start_capture_async(capture_thread_async_ctx_t &ctx);
+  int start_capture_async_with_encoder(capture_thread_async_ctx_t &ctx, const encoder_t *encoder);
   void end_capture_async(capture_thread_async_ctx_t &ctx);
 
   // Keep a reference counter to ensure the capture thread only runs when other threads have a reference to the capture thread
@@ -1649,11 +1791,114 @@ namespace video {
     return 0;
   }
 
+#ifdef HAVE_PYROWAVE
+  /** Hand the CPU path's YUV 4:2:0 frame to the encoder, which uploads it. */
+  pyrowave_result encode_pyrowave_cpu(pyrowave_encode_session_t &session, const pyrowave_rate_control &rate_control) {
+    auto *frame = session.device ? session.device->frame : nullptr;
+    if (!frame || !frame->data[0] || !frame->data[1] || !frame->data[2]) {
+      BOOST_LOG(error) << "PyroWave encoder received an invalid YUV frame"sv;
+      return PYROWAVE_ERROR_INVALID_ARGUMENT;
+    }
+
+    pyrowave_cpu_buffer input {};
+    for (int plane = 0; plane < 3; ++plane) {
+      const auto rows = static_cast<size_t>(plane == 0 ? frame->height : frame->height / 2);
+      input.data[plane] = frame->data[plane];
+      input.row_stride_in_bytes[plane] = static_cast<size_t>(frame->linesize[plane]);
+      input.plane_size_in_bytes[plane] = input.row_stride_in_bytes[plane] * rows;
+    }
+    input.width = frame->width;
+    input.height = frame->height;
+    input.format = PYROWAVE_CPU_BUFFER_FORMAT_YUV420P;
+    return pyrowave_encoder_encode_cpu_synchronous(session.pyrowave_encoder_handle, &input, &rate_control);
+  }
+
+  int encode_pyrowave(int64_t frame_nr, pyrowave_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
+    const auto encode_start = std::chrono::steady_clock::now();
+    double capture_to_encode_ms = 0.0;
+    if (frame_timestamp) {
+      const auto elapsed = std::chrono::duration<double, std::milli>(encode_start - *frame_timestamp).count();
+      capture_to_encode_ms = std::max(0.0, elapsed);
+    }
+
+    const pyrowave_rate_control rate_control {session.maximum_frame_bytes};
+    pyrowave_result encoded;
+  #ifdef __linux__
+    // The planes' semaphore may only be released once the encode that waits
+    // on it has finished, which packetization below waits for.
+    auto release_planes = util::fail_guard([&session]() {
+      if (session.gpu) {
+        session.gpu.device->encoded();
+      }
+    });
+    if (session.gpu) {
+      pyrowave_gpu_buffers buffers {};
+      const pyrowave_gpu_sync_operation *acquire = nullptr;
+      const pyrowave_gpu_sync_operation *release = nullptr;
+      if (!session.gpu.device->planes(buffers, acquire, release)) {
+        BOOST_LOG(error) << "PyroWave has no converted frame to encode"sv;
+        metrics_record_drop();
+        return -1;
+      }
+      encoded = pyrowave_encoder_encode_gpu_synchronous(session.pyrowave_encoder_handle, acquire, release, &buffers, &rate_control);
+    } else
+  #endif
+    {
+      encoded = encode_pyrowave_cpu(session, rate_control);
+    }
+    if (!pyrowave_succeeded(encoded, "frame encode"sv)) {
+      metrics_record_drop();
+      return -1;
+    }
+
+    // One packet for the whole frame: the stream layer splits it for the
+    // network and protects it with FEC like any other codec's frame.
+    size_t num_packets = 0;
+    if (!pyrowave_succeeded(pyrowave_encoder_compute_num_packets(session.pyrowave_encoder_handle, session.maximum_frame_bytes, &num_packets), "packet count"sv) || num_packets == 0) {
+      metrics_record_drop();
+      return -1;
+    }
+
+    std::vector<pyrowave_packet> pyrowave_packets(num_packets);
+    size_t written_packets = 0;
+    if (!pyrowave_succeeded(pyrowave_encoder_packetize(session.pyrowave_encoder_handle, pyrowave_packets.data(), session.maximum_frame_bytes, &written_packets, session.bitstream.data(), session.bitstream.size()), "packetization"sv) || written_packets == 0 || written_packets > pyrowave_packets.size()) {
+      metrics_record_drop();
+      return -1;
+    }
+
+    const auto &last_packet = pyrowave_packets[written_packets - 1];
+    const size_t encoded_size = last_packet.offset + last_packet.size;
+    if (encoded_size == 0 || encoded_size > session.bitstream.size()) {
+      BOOST_LOG(error) << "PyroWave returned an invalid encoded frame size"sv;
+      metrics_record_drop();
+      return -1;
+    }
+
+    // Every PyroWave frame is intra, so every frame is a key frame.
+    auto packet = std::make_unique<packet_raw_generic>(
+      std::vector<uint8_t>(session.bitstream.begin(), session.bitstream.begin() + static_cast<std::ptrdiff_t>(encoded_size)),
+      frame_nr,
+      true
+    );
+    packet->channel_data = channel_data;
+    packet->frame_timestamp = frame_timestamp;
+    packets->raise(std::move(packet));
+
+    const auto encode_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - encode_start).count();
+    metrics_record_frame(encode_ms, capture_to_encode_ms, encoded_size);
+    return 0;
+  }
+#endif
+
   int encode(int64_t frame_nr, encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
     if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
       return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp);
     } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
       return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp);
+#ifdef HAVE_PYROWAVE
+    } else if (auto pyrowave_session = dynamic_cast<pyrowave_encode_session_t *>(&session)) {
+      return encode_pyrowave(frame_nr, *pyrowave_session, packets, channel_data, frame_timestamp);
+#endif
     }
 
     return -1;
@@ -2042,7 +2287,117 @@ namespace video {
     return std::make_unique<nvenc_encode_session_t>(std::move(encode_device));
   }
 
+#ifdef HAVE_PYROWAVE
+  std::unique_ptr<pyrowave_encode_session_t> make_pyrowave_encode_session(
+    const config_t &config,
+    int width,
+    int height,
+    std::unique_ptr<platf::avcodec_encode_device_t> encode_device
+  ) {
+    if (!pyrowave_available() || config.dynamicRange || config.chromaSamplingType != 0 || config.width <= 0 || config.height <= 0 || (config.width & 1) || (config.height & 1)) {
+      BOOST_LOG(error) << "PyroWave requires even dimensions and 8-bit YUV 4:2:0 input"sv;
+      return nullptr;
+    }
+
+    auto colorspace = encode_device->colorspace;
+    auto avcodec_colorspace = avcodec_colorspace_from_sunshine_colorspace(colorspace);
+    avcodec_frame_t frame {av_frame_alloc()};
+    if (!frame) {
+      return nullptr;
+    }
+    frame->format = AV_PIX_FMT_YUV420P;
+    frame->width = config.width;
+    frame->height = config.height;
+    frame->color_range = avcodec_colorspace.range;
+    frame->color_primaries = avcodec_colorspace.primaries;
+    frame->color_trc = avcodec_colorspace.transfer_function;
+    frame->colorspace = avcodec_colorspace.matrix;
+
+    pyrowave_gpu_source_t gpu;
+  #ifdef __linux__
+    gpu.device = dynamic_cast<pyrowave::gpu_encode_device_t *>(encode_device.get());
+  #endif
+
+    std::unique_ptr<platf::avcodec_encode_device_t> conversion_device;
+    if (gpu) {
+      // The frame only carries the output size; the planes are the device's.
+      conversion_device = std::move(encode_device);
+    } else if (!encode_device->data) {
+      auto software_device = std::make_unique<avcodec_software_encode_device_t>();
+      if (software_device->init(width, height, frame.get(), AV_PIX_FMT_YUV420P, false)) {
+        return nullptr;
+      }
+      software_device->colorspace = colorspace;
+      conversion_device = std::move(software_device);
+    } else {
+      // A hardware encoder's device writes into its own surfaces, which the
+      // CPU path cannot read.
+      BOOST_LOG(error) << "PyroWave cannot take frames from this capture's hardware encode device"sv;
+      return nullptr;
+    }
+
+    if (conversion_device->set_frame(frame.release(), nullptr)) {
+      return nullptr;
+    }
+    conversion_device->apply_colorspace();
+
+    // The GPU path must encode on the device its planes were imported into.
+    pyrowave_device pyrowave_device_handle {};
+    bool owns_device = false;
+  #ifdef __linux__
+    if (gpu) {
+      pyrowave_device_handle = gpu.device->device();
+    }
+  #endif
+    if (!pyrowave_device_handle) {
+      if (!pyrowave_succeeded(pyrowave_create_default_device(&pyrowave_device_handle), "device creation"sv)) {
+        return nullptr;
+      }
+      owns_device = true;
+      // The game renders in another process; async compute keeps the encode
+      // from queueing behind its graphics work.
+      pyrowave_device_set_queue_type(pyrowave_device_handle, VK_QUEUE_COMPUTE_BIT);
+    }
+
+    pyrowave_encoder_create_info encoder_info {};
+    encoder_info.device = pyrowave_device_handle;
+    encoder_info.width = config.width;
+    encoder_info.height = config.height;
+    encoder_info.chroma = PYROWAVE_CHROMA_SUBSAMPLING_420;
+
+    pyrowave_encoder pyrowave_encoder_handle {};
+    if (!pyrowave_succeeded(pyrowave_encoder_create(&encoder_info, &pyrowave_encoder_handle), "encoder creation"sv)) {
+      if (owns_device) {
+        pyrowave_device_destroy(pyrowave_device_handle);
+      }
+      return nullptr;
+    }
+
+    const size_t maximum_frame_bytes = pyrowave_frame_budget(config);
+    BOOST_LOG(info) << "Creating experimental PyroWave encoder with "sv << maximum_frame_bytes
+                    << " bytes per-frame budget, converting "sv << (gpu ? "on the GPU"sv : "on the CPU"sv);
+    return std::make_unique<pyrowave_encode_session_t>(
+      std::move(conversion_device),
+      gpu,
+      pyrowave_device_handle,
+      owns_device,
+      pyrowave_encoder_handle,
+      maximum_frame_bytes
+    );
+  }
+#endif
+
   std::unique_ptr<encode_session_t> make_encode_session(platf::display_t *disp, const encoder_t &encoder, const config_t &config, int width, int height, std::unique_ptr<platf::encode_device_t> encode_device) {
+#ifdef HAVE_PYROWAVE
+    if (config.videoFormat == PYROWAVE_VIDEO_FORMAT) {
+      auto avcodec_encode_device = boost::dynamic_pointer_cast<platf::avcodec_encode_device_t>(std::move(encode_device));
+      if (!avcodec_encode_device) {
+        BOOST_LOG(error) << "PyroWave requires the software capture conversion path"sv;
+        return nullptr;
+      }
+      return make_pyrowave_encode_session(config, width, height, std::move(avcodec_encode_device));
+    }
+#endif
     if (dynamic_cast<platf::avcodec_encode_device_t *>(encode_device.get())) {
       auto avcodec_encode_device = boost::dynamic_pointer_cast<platf::avcodec_encode_device_t>(std::move(encode_device));
       return make_avcodec_encode_session(disp, encoder, config, width, height, std::move(avcodec_encode_device));
@@ -2275,8 +2630,10 @@ namespace video {
                   encoder.platform_formats->pix_fmt_8bit;
     }
 
+    const bool pyrowave = config.videoFormat == PYROWAVE_VIDEO_FORMAT;
     {
-      auto encoder_name = encoder.codec_from_config(config).name;
+      // PyroWave borrows another encoder's capture, whose codec it does not use.
+      std::string encoder_name = pyrowave ? "pyrowave"s : encoder.codec_from_config(config).name;
 
       BOOST_LOG(info) << "Creating encoder " << logging::bracket(encoder_name);
 
@@ -2291,7 +2648,19 @@ namespace video {
       BOOST_LOG(info) << "Color range: " << (colorspace.full_range ? "JPEG" : "MPEG");
     }
 
-    if (dynamic_cast<const encoder_platform_formats_avcodec *>(encoder.platform_formats.get())) {
+    if (pyrowave) {
+      // The capture knows where its frames live. One into GPU buffers keeps
+      // them there or fails, rather than silently copying every frame through
+      // RAM; one into system memory converts on the GPU when it can and on the
+      // CPU otherwise.
+      result = disp.make_pyrowave_encode_device();
+      if (!result && encoder.platform_formats->dev_type == platf::mem_type_e::system) {
+        result = disp.make_avcodec_encode_device(platf::pix_fmt_e::yuv420p);
+      }
+      if (!result) {
+        BOOST_LOG(error) << "This capture cannot hand its frames to PyroWave"sv;
+      }
+    } else if (dynamic_cast<const encoder_platform_formats_avcodec *>(encoder.platform_formats.get())) {
       result = disp.make_avcodec_encode_device(pix_fmt);
     } else if (dynamic_cast<const encoder_platform_formats_nvenc *>(encoder.platform_formats.get())) {
       result = disp.make_nvenc_encode_device(pix_fmt);
@@ -2568,7 +2937,7 @@ namespace video {
         display = capture_context.display_wp->lock();
       }
 
-      auto &encoder = *chosen_encoder;
+      auto &encoder = *capture_context.encoder_p;
 
       auto encode_device = make_encode_device(*display, encoder, config);
       if (!encode_device) {
@@ -2603,14 +2972,36 @@ namespace video {
     }
   }
 
+  /**
+   * The encoder whose capture a PyroWave session borrows.
+   *
+   * PyroWave has no capture of its own, so it takes the one the host's
+   * hardware encoder uses. With VAAPI that hands over GPU buffers, which are
+   * converted and encoded without leaving the GPU. With NVENC most captures
+   * hand over GPU buffers too, and Hermes-KMS displays a CPU copy, which is
+   * uploaded and converted on the GPU. A host without either captures into
+   * system memory; the capture then decides between GPU and CPU conversion.
+   */
+  static const encoder_t *pyrowave_capture_encoder() {
+    if (chosen_encoder) {
+      const auto memory = chosen_encoder->platform_formats->dev_type;
+      if (memory == platf::mem_type_e::vaapi || memory == platf::mem_type_e::cuda) {
+        return chosen_encoder;
+      }
+    }
+    return &software;
+  }
+
   void capture_async(
     safe::mail_t mail,
     config_t &config,
     void *channel_data
   ) {
-    if (!config.display_name.empty()) {
+    if (!config.display_name.empty() || config.videoFormat == PYROWAVE_VIDEO_FORMAT) {
       capture_thread_async_ctx_t session_capture;
-      if (start_capture_async(session_capture)) {
+      const encoder_t *capture_encoder =
+        config.videoFormat == PYROWAVE_VIDEO_FORMAT ? pyrowave_capture_encoder() : chosen_encoder;
+      if (start_capture_async_with_encoder(session_capture, capture_encoder)) {
         return;
       }
       auto cleanup = util::fail_guard([&session_capture]() {
@@ -2635,11 +3026,11 @@ namespace video {
     auto idr_events = mail->event<bool>(mail::idr);
 
     idr_events->raise(true);
-    if (!config.display_name.empty() && !(chosen_encoder->flags & PARALLEL_ENCODING)) {
+    if (!config.display_name.empty() && config.videoFormat != PYROWAVE_VIDEO_FORMAT && !(chosen_encoder->flags & PARALLEL_ENCODING)) {
       BOOST_LOG(error) << "Session-scoped multi-output capture requires a parallel encoder pipeline."sv;
       return;
     }
-    if (chosen_encoder->flags & PARALLEL_ENCODING) {
+    if (config.videoFormat == PYROWAVE_VIDEO_FORMAT || (chosen_encoder->flags & PARALLEL_ENCODING)) {
       capture_async(std::move(mail), config, channel_data);
     } else {
       safe::signal_t join_event;
@@ -3222,7 +3613,11 @@ namespace video {
 #endif
 
   int start_capture_async(capture_thread_async_ctx_t &capture_thread_ctx) {
-    capture_thread_ctx.encoder_p = chosen_encoder;
+    return start_capture_async_with_encoder(capture_thread_ctx, chosen_encoder);
+  }
+
+  int start_capture_async_with_encoder(capture_thread_async_ctx_t &capture_thread_ctx, const encoder_t *encoder) {
+    capture_thread_ctx.encoder_p = encoder;
     capture_thread_ctx.reinit_event.reset();
 
     capture_thread_ctx.capture_ctx_queue = std::make_shared<safe::queue_t<capture_ctx_t>>(30);

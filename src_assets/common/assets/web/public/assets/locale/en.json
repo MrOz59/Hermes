@@ -408,6 +408,8 @@
         "high_resolution_scrolling_desc": "When enabled, Hermes will pass through high resolution scroll events from Moonlight clients. This can be useful to disable for older applications that scroll too fast with high resolution scroll events.",
         "ignore_encoder_probe_failure": "Ignore Encoder Probe Failure",
         "ignore_encoder_probe_failure_desc": "Allow streaming to continue even if probing for encoders fails. This may result in streaming failure if no encoder is available.",
+        "pyrowave": "PyroWave (Experimental)",
+        "pyrowave_desc": "Advertise the optional Vulkan PyroWave codec to Hestia clients. Requires a build with pyrowave-shared and is intended for high-bandwidth LAN streaming.",
         "install_steam_audio_drivers": "Install Steam Audio Drivers",
         "install_steam_audio_drivers_desc": "If Steam is installed, this will automatically install the Steam Streaming Speakers driver to support 5.1/7.1 surround sound and muting host audio.",
         "isolated_virtual_display_option": "Use the Virtual Display exclusively",

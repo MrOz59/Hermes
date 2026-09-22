@@ -66,6 +66,14 @@ const config = ref(props.config)
               default="false"
     ></Checkbox>
 
+    <!-- Experimental PyroWave codec -->
+    <Checkbox class="mb-3"
+              id="pyrowave"
+              locale-prefix="config"
+              v-model="config.pyrowave"
+              default="false"
+    ></Checkbox>
+
     <!-- HEVC Support -->
     <div class="mb-3">
       <label for="hevc_mode" class="form-label">{{ $t('config.hevc_mode') }}</label>

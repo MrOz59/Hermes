@@ -40,7 +40,7 @@ namespace video {
        SDR encoding colorspace (encoderCscMode >> 1) : 0 - BT.601, 1 - BT.709, 2 - BT.2020 */
     int encoderCscMode;
 
-    int videoFormat;  // 0 - H.264, 1 - HEVC, 2 - AV1
+    int videoFormat;  // 0 - H.264, 1 - HEVC, 2 - AV1, 3 - PyroWave
 
     /* Encoding color depth (bit depth): 0 - 8-bit, 1 - 10-bit
        HDR encoding activates when color depth is higher than 8-bit and the display which is being captured is operating in HDR mode */
@@ -206,6 +206,10 @@ namespace video {
           return hevc;
         case 2:
           return av1;
+        case 3:
+          // PyroWave uses this encoder only for capture and RGB-to-YUV
+          // conversion; its bitstream is produced by the PyroWave API.
+          return h264;
       }
     }
 
@@ -226,6 +230,23 @@ namespace video {
 
   // encoders
   extern encoder_t software;
+
+  inline constexpr int PYROWAVE_VIDEO_FORMAT = 3;
+  inline constexpr uint32_t PYROWAVE_SERVER_CODEC_MODE = 0x00800000;
+
+  // True only when this build has a compatible PyroWave C API and a usable
+  // Vulkan device. The probe is cached for the process lifetime.
+  bool pyrowave_available();
+
+  /**
+   * @brief The most bytes one PyroWave frame may take.
+   *
+   * PyroWave's rate control is a per-frame ceiling, so the client's bitrate is
+   * spread evenly over its frame rate. It never exceeds an uncompressed 4:2:0
+   * frame, which the encoder has no use for, and never drops below 16 KiB,
+   * where every frame would be a smear.
+   */
+  std::size_t pyrowave_frame_budget(const config_t &config);
 
 #if !defined(__APPLE__)
   extern encoder_t nvenc;  // available for windows and linux

@@ -340,6 +340,8 @@
     "hevc_mode_2": "O Hermes anunciará o suporte ao perfil principal HEVC",
     "hevc_mode_3": "O Hermes anunciará o suporte aos perfis HEVC Main e Main10 (HDR)",
     "hevc_mode_desc": "Permite que o cliente solicite transmissões de vídeo HEVC Main ou HEVC Main10. A codificação do HEVC consome mais CPU, portanto, ativar essa opção pode reduzir o desempenho ao usar a codificação de software.",
+    "pyrowave": "PyroWave (Experimental)",
+    "pyrowave_desc": "Anuncia o codec Vulkan PyroWave opcional para clientes Hestia. Requer uma compilação com pyrowave-shared e é destinado a streaming em LAN de alta largura de banda.",
     "hide_tray_controls": "Esconder controles no ícone de bandeja",
     "hide_tray_controls_desc": "Não exibir \"Forçar fechamento\", \"Reiniciar\" e \"Sair\" do menu do ícone de bandeja.",
     "high_resolution_scrolling": "Suporte à rolagem de alta resolução",

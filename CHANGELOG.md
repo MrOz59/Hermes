@@ -11,12 +11,6 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
-- Preserve the existing shader directory symlink when reconfiguring instead of recreating it and risking deletion of source shaders.
-- Treat capture=kwin as KMS when using Hermes-KMS and report actionable capture initialization errors instead of misleading encoder failures.
-- Explain that explicit per-app Mirror/Extend layouts override global exclusive mode, and that overlapping differently sized outputs can crop the desktop.
-- Add frame-associated Hermes-KMS HDR10 capture, ten-bit pixel conversion and NVENC upload, with explicit SDR/HDR transition handling and validation tools.
-- A client that asks for HDR on a Hermes-KMS output that cannot provide it (a driver loaded without `hdr_enable=1`, or one that does not report frame colour) streams SDR with a warning instead of being refused with a 503.
-
 ### Notice
 
 - **Independent client sessions are being re-evaluated and are not recommended.**
@@ -39,6 +33,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   token remains valid from this machine and private/local networks.
 
 ### Added
+- Add frame-associated Hermes-KMS HDR10 capture, ten-bit pixel conversion and NVENC upload, with explicit SDR/HDR transition handling and validation tools.
+- A client that asks for HDR on a Hermes-KMS output that cannot provide it (a driver loaded without `hdr_enable=1`, or one that does not report frame colour) streams SDR with a warning instead of being refused with a 503.
 - The host log now says when a client stops being reachable. A client sends a
   ping every 100 ms besides its input, so Hermes reports every gap of 150 ms or
   more in what it receives ("sent nothing for 657 ms while the host kept
@@ -589,6 +585,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Hermes-KMS and Hestia trackers for problems that belong to them.
 
 ### Changed
+- Explain that explicit per-app Mirror/Extend layouts override global exclusive mode, and that overlapping differently sized outputs can crop the desktop.
 - NVIDIA sessions on a Hermes-KMS display upload each captured frame by DMA
   from page-locked memory. The CPU copy used to land in pageable memory, which
   the CUDA driver copies a second time into a staging buffer of its own before
@@ -713,6 +710,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   request is therefore retired ([#23]).
 
 ### Fixed
+- Preserve the existing shader directory symlink when reconfiguring instead of recreating it and risking deletion of source shaders.
+- Treat capture=kwin as KMS when using Hermes-KMS and report actionable capture initialization errors instead of misleading encoder failures.
 - Exclusive mode is no longer documented as impossible on GNOME. It was
   implemented through Mutter's `ApplyMonitorsConfig` in this same unreleased
   cycle, and the configuration reference still said Mutter exposes no interface

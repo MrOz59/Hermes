@@ -4,8 +4,10 @@
  */
 // standard includes
 #include <bitset>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <mutex>
 #include <thread>
 
 // lib includes
@@ -99,6 +101,108 @@ namespace cuda {
     return 0;
   }
 
+  // Not in the ffnvcodec headers.
+  constexpr unsigned int cuMemHostAllocPortable = 0x01;
+
+  /**
+   * cuMemHostAlloc and cuMemFreeHost, taken from the libcuda ffnvcodec opened:
+   * the ffnvcodec headers release builds compile against predate both.
+   * Call only once `cdf` is loaded.
+   */
+  struct host_memory_functions_t {
+    CUresult (*alloc)(void **ptr, std::size_t size, unsigned int flags);
+    CUresult (*free)(void *ptr);
+  };
+
+  const host_memory_functions_t *host_memory_functions() {
+    static const host_memory_functions_t functions = [] {
+      host_memory_functions_t loaded {};
+      loaded.alloc = reinterpret_cast<decltype(loaded.alloc)>(dlsym(cdf->lib, "cuMemHostAlloc"));
+      loaded.free = reinterpret_cast<decltype(loaded.free)>(dlsym(cdf->lib, "cuMemFreeHost"));
+      return loaded;
+    }();
+    return functions.alloc && functions.free ? &functions : nullptr;
+  }
+
+  // FFmpeg's hwcontext_cuda opens device 0's primary context (Hermes passes no
+  // device) with these flags, and refuses an active one that has others.
+  constexpr unsigned int ffmpegPrimaryContextFlags = CU_CTX_SCHED_BLOCKING_SYNC;
+
+  void *alloc_host(std::size_t size) {
+    {
+      static std::mutex init_mutex;
+      std::lock_guard lock {init_mutex};
+      if (!cdf && init()) {
+        return nullptr;
+      }
+    }
+    const auto *host_memory = host_memory_functions();
+    if (!host_memory) {
+      return nullptr;
+    }
+
+    CUdevice device;
+    if (CU_CHECK_IGNORE(cdf->cuDeviceGet(&device, 0), "Couldn't get the CUDA device for page-locked frames")) {
+      return nullptr;
+    }
+
+    unsigned int flags = 0;
+    int active = 0;
+    if (CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxGetState(device, &flags, &active), "Couldn't query the primary CUDA context")) {
+      return nullptr;
+    }
+    // Activating the context with the driver's default flags first would make
+    // FFmpeg reject it for the whole session.
+    if (!active && flags != ffmpegPrimaryContextFlags &&
+        CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxSetFlags(device, ffmpegPrimaryContextFlags), "Couldn't set the primary CUDA context flags")) {
+      return nullptr;
+    }
+
+    CUcontext context;
+    if (CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxRetain(&context, device), "Couldn't retain the primary CUDA context")) {
+      return nullptr;
+    }
+
+    void *ptr = nullptr;
+    if (!CU_CHECK_IGNORE(cdf->cuCtxPushCurrent(context), "Couldn't make the primary CUDA context current")) {
+      if (CU_CHECK_IGNORE(host_memory->alloc(&ptr, size, cuMemHostAllocPortable), "Couldn't allocate a page-locked frame")) {
+        ptr = nullptr;
+      }
+      CUcontext popped;
+      CU_CHECK_IGNORE(cdf->cuCtxPopCurrent(&popped), "Couldn't restore the CUDA context");
+    }
+
+    // A live allocation keeps its retain on the context; see free_host().
+    if (!ptr) {
+      CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxRelease(device), "Couldn't release the primary CUDA context");
+    }
+    return ptr;
+  }
+
+  void free_host(void *ptr) {
+    const auto *host_memory = ptr && cdf ? host_memory_functions() : nullptr;
+    if (!host_memory) {
+      return;
+    }
+
+    CUdevice device;
+    if (CU_CHECK_IGNORE(cdf->cuDeviceGet(&device, 0), "Couldn't get the CUDA device to free a page-locked frame")) {
+      return;
+    }
+    CUcontext context;
+    if (CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxRetain(&context, device), "Couldn't retain the primary CUDA context")) {
+      return;
+    }
+    if (!CU_CHECK_IGNORE(cdf->cuCtxPushCurrent(context), "Couldn't make the primary CUDA context current")) {
+      CU_CHECK_IGNORE(host_memory->free(ptr), "Couldn't free a page-locked frame");
+      CUcontext popped;
+      CU_CHECK_IGNORE(cdf->cuCtxPopCurrent(&popped), "Couldn't restore the CUDA context");
+    }
+    // This call's retain, then the one alloc_host() kept for the allocation.
+    CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxRelease(device), "Couldn't release the primary CUDA context");
+    CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxRelease(device), "Couldn't release the primary CUDA context");
+  }
+
   class cuda_t: public platf::avcodec_encode_device_t {
   public:
     int init(int in_width, int in_height) {
@@ -120,8 +224,13 @@ namespace cuda {
       this->frame = frame;
 
       auto hwframe_ctx = (AVHWFramesContext *) hw_frames_ctx->data;
-      if (hwframe_ctx->sw_format != AV_PIX_FMT_NV12) {
-        BOOST_LOG(error) << "cuda::cuda_t doesn't support any format other than AV_PIX_FMT_NV12"sv;
+      int output_bits;
+      if (hwframe_ctx->sw_format == AV_PIX_FMT_NV12) {
+        output_bits = 8;
+      } else if (hwframe_ctx->sw_format == AV_PIX_FMT_P010) {
+        output_bits = 10;
+      } else {
+        BOOST_LOG(error) << "cuda::cuda_t supports only AV_PIX_FMT_NV12 and AV_PIX_FMT_P010"sv;
         return -1;
       }
 
@@ -141,7 +250,7 @@ namespace cuda {
 
       cuda_ctx->stream = stream.get();
 
-      auto sws_opt = sws_t::make(width, height, frame->width, frame->height, width * 4);
+      auto sws_opt = sws_t::make(width, height, frame->width, frame->height, width * 4, layout, output_bits);
       if (!sws_opt) {
         return -1;
       }
@@ -149,6 +258,7 @@ namespace cuda {
       sws = std::move(*sws_opt);
 
       linear_interpolation = width != frame->width || height != frame->height;
+      sws.linear = linear_interpolation;
 
       return 0;
     }
@@ -156,7 +266,7 @@ namespace cuda {
     void apply_colorspace() override {
       sws.apply_colorspace(colorspace);
 
-      auto tex = tex_t::make(height, width * 4);
+      auto tex = tex_t::make(height, width * 4, layout);
       if (!tex) {
         return;
       }
@@ -193,6 +303,9 @@ namespace cuda {
     // When height and width don't change, it's not necessary to use linear interpolation
     bool linear_interpolation;
 
+    /// Channel layout of the frames this device converts.
+    pixel::layout_e layout {pixel::layout_e::bgra8};
+
     sws_t sws;
   };
 
@@ -207,7 +320,7 @@ namespace cuda {
         return -1;
       }
 
-      auto tex_opt = tex_t::make(height, width * 4);
+      auto tex_opt = tex_t::make(height, width * 4, layout);
       if (!tex_opt) {
         return -1;
       }
@@ -399,13 +512,19 @@ namespace cuda {
 
       // Perform the color conversion and scaling in GL
       sws.load_vram(descriptor, offset_x, offset_y, rgb->tex[0]);
-      sws.convert(nv12->buf);
+      if (sws.convert(nv12->buf)) {
+        return -1;
+      }
 
       auto fmt_desc = av_pix_fmt_desc_get(sw_format);
 
       // Map the GL textures to read for CUDA
       CUgraphicsResource resources[2] = {y_res.get(), uv_res.get()};
       CU_CHECK(cdf->cuGraphicsMapResources(2, resources, stream.get()), "Couldn't map GL textures in CUDA");
+
+      auto unmap = util::fail_guard([&]() {
+        CU_CHECK_IGNORE(cdf->cuGraphicsUnmapResources(2, resources, stream.get()), "Couldn't unmap GL textures from CUDA");
+      });
 
       // Copy from the GL textures to the target CUDA frame
       for (int i = 0; i < 2; i++) {
@@ -419,11 +538,13 @@ namespace cuda {
         cpy.WidthInBytes = (frame->width * fmt_desc->comp[i].step) >> (i ? fmt_desc->log2_chroma_w : 0);
         cpy.Height = frame->height >> (i ? fmt_desc->log2_chroma_h : 0);
 
-        CU_CHECK_IGNORE(cdf->cuMemcpy2DAsync(&cpy, stream.get()), "Couldn't copy texture to CUDA frame");
+        CU_CHECK(cdf->cuMemcpy2DAsync(&cpy, stream.get()), "Couldn't copy texture to CUDA frame");
       }
 
-      // Unmap the textures to allow modification from GL again
-      CU_CHECK(cdf->cuGraphicsUnmapResources(2, resources, stream.get()), "Couldn't unmap GL textures from CUDA");
+      // Unmap the textures to allow modification from GL again.
+      const auto result = cdf->cuGraphicsUnmapResources(2, resources, stream.get());
+      unmap.disable();
+      CU_CHECK(result, "Couldn't unmap GL textures from CUDA");
       return 0;
     }
 
@@ -458,7 +579,7 @@ namespace cuda {
     int offset_x, offset_y;
   };
 
-  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram) {
+  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram, pixel::layout_e layout) {
     if (init()) {
       return nullptr;
     }
@@ -469,6 +590,7 @@ namespace cuda {
       cuda = std::make_unique<cuda_vram_t>();
     } else {
       cuda = std::make_unique<cuda_ram_t>();
+      cuda->layout = layout;
     }
 
     if (cuda->init(width, height)) {

@@ -2727,6 +2727,8 @@ namespace video {
     // First, test encoder viability
     config_t config_max_ref_frames {1920, 1080, 60, 1000, 1, 1, 1, 0, 0, 0};
     config_t config_autoselect {1920, 1080, 60, 1000, 1, 0, 1, 0, 0, 0};
+    config_max_ref_frames.encoder_probe = true;
+    config_autoselect.encoder_probe = true;
 
     // If the encoder isn't supported at all (not even H.264), bail early
     reset_display(disp, encoder.platform_formats->dev_type, output_name, config_autoselect);
@@ -2828,7 +2830,8 @@ namespace video {
         encoder.h264[encoder_t::YUV444] = false;
       }
 
-      const config_t generic_hdr_config = {1920, 1080, 60, 1000, 1, 0, 3, 1, 1, 0};
+      config_t generic_hdr_config = {1920, 1080, 60, 1000, 1, 0, 3, 1, 1, 0};
+      generic_hdr_config.encoder_probe = true;
 
       // Reset the display since we're switching from SDR to HDR
       reset_display(disp, encoder.platform_formats->dev_type, output_name, generic_hdr_config);

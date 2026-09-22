@@ -1,10 +1,10 @@
 #version 300 es
 
 #ifdef GL_ES
-precision lowp float;
+precision highp float;
 #endif
 
-uniform sampler2D image;
+uniform highp sampler2D image;
 
 in vec2 tex;
 layout(location = 0) out vec4 color;

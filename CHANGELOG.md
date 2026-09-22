@@ -14,6 +14,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 - Preserve the existing shader directory symlink when reconfiguring instead of recreating it and risking deletion of source shaders.
 - Treat capture=kwin as KMS when using Hermes-KMS and report actionable capture initialization errors instead of misleading encoder failures.
 - Explain that explicit per-app Mirror/Extend layouts override global exclusive mode, and that overlapping differently sized outputs can crop the desktop.
+- Add frame-associated Hermes-KMS HDR10 capture, ten-bit pixel conversion and NVENC upload, with explicit SDR/HDR transition handling and validation tools.
+- A client that asks for HDR on a Hermes-KMS output that cannot provide it (a driver loaded without `hdr_enable=1`, or one that does not report frame colour) streams SDR with a warning instead of being refused with a 503.
 
 ### Notice
 
@@ -37,6 +39,32 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   token remains valid from this machine and private/local networks.
 
 ### Added
+- The host log now says when a client stops being reachable. A client sends a
+  ping every 100 ms besides its input, so Hermes reports every gap of 150 ms or
+  more in what it receives ("sent nothing for 657 ms while the host kept
+  streaming"), notes when a key-frame request follows such a gap, and
+  summarizes the gaps when the session ends. Until now a stream that stuttered
+  and lost audio together left nothing in the host's log to show that the
+  client's network link, not the host, had stopped: in one such HDR session
+  every key-frame request came a few milliseconds after the client had gone
+  silent for up to 660 ms, over and over, while the host's audio and video
+  never paused.
+- NVIDIA sessions on a Hermes-KMS display accept 10-bit scanout and can encode
+  10-bit video. The CPU-copy capture used to stop with "unexpected frame
+  layout" as soon as the compositor scanned out XRGB2101010, XBGR2101010 or
+  their alpha variants, and its CUDA converter wrote NV12 only, so NVENC on
+  this path could never produce Main10. The converter now decodes packed
+  10-bit pixels in CUDA and writes P010 as well as NV12, keeping all 1024
+  levels of each channel, and the cursor is blended at 10 bits. A change of
+  scanout format restarts capture instead of feeding the encoder the wrong
+  layout. With a driver that reports frame colour (Hermes-KMS UAPI 14), a PQ
+  output is streamed as HDR10 through the same CUDA converter; HDR on NVIDIA
+  no longer goes through an OpenGL context and a GL/CUDA interop step on every
+  frame.
+- `HERMES_KMS_FORCE_CPU_COPY=1` sends VAAPI sessions on a Hermes-KMS display
+  through the CPU-copy capture NVIDIA sessions use, instead of the zero-copy
+  import. It exists for testing: the NVIDIA path can now be exercised and
+  measured on AMD and Intel hardware.
 - A GNOME session now notices the desktop layout changing under it. Every
   decision the display backend makes — which mode to drive, where the output
   sits, what the offsets for absolute input are — comes from reading the monitor
@@ -561,6 +589,24 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Hermes-KMS and Hestia trackers for problems that belong to them.
 
 ### Changed
+- NVIDIA sessions on a Hermes-KMS display upload each captured frame by DMA
+  from page-locked memory. The CPU copy used to land in pageable memory, which
+  the CUDA driver copies a second time into a staging buffer of its own before
+  a transfer that stays below PCIe speed. The frames are allocated in the
+  primary context FFmpeg's NVENC uses, and given FFmpeg's context flags first
+  so the encoder can still open it.
+- NVIDIA capture of a Hermes-KMS display copies each frame in about a quarter
+  of the time. The CPU-copy path mapped the whole scanout buffer again for
+  every frame, and the driver maps that memory in one 4 KiB page per fault: at
+  1440p that was 3,600 faults and about 5 of the 6.5 ms the capture took, and
+  at 4K it was 21 ms, longer than a 60 fps frame lasts. Scanout buffers are now
+  mapped once and reused while the compositor rotates through them, and a
+  whole-frame copy is split into 2 MiB blocks, because a single copy of a 4K
+  frame fell onto glibc's large-copy strategy, which reads these mappings at a
+  third of the speed. On a Ryzen 7 5700X the capture now takes 1.5 ms at 1440p
+  and 3 ms at 4K. The frame is also timestamped when it becomes ready instead
+  of after the copy, so the processing latency reported to the client includes
+  the capture step it used to leave out.
 - The documentation says Hermes where it meant Hermes. Most of `docs/` came
   across from upstream unedited, and the parts a new user reads first were
   telling them to install and run a different program: Getting Started's whole

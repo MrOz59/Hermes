@@ -1,7 +1,7 @@
 #version 300 es
 
 #ifdef GL_ES
-precision mediump float;
+precision highp float;
 #endif
 
 uniform float width_i;

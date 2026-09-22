@@ -20,6 +20,7 @@ extern "C" {
 }
 
 // local includes
+#include "client_link_monitor.h"
 #include "config.h"
 #include "crypto.h"
 #include "display_device.h"
@@ -447,7 +448,39 @@ namespace stream {
 
     std::atomic<session::state_e> state;
     std::atomic<session::termination_reason_e> termination_reason {session::termination_reason_e::UNKNOWN};
+
+    /// Gaps in what the client sends on the control connection.
+    client_link_monitor_t client_link;
+    /// Silences logged individually so far; the control thread owns it.
+    unsigned int client_silences_logged {0};
   };
+
+  // A client on a bad link can go silent every second; past this many the
+  // silences are only counted, and the session summary still reports them all.
+  constexpr unsigned int max_logged_client_silences = 50;
+
+  void log_client_silence(session_t &session, std::chrono::milliseconds silence) {
+    if (session.client_silences_logged >= max_logged_client_silences) {
+      return;
+    }
+    ++session.client_silences_logged;
+    BOOST_LOG(info) << "Client ["sv << session.device_name << "] sent nothing for "sv << silence.count()
+                    << " ms while the host kept streaming: its network link or the client itself stalled"sv
+                    << (session.client_silences_logged == max_logged_client_silences ? " (further silences are only counted)"sv : ""sv);
+  }
+
+  /**
+   * Say so when a recovery request follows a silence: the frames sent while
+   * the client was unreachable are the ones it is asking to replace.
+   */
+  void note_recovery_after_silence(session_t &session, std::string_view request) {
+    const auto now = std::chrono::steady_clock::now();
+    if (const auto silence = session.client_link.silence_before(now)) {
+      BOOST_LOG(info) << "Client ["sv << session.device_name << "] asked for "sv << request << ' '
+                      << session.client_link.since_last_silence(now).count() << " ms after a "sv << silence->count()
+                      << " ms silence: the frames sent meanwhile did not reach it"sv;
+    }
+  }
 
   /**
    * First part of cipher must be struct of type control_encrypted_t
@@ -616,6 +649,10 @@ namespace stream {
         case ENET_EVENT_TYPE_RECEIVE:
           {
             net::packet_t packet {event.packet};
+
+            if (const auto silence = session->client_link.on_message(std::chrono::steady_clock::now())) {
+              log_client_silence(*session, *silence);
+            }
 
             auto type = *(std::uint16_t *) packet->data;
             std::string_view payload {(char *) packet->data + sizeof(type), packet->dataLength - sizeof(type)};
@@ -955,6 +992,7 @@ namespace stream {
   void controlBroadcastThread(control_server_t *server) {
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
+      session->client_link.on_periodic_ping();
     });
 
     server->map(packetTypes[IDX_START_A], [&](session_t *session, const std::string_view &payload) {
@@ -983,6 +1021,7 @@ namespace stream {
 
     server->map(packetTypes[IDX_REQUEST_IDR_FRAME], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_REQUEST_IDR_FRAME]"sv;
+      note_recovery_after_silence(*session, "a key frame"sv);
 
       session->video.idr_events->raise(true);
     });
@@ -996,6 +1035,8 @@ namespace stream {
         << "type [IDX_INVALIDATE_REF_FRAMES]"sv << std::endl
         << "firstFrame [" << firstFrame << ']' << std::endl
         << "lastFrame [" << lastFrame << ']';
+
+      note_recovery_after_silence(*session, "reference frame invalidation"sv);
 
       session->video.invalidate_ref_frames_events->raise(std::make_pair(firstFrame, lastFrame));
     });
@@ -2103,6 +2144,14 @@ namespace stream {
         if (reason == termination_reason_e::CLIENT_LOST) {
           ++client_lost_count_v;
         }
+      }
+
+      if (const auto silences = session.client_link.silence_count()) {
+        BOOST_LOG(info) << "Client ["sv << session.device_name << "] went silent "sv << silences
+                        << (silences == 1 ? " time"sv : " times"sv) << " for "sv
+                        << client_link_monitor_t::silence_threshold.count() << " ms or more (longest "sv
+                        << session.client_link.longest_silence().count() << " ms, "sv
+                        << session.client_link.total_silence().count() << " ms in all)"sv;
       }
 
       if (reason == termination_reason_e::CLIENT_LOST) {

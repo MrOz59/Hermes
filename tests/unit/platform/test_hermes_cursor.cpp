@@ -5,6 +5,8 @@
 #include "../../tests_common.h"
 
 #include <cstdint>
+#include <cstring>
+#include <drm_fourcc.h>
 #include <src/platform/common.h>
 #include <vector>
 
@@ -16,7 +18,8 @@ namespace platf::kms {
     std::int32_t y,
     std::uint32_t width,
     std::uint32_t height,
-    const std::vector<std::uint8_t> &pixels
+    const std::vector<std::uint8_t> &pixels,
+    uint32_t fourcc = DRM_FORMAT_ARGB8888
   );
 }
 
@@ -133,4 +136,99 @@ TEST(HermesCursorComposition, IgnoresHiddenOffscreenAndTruncatedCursors) {
   platf::kms::blend_hermes_cursor_for_test(image, true, 0, 0, 2, 1, pixel);
 
   EXPECT_EQ(frame, original);
+}
+
+namespace {
+  /// A 10-bit frame word: `high` in bits 29:20, `mid` in 19:10, `low` in 9:0.
+  constexpr std::uint32_t word10(std::uint32_t high, std::uint32_t mid, std::uint32_t low, std::uint32_t pad = 0) {
+    return pad << 30 | high << 20 | mid << 10 | low;
+  }
+
+  void describe_words(platf::img_t &image, std::vector<std::uint32_t> &words, int width, int height) {
+    image.data = reinterpret_cast<std::uint8_t *>(words.data());
+    image.width = width;
+    image.height = height;
+    image.pixel_pitch = 4;
+    image.row_pitch = width * image.pixel_pitch;
+  }
+
+  // Premultiplied ARGB8888, bytes B, G, R, A: opaque (R 51, B 255),
+  // transparent, and half-covering (G 64 at alpha 128).
+  const std::vector<std::uint8_t> ten_bit_cursor {
+    255,
+    0,
+    51,
+    255,
+    9,
+    9,
+    9,
+    0,
+    0,
+    64,
+    0,
+    128,
+  };
+}  // namespace
+
+TEST(HermesCursorComposition, BlendsIntoRedHighTenBitWordsKeepingPadding) {
+  // XR30: R in the high bits.
+  std::vector<std::uint32_t> frame {
+    word10(100, 200, 300, 3),
+    word10(7, 8, 9, 3),
+    word10(1000, 0, 500, 3),
+  };
+  platf::img_t image;
+  describe_words(image, frame, 3, 1);
+
+  platf::kms::blend_hermes_cursor_for_test(image, true, 0, 0, 3, 1, ten_bit_cursor, DRM_FORMAT_XRGB2101010);
+
+  // 8-bit channels scale to ten bits: 255 -> 1023, 51 -> 205. Half cover:
+  // (src * 1023 + dst * 127 + 127) / 255.
+  EXPECT_EQ(frame[0], word10(205, 0, 1023, 3));
+  EXPECT_EQ(frame[1], word10(7, 8, 9, 3));
+  EXPECT_EQ(frame[2], word10(498, 257, 249, 3));
+}
+
+TEST(HermesCursorComposition, BlendsIntoBlueHighTenBitWords) {
+  // XB30: B in the high bits.
+  std::vector<std::uint32_t> frame {
+    word10(0, 0, 0),
+    word10(7, 8, 9),
+    word10(500, 0, 1000),
+  };
+  platf::img_t image;
+  describe_words(image, frame, 3, 1);
+
+  platf::kms::blend_hermes_cursor_for_test(image, true, 0, 0, 3, 1, ten_bit_cursor, DRM_FORMAT_XBGR2101010);
+
+  EXPECT_EQ(frame[0], word10(1023, 0, 205));
+  EXPECT_EQ(frame[1], word10(7, 8, 9));
+  EXPECT_EQ(frame[2], word10(249, 257, 498));
+}
+
+TEST(HermesCursorComposition, PreservesTenBitPixelsAndChannelOrder) {
+  for (const auto format : {DRM_FORMAT_XRGB2101010, DRM_FORMAT_ARGB2101010, DRM_FORMAT_XBGR2101010, DRM_FORMAT_ABGR2101010}) {
+    const bool bgr = format == DRM_FORMAT_XBGR2101010 || format == DRM_FORMAT_ABGR2101010;
+    const uint32_t original = 73U | (517U << 10) | (999U << 20) | 0xc0000000U;
+    std::vector<std::uint8_t> frame(12);
+    for (int i = 0; i < 3; ++i) {
+      std::memcpy(frame.data() + 4 * i, &original, 4);
+    }
+    platf::img_t image;
+    describe(image, frame, 3, 1);
+    const std::vector<std::uint8_t> cursor {0, 0, 0, 0, 255, 0, 0, 255, 64, 32, 16, 128};
+    platf::kms::blend_hermes_cursor_for_test(image, true, 0, 0, 3, 1, cursor, format);
+    uint32_t pixels[3];
+    std::memcpy(pixels, frame.data(), sizeof(pixels));
+    EXPECT_EQ(pixels[0], original);
+    EXPECT_EQ(pixels[1], 0xc0000000U | (1023U << (bgr ? 20 : 0)));
+    // Independent integer reference for premultiplied cursor samples in the
+    // compositor's output encoding, with rounding into each ten-bit channel.
+    const unsigned blue = bgr ? 16 : 64;
+    const unsigned red = bgr ? 64 : 16;
+    EXPECT_EQ(pixels[2] & 1023U, (blue * 1023U + 73U * 127U + 127U) / 255U);
+    EXPECT_EQ((pixels[2] >> 10) & 1023U, (32U * 1023U + 517U * 127U + 127U) / 255U);
+    EXPECT_EQ((pixels[2] >> 20) & 1023U, (red * 1023U + 999U * 127U + 127U) / 255U);
+    EXPECT_EQ(pixels[2] >> 30, 3U);
+  }
 }

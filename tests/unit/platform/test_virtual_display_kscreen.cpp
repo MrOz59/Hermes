@@ -326,3 +326,78 @@ TEST(KScreenModeState, TreatsAnUnreadableReplyAsNoAnswer) {
     VDISPLAY::kscreen_mode_state_e::unknown_output
   );
 }
+
+TEST(KScreenHdr, ReadsOnlyTheRequestedConnectedOutput) {
+  const auto state = VDISPLAY::kscreenHdrState(R"({"outputs":[
+    {"name":"DP-1","connected":true,"enabled":true,"hdr":true,"wcg":true},
+    {"name":"Virtual-1","connected":true,"enabled":true,"hdr":false,"wcg":false}
+  ]})", "Virtual-1");
+  ASSERT_TRUE(state);
+  EXPECT_TRUE(state->hdr_supported);
+  EXPECT_FALSE(state->hdr);
+  EXPECT_TRUE(state->wcg_supported);
+  EXPECT_FALSE(state->wcg);
+}
+
+TEST(KScreenHdr, PreservesWideGamutOnlyAndUnsupportedStates) {
+  const auto wide = VDISPLAY::kscreenHdrState(R"({"outputs":[
+    {"name":"Virtual-1","connected":true,"hdr":false,"wcg":true}
+  ]})", "Virtual-1");
+  ASSERT_TRUE(wide);
+  EXPECT_FALSE(wide->hdr);
+  EXPECT_TRUE(wide->wcg);  // SDR must turn off WCG as well as HDR.
+  const auto unsupported = VDISPLAY::kscreenHdrState(R"({"outputs":[
+    {"name":"Virtual-1","connected":true}
+  ]})", "Virtual-1");
+  ASSERT_TRUE(unsupported);
+  EXPECT_FALSE(unsupported->hdr_supported);
+}
+
+TEST(KScreenHdr, HdrRequestStreamsHdrOnlyWhenOutputAndDriverCanCarryIt) {
+  const VDISPLAY::kscreen_hdr_state_t capable {true, false, true, false};
+  const auto mode = VDISPLAY::virtualDisplayHdrMode(true, capable, true);
+  EXPECT_TRUE(mode.hdr);
+  EXPECT_EQ(mode.sdr_reason, nullptr);
+}
+
+TEST(KScreenHdr, HdrRequestFallsBackToSdrInsteadOfRefusingTheSession) {
+  // The default driver load: the output does not offer HDR at all.
+  const VDISPLAY::kscreen_hdr_state_t plain {false, false, false, false};
+  const auto no_hdr_output = VDISPLAY::virtualDisplayHdrMode(true, plain, true);
+  EXPECT_FALSE(no_hdr_output.hdr);
+  ASSERT_NE(no_hdr_output.sdr_reason, nullptr);
+  EXPECT_NE(std::string {no_hdr_output.sdr_reason}.find("hdr_enable=1"), std::string::npos);
+
+  // hdr_enable=1 on a driver that cannot say which frames are PQ (UAPI 13).
+  const VDISPLAY::kscreen_hdr_state_t capable {true, true, true, true};
+  const auto no_frame_colour = VDISPLAY::virtualDisplayHdrMode(true, capable, false);
+  EXPECT_FALSE(no_frame_colour.hdr);
+  ASSERT_NE(no_frame_colour.sdr_reason, nullptr);
+  EXPECT_NE(std::string {no_frame_colour.sdr_reason}.find("UAPI 14"), std::string::npos);
+}
+
+TEST(KScreenHdr, SdrRequestIsNeverReportedAsAFallback) {
+  for (const bool supported : {false, true}) {
+    for (const bool reports_colour : {false, true}) {
+      const VDISPLAY::kscreen_hdr_state_t state {supported, supported, supported, supported};
+      const auto mode = VDISPLAY::virtualDisplayHdrMode(false, state, reports_colour);
+      EXPECT_FALSE(mode.hdr);
+      EXPECT_EQ(mode.sdr_reason, nullptr);
+    }
+  }
+}
+
+TEST(KScreenHdr, RejectsMissingDisconnectedAndMalformedState) {
+  EXPECT_FALSE(VDISPLAY::kscreenHdrState("{}", "Virtual-1"));
+  EXPECT_FALSE(VDISPLAY::kscreenHdrState("broken", "Virtual-1"));
+  EXPECT_FALSE(VDISPLAY::kscreenHdrState(R"({"outputs":[
+    {"name":"Virtual-1","connected":false,"hdr":true}
+  ]})", "Virtual-1"));
+  EXPECT_FALSE(VDISPLAY::kscreenHdrState(R"({"outputs":[
+    {"name":"Virtual-1","connected":true,"enabled":false,"hdr":true}
+  ]})", "Virtual-1"));
+  EXPECT_FALSE(VDISPLAY::kscreenHdrState(R"({"outputs":[
+    {"name":"Virtual-1","connected":true,"hdr":"yes"}
+  ]})", "Virtual-1"));
+  EXPECT_FALSE(VDISPLAY::kscreenHdrState("{}", "Virtual-1;false"));
+}

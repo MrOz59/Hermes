@@ -631,6 +631,47 @@ namespace VDISPLAY {
   void mutterInputDeviceSettingsTargets(std::string &touch, std::string &pen);
 
   /**
+   * @brief The names Hermes gives its per-client touch and pen devices.
+   *
+   * KWin keeps a device's settings, the output it is bound to among them, in a
+   * kcminputrc group named after the device's vendor, product and name. The
+   * display code has to address that group, so these are named here and
+   * inputtino is given the same constants.
+   */
+  constexpr const char *VIRTUAL_TOUCH_DEVICE_NAME = "Touch passthrough";
+  constexpr const char *VIRTUAL_PEN_DEVICE_NAME = "Pen passthrough";
+
+  /**
+   * @brief Whether a device KWin reports is one of Hermes' touch or pen devices.
+   *
+   * Name, vendor and product together, so that neither a real touchscreen nor
+   * another program's device that happens to share a name is ever rebound.
+   */
+  bool isHermesKWinInputDevice(const std::string &name, uint32_t vendor, uint32_t product);
+
+  /**
+   * @brief The kreadconfig6 command that prints the output UUID a KWin input
+   *        device is bound to. It prints nothing when there is none.
+   *
+   * @return the command, or an empty string for a device name that cannot be
+   *         put on a command line safely.
+   */
+  std::string buildKWinInputBindingReadCommand(const std::string &device_name);
+
+  /**
+   * @brief The kwriteconfig6 command that puts a KWin input device's binding
+   *        back to @p previous_uuid, deleting the key when it is empty.
+   *
+   * The command notifies KWin, which otherwise keeps serving the value it has
+   * cached to every device it adds.
+   *
+   * @return the command, or an empty string when @p previous_uuid is not
+   *         spelled like a UUID or the device name is unsafe: a value read
+   *         back from the file never reaches a command line unchecked.
+   */
+  std::string buildKWinInputBindingRestoreCommand(const std::string &device_name, const std::string &previous_uuid);
+
+  /**
    * @brief Where a connector sits on a GNOME desktop, for absolute input.
    *
    * Mutter feeds an absolute pointing device the extents of the whole stage, so

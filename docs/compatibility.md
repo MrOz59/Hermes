@@ -55,6 +55,23 @@ outputs for the duration of the session, restores them when it ends, and
 persists the previous layout so a crashed session can be recovered at next
 startup.
 
+**Touch and pen are bound to the streamed output.** KWin binds a touchscreen or
+a tablet to a single output, and without a binding it guesses: the built-in
+panel, an output whose physical size matches the device's, or the first output.
+Hermes binds each of its touch and pen devices to the virtual output through
+KWin's `org.kde.KWin.InputDevice` D-Bus interface as the device appears. KWin
+stores that binding in `kcminputrc`, in a group named after the device, and
+Hermes puts the previous value back when the display goes away. Writing the
+older `OutputName` key is not enough on its own: KWin 6.7 reads `OutputUuid`
+after it, and an empty one undoes the match. The devices of concurrent sessions
+share their names, so a new client's devices follow the display activated last.
+
+Verified on KWin 6.7.4 with uinput devices carrying Hermes' names and ids: a
+touchscreen and a tablet that appear are bound to the virtual output, a later
+device inherits the stored binding, and after the restore a new one is left to
+KWin's guess again. The sd-bus calls were reproduced in a standalone probe
+rather than run through Hermes itself.
+
 ### COSMIC / cosmic-comp — verified at protocol level
 
 Tested 2026-08-16 against the Arch `cosmic-comp` 1:1.3.0-1 package (the binary

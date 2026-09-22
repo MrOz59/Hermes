@@ -2840,6 +2840,358 @@ namespace VDISPLAY {
       }
       layouts.erase(it);
     }
+
+    // ------------------------------------------------------------------
+    // Input device binding.
+    //
+    // KWin binds a touchscreen or a tablet to one output. With nothing
+    // configured it guesses (Connection::applyScreenToDevice): the built-in
+    // panel, then an output whose physical size matches the device's, then
+    // simply the first output. None of those is the streamed output, so a
+    // client's touches land on the host's own monitor.
+    //
+    // The binding System Settings makes is stored per device in kcminputrc,
+    // under [Libinput][<vendor>][<product>][<name>], as the output's UUID.
+    // Writing that key ourselves is not an option: KWin keeps output UUIDs to
+    // itself, and the older OutputName key alone binds nothing, because KWin
+    // reads OutputUuid after it and an empty one undoes the match (KWin 6.7,
+    // Device::loadConfiguration). What does work is the property each device
+    // exposes over D-Bus: setting outputName makes KWin resolve the UUID, bind
+    // the device and store the binding.
+    //
+    // A device can only be bound once it exists, and Hermes creates its touch
+    // and pen devices per client, after the display is activated. So the
+    // binding listens for KWin's deviceAdded and binds each Hermes device as
+    // it appears, for as long as the display lives - a client that resumes
+    // gets new devices without a new activation. Devices that already exist
+    // are left alone: they belong to a session already running on its own
+    // display.
+    //
+    // KWin writes the binding to kcminputrc, where it would outlive the
+    // session, so the value the key held before is kept and put back when the
+    // display goes away. As on GNOME, a binding left behind by a crash names
+    // an output that exists only while Hermes streams; with it gone, KWin
+    // falls back to the guess it would have made anyway.
+    //
+    // Concurrent sessions' devices share their names, so new devices follow
+    // the display activated last. Each device is bound once, on arrival, so a
+    // running session's devices keep their output when another one starts.
+    // ------------------------------------------------------------------
+
+    /// The device names whose stored binding a session changes and has to put back.
+    static constexpr std::array<const char *, 2> bound_device_names {VIRTUAL_TOUCH_DEVICE_NAME, VIRTUAL_PEN_DEVICE_NAME};
+
+    static bool safe_input_device_name(const std::string &name) {
+      return !name.empty() && name.size() <= 64 && std::all_of(name.begin(), name.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == ' ' || c == '-' || c == '_';
+      });
+    }
+
+    /// KWin stores the UUID bare; braces are accepted in case a version
+    /// stores QUuid's default spelling.
+    static bool uuid_like(const std::string &value) {
+      return !value.empty() && value.size() <= 38 && std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return std::isxdigit(c) || c == '-' || c == '{' || c == '}';
+      });
+    }
+
+    static std::string input_binding_key_args(const std::string &device_name) {
+      return "--file kcminputrc --group Libinput --group " + std::to_string(VIRTUAL_INPUT_SETTINGS_VENDOR_ID) +
+             " --group " + std::to_string(VIRTUAL_INPUT_SETTINGS_PRODUCT_ID) + " --group '" + device_name +
+             "' --key OutputUuid";
+    }
+
+    static std::string input_binding_read_command(const std::string &device_name) {
+      if (!safe_input_device_name(device_name)) {
+        return {};
+      }
+      return "kreadconfig6 " + input_binding_key_args(device_name) + " 2>/dev/null";
+    }
+
+    static std::string input_binding_restore_command(const std::string &device_name, const std::string &previous_uuid) {
+      if (!safe_input_device_name(device_name)) {
+        return {};
+      }
+      const auto prefix = "kwriteconfig6 --notify " + input_binding_key_args(device_name);
+      if (previous_uuid.empty()) {
+        return prefix + " --delete 2>/dev/null";
+      }
+      if (!uuid_like(previous_uuid)) {
+        return {};
+      }
+      return prefix + " '" + previous_uuid + "' 2>/dev/null";
+    }
+
+    static bool is_hermes_input_device(const std::string &name, uint32_t vendor, uint32_t product) {
+      return vendor == VIRTUAL_INPUT_SETTINGS_VENDOR_ID && product == VIRTUAL_INPUT_SETTINGS_PRODUCT_ID &&
+             std::any_of(bound_device_names.begin(), bound_device_names.end(), [&name](const char *bound) {
+               return name == bound;
+             });
+    }
+
+    static bool have_config_tools() {
+      const auto have = [](const char *tool) {
+        return ::access((std::string {"/usr/bin/"} + tool).c_str(), X_OK) == 0 ||
+               ::access((std::string {"/bin/"} + tool).c_str(), X_OK) == 0;
+      };
+      return have("kreadconfig6") && have("kwriteconfig6");
+    }
+
+#ifdef SUNSHINE_BUILD_SDBUS
+    static constexpr const char *kwin_service = "org.kde.KWin";
+    static constexpr const char *input_device_manager_path = "/org/kde/KWin/InputDevice";
+    static constexpr const char *input_device_interface = "org.kde.KWin.InputDevice";
+
+    struct input_binding_t {
+      sd_bus *bus {nullptr};
+      sd_bus_slot *slot {nullptr};
+      std::thread thread;
+      std::atomic<bool> stop {false};
+      /// The display the binding follows. Only its teardown releases it.
+      std::string owner;
+      /// What each of bound_device_names held before the first session, in order.
+      std::array<std::string, bound_device_names.size()> previous_uuids;
+      /// Read by the bus thread for every device that appears.
+      std::mutex output_mutex;
+      std::string output;
+    };
+
+    static std::mutex input_binding_mutex;
+    static std::unique_ptr<input_binding_t> input_binding;
+
+    static void bind_input_device(input_binding_t &binding, const std::string &sys_name) {
+      // KWin names a device's object after its evdev node.
+      if (sys_name.empty() || sys_name.size() > 32 || !std::all_of(sys_name.begin(), sys_name.end(), [](unsigned char c) {
+            return std::isalnum(c);
+          })) {
+        return;
+      }
+      const std::string path = std::string {input_device_manager_path} + '/' + sys_name;
+
+      char *name = nullptr;
+      uint32_t vendor = 0;
+      uint32_t product = 0;
+      sd_bus_error error = SD_BUS_ERROR_NULL;
+      const bool read =
+        sd_bus_get_property_string(binding.bus, kwin_service, path.c_str(), input_device_interface, "name", &error, &name) >= 0 &&
+        sd_bus_get_property_trivial(binding.bus, kwin_service, path.c_str(), input_device_interface, "vendor", &error, 'u', &vendor) >= 0 &&
+        sd_bus_get_property_trivial(binding.bus, kwin_service, path.c_str(), input_device_interface, "product", &error, 'u', &product) >= 0;
+      sd_bus_error_free(&error);
+      const std::string device_name = name ? name : "";
+      std::free(name);
+      if (!read || !is_hermes_input_device(device_name, vendor, product)) {
+        return;
+      }
+
+      std::string output;
+      {
+        std::lock_guard<std::mutex> lock(binding.output_mutex);
+        output = binding.output;
+      }
+      const int set = sd_bus_set_property(
+        binding.bus,
+        kwin_service,
+        path.c_str(),
+        input_device_interface,
+        "outputName",
+        &error,
+        "s",
+        output.c_str()
+      );
+      if (set < 0) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not bind " << device_name << " (" << sys_name << ") to "
+                           << output << ": " << (error.message ? error.message : std::strerror(-set))
+                           << ". Its input will land where KWin guesses.";
+      } else {
+        BOOST_LOG(info) << "[VDISPLAY/KScreen] Bound " << device_name << " (" << sys_name << ") to " << output << '.';
+      }
+      sd_bus_error_free(&error);
+    }
+
+    static int on_input_device_added(sd_bus_message *message, void *userdata, sd_bus_error * /* error */) {
+      const char *sys_name = nullptr;
+      if (sd_bus_message_read(message, "s", &sys_name) >= 0 && sys_name) {
+        bind_input_device(*static_cast<input_binding_t *>(userdata), sys_name);
+      }
+      return 0;
+    }
+
+    /** Put back the stored bindings a session replaced. */
+    static void restore_input_bindings(const input_binding_t &binding) {
+      for (std::size_t i = 0; i < bound_device_names.size(); ++i) {
+        const auto command = input_binding_restore_command(bound_device_names[i], binding.previous_uuids[i]);
+        if (command.empty() || std::system(command.c_str()) != 0) {
+          BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not restore the output " << bound_device_names[i]
+                             << " was bound to before the session.";
+        }
+      }
+    }
+
+    /**
+     * Bind the touch and pen devices created from now on to @p display_name's
+     * output.
+     *
+     * Best effort by design: a failure costs the session its touch placement,
+     * not its stream, so it is logged and the stream goes on.
+     */
+    static void map_input_devices(const std::string &display_name) {
+      std::string output;
+      {
+        std::lock_guard<std::mutex> lock(layouts_mutex);
+        const auto it = layouts.find(display_name);
+        if (it == layouts.end()) {
+          return;
+        }
+        output = it->second.virtual_output;
+      }
+      if (!safe_output_name(output)) {
+        return;
+      }
+
+      std::lock_guard<std::mutex> lock(input_binding_mutex);
+      if (input_binding) {
+        // One subscription serves every display; a later one takes over the
+        // devices created from now on.
+        {
+          std::lock_guard<std::mutex> output_lock(input_binding->output_mutex);
+          input_binding->output = output;
+        }
+        input_binding->owner = display_name;
+        BOOST_LOG(info) << "[VDISPLAY/KScreen] Touch and pen input from new clients now goes to " << output << '.';
+        return;
+      }
+
+      if (!have_config_tools()) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] kreadconfig6 or kwriteconfig6 is missing, so the touch binding "
+                              "KWin stores could not be undone after the session. Touch input will land where "
+                              "KWin guesses.";
+        return;
+      }
+
+      auto started = std::make_unique<input_binding_t>();
+      for (std::size_t i = 0; i < bound_device_names.size(); ++i) {
+        auto previous = command_output(input_binding_read_command(bound_device_names[i]).c_str());
+        while (!previous.empty() && std::isspace(static_cast<unsigned char>(previous.back()))) {
+          previous.pop_back();
+        }
+        // A value restore could not write back is left alone rather than
+        // replaced for good.
+        if (!previous.empty() && !uuid_like(previous)) {
+          BOOST_LOG(warning) << "[VDISPLAY/KScreen] " << bound_device_names[i]
+                             << " already has an output binding Hermes could not put back after the session, "
+                                "so touch and pen input are left where KWin places them.";
+          return;
+        }
+        started->previous_uuids[i] = std::move(previous);
+      }
+
+      if (sd_bus_open_user(&started->bus) < 0 || !started->bus) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] No session bus to bind touch input over. Touch input will land "
+                              "where KWin guesses.";
+        return;
+      }
+      const int matched = sd_bus_match_signal(
+        started->bus,
+        &started->slot,
+        kwin_service,
+        input_device_manager_path,
+        "org.kde.KWin.InputDeviceManager",
+        "deviceAdded",
+        on_input_device_added,
+        started.get()
+      );
+      if (matched < 0) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not subscribe to KWin's input devices: "
+                           << std::strerror(-matched) << ". Touch input will land where KWin guesses.";
+        sd_bus_unref(started->bus);
+        return;
+      }
+      started->owner = display_name;
+      started->output = output;
+
+      input_binding_t *raw = started.get();
+      started->thread = std::thread([raw]() {
+        while (!raw->stop.load(std::memory_order_relaxed)) {
+          const int processed = sd_bus_process(raw->bus, nullptr);
+          if (processed < 0) {
+            break;
+          }
+          if (processed > 0) {
+            continue;  // more may be queued
+          }
+          // A bounded wait rather than an indefinite one, so stopping does not
+          // need a second wakeup channel.
+          if (sd_bus_wait(raw->bus, 250000 /* us */) < 0) {
+            break;
+          }
+        }
+      });
+      input_binding = std::move(started);
+      BOOST_LOG(info) << "[VDISPLAY/KScreen] Touch and pen input from this session will be bound to " << output << '.';
+    }
+
+    /**
+     * Undo map_input_devices() when @p display_name is the display the binding
+     * follows. Call it after restore(), which forgets the display: a display
+     * still streaming then takes the binding over instead.
+     */
+    static void unmap_input_devices(const std::string &display_name) {
+      std::unique_ptr<input_binding_t> stopping;
+      {
+        std::lock_guard<std::mutex> lock(input_binding_mutex);
+        if (!input_binding || input_binding->owner != display_name) {
+          return;
+        }
+        std::string successor;
+        std::string successor_output;
+        {
+          std::lock_guard<std::mutex> layouts_lock(layouts_mutex);
+          for (const auto &[name, layout] : layouts) {
+            if (name != display_name && safe_output_name(layout.virtual_output)) {
+              successor = name;
+              successor_output = layout.virtual_output;
+              break;
+            }
+          }
+        }
+        if (!successor.empty()) {
+          {
+            std::lock_guard<std::mutex> output_lock(input_binding->output_mutex);
+            input_binding->output = successor_output;
+          }
+          input_binding->owner = successor;
+          BOOST_LOG(info) << "[VDISPLAY/KScreen] Touch and pen input from new clients now goes to "
+                          << successor_output << '.';
+          return;
+        }
+        stopping = std::move(input_binding);
+      }
+
+      stopping->stop.store(true, std::memory_order_relaxed);
+      if (stopping->thread.joinable()) {
+        stopping->thread.join();
+      }
+      if (stopping->slot) {
+        sd_bus_slot_unref(stopping->slot);
+      }
+      if (stopping->bus) {
+        sd_bus_unref(stopping->bus);
+      }
+      restore_input_bindings(*stopping);
+      BOOST_LOG(info) << "[VDISPLAY/KScreen] Released the touch and pen input binding.";
+    }
+#else
+    // Without sd-bus there is no way to reach KWin's devices, and so no
+    // binding to undo either.
+    static void map_input_devices(const std::string &display_name) {
+      if (is_active(display_name)) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Built without sd-bus, so touch and pen input cannot be bound to "
+                              "the streamed output; KWin will guess where it lands.";
+      }
+    }
+
+    static void unmap_input_devices(const std::string & /* display_name */) {}
+#endif
   }  // namespace kscreen
 
   // GNOME / Mutter output management. Mutter does not speak kscreen-doctor or
@@ -5656,6 +6008,7 @@ namespace VDISPLAY {
           ::close(vdinfo.drm_fd);
         }
         kscreen::restore(vdinfo.name);
+        kscreen::unmap_input_devices(vdinfo.name);
         mutter::restore(vdinfo.name);
         mutter::unmap_input_devices();
       }
@@ -6073,6 +6426,7 @@ namespace VDISPLAY {
     }
     hermes_kms::forget_secret(vdinfo.session_token.data(), sizeof(vdinfo.session_token));
     kscreen::restore(vdinfo.name);
+    kscreen::unmap_input_devices(vdinfo.name);
     mutter::restore(vdinfo.name);
     mutter::unmap_input_devices();
 
@@ -6334,6 +6688,18 @@ namespace VDISPLAY {
     pen = mutter::device_settings_target(mutter::pen_settings);
   }
 
+  bool isHermesKWinInputDevice(const std::string &name, uint32_t vendor, uint32_t product) {
+    return kscreen::is_hermes_input_device(name, vendor, product);
+  }
+
+  std::string buildKWinInputBindingReadCommand(const std::string &device_name) {
+    return kscreen::input_binding_read_command(device_name);
+  }
+
+  std::string buildKWinInputBindingRestoreCommand(const std::string &device_name, const std::string &previous_uuid) {
+    return kscreen::input_binding_restore_command(device_name, previous_uuid);
+  }
+
   uint64_t displayLayoutGeneration() {
     return mutter::layout_generation.load(std::memory_order_relaxed);
   }
@@ -6485,6 +6851,9 @@ namespace VDISPLAY {
       if (virtual_display_mode(displayName, width, height, refresh_mhz)) {
         kscreen::apply_mode(displayName, width, height, refresh_mhz / 1000);
       }
+      // KWin binds touch and pen to one output, and the one it picks by itself
+      // is never this one.
+      kscreen::map_input_devices(displayName);
       return true;
     }
 

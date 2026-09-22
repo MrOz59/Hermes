@@ -11,6 +11,20 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+### Fixed
+- Touch and pen input now land on the streamed display under KDE. KWin binds a
+  touchscreen or a tablet to one output, and with nothing configured it picks
+  the built-in panel, an output whose physical size matches the device's, or
+  simply the first one - never the virtual output being streamed. Hermes now
+  binds each of its touch and pen devices to the streamed output through KWin's
+  D-Bus interface as the device appears, and puts back the binding KWin stores
+  in `kcminputrc` when the display goes away. Like the GNOME layout watch, this
+  needs libsystemd at build time.
+
+  The devices of concurrent sessions share their names, so a new client's
+  devices follow the display activated last; a running session's devices keep
+  their output when another one starts.
+
 ## [0.6.0] - 2026-09-22
 
 ### Notice

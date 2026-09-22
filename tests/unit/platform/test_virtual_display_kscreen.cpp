@@ -401,3 +401,73 @@ TEST(KScreenHdr, RejectsMissingDisconnectedAndMalformedState) {
   ]})", "Virtual-1"));
   EXPECT_FALSE(VDISPLAY::kscreenHdrState("{}", "Virtual-1;false"));
 }
+
+namespace {
+
+  /** The kcminputrc key KWin binds the touch device through, as the tools address it. */
+  const std::string kTouchBindingKey =
+    "--file kcminputrc --group Libinput --group 48879 --group 57005 --group 'Touch passthrough' --key OutputUuid";
+
+}  // namespace
+
+TEST(KWinInputBinding, ReadsTheGroupKWinKeepsTheDeviceIn) {
+  // KWin names the group after the device's vendor, product and name, with
+  // the ids in decimal (QString::number). A group spelled any other way is a
+  // key KWin never reads, so the binding would be saved and restored while
+  // touch input went on landing where KWin guesses.
+  EXPECT_EQ(
+    VDISPLAY::buildKWinInputBindingReadCommand(VDISPLAY::VIRTUAL_TOUCH_DEVICE_NAME),
+    "kreadconfig6 " + kTouchBindingKey + " 2>/dev/null"
+  );
+  EXPECT_NE(
+    VDISPLAY::buildKWinInputBindingReadCommand(VDISPLAY::VIRTUAL_PEN_DEVICE_NAME).find("--group 'Pen passthrough'"),
+    std::string::npos
+  );
+}
+
+TEST(KWinInputBinding, PutsBackTheOutputAUserHadBound) {
+  EXPECT_EQ(
+    VDISPLAY::buildKWinInputBindingRestoreCommand(
+      VDISPLAY::VIRTUAL_TOUCH_DEVICE_NAME,
+      "6a1ee9a1-cbf6-4855-9567-3840eb91caf0"
+    ),
+    "kwriteconfig6 --notify " + kTouchBindingKey + " '6a1ee9a1-cbf6-4855-9567-3840eb91caf0' 2>/dev/null"
+  );
+}
+
+TEST(KWinInputBinding, DeletesTheBindingWhenThereWasNone) {
+  // KWin stores the session's binding itself; leaving it would bind the next
+  // session's devices to an output that may not be the streamed one.
+  EXPECT_EQ(
+    VDISPLAY::buildKWinInputBindingRestoreCommand(VDISPLAY::VIRTUAL_TOUCH_DEVICE_NAME, ""),
+    "kwriteconfig6 --notify " + kTouchBindingKey + " --delete 2>/dev/null"
+  );
+}
+
+TEST(KWinInputBinding, NeverWritesBackAValueThatIsNotAUuid) {
+  // The previous value is read back from a file anyone in the session can
+  // edit, and the command goes to a shell.
+  EXPECT_EQ(VDISPLAY::buildKWinInputBindingRestoreCommand(VDISPLAY::VIRTUAL_TOUCH_DEVICE_NAME, "x'; reboot; '"), "");
+  EXPECT_EQ(VDISPLAY::buildKWinInputBindingRestoreCommand(VDISPLAY::VIRTUAL_TOUCH_DEVICE_NAME, "$(id)"), "");
+  EXPECT_EQ(VDISPLAY::buildKWinInputBindingRestoreCommand(VDISPLAY::VIRTUAL_TOUCH_DEVICE_NAME, "HDMI-A-1"), "");
+}
+
+TEST(KWinInputBinding, RefusesADeviceNameThatCouldEscapeTheShell) {
+  EXPECT_EQ(VDISPLAY::buildKWinInputBindingReadCommand("Touch' passthrough"), "");
+  EXPECT_EQ(VDISPLAY::buildKWinInputBindingReadCommand(""), "");
+  EXPECT_EQ(VDISPLAY::buildKWinInputBindingRestoreCommand("$(id)", ""), "");
+}
+
+TEST(KWinInputBinding, BindsOnlyHermesTouchAndPenDevices) {
+  EXPECT_TRUE(VDISPLAY::isHermesKWinInputDevice("Touch passthrough", 0xBEEF, 0xDEAD));
+  EXPECT_TRUE(VDISPLAY::isHermesKWinInputDevice("Pen passthrough", 0xBEEF, 0xDEAD));
+
+  // The mouse and keyboard share the ids; KWin only binds touch and tablets.
+  EXPECT_FALSE(VDISPLAY::isHermesKWinInputDevice("Mouse passthrough (absolute)", 0xBEEF, 0xDEAD));
+  // A real touchscreen, or another program's device with a borrowed name.
+  EXPECT_FALSE(VDISPLAY::isHermesKWinInputDevice("Touch passthrough", 0x04f3, 0x2a1c));
+  EXPECT_FALSE(VDISPLAY::isHermesKWinInputDevice("ELAN Touchscreen", 0xBEEF, 0xDEAD));
+  // An isolated session's devices live on their own seat, which is not this
+  // KWin's.
+  EXPECT_FALSE(VDISPLAY::isHermesKWinInputDevice("Hermes Session Touch", 0xBEEF, 0xDEAD));
+}

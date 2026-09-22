@@ -95,7 +95,7 @@ namespace platf {
     client_input_raw_t(input_t &input):
         global((input_raw_t *) input.get()),
         touch(inputtino::TouchScreen::create({
-          .name = global->session_tag.empty() ? "Touch passthrough" : "Hermes Session Touch",
+          .name = global->session_tag.empty() ? VDISPLAY::VIRTUAL_TOUCH_DEVICE_NAME : "Hermes Session Touch",
           .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
           .product_id = VIRTUAL_INPUT_PRODUCT_ID,
           .version = 0x111,
@@ -103,7 +103,7 @@ namespace platf {
           .device_uniq = global->session_tag,
         })),
         pen(inputtino::PenTablet::create({
-          .name = global->session_tag.empty() ? "Pen passthrough" : "Hermes Session Pen",
+          .name = global->session_tag.empty() ? VDISPLAY::VIRTUAL_PEN_DEVICE_NAME : "Hermes Session Pen",
           .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
           .product_id = VIRTUAL_INPUT_PRODUCT_ID,
           .version = 0x111,

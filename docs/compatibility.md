@@ -69,8 +69,11 @@ share their names, so a new client's devices follow the display activated last.
 Verified on KWin 6.7.4 with uinput devices carrying Hermes' names and ids: a
 touchscreen and a tablet that appear are bound to the virtual output, a later
 device inherits the stored binding, and after the restore a new one is left to
-KWin's guess again. The sd-bus calls were reproduced in a standalone probe
-rather than run through Hermes itself.
+KWin's guess again. Packaged builds open the standard `/run/user/<uid>/bus`
+address explicitly when libsystemd's normal discovery fails: the package's
+`cap_sys_admin+p` file capability enables secure-execution mode, in which
+libsystemd intentionally ignores the environment variables it normally uses to
+find that same bus.
 
 ### COSMIC / cosmic-comp — verified at protocol level
 

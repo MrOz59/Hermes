@@ -25,6 +25,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   devices follow the display activated last; a running session's devices keep
   their output when another one starts.
 
+  The user-bus connection now also works in packaged builds. Their
+  `cap_sys_admin+p` file capability puts the process in secure-execution mode,
+  where libsystemd deliberately hides the environment variables used by
+  `sd_bus_open_user()`. Hermes falls back to the standard per-user bus address
+  derived from its real uid. This also restores GNOME's D-Bus layout watch.
+
 ## [0.6.0] - 2026-09-22
 
 ### Notice

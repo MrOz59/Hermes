@@ -410,6 +410,14 @@ namespace {
 
 }  // namespace
 
+TEST(UserBusAddress, DoesNotDependOnEnvironmentDiscovery) {
+  // The packaged Hermes binary carries a file capability, so libsystemd's
+  // secure_getenv-based discovery cannot see DBUS_SESSION_BUS_ADDRESS or
+  // XDG_RUNTIME_DIR. The fallback must be derived from the real uid alone.
+  EXPECT_EQ(VDISPLAY::systemdUserBusAddress(1000), "unix:path=/run/user/1000/bus");
+  EXPECT_EQ(VDISPLAY::systemdUserBusAddress(65534), "unix:path=/run/user/65534/bus");
+}
+
 TEST(KWinInputBinding, ReadsTheGroupKWinKeepsTheDeviceIn) {
   // KWin names the group after the device's vendor, product and name, with
   // the ids in decimal (QString::number). A group spelled any other way is a

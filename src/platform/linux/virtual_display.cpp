@@ -70,6 +70,73 @@ namespace fs = std::filesystem;
 
 namespace VDISPLAY {
 
+  std::string systemdUserBusAddress(uint32_t uid) {
+    return "unix:path=/run/user/" + std::to_string(uid) + "/bus";
+  }
+
+#ifdef SUNSHINE_BUILD_SDBUS
+  /**
+   * Open the desktop's user bus even when Hermes carries a file capability.
+   *
+   * libsystemd deliberately reads DBUS_SESSION_BUS_ADDRESS and XDG_RUNTIME_DIR
+   * with secure_getenv(). Linux sets AT_SECURE for a file-capability binary, so
+   * sd_bus_open_user() then sees neither variable and returns ENOMEDIUM. The
+   * packaged binary carries cap_sys_admin+p for legacy KMS capture, which made
+   * every sd-bus feature fail even though its child tools could reach the bus.
+   *
+   * Try libsystemd's normal discovery first for non-systemd/custom sessions.
+   * Its standard user-bus fallback is deterministic, so reproduce that path
+   * explicitly when discovery is unavailable. The address contains only the
+   * kernel-provided real uid; no environment value crosses the capability
+   * boundary.
+   */
+  static int open_user_bus(sd_bus **result) {
+    if (!result) {
+      return -EINVAL;
+    }
+    *result = nullptr;
+
+    const int discovered = sd_bus_open_user(result);
+    if (discovered >= 0) {
+      return discovered;
+    }
+    if (*result) {
+      sd_bus_unref(*result);
+      *result = nullptr;
+    }
+    if (discovered != -ENOMEDIUM) {
+      return discovered;
+    }
+
+    sd_bus *bus = nullptr;
+    int status = sd_bus_new(&bus);
+    if (status < 0) {
+      return status;
+    }
+    const auto fail = [&bus](int error) {
+      sd_bus_unref(bus);
+      return error;
+    };
+
+    const auto address = systemdUserBusAddress(static_cast<uint32_t>(::getuid()));
+    status = sd_bus_set_address(bus, address.c_str());
+    if (status < 0) {
+      return fail(status);
+    }
+    status = sd_bus_set_bus_client(bus, 1);
+    if (status < 0) {
+      return fail(status);
+    }
+    status = sd_bus_start(bus);
+    if (status < 0) {
+      return fail(status);
+    }
+
+    *result = bus;
+    return 0;
+  }
+#endif
+
   // ============================================================================
   // EVDI Types and Function Pointers (loaded dynamically)
   // ============================================================================
@@ -3085,9 +3152,11 @@ namespace VDISPLAY {
         started->previous_uuids[i] = std::move(previous);
       }
 
-      if (sd_bus_open_user(&started->bus) < 0 || !started->bus) {
-        BOOST_LOG(warning) << "[VDISPLAY/KScreen] No session bus to bind touch input over. Touch input will land "
-                              "where KWin guesses.";
+      const int opened = open_user_bus(&started->bus);
+      if (opened < 0 || !started->bus) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not connect to the user bus to bind touch input: "
+                           << (opened < 0 ? std::strerror(-opened) : "no connection was returned")
+                           << ". Touch input will land where KWin guesses.";
         return;
       }
       const int matched = sd_bus_match_signal(
@@ -4795,8 +4864,10 @@ namespace VDISPLAY {
       }
 
       auto started = std::make_unique<watcher_t>();
-      if (sd_bus_open_user(&started->bus) < 0 || !started->bus) {
-        BOOST_LOG(debug) << "[VDISPLAY/Mutter] No session bus to watch for layout changes.";
+      const int opened = open_user_bus(&started->bus);
+      if (opened < 0 || !started->bus) {
+        BOOST_LOG(debug) << "[VDISPLAY/Mutter] Could not connect to the user bus to watch for layout changes: "
+                         << (opened < 0 ? std::strerror(-opened) : "no connection was returned") << '.';
         return;
       }
       started->signature = layout_signature();

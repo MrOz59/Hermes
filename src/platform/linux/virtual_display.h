@@ -631,6 +631,15 @@ namespace VDISPLAY {
   void mutterInputDeviceSettingsTargets(std::string &touch, std::string &pen);
 
   /**
+   * @brief The standard systemd user-bus address for @p uid.
+   *
+   * Kept independent of the process environment because libsystemd suppresses
+   * environment-based bus discovery when Hermes' file capability sets
+   * AT_SECURE.
+   */
+  std::string systemdUserBusAddress(uint32_t uid);
+
+  /**
    * @brief The names Hermes gives its per-client touch and pen devices.
    *
    * KWin keeps a device's settings, the output it is bound to among them, in a

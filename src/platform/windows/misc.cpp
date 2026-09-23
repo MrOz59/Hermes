@@ -107,6 +107,11 @@ static int setClipboardData(const std::wstring& utf16Str);
 using namespace std::literals;
 
 namespace platf {
+
+  bool touch_binds_to_output() {
+    // Touch injection addresses the whole virtual desktop.
+    return false;
+  }
   using adapteraddrs_t = util::c_ptr<IP_ADAPTER_ADDRESSES>;
 
   bool enabled_mouse_keys = false;

@@ -186,7 +186,7 @@ namespace input {
         touch_port_event {std::move(touch_port_event)},
         feedback_queue {std::move(feedback_queue)},
         mouse_left_button_timeout {},
-        touch_port {{0, 0, 0, 0}, 0, 0, 1.0f},
+        touch_port {{0, 0, 0, 0}, 0, 0, {0, 0, 0, 0}, 0, 0, 1.0f},
         accumulated_vscroll_delta {},
         accumulated_hscroll_delta {} {
       gamepads.reserve(MAX_GAMEPADS);
@@ -919,6 +919,27 @@ namespace input {
     input->gamepads[packet->controllerNumber].id = id;
   }
 
+  platf::touch_port_t direct_device_port(
+    int output_width,
+    int output_height,
+    int offset_x,
+    int offset_y,
+    int env_width,
+    int env_height,
+    bool binds_to_output
+  ) {
+    // Bound to one output, the device's surface *is* that output: a touch in
+    // the middle of the client's picture is the middle of the device, whatever
+    // else the desktop holds. Measured against the desktop instead, every
+    // touch fell short of where it belonged by the ratio between the two - on
+    // a 2560-wide output inside a 6000-wide desktop, the middle landed a fifth
+    // of the way across.
+    if (binds_to_output && output_width > 0 && output_height > 0) {
+      return {0, 0, output_width, output_height};
+    }
+    return {offset_x, offset_y, env_width, env_height};
+  }
+
   /**
    * @brief Called to pass a touch message to the platform backend.
    * @param input The input context pointer.
@@ -936,12 +957,9 @@ namespace input {
     }
 
     auto &touch_port = input->touch_port;
-    platf::touch_port_t abs_port {
-      touch_port.offset_x,
-      touch_port.offset_y,
-      touch_port.env_width,
-      touch_port.env_height
-    };
+    // A touchscreen or a pen is measured against the surface the session
+    // maps it onto, which is not always the whole desktop.
+    const auto &abs_port = touch_port.device_port;
 
     // Renormalize the coordinates
     coords->first /= abs_port.width;
@@ -992,12 +1010,9 @@ namespace input {
     }
 
     auto &touch_port = input->touch_port;
-    platf::touch_port_t abs_port {
-      touch_port.offset_x,
-      touch_port.offset_y,
-      touch_port.env_width,
-      touch_port.env_height
-    };
+    // A touchscreen or a pen is measured against the surface the session
+    // maps it onto, which is not always the whole desktop.
+    const auto &abs_port = touch_port.device_port;
 
     // Renormalize the coordinates
     coords->first /= abs_port.width;

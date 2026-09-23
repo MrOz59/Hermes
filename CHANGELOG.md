@@ -12,6 +12,20 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Fixed
+- Touch and pen now land where they are aimed on a host with more than one
+  monitor. Their coordinates were measured against the whole desktop, while
+  KDE and GNOME map such a device onto a single output, so every touch fell
+  short of the point by the ratio between the two: on a 2560-wide streamed
+  output inside a 6000-wide desktop, the middle of the client's picture
+  landed a fifth of the way across, about three inches out on a 12" tablet
+  ([#50]). Where the session binds the device to the streamed output, the
+  coordinates are now relative to that output; where it spans the desktop
+  instead, as on X11 and wlroots, the output's offset within the desktop is
+  added, which had been missing as well. The absolute pointer, which is meant
+  to cover the whole desktop, is unchanged.
+- The touch and pen binding under KDE now also picks up devices that already
+  existed when the display was activated - a client resuming its session, or
+  a launch that raced it - instead of only those announced afterwards.
 - The `.deb` and `.rpm` packages ship the application menu entries, the icons
   and the systemd unit again. Both were assembled file by file in CI, and that
   list only ever had the binary and the web assets on it, so everything the
@@ -1624,6 +1638,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#40]: https://github.com/MrOz59/Hermes/issues/40
 [#41]: https://github.com/MrOz59/Hermes/issues/41
 [#43]: https://github.com/MrOz59/Hermes/issues/43
+[#50]: https://github.com/MrOz59/Hermes/issues/50
 [#52]: https://github.com/MrOz59/Hermes/issues/52
 
 ## [0.4.0] - 2026-07-02

@@ -834,6 +834,18 @@ namespace platf {
   void touch_update(client_input_t *input, const touch_port_t &touch_port, const touch_input_t &touch);
 
   /**
+   * @brief Whether the session binds a touchscreen or a pen to one output.
+   *
+   * Such a device reports where on its own surface it was touched, so the
+   * compositor has to decide which output that surface stands for. KWin and
+   * Mutter bind it to a single output, and the coordinates Hermes sends are
+   * then relative to the streamed output alone. Everywhere else the device
+   * spans the whole desktop and the streamed output's offset within it is
+   * part of the coordinate.
+   */
+  bool touch_binds_to_output();
+
+  /**
    * @brief Send a pen event to the OS.
    * @param input The client-specific input context.
    * @param touch_port The current viewport for translating to screen coordinates.

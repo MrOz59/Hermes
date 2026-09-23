@@ -28,8 +28,38 @@ namespace input {
     const std::string &session_tag = {}
   );
 
+  /**
+   * @brief The rectangle a touchscreen or a pen is addressed in.
+   *
+   * @param output_width Width of the streamed output.
+   * @param output_height Height of the streamed output.
+   * @param offset_x Horizontal offset of that output within the desktop.
+   * @param offset_y Vertical offset of that output within the desktop.
+   * @param env_width Width of the whole desktop.
+   * @param env_height Height of the whole desktop.
+   * @param binds_to_output Whether the session maps such a device onto one
+   *        output, which makes its coordinates relative to that output.
+   */
+  platf::touch_port_t direct_device_port(
+    int output_width,
+    int output_height,
+    int offset_x,
+    int offset_y,
+    int env_width,
+    int env_height,
+    bool binds_to_output
+  );
+
   struct touch_port_t: public platf::touch_port_t {
     int env_width, env_height;
+
+    /**
+     * The rectangle a touchscreen or a pen is addressed in. A compositor that
+     * binds such a device to one output measures it against that output
+     * alone; elsewhere the device spans the desktop, and the streamed
+     * output's place in it is part of the coordinate.
+     */
+    platf::touch_port_t device_port;
 
     // Offset x and y coordinates of the client
     float client_offsetX, client_offsetY;

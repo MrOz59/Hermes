@@ -2238,6 +2238,15 @@ namespace video {
       },
       display->env_width,
       display->env_height,
+      input::direct_device_port(
+        display->width,
+        display->height,
+        display->offset_x,
+        display->offset_y,
+        display->env_width,
+        display->env_height,
+        platf::touch_binds_to_output()
+      ),
       offsetX,
       offsetY,
       1.0f / scalar,

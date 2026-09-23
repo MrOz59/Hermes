@@ -39,7 +39,12 @@ namespace platf::touch {
             } else if (adjusted_angle < -90) {
               adjusted_angle += 360;
             }
-            (*raw->touch).place_finger(touch.pointerId, touch.x, touch.y, touch.pressureOrDistance, adjusted_angle);
+            // Where the device spans the whole desktop, the streamed output's
+            // offset within it is part of the coordinate; where the session
+            // binds it to that output, the offset is zero.
+            const float x = touch.x + static_cast<float>(touch_port.offset_x) / touch_port.width;
+            const float y = touch.y + static_cast<float>(touch_port.offset_y) / touch_port.height;
+            (*raw->touch).place_finger(touch.pointerId, x, y, touch.pressureOrDistance, adjusted_angle);
             break;
           }
         case LI_TOUCH_EVENT_CANCEL:

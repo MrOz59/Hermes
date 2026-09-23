@@ -38,6 +38,11 @@ namespace bp = boost::process;
 
 namespace platf {
 
+  bool touch_binds_to_output() {
+    // No touch passthrough on macOS; the whole desktop is the surface.
+    return false;
+  }
+
 // Even though the following two functions are available starting in macOS 10.15, they weren't
 // actually in the Mac SDK until Xcode 12.2, the first to include the SDK for macOS 11
 #if __MAC_OS_X_VERSION_MAX_ALLOWED < 110000  // __MAC_11_0

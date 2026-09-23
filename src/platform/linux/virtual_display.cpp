@@ -3026,7 +3026,7 @@ namespace VDISPLAY {
     static std::mutex input_binding_mutex;
     static std::unique_ptr<input_binding_t> input_binding;
 
-    static void bind_input_device(input_binding_t &binding, const std::string &sys_name) {
+    static void bind_input_device(input_binding_t &binding, const std::string &sys_name, bool only_unbound = false) {
       // KWin names a device's object after its evdev node.
       if (sys_name.empty() || sys_name.size() > 32 || !std::all_of(sys_name.begin(), sys_name.end(), [](unsigned char c) {
             return std::isalnum(c);
@@ -3048,6 +3048,19 @@ namespace VDISPLAY {
       std::free(name);
       if (!read || !is_hermes_input_device(device_name, vendor, product)) {
         return;
+      }
+
+      if (only_unbound) {
+        // A device that already names an output belongs to a session that is
+        // still running; leave it where it is.
+        char *bound = nullptr;
+        const bool known = sd_bus_get_property_string(binding.bus, kwin_service, path.c_str(), input_device_interface, "outputName", &error, &bound) >= 0;
+        const bool has_output = bound && *bound;
+        std::free(bound);
+        sd_bus_error_free(&error);
+        if (!known || has_output) {
+          return;
+        }
       }
 
       std::string output;
@@ -3073,6 +3086,36 @@ namespace VDISPLAY {
         BOOST_LOG(info) << "[VDISPLAY/KScreen] Bound " << device_name << " (" << sys_name << ") to " << output << '.';
       }
       sd_bus_error_free(&error);
+    }
+
+    /**
+     * Bind the Hermes devices KWin already knows about.
+     *
+     * deviceAdded only reports what appears from now on, and a client whose
+     * devices were created before its display was activated - a session that
+     * resumed, or a launch that raced - would never be bound at all.
+     */
+    static void bind_existing_devices(input_binding_t &binding) {
+      sd_bus_error error = SD_BUS_ERROR_NULL;
+      sd_bus_message *reply = nullptr;
+      if (sd_bus_get_property(binding.bus, kwin_service, input_device_manager_path, "org.kde.KWin.InputDeviceManager", "devicesSysNames", &error, &reply, "as") < 0) {
+        sd_bus_error_free(&error);
+        return;
+      }
+      std::vector<std::string> sys_names;
+      if (sd_bus_message_enter_container(reply, SD_BUS_TYPE_ARRAY, "s") >= 0) {
+        const char *sys_name = nullptr;
+        while (sd_bus_message_read_basic(reply, SD_BUS_TYPE_STRING, &sys_name) > 0 && sys_name) {
+          sys_names.emplace_back(sys_name);
+        }
+        sd_bus_message_exit_container(reply);
+      }
+      sd_bus_message_unref(reply);
+      sd_bus_error_free(&error);
+
+      for (const auto &sys_name : sys_names) {
+        bind_input_device(binding, sys_name, true);
+      }
     }
 
     static int on_input_device_added(sd_bus_message *message, void *userdata, sd_bus_error * /* error */) {
@@ -3196,6 +3239,7 @@ namespace VDISPLAY {
         }
       });
       input_binding = std::move(started);
+      bind_existing_devices(*input_binding);
       BOOST_LOG(info) << "[VDISPLAY/KScreen] Touch and pen input from this session will be bound to " << output << '.';
     }
 

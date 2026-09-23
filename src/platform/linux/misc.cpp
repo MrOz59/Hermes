@@ -108,6 +108,17 @@ namespace dyn {
 }  // namespace dyn
 
 namespace platf {
+
+  bool touch_binds_to_output() {
+    // KWin picks an output for every touchscreen and tablet (its own guess
+    // when nothing is configured, the streamed output once Hermes binds it),
+    // and Mutter does the same through MetaInputMapper. wlroots compositors
+    // leave an unmapped device spanning the whole layout, and X11 has no
+    // per-output mapping at all, so there the desktop is the surface.
+    const auto compositor = VDISPLAY::sessionCompositor();
+    return compositor == VDISPLAY::compositor_e::kwin || compositor == VDISPLAY::compositor_e::mutter;
+  }
+
   using ifaddr_t = util::safe_ptr<ifaddrs, freeifaddrs>;
 
   ifaddr_t get_ifaddrs() {

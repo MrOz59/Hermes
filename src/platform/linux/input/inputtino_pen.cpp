@@ -63,7 +63,11 @@ namespace platf::pen {
 
       bool is_touching = pen.eventType == LI_TOUCH_EVENT_DOWN || pen.eventType == LI_TOUCH_EVENT_MOVE;
 
-      (*raw->pen).place_tool(tool, pen.x, pen.y, is_touching ? pen.pressureOrDistance : -1, is_touching ? -1 : pen.pressureOrDistance, tilt_x, tilt_y);
+      // Same offset as touch: it is zero when the session binds the pen to the
+      // streamed output, and the output's place in the desktop when it does not.
+      const float x = pen.x + static_cast<float>(touch_port.offset_x) / touch_port.width;
+      const float y = pen.y + static_cast<float>(touch_port.offset_y) / touch_port.height;
+      (*raw->pen).place_tool(tool, x, y, is_touching ? pen.pressureOrDistance : -1, is_touching ? -1 : pen.pressureOrDistance, tilt_x, tilt_y);
     }
   }
 }  // namespace platf::pen

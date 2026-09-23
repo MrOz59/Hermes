@@ -48,6 +48,10 @@ for path in "${required[@]}"; do
 done
 if [ ${#missing[@]} -ne 0 ]; then
   printf 'stage-install: the staged tree is missing %s\n' "${missing[*]}" >&2
+  # The usual cause for the unit, the udev rule and sysusers: CMake looks for
+  # systemd.pc and udev.pc, which live in systemd-dev on Debian and Ubuntu and
+  # in systemd-devel on Fedora, and installs none of them when they are absent.
+  printf 'stage-install: check that the build found systemd and udev through pkg-config\n' >&2
   exit 1
 fi
 

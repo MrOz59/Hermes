@@ -530,6 +530,7 @@ jobs:
             libevdev-dev \
             libudev-dev \
             libsystemd-dev \
+            systemd-dev \
             libminiupnpc-dev \
             libicu-dev \
             libnuma-dev \
@@ -612,7 +613,7 @@ jobs:
           #
           # dpkg-shlibdeps reads debian/control for the package name, so give it
           # a throwaway one rather than a full debian/ source tree.
-          BIN_PATH="${PKGDIR}/usr/bin/hermes"
+          BIN_PATH="$(readlink -f "${PKGDIR}/usr/bin/hermes")"
           mkdir -p .shlibdeps/debian
           printf 'Source: hermes\nPackage: hermes\nArchitecture: amd64\n' \
             > .shlibdeps/debian/control

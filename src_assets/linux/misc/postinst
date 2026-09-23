@@ -8,14 +8,20 @@ modprobe uhid
 if [ ! -x "$(command -v rpm-ostree)" ]; then
   echo "Not in an rpm-ostree environment, proceeding with post install steps."
 
-  # Ensure Sunshine can grab images from KMS
+  # Ensure Hermes can grab images from KMS. Keep the Sunshine fallback for
+  # downstream builds that still install the historical executable name.
   path_to_setcap=$(which setcap)
-  path_to_sunshine=$(readlink -f "$(which sunshine)")
+  path_to_hermes=$(command -v hermes || command -v sunshine || true)
   if [ -x "$path_to_setcap" ] ; then
-    echo "Setting CAP_SYS_ADMIN capability on Sunshine binary."
-    echo "$path_to_setcap cap_sys_admin+p $path_to_sunshine"
-    $path_to_setcap cap_sys_admin+p $path_to_sunshine
-    echo "CAP_SYS_ADMIN capability set on Sunshine binary."
+    if [ -n "$path_to_hermes" ]; then
+      path_to_hermes=$(readlink -f "$path_to_hermes")
+      echo "Setting CAP_SYS_ADMIN capability on Hermes binary."
+      echo "$path_to_setcap cap_sys_admin+p $path_to_hermes"
+      $path_to_setcap cap_sys_admin+p "$path_to_hermes"
+      echo "CAP_SYS_ADMIN capability set on Hermes binary."
+    else
+      echo "error: Hermes executable not found."
+    fi
   else
     echo "error: setcap not found or not executable."
   fi

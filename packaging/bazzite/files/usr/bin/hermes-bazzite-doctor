@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+
+set -u
+
+failures=0
+check() {
+  description="$1"
+  shift
+  if "$@" >/dev/null 2>&1; then
+    printf '[ok]   %s\n' "${description}"
+  else
+    printf '[fail] %s\n' "${description}"
+    failures=$((failures + 1))
+  fi
+}
+
+printf 'Hermes/Bazzite diagnostics\n'
+printf 'kernel: %s\n' "$(uname -r)"
+if command -v bootc >/dev/null 2>&1; then
+  bootc status 2>/dev/null | sed -n '1,12p'
+fi
+
+check 'Hermes executable is installed' test -x /usr/bin/hermes
+check 'Hermes has CAP_SYS_ADMIN' sh -c "getcap /usr/bin/hermes | grep -q cap_sys_admin"
+check 'Hermes-KMS module matches this kernel' modinfo -k "$(uname -r)" hermes_kms
+check 'Hermes-KMS module is loaded' sh -c "grep -q '^hermes_kms ' /proc/modules"
+check 'Hermes-KMS render node exists' sh -c "ls /dev/dri/by-path/*hermes*render* >/dev/null 2>&1"
+check 'uinput exists' test -e /dev/uinput
+check 'uhid exists' test -e /dev/uhid
+check 'Hermes user service is enabled' systemctl --user is-enabled hermes.service
+check 'Hermes user service is running' systemctl --user is-active hermes.service
+
+if command -v mokutil >/dev/null 2>&1; then
+  printf 'secure boot: %s\n' "$(mokutil --sb-state 2>/dev/null || printf unknown)"
+fi
+
+printf '\nRecent service log:\n'
+journalctl --user -u hermes.service -b --no-pager -n 20 2>/dev/null || true
+
+exit "${failures}"

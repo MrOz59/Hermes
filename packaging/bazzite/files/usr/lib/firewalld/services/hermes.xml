@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<service>
+  <short>Hermes</short>
+  <description>Hermes game streaming and Moonlight-compatible discovery</description>
+  <port protocol="tcp" port="47984"/>
+  <port protocol="tcp" port="47989-47990"/>
+  <port protocol="tcp" port="48010"/>
+  <port protocol="udp" port="47998-48000"/>
+</service>

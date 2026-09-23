@@ -1,0 +1,173 @@
+name: Build Hermes Bazzite image
+
+on:
+  workflow_run:
+    workflows: [Build Hermes]
+    types: [completed]
+  schedule:
+    # Rebuild against Bazzite's current kernel even when Hermes did not change.
+    - cron: '37 6 * * *'
+  workflow_dispatch:
+    inputs:
+      hermes_release:
+        description: Hermes release tag (latest or nightly are accepted)
+        required: false
+        default: latest
+      bazzite_image:
+        description: Exact Bazzite base image
+        required: false
+        default: ghcr.io/ublue-os/bazzite
+      bazzite_tag:
+        description: Bazzite base tag
+        required: false
+        default: stable
+      output_tag:
+        description: Tag published for the derived image
+        required: false
+        default: stable
+      isolated_sessions:
+        description: Include the experimental Hermes-KMS seat broker
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: bazzite-${{ github.event_name }}-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event != 'pull_request')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Recover runner disk space
+        uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+
+      - name: Select source revision
+        id: source
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == workflow_run ]]; then
+            printf 'revision=%s\n' '${{ github.event.workflow_run.head_sha }}' >> "$GITHUB_OUTPUT"
+          else
+            printf 'revision=%s\n' "${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out Hermes
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.revision }}
+
+      - name: Install image tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y podman skopeo jq
+
+      - name: Select release and image tags
+        id: image
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          release='${{ inputs.hermes_release }}'
+          base_image='${{ inputs.bazzite_image }}'
+          base_tag='${{ inputs.bazzite_tag }}'
+          output_tag='${{ inputs.output_tag }}'
+
+          if [[ -z "${release}" ]]; then
+            if [[ "${GITHUB_EVENT_NAME}" == workflow_run && \
+                  ( '${{ github.event.workflow_run.head_branch }}' == main || \
+                    '${{ github.event.workflow_run.head_branch }}' == master ) ]]; then
+              release=nightly
+              output_tag=nightly
+            else
+              release=latest
+              output_tag=stable
+            fi
+          fi
+          base_image="${base_image:-ghcr.io/ublue-os/bazzite}"
+          base_tag="${base_tag:-stable}"
+          output_tag="${output_tag:-stable}"
+
+          printf 'release=%s\n' "${release}" >> "$GITHUB_OUTPUT"
+          printf 'base_image=%s\n' "${base_image}" >> "$GITHUB_OUTPUT"
+          printf 'base_tag=%s\n' "${base_tag}" >> "$GITHUB_OUTPUT"
+          printf 'output_tag=%s\n' "${output_tag}" >> "$GITHUB_OUTPUT"
+          printf 'local_image=localhost/hermes-bazzite:%s\n' "${output_tag}" >> "$GITHUB_OUTPUT"
+          printf 'remote_image=ghcr.io/%s/hermes-bazzite:%s\n' \
+            "${owner}" "${output_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare optional kernel-module signing key
+        id: module-signing
+        env:
+          MODULE_SIGN_KEY_B64: ${{ secrets.MODULE_SIGN_KEY_B64 }}
+          MODULE_SIGN_CERT_B64: ${{ secrets.MODULE_SIGN_CERT_B64 }}
+        shell: bash
+        run: |
+          if [[ -n "${MODULE_SIGN_KEY_B64}" || -n "${MODULE_SIGN_CERT_B64}" ]]; then
+            test -n "${MODULE_SIGN_KEY_B64}" && test -n "${MODULE_SIGN_CERT_B64}"
+            install -d -m 0700 "${RUNNER_TEMP}/module-signing"
+            printf '%s' "${MODULE_SIGN_KEY_B64}" | base64 -d \
+              > "${RUNNER_TEMP}/module-signing/MOK.priv"
+            printf '%s' "${MODULE_SIGN_CERT_B64}" | base64 -d \
+              > "${RUNNER_TEMP}/module-signing/MOK.der"
+            chmod 0600 "${RUNNER_TEMP}/module-signing/MOK.priv"
+            printf 'enabled=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'enabled=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build native Bazzite image
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.local_image }}
+          BAZZITE_IMAGE: ${{ steps.image.outputs.base_image }}
+          BAZZITE_TAG: ${{ steps.image.outputs.base_tag }}
+          HERMES_RELEASE: ${{ steps.image.outputs.release }}
+          HERMES_KMS_REF: main
+          SOURCE_REVISION: ${{ steps.source.outputs.revision }}
+          WITH_ISOLATED_SESSIONS: ${{ inputs.isolated_sessions && '1' || '0' }}
+        shell: bash
+        run: |
+          if [[ '${{ steps.module-signing.outputs.enabled }}' == true ]]; then
+            export MODULE_SIGN_KEY="${RUNNER_TEMP}/module-signing/MOK.priv"
+            export MODULE_SIGN_CERT="${RUNNER_TEMP}/module-signing/MOK.der"
+          fi
+          packaging/bazzite/build-image.sh
+
+      - name: Inspect image metadata
+        env:
+          IMAGE: ${{ steps.image.outputs.local_image }}
+        run: |
+          podman image inspect "${IMAGE}" --format '{{ .Labels.containers.bootc }} {{ .Labels.ostree.linux }}'
+
+      - name: Push image to GHCR
+        id: push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LOCAL_IMAGE: ${{ steps.image.outputs.local_image }}
+          REMOTE_IMAGE: ${{ steps.image.outputs.remote_image }}
+        shell: bash
+        run: |
+          printf '%s' "${GH_TOKEN}" | podman login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin
+          podman push --digestfile "${RUNNER_TEMP}/digest" \
+            "${LOCAL_IMAGE}" "${REMOTE_IMAGE}"
+          printf 'digest=%s\n' "$(cat "${RUNNER_TEMP}/digest")" >> "$GITHUB_OUTPUT"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+
+      - name: Sign image with GitHub OIDC
+        env:
+          REMOTE_IMAGE: ${{ steps.image.outputs.remote_image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "${REMOTE_IMAGE%@*}@${DIGEST}"

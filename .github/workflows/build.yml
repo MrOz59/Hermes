@@ -785,58 +785,8 @@ jobs:
 
       - name: Create RPM Package
         run: |
-          VERSION="${BUILD_VERSION}"
-          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-
-          # The package used to be the binary and the asset tree, and nothing
-          # else: no menu entries, no icons, not even the systemd unit, so it
-          # installed and then could not be found or started (#52). Stage the
-          # project's own install instead, as every other package does.
-          packaging/linux/stage-install.sh build "hermes-${VERSION}" > /dev/null
-          tar -czf ~/rpmbuild/SOURCES/hermes-${VERSION}.tar.gz hermes-${VERSION}
-
-          # %files is generated from that tree, so a file CMake starts or stops
-          # installing cannot silently fall in or out of the package.
-          FILE_LIST="$(cd hermes-${VERSION} && {
-            find . -type d -path './usr/share/hermes*' -printf '%%dir /%P\n'
-            find . \( -type f -o -type l \) -printf '/%P\n'
-          } | sort)"
-
-          cat > ~/rpmbuild/SPECS/hermes.spec << EOF
-          Name:           hermes
-          Version:        ${VERSION}
-          Release:        1%{?dist}
-          Summary:        Self-hosted game stream host with Linux virtual display support
-          License:        GPLv3
-          URL:            https://github.com/MrOz59/Hermes
-          Source0:        hermes-%{version}.tar.gz
-
-          # The binary is built by the job above and only copied in %install, so
-          # there are no sources for a debuginfo package to point at. Left on,
-          # rpmbuild would emit a second .rpm that ships as a release asset.
-          %global debug_package %{nil}
-
-          %description
-          Hermes is an Apollo-derived game streaming server with low-latency
-          Linux virtual displays via Hermes-KMS (EVDI also supported).
-
-          %prep
-          %setup -q
-
-          %install
-          mkdir -p %{buildroot}
-          cp -a usr %{buildroot}/
-
-          %files
-          %defattr(-,root,root,-)
-          ${FILE_LIST}
-
-          %post
-          setcap cap_sys_admin+p /usr/bin/hermes || true
-          EOF
-
-          rpmbuild -bb ~/rpmbuild/SPECS/hermes.spec
-          cp ~/rpmbuild/RPMS/*/*.rpm .
+          packaging/linux/fedora/build-rpm.sh \
+            build "${BUILD_VERSION}" "${GITHUB_WORKSPACE}"
 
       # The release jobs collect artifacts/**/*, so each leg needs its own
       # artifact name; the packages themselves are already distinct, since

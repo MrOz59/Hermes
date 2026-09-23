@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ ${EUID} -eq 0 ]]; then
+  printf 'Run this command as the desktop user, not as root.\n' >&2
+  exit 2
+fi
+
+case "${1:-enable}" in
+  enable)
+    # These hosts use the same GameStream ports. Disabling only user units is
+    # reversible and avoids a misleading bind failure on Hermes startup.
+    systemctl --user disable --now sunshine.service 2>/dev/null || true
+    systemctl --user disable --now apollo.service 2>/dev/null || true
+    systemctl --user daemon-reload
+    systemctl --user enable --now hermes.service
+    printf '\nHermes is enabled for this user. Open https://localhost:47990\n'
+    if systemctl is-active --quiet firewalld.service; then
+      printf 'For LAN clients, enable the packaged firewall service once:\n'
+      printf '  sudo firewall-cmd --permanent --add-service=hermes\n'
+      printf '  sudo firewall-cmd --reload\n'
+    fi
+    ;;
+  disable)
+    systemctl --user disable --now hermes.service
+    ;;
+  *)
+    printf 'usage: hermes-bazzite-setup [enable|disable]\n' >&2
+    exit 2
+    ;;
+esac

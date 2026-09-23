@@ -390,7 +390,8 @@ module is built and how the package is installed.
 | CachyOS / Arch | Verified | Development target. In-tree PKGBUILDs. |
 | Debian / Ubuntu | Expected to work | One `.deb` per supported LTS (24.04, 26.04), built in CI; not exercised as a desktop. Match the `ubuntuNN.NN` in the filename to your release. |
 | Fedora | Expected to work | One `.rpm` per supported release (43, 44), built in CI; not exercised as a desktop. Match the `.fcNN` in the filename to your release. |
-| Bazzite / Silverblue / SteamOS | Partial | See below. |
+| Bazzite | Buildable image; hardware validation pending | Native bootc recipe compiles Hermes-KMS against the image kernel and installs Hermes. |
+| Silverblue / SteamOS | Partial | The same image pattern applies, but only Bazzite is currently packaged. |
 
 ### Image-based distributions
 
@@ -402,6 +403,14 @@ installing it to `/usr/lib/modules/<kver>/extra`, with optional MOK signing.
 
 Separately, `packaging/container` holds a runtime image that runs Hermes on a
 headless sway session with audio and XWayland.
+
+For Bazzite, `packaging/bazzite` combines both pieces in one derived bootc image.
+The build rejects a Fedora-mismatched Hermes RPM, verifies the module against the
+kernel contained in the image, runs `depmod` and finishes with
+`bootc container lint`. It supports optional MOK signing through build secrets.
+This is build coverage, not a claim of successful end-to-end streaming on every
+Bazzite GPU/compositor combination; those remain compatibility reports to be
+collected.
 
 ## GPUs and encoders
 

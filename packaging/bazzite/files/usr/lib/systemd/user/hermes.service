@@ -1,0 +1,18 @@
+[Unit]
+Description=Hermes game streaming host
+Documentation=https://github.com/MrOz59/Hermes
+After=graphical-session.target
+PartOf=graphical-session.target
+Wants=graphical-session.target
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/bin/hermes
+ExecStopPost=-/usr/bin/hermes-monitor-recovery
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=graphical-session.target xdg-desktop-autostart.target

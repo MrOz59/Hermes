@@ -1,0 +1,15 @@
+[Desktop Entry]
+Actions=RunInTerminal;
+Categories=RemoteAccess;Network;
+Comment=Self-hosted game streaming with a low-latency virtual display
+Exec=/usr/bin/env systemctl start --user hermes
+Icon=hermes
+Keywords=gamestream;stream;moonlight;remote play;
+Name=Hermes
+Type=Application
+Version=1.0
+
+[Desktop Action RunInTerminal]
+Exec=/usr/bin/hermes
+Icon=application-x-executable
+Name=Run in Terminal

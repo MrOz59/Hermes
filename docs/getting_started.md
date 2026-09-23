@@ -107,10 +107,13 @@ CI publishes with `makepkg -sf` from the repository root.
 
 ### Image-based distributions (Bazzite, Silverblue, SteamOS)
 
-`/usr` is read-only there, so no package lands on the installed system.
-`packaging/container` holds a runtime image that runs Hermes on a headless sway
-session; only the kernel module has to exist on the host. See
-`packaging/container/README.md`.
+`/usr` is read-only there, so the driver and native host integration belong in
+the bootable image. On Bazzite, use `packaging/bazzite` to derive from the exact
+installed flavour, compile Hermes-KMS against its kernel and install Hermes as a
+systemd user service. See `packaging/bazzite/README.md`.
+
+`packaging/container` is the alternative for a separate headless sway session;
+the kernel module must still exist on the host.
 
 ### The virtual display driver
 
@@ -420,4 +423,3 @@ Tutorials and Guides are community generated. Want to contribute? Reach out to u
   <summary></summary>
   [TOC]
 </details>
-

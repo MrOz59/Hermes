@@ -67,6 +67,7 @@ pkg/
 pkg-output/
 *.pkg.tar.zst
 apollo-linux-build
+/packaging/bazzite/hermes.rpm
 
 docs/codex/*
 jsson-lsp.log

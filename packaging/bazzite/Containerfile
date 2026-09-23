@@ -1,0 +1,158 @@
+# syntax=docker/dockerfile:1
+
+# A native Hermes host layered onto the same bootc image that supplies its
+# kernel.  Use the exact Bazzite flavour already installed (bazzite,
+# bazzite-deck, bazzite-nvidia, ...); changing flavour or desktop as part of a
+# rebase is intentionally not hidden here.
+ARG BAZZITE_IMAGE=ghcr.io/ublue-os/bazzite
+ARG BAZZITE_TAG=stable
+
+FROM ${BAZZITE_IMAGE}:${BAZZITE_TAG} AS hermes-kms-build
+ARG HERMES_KMS_REPOSITORY=https://github.com/MrOz59/Hermes-KMS.git
+ARG HERMES_KMS_REF=main
+
+RUN dnf5 install -y \
+      elfutils-libelf-devel \
+      clang \
+      gcc \
+      git \
+      libdrm-devel \
+      llvm \
+      make \
+      openssl-devel && \
+    dnf5 clean all
+
+WORKDIR /src/hermes-kms
+RUN git init . && \
+    git remote add origin "${HERMES_KMS_REPOSITORY}" && \
+    git fetch --depth 1 origin "${HERMES_KMS_REF}" && \
+    git checkout --detach FETCH_HEAD && \
+    git rev-parse HEAD > /tmp/hermes-kms-revision
+
+ARG WITH_ISOLATED_SESSIONS=0
+RUN --mount=type=secret,id=module_sign_key,required=false \
+    --mount=type=secret,id=module_sign_cert,required=false \
+    set -eux; \
+    kver="$(rpm -q --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core | sort -V | tail -n1)"; \
+    test -n "${kver}"; \
+    if [ ! -f "/usr/lib/modules/${kver}/build/Makefile" ]; then \
+      dnf5 install -y "kernel-devel-${kver}"; \
+    fi; \
+    test -f "/usr/lib/modules/${kver}/build/Makefile"; \
+    make -j"$(nproc)" modules \
+      KERNELRELEASE="${kver}" \
+      KDIR="/usr/lib/modules/${kver}/build"; \
+    make check-uapi check-session check-edid; \
+    key=/run/secrets/module_sign_key; \
+    cert=/run/secrets/module_sign_cert; \
+    if [ -e "${key}" ] || [ -e "${cert}" ]; then \
+      test -r "${key}" && test -r "${cert}" || { \
+        echo 'both module_sign_key and module_sign_cert are required' >&2; \
+        exit 1; \
+      }; \
+      "/usr/lib/modules/${kver}/build/scripts/sign-file" \
+        sha256 "${key}" "${cert}" kernel/hermes-kms/hermes_kms.ko; \
+      install -D -m 0644 "${cert}" \
+        /out/usr/share/hermes-kms/module-signing-certificate.der; \
+    else \
+      echo 'WARNING: Hermes-KMS is unsigned; enforcing Secure Boot will reject it' >&2; \
+    fi; \
+    make modules-install install-core-configs \
+      KERNELRELEASE="${kver}" DESTDIR=/out; \
+    if [ "${WITH_ISOLATED_SESSIONS}" = 1 ]; then \
+      make install-broker-configs DESTDIR=/out; \
+    fi; \
+    modinfo kernel/hermes-kms/hermes_kms.ko; \
+    printf '%s\n' "${kver}" > /out/hermes-kms-kernel
+
+FROM ${BAZZITE_IMAGE}:${BAZZITE_TAG}
+ARG HERMES_RPM=packaging/bazzite/hermes.rpm
+
+COPY ${HERMES_RPM} /tmp/hermes.rpm
+COPY --from=hermes-kms-build /out/usr/ /usr/
+COPY --from=hermes-kms-build /out/hermes-kms-kernel /tmp/hermes-kms-kernel
+COPY --from=hermes-kms-build /tmp/hermes-kms-revision /usr/share/hermes-kms/revision
+
+# Fallback integration files keep the currently published minimal RPM usable.
+# A corrected RPM already owns these paths; in that case it remains authoritative.
+COPY packaging/bazzite/files/ /tmp/hermes-bazzite-files/
+COPY src_assets/linux/misc/60-hermes.conf /tmp/hermes-integration/60-hermes.conf
+COPY src_assets/linux/misc/60-hermes.rules /tmp/hermes-integration/60-hermes.rules
+COPY src_assets/linux/misc/hermes-gamescope-launch /tmp/hermes-integration/hermes-gamescope-launch
+COPY src_assets/linux/misc/hermes-monitor-recovery /tmp/hermes-integration/hermes-monitor-recovery
+COPY apollo.svg /tmp/hermes-integration/hermes.svg
+COPY LICENSE /tmp/hermes-integration/LICENSE
+
+ARG WITH_ISOLATED_SESSIONS=0
+RUN set -eux; \
+    base_fedora="$(rpm -E '%fedora')"; \
+    rpm_release="$(rpm -qp --queryformat '%{RELEASE}' /tmp/hermes.rpm)"; \
+    case "${rpm_release}" in \
+      *.fc"${base_fedora}"*) ;; \
+      *) echo "Hermes RPM ${rpm_release} does not match Fedora ${base_fedora}" >&2; exit 1 ;; \
+    esac; \
+    dnf5 install -y /tmp/hermes.rpm acl libcap; \
+    if [ "${WITH_ISOLATED_SESSIONS}" = 1 ]; then \
+      dnf5 install -y seatd polkit; \
+    fi; \
+    install_if_missing() { \
+      src="$1"; dst="$2"; mode="$3"; \
+      if [ ! -e "${dst}" ]; then install -D -m "${mode}" "${src}" "${dst}"; fi; \
+    }; \
+    install_if_missing /tmp/hermes-bazzite-files/usr/lib/systemd/user/hermes.service \
+      /usr/lib/systemd/user/hermes.service 0644; \
+    install_if_missing /tmp/hermes-bazzite-files/usr/share/applications/io.github.mroz59.Hermes.desktop \
+      /usr/share/applications/io.github.mroz59.Hermes.desktop 0644; \
+    install_if_missing /tmp/hermes-integration/60-hermes.conf \
+      /usr/lib/modules-load.d/60-hermes.conf 0644; \
+    install_if_missing /tmp/hermes-integration/60-hermes.rules \
+      /usr/lib/udev/rules.d/60-hermes.rules 0644; \
+    install_if_missing /tmp/hermes-integration/hermes-gamescope-launch \
+      /usr/bin/hermes-gamescope-launch 0755; \
+    install_if_missing /tmp/hermes-integration/hermes-monitor-recovery \
+      /usr/bin/hermes-monitor-recovery 0755; \
+    install_if_missing /tmp/hermes-integration/hermes.svg \
+      /usr/share/icons/hicolor/scalable/apps/hermes.svg 0644; \
+    install_if_missing /tmp/hermes-integration/LICENSE \
+      /usr/share/licenses/hermes/LICENSE 0644; \
+    install -D -m 0755 /tmp/hermes-bazzite-files/usr/bin/hermes-bazzite-setup \
+      /usr/bin/hermes-bazzite-setup; \
+    install -D -m 0755 /tmp/hermes-bazzite-files/usr/bin/hermes-bazzite-doctor \
+      /usr/bin/hermes-bazzite-doctor; \
+    install -D -m 0644 /tmp/hermes-bazzite-files/usr/lib/firewalld/services/hermes.xml \
+      /usr/lib/firewalld/services/hermes.xml; \
+    setcap cap_sys_admin+p /usr/bin/hermes; \
+    getcap /usr/bin/hermes | grep -q cap_sys_admin; \
+    kver="$(cat /tmp/hermes-kms-kernel)"; \
+    running_image_kver="$(rpm -q --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core | sort -V | tail -n1)"; \
+    test "${kver}" = "${running_image_kver}"; \
+    test -f "/usr/lib/modules/${kver}/extra/hermes-kms/hermes_kms.ko"; \
+    depmod -a "${kver}"; \
+    modinfo "/usr/lib/modules/${kver}/extra/hermes-kms/hermes_kms.ko" >/dev/null; \
+    test -f /usr/lib/modprobe.d/hermes-kms.conf; \
+    test -f /usr/lib/systemd/user/hermes.service; \
+    test -f /usr/lib/udev/rules.d/60-hermes.rules; \
+    if [ "${WITH_ISOLATED_SESSIONS}" = 1 ]; then \
+      test -x /usr/bin/hermes-kms-card-broker; \
+      test -x /usr/bin/hermes-session-broker; \
+      test -f /usr/lib/systemd/system/hermes-kms-card-broker.socket; \
+      test -f /usr/lib/systemd/system/hermes-session-broker.socket; \
+    fi; \
+    dnf5 clean all; \
+    rm -rf \
+      /tmp/hermes.rpm \
+      /tmp/hermes-bazzite-files \
+      /tmp/hermes-integration \
+      /tmp/hermes-kms-kernel \
+      /var/cache/ldconfig/aux-cache \
+      /var/cache/libdnf5 \
+      /var/lib/dnf/repos \
+      /var/log/dnf5.log
+
+ARG HERMES_REVISION=unknown
+LABEL org.opencontainers.image.title="Hermes for Bazzite" \
+      org.opencontainers.image.description="Bazzite with Hermes and a kernel-matched Hermes-KMS module" \
+      org.opencontainers.image.source="https://github.com/MrOz59/Hermes" \
+      org.opencontainers.image.revision="${HERMES_REVISION}"
+
+RUN --mount=type=tmpfs,target=/run --network=none bootc container lint

@@ -591,25 +591,13 @@ jobs:
           VERSION="${BUILD_VERSION}"
           PKGDIR="hermes_${VERSION}_amd64"
 
+          # Everything the package ships comes from the project's own install
+          # rules, as the Arch package already does. Assembling the tree here
+          # by hand is what left the .deb without icons and with a cut-down
+          # copy of the systemd unit, and the .rpm without a menu entry at
+          # all (#52).
+          packaging/linux/stage-install.sh build "${PKGDIR}" > /dev/null
           mkdir -p ${PKGDIR}/DEBIAN
-          mkdir -p ${PKGDIR}/usr/bin
-          mkdir -p ${PKGDIR}/usr/share/hermes
-          mkdir -p ${PKGDIR}/usr/share/applications
-          mkdir -p ${PKGDIR}/usr/share/icons/hicolor/scalable/apps
-          mkdir -p ${PKGDIR}/usr/share/icons/hicolor/scalable/status
-          mkdir -p ${PKGDIR}/usr/lib/systemd/user
-
-          # Install the binary as `hermes` (resolve the sunshine symlink).
-          cp -L build/sunshine ${PKGDIR}/usr/bin/hermes
-          chmod 755 ${PKGDIR}/usr/bin/hermes
-
-          # Copy the whole asset tree, not just web/ and the top-level files:
-          # `shaders/` is needed by the Linux GPU capture path, and cmake links
-          # it into the build dir as a symlink, so dereference with -L.
-          cp -rL build/assets/. ${PKGDIR}/usr/share/hermes/
-
-          # Copy icons
-          cp src_assets/linux/misc/icons/*.svg ${PKGDIR}/usr/share/icons/hicolor/scalable/apps/ 2>/dev/null || true
 
           # Derive the dependencies from what the binary actually links, the
           # way debhelper does for a normal Debian build. The hand-written list
@@ -624,7 +612,7 @@ jobs:
           #
           # dpkg-shlibdeps reads debian/control for the package name, so give it
           # a throwaway one rather than a full debian/ source tree.
-          BIN_PATH="$(readlink -f ${PKGDIR}/usr/bin/hermes)"
+          BIN_PATH="${PKGDIR}/usr/bin/hermes"
           mkdir -p .shlibdeps/debian
           printf 'Source: hermes\nPackage: hermes\nArchitecture: amd64\n' \
             > .shlibdeps/debian/control
@@ -662,36 +650,16 @@ jobs:
             modprobe evdi 2>/dev/null || true
           fi
           gtk-update-icon-cache -f /usr/share/icons/hicolor/ 2>/dev/null || true
+          update-desktop-database /usr/share/applications 2>/dev/null || true
           EOF
           chmod 755 ${PKGDIR}/DEBIAN/postinst
 
-          # Create systemd service
-          cat > ${PKGDIR}/usr/lib/systemd/user/hermes.service << 'EOF'
-          [Unit]
-          Description=Hermes Game Streaming Server
-          StartLimitIntervalSec=500
-          StartLimitBurst=5
-
-          [Service]
-          ExecStartPre=/bin/sleep 5
-          ExecStart=/usr/bin/hermes
-          Restart=on-failure
-          RestartSec=5s
-
-          [Install]
-          WantedBy=xdg-desktop-autostart.target
-          EOF
-
-          # Create desktop file
-          cat > ${PKGDIR}/usr/share/applications/hermes.desktop << 'EOF'
-          [Desktop Entry]
-          Name=Hermes
-          Comment=Self-hosted game stream host
-          Exec=/usr/bin/env systemctl start --user hermes
-          Icon=hermes
-          Type=Application
-          Categories=Network;RemoteAccess;
-          EOF
+          # The systemd unit and the three desktop entries come from the
+          # staged install. The unit written here before was a cut-down copy:
+          # it lacked the monitor recovery run on stop, and was wanted only by
+          # xdg-desktop-autostart.target, which Game Mode sessions never
+          # activate - so the package undid the fix that makes Hermes start
+          # there.
 
           # Build package. The release goes in the filename so the two builds
           # are told apart on the release page - the control Version stays the
@@ -819,16 +787,19 @@ jobs:
           VERSION="${BUILD_VERSION}"
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
-          # Create source tarball; install the binary as `hermes`
-          # (resolve the sunshine symlink).
-          mkdir -p hermes-${VERSION}/usr/bin
-          mkdir -p hermes-${VERSION}/usr/share/hermes
-          cp -L build/sunshine hermes-${VERSION}/usr/bin/hermes
-          chmod 755 hermes-${VERSION}/usr/bin/hermes
-          # -L: cmake links build/assets/shaders to the source tree, and a bare
-          # symlink would dangle once unpacked on the user's machine.
-          cp -rL build/assets/. hermes-${VERSION}/usr/share/hermes/
-          tar -czvf ~/rpmbuild/SOURCES/hermes-${VERSION}.tar.gz hermes-${VERSION}
+          # The package used to be the binary and the asset tree, and nothing
+          # else: no menu entries, no icons, not even the systemd unit, so it
+          # installed and then could not be found or started (#52). Stage the
+          # project's own install instead, as every other package does.
+          packaging/linux/stage-install.sh build "hermes-${VERSION}" > /dev/null
+          tar -czf ~/rpmbuild/SOURCES/hermes-${VERSION}.tar.gz hermes-${VERSION}
+
+          # %files is generated from that tree, so a file CMake starts or stops
+          # installing cannot silently fall in or out of the package.
+          FILE_LIST="$(cd hermes-${VERSION} && {
+            find . -type d -path './usr/share/hermes*' -printf '%%dir /%P\n'
+            find . \( -type f -o -type l \) -printf '/%P\n'
+          } | sort)"
 
           cat > ~/rpmbuild/SPECS/hermes.spec << EOF
           Name:           hermes
@@ -852,14 +823,12 @@ jobs:
           %setup -q
 
           %install
-          mkdir -p %{buildroot}/usr/bin
-          mkdir -p %{buildroot}/usr/share/hermes
-          cp -r usr/bin/* %{buildroot}/usr/bin/
-          cp -r usr/share/hermes/* %{buildroot}/usr/share/hermes/
+          mkdir -p %{buildroot}
+          cp -a usr %{buildroot}/
 
           %files
-          %attr(755,root,root) /usr/bin/hermes
-          /usr/share/hermes
+          %defattr(-,root,root,-)
+          ${FILE_LIST}
 
           %post
           setcap cap_sys_admin+p /usr/bin/hermes || true

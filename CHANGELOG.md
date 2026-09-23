@@ -12,6 +12,17 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Fixed
+- The `.deb` and `.rpm` packages ship the application menu entries, the icons
+  and the systemd unit again. Both were assembled file by file in CI, and that
+  list only ever had the binary and the web assets on it, so everything the
+  project installs through CMake was left out: on Fedora the package had no
+  menu entry, no icon and no user service at all, which is a Hermes that
+  installs and then cannot be found or started; on Ubuntu the entry was there
+  but pointed at an icon the package did not carry, and its hand-written unit
+  was wanted only by `xdg-desktop-autostart.target`, which Game Mode sessions
+  never activate ([#52]). Both packages are now staged from the project's own
+  install rules, the way the Arch package already was, and the staging refuses
+  to produce a tree that is missing any of them.
 - Touch and pen input now land on the streamed display under KDE. KWin binds a
   touchscreen or a tablet to one output, and with nothing configured it picks
   the built-in panel, an output whose physical size matches the device's, or
@@ -1613,6 +1624,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#40]: https://github.com/MrOz59/Hermes/issues/40
 [#41]: https://github.com/MrOz59/Hermes/issues/41
 [#43]: https://github.com/MrOz59/Hermes/issues/43
+[#52]: https://github.com/MrOz59/Hermes/issues/52
 
 ## [0.4.0] - 2026-07-02
 

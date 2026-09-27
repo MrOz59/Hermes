@@ -2236,6 +2236,55 @@ namespace VDISPLAY {
     return position;
   }
 
+  bool kscreenDisplayGeometry(
+    const std::vector<kscreen_output_t> &outputs,
+    const std::string &output_name,
+    int &offset_x,
+    int &offset_y,
+    int &environment_width,
+    int &environment_height
+  ) {
+    const auto selected = std::find_if(outputs.begin(), outputs.end(), [&](const auto &output) {
+      return output.connected && output.enabled && output.name == output_name &&
+             output.width > 0 && output.height > 0;
+    });
+    if (selected == outputs.end()) {
+      return false;
+    }
+
+    // Start at a real enabled output, not the coordinate-system origin.
+    // KWin keeps Virtual-1 at (3440,0) after disabling the 3440-wide monitor
+    // beside it. In that exclusive layout the desktop begins at x=3440 and is
+    // 2560 pixels wide; including the now-empty path back to zero made an
+    // absolute pointer land about three inches to the right on the reporter's
+    // tablet.
+    int min_x = selected->x;
+    int min_y = selected->y;
+    int max_x = selected->x + selected->width;
+    int max_y = selected->y + selected->height;
+    for (const auto &output : outputs) {
+      if (!output.connected || !output.enabled || output.width <= 0 || output.height <= 0) {
+        continue;
+      }
+      min_x = std::min(min_x, output.x);
+      min_y = std::min(min_y, output.y);
+      max_x = std::max(max_x, output.x + output.width);
+      max_y = std::max(max_y, output.y + output.height);
+    }
+
+    const int width = max_x - min_x;
+    const int height = max_y - min_y;
+    if (width <= 0 || height <= 0) {
+      return false;
+    }
+
+    offset_x = selected->x - min_x;
+    offset_y = selected->y - min_y;
+    environment_width = width;
+    environment_height = height;
+    return true;
+  }
+
   kscreen_mode_state_e kscreenModeState(
     const std::string &json_text,
     const std::string &output,
@@ -2796,32 +2845,7 @@ namespace VDISPLAY {
         output_name = it->second.virtual_output;
       }
 
-      const auto current = outputs();
-      const auto selected = std::find_if(current.begin(), current.end(), [&](const auto &output) {
-        return output.connected && output.enabled && output.name == output_name;
-      });
-      if (selected == current.end()) {
-        return false;
-      }
-
-      int min_x = 0;
-      int min_y = 0;
-      int max_x = 0;
-      int max_y = 0;
-      for (const auto &output : current) {
-        if (!output.connected || !output.enabled) {
-          continue;
-        }
-        min_x = std::min(min_x, output.x);
-        min_y = std::min(min_y, output.y);
-        max_x = std::max(max_x, output.x + output.width);
-        max_y = std::max(max_y, output.y + output.height);
-      }
-      x = selected->x - min_x;
-      y = selected->y - min_y;
-      env_width = max_x - min_x;
-      env_height = max_y - min_y;
-      return env_width > 0 && env_height > 0;
+      return kscreenDisplayGeometry(outputs(), output_name, x, y, env_width, env_height);
     }
 
     // Called at SESSION START (only when isolated mode is on) to hand the
@@ -3221,6 +3245,15 @@ namespace VDISPLAY {
       started->owner = display_name;
       started->output = output;
 
+      // sd-bus permits an object to move between threads, but only one thread
+      // may operate on it at a time. Enumerate synchronously before the pump
+      // thread starts; doing this afterwards let sd_bus_process() consume the
+      // Properties.Get reply and left this call waiting for the default 25 s
+      // method timeout on every connection. The signal match is already
+      // installed, so devices added while enumerating remain queued for the
+      // thread and are not missed.
+      bind_existing_devices(*started);
+
       input_binding_t *raw = started.get();
       started->thread = std::thread([raw]() {
         while (!raw->stop.load(std::memory_order_relaxed)) {
@@ -3239,7 +3272,6 @@ namespace VDISPLAY {
         }
       });
       input_binding = std::move(started);
-      bind_existing_devices(*input_binding);
       BOOST_LOG(info) << "[VDISPLAY/KScreen] Touch and pen input from this session will be bound to " << output << '.';
     }
 

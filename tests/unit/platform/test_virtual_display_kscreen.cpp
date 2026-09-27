@@ -224,6 +224,79 @@ TEST(KScreenPlacement, MirrorAnchorsOnThePrimaryOutput) {
   EXPECT_EQ(position.y, 180);
 }
 
+TEST(KScreenDisplayGeometry, ExclusiveLayoutDropsTheDisabledOutputsGap) {
+  // Issue #50 after the native-touch fix: KWin leaves Virtual-1 at x=3440
+  // when exclusive mode disables the ultrawide that occupied 0..3440. The
+  // sole live desktop is Virtual-1 itself, not the empty 3440-pixel path back
+  // to the old origin.
+  const std::vector<VDISPLAY::kscreen_output_t> outputs {
+    {.name = "DP-1", .connected = true, .enabled = false, .priority = 2, .x = 0, .y = 0, .width = 3440, .height = 1440},
+    {.name = "Virtual-1", .connected = true, .enabled = true, .priority = 1, .x = 3440, .y = 0, .width = 2560, .height = 1600},
+  };
+  int x = -1;
+  int y = -1;
+  int width = -1;
+  int height = -1;
+
+  ASSERT_TRUE(VDISPLAY::kscreenDisplayGeometry(outputs, "Virtual-1", x, y, width, height));
+  EXPECT_EQ(x, 0);
+  EXPECT_EQ(y, 0);
+  EXPECT_EQ(width, 2560);
+  EXPECT_EQ(height, 1600);
+}
+
+TEST(KScreenDisplayGeometry, ExtendedLayoutKeepsTheVirtualOutputsOffset) {
+  // With both outputs live, the absolute pointer still spans the whole
+  // desktop and therefore needs Virtual-1's position inside it.
+  const std::vector<VDISPLAY::kscreen_output_t> outputs {
+    {.name = "DP-1", .connected = true, .enabled = true, .priority = 1, .x = 0, .y = 0, .width = 3440, .height = 1440},
+    {.name = "Virtual-1", .connected = true, .enabled = true, .priority = 2, .x = 3440, .y = 0, .width = 2560, .height = 1600},
+  };
+  int x = -1;
+  int y = -1;
+  int width = -1;
+  int height = -1;
+
+  ASSERT_TRUE(VDISPLAY::kscreenDisplayGeometry(outputs, "Virtual-1", x, y, width, height));
+  EXPECT_EQ(x, 3440);
+  EXPECT_EQ(y, 0);
+  EXPECT_EQ(width, 6000);
+  EXPECT_EQ(height, 1600);
+}
+
+TEST(KScreenDisplayGeometry, NormalizesANegativeDesktopOrigin) {
+  const std::vector<VDISPLAY::kscreen_output_t> outputs {
+    {.name = "DP-1", .connected = true, .enabled = true, .priority = 2, .x = -1920, .y = -180, .width = 1920, .height = 1080},
+    {.name = "Virtual-1", .connected = true, .enabled = true, .priority = 1, .x = 0, .y = 0, .width = 2560, .height = 1600},
+  };
+  int x = -1;
+  int y = -1;
+  int width = -1;
+  int height = -1;
+
+  ASSERT_TRUE(VDISPLAY::kscreenDisplayGeometry(outputs, "Virtual-1", x, y, width, height));
+  EXPECT_EQ(x, 1920);
+  EXPECT_EQ(y, 180);
+  EXPECT_EQ(width, 4480);
+  EXPECT_EQ(height, 1780);
+}
+
+TEST(KScreenDisplayGeometry, RejectsAnOutputThatIsNotLive) {
+  const std::vector<VDISPLAY::kscreen_output_t> outputs {
+    {.name = "Virtual-1", .connected = true, .enabled = false, .priority = 1, .x = 3440, .y = 0, .width = 2560, .height = 1600},
+  };
+  int x = 11;
+  int y = 12;
+  int width = 13;
+  int height = 14;
+
+  EXPECT_FALSE(VDISPLAY::kscreenDisplayGeometry(outputs, "Virtual-1", x, y, width, height));
+  EXPECT_EQ(x, 11);
+  EXPECT_EQ(y, 12);
+  EXPECT_EQ(width, 13);
+  EXPECT_EQ(height, 14);
+}
+
 TEST(KScreenLayout, PutsTheRestoredOutputsBackWhereTheyWere) {
   // Enabling an output does not say where it goes, so KWin kept the position
   // from the setup it replayed and a monitor came back on top of the virtual

@@ -759,6 +759,31 @@ namespace VDISPLAY {
   );
 
   /**
+   * @brief Resolve one KScreen output inside the live desktop envelope.
+   *
+   * Only connected, enabled outputs form the desktop. KScreen retains an
+   * output's old position when its neighbours are disabled, so the envelope
+   * has to start at the first live pixel rather than unconditionally at 0,0.
+   * Otherwise an exclusive session whose sole output remains at x=3440 is
+   * reported as 3440 pixels into a 6000-pixel desktop, and absolute input is
+   * shifted when KWin maps it over that sole output.
+   *
+   * Exposed so layouts captured from kscreen-doctor can be checked without a
+   * running KDE session.
+   *
+   * @return true when @p output_name names an enabled output with a usable
+   *         geometry; false leaves the output arguments untouched.
+   */
+  bool kscreenDisplayGeometry(
+    const std::vector<kscreen_output_t> &outputs,
+    const std::string &output_name,
+    int &offset_x,
+    int &offset_y,
+    int &environment_width,
+    int &environment_height
+  );
+
+  /**
    * @brief Build the kscreen-doctor invocation that enables a virtual output,
    *        places it, and drives it at a requested mode.
    *

@@ -21,11 +21,17 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   ([#50]). Where the session binds the device to the streamed output, the
   coordinates are now relative to that output; where it spans the desktop
   instead, as on X11 and wlroots, the output's offset within the desktop is
-  added, which had been missing as well. The absolute pointer, which is meant
-  to cover the whole desktop, is unchanged.
+  added, which had been missing as well. KDE's absolute pointer still covers
+  the whole live desktop, but no longer includes the empty region left behind
+  by a physical output disabled for an exclusive session; that region shifted
+  Artemis's "absolute touch" cursor about three inches to the right in the
+  same reported layout.
 - The touch and pen binding under KDE now also picks up devices that already
   existed when the display was activated - a client resuming its session, or
-  a launch that raced it - instead of only those announced afterwards.
+  a launch that raced it - instead of only those announced afterwards. The
+  initial enumeration now completes before its D-Bus event thread starts;
+  running both over the same bus made every connection wait for the 25-second
+  method timeout.
 - The `.deb` and `.rpm` packages ship the application menu entries, the icons
   and the systemd unit again. Both were assembled file by file in CI, and that
   list only ever had the binary and the web assets on it, so everything the

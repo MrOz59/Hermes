@@ -103,8 +103,8 @@ namespace proc {
     // application/desktop: force the corresponding isolated profile.
     std::string session_type;
     // auto: extend the virtual display beside the physical outputs and follow
-    // the global exclusive option. extend/mirror/exclusive: force that layout
-    // for this app's session, overriding the global option.
+    // the global exclusive option. extend/detached/mirror/exclusive: force that
+    // layout for this app's session, overriding the global option.
     std::string virtual_display_layout;
     int  scale_factor;
     std::chrono::seconds exit_timeout;

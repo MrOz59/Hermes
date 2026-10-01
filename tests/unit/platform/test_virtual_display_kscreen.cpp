@@ -79,6 +79,58 @@ TEST(KScreenLayout, ReEnablesEveryPreSessionOutputAtItsOwnPriority) {
   );
 }
 
+TEST(KScreenDetachedLayout, TargetsOnlyTheVirtualOutput) {
+  const std::map<std::string, int> enabled_before {{"DP-2", 1}, {"HDMI-A-1", 2}};
+  const std::map<std::string, VDISPLAY::kscreen_point_t> positions {
+    {"DP-2", {0, 120}},
+    {"HDMI-A-1", {2560, 0}},
+  };
+
+  const auto command = VDISPLAY::buildKScreenLayoutCommand(
+    "Virtual-1",
+    enabled_before,
+    4480,
+    0,
+    1920,
+    1080,
+    120,
+    positions,
+    VDISPLAY::virtual_display_layout_e::detached
+  );
+
+  EXPECT_EQ(
+    command,
+    "kscreen-doctor"
+    " output.Virtual-1.enable"
+    " output.Virtual-1.position.4480,0"
+    " output.Virtual-1.mode.1920x1080@120"
+  );
+  EXPECT_EQ(command.find("output.DP-2"), std::string::npos);
+  EXPECT_EQ(command.find("output.HDMI-A-1"), std::string::npos);
+  EXPECT_EQ(command.find("output.Virtual-1.priority"), std::string::npos);
+}
+
+TEST(KScreenDetachedLayout, UsesExtendPlacementWithoutMirroring) {
+  const std::vector<VDISPLAY::kscreen_output_t> physical {
+    {.name = "DP-2", .connected = true, .enabled = true, .priority = 1, .x = 0, .y = 0, .width = 2560, .height = 1440},
+  };
+  const auto detached = VDISPLAY::kscreenVirtualOutputPosition(
+    "Virtual-1",
+    physical,
+    physical,
+    VDISPLAY::virtual_display_layout_e::detached
+  );
+  const auto extended = VDISPLAY::kscreenVirtualOutputPosition(
+    "Virtual-1",
+    physical,
+    physical,
+    VDISPLAY::virtual_display_layout_e::extend
+  );
+
+  EXPECT_EQ(detached.x, extended.x);
+  EXPECT_EQ(detached.y, extended.y);
+}
+
 TEST(KScreenLayout, DoesNotEnableTheVirtualOutputTwice) {
   // KWin can report the virtual connector as already enabled from a previous
   // session. Naming it twice in one transaction is not a layout KScreen owes

@@ -98,6 +98,7 @@ namespace proc {
     bool per_client_app_identity;
     bool allow_client_commands;
     bool terminate_on_pause;
+    bool unlock_host_session;
     // auto: desktop when cmd is empty, application otherwise.
     // shared: legacy marker; rejected while isolation is enabled.
     // application/desktop: force the corresponding isolated profile.

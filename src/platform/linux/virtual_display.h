@@ -640,6 +640,19 @@ namespace VDISPLAY {
   std::string systemdUserBusAddress(uint32_t uid);
 
   /**
+   * @brief Unlock the active graphical login session for the Hermes user when locked.
+   *
+   * Uses systemd-logind directly over D-Bus. The graphical session is selected
+   * with sd-login rather than from Hermes' own PID because Hermes normally runs
+   * as a systemd user service outside the desktop session's process tree.
+   *
+   * @return true when the session was already unlocked or an unlock request was
+   *         accepted; false when no graphical session could be identified or
+   *         logind could not be reached.
+   */
+  bool unlockHostSessionIfLocked();
+
+  /**
    * @brief The names Hermes gives its per-client touch and pen devices.
    *
    * KWin keeps a device's settings, the output it is bound to among them, in a

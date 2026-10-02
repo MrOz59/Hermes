@@ -49,6 +49,7 @@
 #include <unistd.h>
 #ifdef SUNSHINE_BUILD_SDBUS
   #include <systemd/sd-bus.h>
+  #include <systemd/sd-login.h>
 #endif
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -136,6 +137,116 @@ namespace VDISPLAY {
     return 0;
   }
 #endif
+
+  bool unlockHostSessionIfLocked() {
+#ifdef SUNSHINE_BUILD_SDBUS
+    // Hermes normally runs as a systemd user service, so its own PID is not a
+    // reliable way to identify the graphical login session. Ask sd-login for
+    // this uid's display session instead; this is the same session loginctl
+    // reports in the user's Display= field.
+    char *session_id_raw = nullptr;
+    const int display_status = sd_uid_get_display(::getuid(), &session_id_raw);
+    if (display_status < 0 || !session_id_raw || !*session_id_raw) {
+      BOOST_LOG(warning) << "[Session] Could not identify the active graphical login session: "
+                         << (display_status < 0 ? std::strerror(-display_status) : "no display session was returned");
+      std::free(session_id_raw);
+      return false;
+    }
+    const std::string session_id {session_id_raw};
+    std::free(session_id_raw);
+
+    sd_bus *bus = nullptr;
+    int status = sd_bus_open_system(&bus);
+    if (status < 0 || !bus) {
+      BOOST_LOG(warning) << "[Session] Could not connect to systemd-logind: "
+                         << (status < 0 ? std::strerror(-status) : "no system bus connection was returned");
+      if (bus) {
+        sd_bus_unref(bus);
+      }
+      return false;
+    }
+
+    constexpr const char *service = "org.freedesktop.login1";
+    constexpr const char *manager_path = "/org/freedesktop/login1";
+    constexpr const char *manager_interface = "org.freedesktop.login1.Manager";
+    constexpr const char *session_interface = "org.freedesktop.login1.Session";
+
+    sd_bus_error error = SD_BUS_ERROR_NULL;
+    sd_bus_message *reply = nullptr;
+    status = sd_bus_call_method(
+      bus, service, manager_path, manager_interface, "GetSession",
+      &error, &reply, "s", session_id.c_str()
+    );
+    if (status < 0) {
+      BOOST_LOG(warning) << "[Session] Could not resolve graphical session " << session_id << ": "
+                         << (error.message ? error.message : std::strerror(-status));
+      sd_bus_error_free(&error);
+      sd_bus_message_unref(reply);
+      sd_bus_unref(bus);
+      return false;
+    }
+
+    const char *session_path_raw = nullptr;
+    status = sd_bus_message_read(reply, "o", &session_path_raw);
+    const std::string session_path = session_path_raw ? session_path_raw : "";
+    sd_bus_message_unref(reply);
+    reply = nullptr;
+    if (status < 0 || session_path.empty()) {
+      BOOST_LOG(warning) << "[Session] systemd-logind returned no object path for graphical session "
+                         << session_id << '.';
+      sd_bus_error_free(&error);
+      sd_bus_unref(bus);
+      return false;
+    }
+
+    int locked = 0;
+    status = sd_bus_get_property_trivial(
+      bus, service, session_path.c_str(), session_interface, "LockedHint",
+      &error, 'b', &locked
+    );
+    if (status < 0) {
+      BOOST_LOG(warning) << "[Session] Could not read LockedHint for graphical session " << session_id << ": "
+                         << (error.message ? error.message : std::strerror(-status));
+      sd_bus_error_free(&error);
+      sd_bus_unref(bus);
+      return false;
+    }
+
+    if (!locked) {
+      BOOST_LOG(info) << "[Session] Graphical session " << session_id << " is already unlocked.";
+      sd_bus_error_free(&error);
+      sd_bus_unref(bus);
+      return true;
+    }
+
+    // Call logind directly rather than spawning loginctl. Unlock() emits the
+    // standard session Unlock signal consumed by Plasma/GNOME screen lockers.
+    // This setting is opt-in because it unlocks the entire host desktop session,
+    // not just the virtual output.
+    status = sd_bus_call_method(
+      bus, service, session_path.c_str(), session_interface, "Unlock",
+      &error, &reply, ""
+    );
+    if (status < 0) {
+      BOOST_LOG(warning) << "[Session] Could not unlock graphical session " << session_id << ": "
+                         << (error.message ? error.message : std::strerror(-status));
+      sd_bus_error_free(&error);
+      sd_bus_message_unref(reply);
+      sd_bus_unref(bus);
+      return false;
+    }
+
+    BOOST_LOG(info) << "[Session] Requested unlock of graphical session " << session_id
+                    << " before application launch.";
+    sd_bus_error_free(&error);
+    sd_bus_message_unref(reply);
+    sd_bus_unref(bus);
+    return true;
+#else
+    BOOST_LOG(warning) << "[Session] Host-session unlock was requested, but this build has no sd-bus support.";
+    return false;
+#endif
+  }
 
   // ============================================================================
   // EVDI Types and Function Pointers (loaded dynamically)

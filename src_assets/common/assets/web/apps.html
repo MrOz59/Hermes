@@ -398,6 +398,15 @@
           </select>
           <div class="form-text">{{ $t('apps.virtual_display_layout_desc') }}</div>
         </div>
+        <!-- optionally unlock the existing host desktop session -->
+        <Checkbox v-if="platform === 'linux'"
+                  class="mb-3"
+                  id="unlockHostSession"
+                  label="apps.unlock_host_session"
+                  desc="apps.unlock_host_session_desc"
+                  v-model="editForm['unlock-host-session']"
+                  default="false"
+        ></Checkbox>
         <!-- experimental isolated session profile -->
         <div class="mb-3" v-if="platform === 'linux'">
           <label for="sessionType" class="form-label">{{ $t('apps.session_type') }}</label>
@@ -570,6 +579,7 @@
     "allow-client-commands": true,
     "virtual-display": false,
     "virtual-display-layout": "auto",
+    "unlock-host-session": false,
     "session-type": "auto",
     "terminate-on-pause": false,
     "gamepad": ""

@@ -1982,6 +1982,20 @@ namespace proc {
        || !video::allow_encoder_probing() // No active display presents
       );
 
+#ifndef _WIN32
+    // A nested application launched into the host compositor cannot appear above
+    // the desktop's screen locker. For unattended same-session streaming, an app
+    // may explicitly ask Hermes to unlock the host graphical session first. This
+    // is deliberately independent of virtual-display layout: that controls monitor
+    // arrangement, while this controls the security state of the existing host
+    // desktop. Failure is non-fatal so the stream can still present the lock
+    // screen and be unlocked manually.
+    if (_app.unlock_host_session && !VDISPLAY::unlockHostSessionIfLocked()) {
+      BOOST_LOG(warning) << "[Session] Host-session unlock was requested for '" << _app.name
+                         << "' but could not be completed; launch will continue.";
+    }
+#endif
+
     // Two independent reports arrived from users whose Hermes-KMS status panel
     // read "ready", who then found their physical monitor being streamed and no
     // explanation anywhere. Nothing was wrong with the driver in either case:
@@ -3378,6 +3392,7 @@ namespace proc {
           ctx.per_client_app_identity = app_node.value("per-client-app-identity", false);
           ctx.allow_client_commands = app_node.value("allow-client-commands", true);
           ctx.terminate_on_pause = app_node.value("terminate-on-pause", false);
+          ctx.unlock_host_session = app_node.value("unlock-host-session", false);
           ctx.session_type = app_node.value("session-type", "auto");
           if (ctx.session_type != "auto" &&
               ctx.session_type != "shared" &&
@@ -3464,6 +3479,7 @@ namespace proc {
       ctx.per_client_app_identity = false;
       ctx.allow_client_commands = false;
       ctx.terminate_on_pause = false;
+      ctx.unlock_host_session = false;
       ctx.session_type = "auto";
 
       ctx.elevated = false;
@@ -3499,6 +3515,7 @@ namespace proc {
       ctx.per_client_app_identity = false;
       ctx.allow_client_commands = false;
       ctx.terminate_on_pause = false;
+      ctx.unlock_host_session = false;
       ctx.session_type = "auto";
 
       ctx.elevated = false;
@@ -3535,6 +3552,7 @@ namespace proc {
         ctx.per_client_app_identity = false;
         ctx.allow_client_commands = false;
         ctx.terminate_on_pause = true; // There's no need to keep an active input only session ongoing
+        ctx.unlock_host_session = false;
         ctx.session_type = "shared";
 
         ctx.elevated = false;
@@ -3572,6 +3590,7 @@ namespace proc {
         ctx.per_client_app_identity = false;
         ctx.allow_client_commands = false;
         ctx.terminate_on_pause = false;
+        ctx.unlock_host_session = false;
         ctx.session_type = "shared";
 
         ctx.elevated = false;

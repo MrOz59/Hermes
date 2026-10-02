@@ -20,6 +20,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Auto/Extend/Mirror/Exclusive behavior is unchanged. GNOME/Mutter retains its
   full-layout path because its DisplayConfig API applies monitor layouts as a
   complete configuration.
+- Linux applications can optionally unlock the existing host graphical session
+  before launch. When enabled per application, Hermes asks systemd-logind for
+  the user's active graphical session, checks its lock state, and requests an
+  unlock only when needed. The option is off by default because it unlocks the
+  entire host desktop, not only the streamed display; failure is non-fatal and
+  application launch continues normally.
 
 ### Fixed
 - Touch and pen now land where they are aimed on a host with more than one

@@ -12,6 +12,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- Linux applications can now use a `Detached (preserve physical monitors)`
+  virtual-display layout. On KDE/KScreen, Hermes enables and positions only the
+  virtual output and does not issue layout changes for the physical outputs,
+  giving a remote client its own display target within the existing desktop
+  session while preserving the local monitor configuration. Existing
+  Auto/Extend/Mirror/Exclusive behavior is unchanged. GNOME/Mutter retains its
+  full-layout path because its DisplayConfig API applies monitor layouts as a
+  complete configuration.
 - Linux applications can optionally unlock the existing host graphical session
   before launch. When enabled per application, Hermes asks systemd-logind for
   the user's active graphical session, checks its lock state, and requests an

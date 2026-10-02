@@ -92,6 +92,16 @@ namespace proc {
 
 #ifndef _WIN32
   namespace {
+    VDISPLAY::virtual_display_layout_e linux_virtual_display_layout(const std::string &layout) {
+      if (layout == "mirror") {
+        return VDISPLAY::virtual_display_layout_e::mirror;
+      }
+      if (layout == "detached") {
+        return VDISPLAY::virtual_display_layout_e::detached;
+      }
+      return VDISPLAY::virtual_display_layout_e::extend;
+    }
+
     struct isolated_runtime_t {
       uint32_t launch_session_id {};
       std::string client_uuid;
@@ -916,8 +926,7 @@ namespace proc {
       target_fps,
       launch_session->display_guid,
       session_owner_uid,
-      app.virtual_display_layout == "mirror" ? VDISPLAY::virtual_display_layout_e::mirror :
-                                               VDISPLAY::virtual_display_layout_e::extend
+      linux_virtual_display_layout(app.virtual_display_layout)
     );
     if (display_name.empty()) {
       return 503;
@@ -2084,12 +2093,13 @@ namespace proc {
         // Per-app virtual display layout: "mirror" overlaps the primary
         // output so the desktop is cloned, "exclusive" hands the desktop to
         // the virtual display for the session, "extend" forces the default
-        // side-by-side placement, and "auto" follows the global exclusive
-        // option. An explicit extend/mirror also disables the global
-        // exclusive option for this session - the app asked for a specific
-        // layout.
+        // side-by-side placement, "detached" places it beside the physical
+        // desktop without intentionally rewriting physical-output state, and
+        // "auto" follows the global exclusive option. Any explicit non-exclusive
+        // placement also disables the global exclusive option for this session.
         const std::string &vd_layout = _app.virtual_display_layout;
-        const bool vd_layout_explicit = vd_layout == "extend" || vd_layout == "mirror";
+        const bool vd_layout_explicit =
+          vd_layout == "extend" || vd_layout == "detached" || vd_layout == "mirror";
         const bool want_exclusive = vd_layout == "exclusive" ||
                                     (config::video.isolated_virtual_display_option && !vd_layout_explicit);
         if (config::video.isolated_virtual_display_option && vd_layout_explicit) {
@@ -2116,8 +2126,7 @@ namespace proc {
           target_fps,
           launch_session->display_guid,
           std::nullopt,
-          vd_layout == "mirror" ? VDISPLAY::virtual_display_layout_e::mirror :
-                                  VDISPLAY::virtual_display_layout_e::extend
+          linux_virtual_display_layout(vd_layout)
         );
 #endif
 
@@ -3396,6 +3405,7 @@ namespace proc {
           ctx.virtual_display_layout = app_node.value("virtual-display-layout", "auto");
           if (ctx.virtual_display_layout != "auto" &&
               ctx.virtual_display_layout != "extend" &&
+              ctx.virtual_display_layout != "detached" &&
               ctx.virtual_display_layout != "mirror" &&
               ctx.virtual_display_layout != "exclusive") {
             BOOST_LOG(warning) << "Unknown virtual-display-layout '" << ctx.virtual_display_layout

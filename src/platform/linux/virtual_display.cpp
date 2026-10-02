@@ -2230,7 +2230,8 @@ namespace VDISPLAY {
     int mode_width,
     int mode_height,
     int mode_refresh_hz,
-    const std::map<std::string, kscreen_point_t> &positions_before
+    const std::map<std::string, kscreen_point_t> &positions_before,
+    virtual_display_layout_e layout
   ) {
     if (!safe_output_name(virtual_output)) {
       // Every caller reads this name back from the compositor, which has no
@@ -2241,29 +2242,37 @@ namespace VDISPLAY {
     }
 
     std::string command = "kscreen-doctor";
-    int next_priority = 1;
-    for (const auto &[output, priority] : enabled_before) {
-      if (output == virtual_output || !safe_output_name(output)) {
-        continue;
+    if (layout != virtual_display_layout_e::detached) {
+      int next_priority = 1;
+      for (const auto &[output, priority] : enabled_before) {
+        if (output == virtual_output || !safe_output_name(output)) {
+          continue;
+        }
+        command += " output." + output + ".enable";
+        if (priority > 0) {
+          command += " output." + output + ".priority." + std::to_string(priority);
+          next_priority = std::max(next_priority, priority + 1);
+        }
+        // Enabling an output says nothing about where it lands, so KWin keeps
+        // whatever the setup it replayed for this output combination said - which
+        // is the origin for a combination last used exclusively. Put each one
+        // back where the user had it, so the layout this builds is the whole
+        // layout rather than a virtual output placed against a moving target.
+        if (const auto position = positions_before.find(output); position != positions_before.end()) {
+          command += " output." + output + ".position." +
+                     std::to_string(position->second.x) + ',' + std::to_string(position->second.y);
+        }
       }
-      command += " output." + output + ".enable";
-      if (priority > 0) {
-        command += " output." + output + ".priority." + std::to_string(priority);
-        next_priority = std::max(next_priority, priority + 1);
-      }
-      // Enabling an output says nothing about where it lands, so KWin keeps
-      // whatever the setup it replayed for this output combination said - which
-      // is the origin for a combination last used exclusively. Put each one
-      // back where the user had it, so the layout this builds is the whole
-      // layout rather than a virtual output placed against a moving target.
-      if (const auto position = positions_before.find(output); position != positions_before.end()) {
-        command += " output." + output + ".position." +
-                   std::to_string(position->second.x) + ',' + std::to_string(position->second.y);
-      }
-    }
 
-    command += " output." + virtual_output + ".enable";
-    command += " output." + virtual_output + ".priority." + std::to_string(next_priority);
+      command += " output." + virtual_output + ".enable";
+      command += " output." + virtual_output + ".priority." + std::to_string(next_priority);
+    } else {
+      // Detached mode deliberately does not name any physical output and does
+      // not change the virtual output's priority. KWin may read the physical
+      // geometry so Hermes can place the virtual desktop beside it, but the
+      // transaction itself is scoped to the virtual connector.
+      command += " output." + virtual_output + ".enable";
+    }
     command += " output." + virtual_output + ".position." +
                std::to_string(target_x) + ',' + std::to_string(target_y);
 
@@ -2471,6 +2480,7 @@ namespace VDISPLAY {
       std::map<std::string, int> original_outputs;
       std::string virtual_output;
       bool physical_output_disabled {false};
+      bool preserve_physical_outputs {false};
     };
 
     static std::mutex layouts_mutex;
@@ -2725,7 +2735,7 @@ namespace VDISPLAY {
       const bool has_mode = mode_width > 0 && mode_height > 0 && mode_refresh_hz > 0;
       const auto command = buildKScreenLayoutCommand(
         virtual_output, enabled_before, target_x, target_y, mode_width, mode_height, mode_refresh_hz,
-        positions_before);
+        positions_before, layout);
       if (command.empty()) {
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] Refusing to build a layout around output name "
                            << virtual_output;
@@ -2739,7 +2749,7 @@ namespace VDISPLAY {
         // rather than leaving a silent resolution mismatch.
         if (!has_mode || !run_layout_command(buildKScreenLayoutCommand(
                            virtual_output, enabled_before, target_x, target_y, 0, 0, 0,
-                           positions_before))) {
+                           positions_before, layout))) {
           return false;
         }
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] KWin rejected mode "
@@ -2752,6 +2762,8 @@ namespace VDISPLAY {
                       << " at " << target_x << ',' << target_y
                       << (layout == virtual_display_layout_e::mirror ?
                             " overlapping the primary output (mirror)" :
+                          layout == virtual_display_layout_e::detached ?
+                            " outside the physical output regions (detached; physical outputs preserved)" :
                             " outside the pre-session output regions");
       return true;
     }
@@ -2862,9 +2874,12 @@ namespace VDISPLAY {
         .original_outputs = std::move(original_outputs),
         .virtual_output = virtual_output,
         .physical_output_disabled = false,
+        .preserve_physical_outputs = layout == virtual_display_layout_e::detached,
       };
       BOOST_LOG(info) << "[VDISPLAY/KScreen] Enabled " << backend_label << " output " << virtual_output
-                      << " and restored the pre-session physical layout";
+                      << (layout == virtual_display_layout_e::detached ?
+                            " without rewriting physical outputs" :
+                            " and restored the pre-session physical layout");
       return true;
     }
 
@@ -3026,6 +3041,15 @@ namespace VDISPLAY {
       if (it == layouts.end()) {
         return;
       }
+      // Detached mode never intentionally rewrites the physical outputs, so
+      // teardown must not turn around and replay them either. If an exclusive
+      // transition somehow did occur, physical_output_disabled wins and the
+      // normal recovery path still restores the monitors.
+      if (it->second.preserve_physical_outputs && !it->second.physical_output_disabled) {
+        layouts.erase(it);
+        return;
+      }
+
       // Re-enable every physical output with the priority it had before the
       // session, in one command, so the desktop never sits with two primaries
       // or none. The virtual connector itself disappears when the display is

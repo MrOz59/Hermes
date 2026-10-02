@@ -230,8 +230,9 @@ namespace VDISPLAY {
    * nested Gamescope) visible in the captured stream.
    */
   enum class virtual_display_layout_e {
-    extend,  ///< Side-by-side with the physical outputs (the default).
-    mirror,  ///< Overlapped with the primary output, so the desktop is cloned.
+    extend,    ///< Side-by-side, reasserting the pre-session physical layout.
+    detached,  ///< Side-by-side while preserving physical-output state where possible.
+    mirror,    ///< Overlapped with the primary output, so the desktop is cloned.
   };
 
   /**
@@ -819,7 +820,8 @@ namespace VDISPLAY {
     int mode_width,
     int mode_height,
     int mode_refresh_hz,
-    const std::map<std::string, kscreen_point_t> &positions_before = {}
+    const std::map<std::string, kscreen_point_t> &positions_before = {},
+    virtual_display_layout_e layout = virtual_display_layout_e::extend
   );
 
   /** @brief What `kscreen-doctor -j` says about a mode on one output. */

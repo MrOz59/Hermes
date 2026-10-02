@@ -11,6 +11,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+### Added
+- Linux applications can now use a `Detached (preserve physical monitors)`
+  virtual-display layout. On KDE/KScreen, Hermes enables and positions only the
+  virtual output and does not issue layout changes for the physical outputs,
+  giving a remote client its own display target within the existing desktop
+  session while preserving the local monitor configuration. Existing
+  Auto/Extend/Mirror/Exclusive behavior is unchanged. GNOME/Mutter retains its
+  full-layout path because its DisplayConfig API applies monitor layouts as a
+  complete configuration.
+
 ### Fixed
 - Touch and pen now land where they are aimed on a host with more than one
   monitor. Their coordinates were measured against the whole desktop, while

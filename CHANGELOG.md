@@ -11,6 +11,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+### Added
+- Linux applications can optionally unlock the existing host graphical session
+  before launch. When enabled per application, Hermes asks systemd-logind for
+  the user's active graphical session, checks its lock state, and requests an
+  unlock only when needed. The option is off by default because it unlocks the
+  entire host desktop, not only the streamed display; failure is non-fatal and
+  application launch continues normally.
+
 ### Fixed
 - Touch and pen now land where they are aimed on a host with more than one
   monitor. Their coordinates were measured against the whole desktop, while

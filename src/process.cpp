@@ -1977,8 +1977,8 @@ namespace proc {
     // A nested application launched into the host compositor cannot appear above
     // the desktop's screen locker. For unattended same-session streaming, an app
     // may explicitly ask Hermes to unlock the host graphical session first. This
-    // is deliberately independent of virtual-display layout: Detached controls
-    // monitor state, while this controls the security state of the existing host
+    // is deliberately independent of virtual-display layout: that controls monitor
+    // arrangement, while this controls the security state of the existing host
     // desktop. Failure is non-fatal so the stream can still present the lock
     // screen and be unlocked manually.
     if (_app.unlock_host_session && !VDISPLAY::unlockHostSessionIfLocked()) {

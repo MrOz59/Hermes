@@ -56,6 +56,7 @@ namespace rtsp_stream {
     bool enable_hdr;
     bool enable_sops;
     bool virtual_display;
+    std::string launch_error_message;
     // Experimental Linux Hermes-KMS multi-output state. The display is owned
     // by the streaming session rather than by the process/app lifetime.
     bool session_scoped_virtual_display = false;

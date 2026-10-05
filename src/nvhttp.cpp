@@ -1420,14 +1420,18 @@ namespace nvhttp {
         const auto err = proc::proc.execute_isolated(*app_iter, launch_session);
         if (err) {
           tree.put("root.<xmlattr>.status_code", err);
-          tree.put(
-            "root.<xmlattr>.status_message",
-            err == 409 ?
-              "This client already owns an isolated session." :
-              err == 503 ?
-                "Failed to start the isolated compositor/capture session." :
-                "Failed to start the specified application"
-          );
+          if (!launch_session->launch_error_message.empty()) {
+            tree.put("root.<xmlattr>.status_message", launch_session->launch_error_message);
+          } else {
+            tree.put(
+              "root.<xmlattr>.status_message",
+              err == 409 ?
+                "This client already owns an isolated session." :
+                err == 503 ?
+                  "Failed to start the isolated compositor/capture session." :
+                  "Failed to start the specified application"
+            );
+          }
           tree.put("root.gamesession", 0);
           return;
         }
@@ -1477,11 +1481,15 @@ namespace nvhttp {
         auto err = proc::proc.execute(*app_iter, launch_session);
         if (err) {
           tree.put("root.<xmlattr>.status_code", err);
-          tree.put(
-            "root.<xmlattr>.status_message",
-            err == 503
-            ? "Failed to initialize video capture/encoding. Is a display connected and turned on?"
-            : "Failed to start the specified application");
+          if (!launch_session->launch_error_message.empty()) {
+            tree.put("root.<xmlattr>.status_message", launch_session->launch_error_message);
+          } else {
+            tree.put(
+              "root.<xmlattr>.status_message",
+              err == 503
+                ? "Failed to initialize video capture/encoding. Is a display connected and turned on?"
+                : "Failed to start the specified application");
+          }
           tree.put("root.gamesession", 0);
 
           return;

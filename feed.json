@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/MrOz59/Hermes/main/docs/feed/feed.schema.json",
+  "version": 1,
+  "messages": [
+    {
+      "id": "roadmap-2026-community-feedback",
+      "level": "info",
+      "channel": "all",
+      "title": "Help shape the future of Hermes",
+      "body": "We're re-evaluating the Hermes roadmap and we'd like your feedback. Tell us which fixes, features and platforms you think should be prioritized next.",
+      "link": {
+        "url": "https://github.com/MrOz59/Hermes/issues/57",
+        "label": "Join the discussion"
+      },
+      "expires": "2026-11-05",
+      "dismissible": true,
+      "revision": 1
+    }
+  ]
+}

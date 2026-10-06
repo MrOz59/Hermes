@@ -2160,13 +2160,12 @@ namespace proc {
           virtual_display_ready_for_capture = VDISPLAY::activateVirtualDisplayOutput(vdisplayName);
           if (!virtual_display_ready_for_capture) {
             const char *backend_label = hermes_kms_display ? "Hermes-KMS" : "EVDI";
-            if (hermes_kms_display) {
-              BOOST_LOG(error) << "The compositor did not activate the Hermes-KMS output. "
-                               << "Keeping capture pinned to HERMES-1 so the session fails explicitly instead of streaming a physical display.";
-            } else {
-              BOOST_LOG(warning) << "The compositor did not activate the " << backend_label << " output. "
-                                 << "Falling back to the configured physical display to avoid a black stream.";
-            }
+            BOOST_LOG(error) << "The compositor did not activate the " << backend_label
+                             << " output; refusing physical-display fallback for a virtual-display session.";
+            VDISPLAY::setVirtualDisplayCaptureFallbackActive(false);
+            launch_session->launch_error_message =
+              "Virtual display setup failed. Physical display fallback was not attempted.";
+            return 503;
           }
 #endif
 
@@ -2197,20 +2196,12 @@ namespace proc {
           // Some Wayland compositors expose the DRM connector but cannot add it
           // to their output layout; encoding that untouched virtual buffer yields
           // a black stream while audio continues normally.
-          this->virtual_display = virtual_display_ready_for_capture;
+          this->virtual_display = true;
 #ifdef _WIN32
           this->display_name = platf::to_utf8(vdisplayName);
 #else
-          if (hermes_kms_display && !virtual_display_ready_for_capture) {
-            this->virtual_display = true;
-            this->display_name = vdisplayName;
-            VDISPLAY::setVirtualDisplayCaptureFallbackActive(false);
-          } else {
-            VDISPLAY::setVirtualDisplayCaptureFallbackActive(!virtual_display_ready_for_capture);
-            if (virtual_display_ready_for_capture) {
-              this->display_name = vdisplayName;
-            }
-          }
+          this->display_name = vdisplayName;
+          VDISPLAY::setVirtualDisplayCaptureFallbackActive(false);
 #endif
 
 #ifndef _WIN32
@@ -2234,11 +2225,18 @@ namespace proc {
             config::video.output_name = mapped_name.empty() ? this->display_name : std::move(mapped_name);
           }
         } else {
-          BOOST_LOG(warning) << "Virtual Display creation failed, or cannot get created display name in time!";
+          BOOST_LOG(error) << "Virtual display was requested but creation failed or no display name became available; "
+                           << "refusing physical-display fallback.";
+          launch_session->launch_error_message =
+            "Virtual display setup failed. Physical display fallback was not attempted.";
+          return 503;
         }
       } else {
-        // Driver isn't working so we don't need to track virtual display.
-        launch_session->virtual_display = false;
+        BOOST_LOG(error) << "Virtual display was requested but the virtual-display driver is unavailable; "
+                         << "refusing physical-display fallback.";
+        launch_session->launch_error_message =
+          "Virtual display setup failed. Physical display fallback was not attempted.";
+        return 503;
       }
     }
 

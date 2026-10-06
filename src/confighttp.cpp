@@ -382,7 +382,6 @@ namespace confighttp {
       {"sessionType", status.session_type},
       {"exclusiveLayoutSupported", status.exclusive_layout_supported},
       {"outputLayoutBackend", status.output_layout_backend},
-      {"captureFallbackActive", status.capture_fallback_active},
       {"libraryVersion", status.library_version},
       {"runningKernel", status.running_kernel},
       {"dkmsKernels", status.dkms_kernels},

@@ -580,9 +580,6 @@ const validateFallbackMode = (event) => {
           Hermes can still use hardware encoding, but EVDI exposes a CPU framebuffer rather than a GPU render node. Frames are copied through system memory before VAAPI encoding, which can increase latency compared with direct physical-display capture.
         </div>
       </div>
-      <div v-if="evdiInfo.captureFallbackActive" class="alert alert-warning small mt-3 mb-0">
-        {{ $t('config.evdi_capture_fallback_active') }}
-      </div>
     </section>
 
     <section class="border-top pt-3 mt-4" v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms'">

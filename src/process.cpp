@@ -2136,7 +2136,6 @@ namespace proc {
 
         if (!vdisplayName.empty()) {
           BOOST_LOG(info) << "Virtual Display created at " << vdisplayName;
-          bool virtual_display_ready_for_capture = true;
 
           // Don't change display settings when no params are given
           if (launch_session->width && launch_session->height && launch_session->fps) {
@@ -2156,13 +2155,15 @@ namespace proc {
           }
 
 #ifndef _WIN32
-          const bool hermes_kms_display = VDISPLAY::isHermesKmsDisplay(vdisplayName);
-          virtual_display_ready_for_capture = VDISPLAY::activateVirtualDisplayOutput(vdisplayName);
-          if (!virtual_display_ready_for_capture) {
-            const char *backend_label = hermes_kms_display ? "Hermes-KMS" : "EVDI";
+          // Some Wayland compositors expose the DRM connector but cannot add it
+          // to their output layout; encoding that untouched virtual buffer
+          // yields a black stream while audio continues normally. Streaming a
+          // physical monitor instead would hand the client the host desktop it
+          // asked to be kept away from, so the launch fails here.
+          if (!VDISPLAY::activateVirtualDisplayOutput(vdisplayName)) {
+            const char *backend_label = VDISPLAY::isHermesKmsDisplay(vdisplayName) ? "Hermes-KMS" : "EVDI";
             BOOST_LOG(error) << "The compositor did not activate the " << backend_label
                              << " output; refusing physical-display fallback for a virtual-display session.";
-            VDISPLAY::setVirtualDisplayCaptureFallbackActive(false);
             launch_session->launch_error_message =
               "Virtual display setup failed. Physical display fallback was not attempted.";
             return 503;
@@ -2172,7 +2173,7 @@ namespace proc {
           // Rearrange the displays when this session asked for the virtual
           // display exclusively - through the global ISOLATED DISPLAY setting
           // or the app's virtual-display-layout.
-          if (virtual_display_ready_for_capture && want_exclusive) {
+          if (want_exclusive) {
             // Read the host's default sink before the monitors go dark, not
             // after. A monitor's audio device leaves with the monitor, and the
             // sound server hands the default to whatever is still there - so a
@@ -2192,21 +2193,15 @@ namespace proc {
 #endif
           }
 
-          // Only route capture to the virtual output after the compositor has enabled it.
-          // Some Wayland compositors expose the DRM connector but cannot add it
-          // to their output layout; encoding that untouched virtual buffer yields
-          // a black stream while audio continues normally.
           this->virtual_display = true;
 #ifdef _WIN32
           this->display_name = platf::to_utf8(vdisplayName);
 #else
           this->display_name = vdisplayName;
-          VDISPLAY::setVirtualDisplayCaptureFallbackActive(false);
 #endif
 
 #ifndef _WIN32
-          if (virtual_display_ready_for_capture &&
-              !VDISPLAY::configureVirtualDisplayHdr(this->display_name, launch_session->enable_hdr)) {
+          if (!VDISPLAY::configureVirtualDisplayHdr(this->display_name, launch_session->enable_hdr)) {
             return -1;
           }
 #endif
@@ -2214,16 +2209,14 @@ namespace proc {
           // When using virtual display, we don't care which display user configured to use.
           // So we always set output_name to the newly created virtual display as a workaround for
           // empty name when probing graphics cards.
-
-          if (virtual_display_ready_for_capture || this->virtual_display) {
-            // map_display_name resolves a device id on Windows but returns an
-            // empty string on platforms without a settings manager (Linux).
-            // Wiping output_name here would make the pre-stream encoder probe
-            // look up an empty display and fail, so keep the virtual display's
-            // own name in that case (e.g. HERMES-1).
-            auto mapped_name = display_device::map_display_name(this->display_name);
-            config::video.output_name = mapped_name.empty() ? this->display_name : std::move(mapped_name);
-          }
+          //
+          // map_display_name resolves a device id on Windows but returns an
+          // empty string on platforms without a settings manager (Linux).
+          // Wiping output_name here would make the pre-stream encoder probe
+          // look up an empty display and fail, so keep the virtual display's
+          // own name in that case (e.g. HERMES-1).
+          auto mapped_name = display_device::map_display_name(this->display_name);
+          config::video.output_name = mapped_name.empty() ? this->display_name : std::move(mapped_name);
         } else {
           BOOST_LOG(error) << "Virtual display was requested but creation failed or no display name became available; "
                            << "refusing physical-display fallback.";

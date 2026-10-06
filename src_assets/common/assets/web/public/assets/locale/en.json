@@ -329,7 +329,6 @@
         "evdi_status_not_loaded": "Not loaded",
         "evdi_status_none": "None",
         "evdi_no_frames_warning": "The virtual display is active but has not delivered any frames. On X11, confirm the EVDI output is enabled; on Wayland, confirm the compositor has added the new output.",
-        "evdi_capture_fallback_active": "The compositor did not activate the EVDI output. Hermes is streaming the configured physical display to avoid a black video stream; virtual-display isolation is unavailable in this session.",
         "evdi_exclusive_x11_only": "Exclusive virtual display mode can only turn off physical outputs in an X11 session. Your current Wayland session keeps physical outputs enabled.",
         "evdi_exclusive_layout_unavailable": "This compositor does not expose a supported output-layout API, so physical outputs will remain active. wlroots compositors can use wlr-output-management and KDE Plasma uses KScreen; GNOME and COSMIC still require compositor-specific integration.",
         "hermes_kms_status_driver": "Driver",

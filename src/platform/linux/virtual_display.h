@@ -114,7 +114,6 @@ namespace VDISPLAY {
     std::string session_type;
     bool exclusive_layout_supported;
     std::string output_layout_backend;
-    bool capture_fallback_active;
     std::string library_version;
     std::string running_kernel;
     std::vector<std::string> dkms_kernels;
@@ -893,9 +892,6 @@ namespace VDISPLAY {
 
   /** Match only the owned KDE virtual output to the connecting client's HDR request. */
   bool configureVirtualDisplayHdr(const std::string &displayName, bool hdr);
-
-  /** Record whether capture was routed away from an uncomposited virtual output. */
-  void setVirtualDisplayCaptureFallbackActive(bool active);
 
   /** Activate a virtual output using the current session's display protocol. */
   bool activateVirtualDisplayOutput(const std::string &displayName);

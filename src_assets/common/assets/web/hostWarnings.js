@@ -90,17 +90,6 @@ export function hostWarnings(config) {
     });
   }
 
-  if (evdiInfo.captureFallbackActive) {
-    warnings.push({
-      id: 'evdi-capture-fallback',
-      level: 'danger',
-      title: 'Virtual-display isolation fell back',
-      message: 'The compositor did not activate the EVDI output, so Hermes is streaming a physical display to avoid black video.',
-      href: './config#Audio/Video',
-      action: 'Open EVDI diagnostics',
-    });
-  }
-
   if (asArray(evdiInfo.activeDisplays).some(display => asObject(display).zeroCopyCapture === false)) {
     warnings.push({
       id: 'evdi-cpu-buffer',

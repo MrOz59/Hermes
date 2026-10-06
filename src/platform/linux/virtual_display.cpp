@@ -414,7 +414,6 @@ namespace VDISPLAY {
   static std::thread watchdog_thread;
   static bool evdi_available = false;
   static bool exclusive_virtual_display_active = false;
-  static std::atomic<bool> virtual_display_capture_fallback_active {false};
   static std::string evdi_library_version;
 
 
@@ -5594,7 +5593,6 @@ namespace VDISPLAY {
       .session_type = session_type,
       .exclusive_layout_supported = exclusive_layout_supported,
       .output_layout_backend = output_layout_backend,
-      .capture_fallback_active = virtual_display_capture_fallback_active.load(),
       .library_version = evdi_library_version,
       .running_kernel = running_kernel_release(),
       .dkms_kernels = dkms_kernels("evdi"),
@@ -6721,7 +6719,6 @@ namespace VDISPLAY {
     }
 
     virtual_displays.erase(it);
-    virtual_display_capture_fallback_active = false;
 
     BOOST_LOG(info) << "[VDISPLAY] Virtual display removed successfully.";
     return true;
@@ -7006,10 +7003,6 @@ namespace VDISPLAY {
       environment_width,
       environment_height
     );
-  }
-
-  void setVirtualDisplayCaptureFallbackActive(bool active) {
-    virtual_display_capture_fallback_active = active;
   }
 
   static bool virtual_display_mode(const std::string &display_name, int &width, int &height, int &refresh_rate) {

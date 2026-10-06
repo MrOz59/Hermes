@@ -120,15 +120,6 @@ describe('hostWarnings', () => {
     expect(hostWarnings(windowsHost)).toEqual([])
   })
 
-  it('reports a capture path that fell back to a physical display', () => {
-    const warnings = hostWarnings({
-      ...healthyHost,
-      evdiInfo: { diagnostic: 'ready', captureFallbackActive: true },
-    })
-    expect(warnings.map(w => w.id)).toContain('evdi-capture-fallback')
-    expect(warnings.find(w => w.id === 'evdi-capture-fallback').level).toBe('danger')
-  })
-
   it('reports a virtual display that is copying frames through system memory', () => {
     const warnings = hostWarnings({
       ...healthyHost,
@@ -141,7 +132,7 @@ describe('hostWarnings', () => {
     const warnings = hostWarnings({
       ...healthyHost,
       virtual_display_backend: 'evdi',
-      evdiInfo: { diagnostic: 'device-unconfigured', captureFallbackActive: true },
+      evdiInfo: { diagnostic: 'device-unconfigured', activeDisplays: [{ zeroCopyCapture: false }] },
       clipboardInfo: { diagnostic: 'missing', available: false },
       streamPorts: [{ name: 'Video', port: 47998, available: false }],
     })

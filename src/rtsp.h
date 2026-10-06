@@ -133,6 +133,9 @@ namespace rtsp_stream {
   /** Terminates only the session associated with a paired client. */
   bool terminate_session(const std::string_view &uuid);
 
+  /** Terminates only shared-host streaming sessions. */
+  void terminate_shared_sessions();
+
   /**
    * @brief Terminates all running streaming sessions.
    */

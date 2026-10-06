@@ -2137,10 +2137,10 @@ namespace platf {
       env_width = width;
       env_height = height;
 
-      // An isolated session runs a compositor that drives nothing but this
-      // output, so the display really is the whole desktop and there is no
-      // host layout to ask about.
-      if (config::video.hermes_kms_isolated_sessions) {
+      // A session-device output belongs to an isolated compositor that drives
+      // only this display. Shared-host outputs still need host desktop geometry,
+      // even when isolated-session capability is enabled for other clients.
+      if (!VDISPLAY::getHermesKmsSeatName(display_name).empty()) {
         return;
       }
 

@@ -734,6 +734,20 @@ namespace rtsp_stream {
       return false;
     }
 
+    void terminate_shared_sessions() {
+      auto lg = _session_slots.lock();
+      for (auto it = _session_slots->begin(); it != _session_slots->end();) {
+        const auto &slot = *it;
+        if (!slot || stream::session::isolated(*slot)) {
+          ++it;
+          continue;
+        }
+        stream::session::stop(*slot, stream::session::termination_reason_e::SERVER_STOPPED);
+        stream::session::join(*slot);
+        it = _session_slots->erase(it);
+      }
+    }
+
   private:
     std::unordered_map<std::string_view, cmd_func_t> _map_cmd_cb;
 
@@ -794,6 +808,10 @@ namespace rtsp_stream {
 
   bool terminate_session(const std::string_view &uuid) {
     return server.terminate_session(uuid);
+  }
+
+  void terminate_shared_sessions() {
+    server.terminate_shared_sessions();
   }
 
   void terminate_sessions() {

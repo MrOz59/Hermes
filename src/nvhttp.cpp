@@ -1347,8 +1347,16 @@ namespace nvhttp {
         (config::input.enable_input_only_mode && appid == proc::terminate_app_id)
         || appuuid_str == TERMINATE_APP_UUID
       ) {
-        if (isolated_sessions) {
-          rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+        const auto stream_route =
+          rtsp_stream::session_is_isolated(named_cert_p->uuid);
+        const bool terminate_isolated =
+          stream_route.value_or(
+            isolated_sessions &&
+            proc::proc.isolated_client_present(named_cert_p->uuid)
+          );
+
+        rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+        if (terminate_isolated) {
           rtsp_stream::terminate_session(named_cert_p->uuid);
           proc::proc.terminate_isolated_client(named_cert_p->uuid);
         } else {
@@ -1604,7 +1612,7 @@ namespace nvhttp {
     });
 
     auto named_cert_p = get_verified_cert(request);
-    const bool isolated_sessions = experimental_isolated_sessions_enabled();
+    const bool isolated_sessions_enabled = experimental_isolated_sessions_enabled();
     if (!(named_cert_p->perm & PERM::_allow_view)) {
       BOOST_LOG(debug) << "Permission ViewApp denied for [" << named_cert_p->name << "] (" << (uint32_t)named_cert_p->perm << ")";
 
@@ -1615,10 +1623,15 @@ namespace nvhttp {
       return;
     }
 
-    auto current_appid = isolated_sessions ?
-                           proc::proc.running_for_client(named_cert_p->uuid) :
-                           proc::proc.running();
-    if (isolated_sessions && rtsp_stream::find_session(named_cert_p->uuid)) {
+    const auto isolated_current_appid = isolated_sessions_enabled ?
+                                          proc::proc.running_for_client(named_cert_p->uuid) :
+                                          0;
+    const bool isolated_resume = isolated_current_appid > 0;
+    const auto current_appid = isolated_resume ?
+                                 isolated_current_appid :
+                                 proc::proc.running();
+
+    if (isolated_resume && rtsp_stream::find_session(named_cert_p->uuid)) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 409);
       tree.put("root.<xmlattr>.status_message", "This client already has an active stream");
@@ -1648,18 +1661,19 @@ namespace nvhttp {
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
     const bool no_active_sessions {rtsp_stream::session_count() == 0};
+    const bool no_active_shared_sessions {rtsp_stream::shared_session_count() == 0};
     if (no_active_sessions && args.find("localAudioPlayMode"s) != std::end(args)) {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }
     auto launch_session = make_launch_session(host_audio, false, args, named_cert_p);
 
-    if ((!isolated_sessions && !proc::proc.allow_client_commands) ||
+    if ((!isolated_resume && !proc::proc.allow_client_commands) ||
         !named_cert_p->allow_client_commands) {
       launch_session->client_do_cmds.clear();
       launch_session->client_undo_cmds.clear();
     }
 
-    if (isolated_sessions && !proc::proc.prepare_isolated_resume(launch_session)) {
+    if (isolated_resume && !proc::proc.prepare_isolated_resume(launch_session)) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 503);
       tree.put("root.<xmlattr>.status_message", "No isolated session is available to resume");
@@ -1670,7 +1684,7 @@ namespace nvhttp {
       launch_session->input_only = true;
     }
 
-    if (!isolated_sessions && no_active_sessions && !proc::proc.virtual_display) {
+    if (!isolated_resume && no_active_shared_sessions && !proc::proc.virtual_display) {
       // We want to prepare display only if there are no active sessions
       // and the current session isn't virtual display at the moment.
       // This should be done before probing encoders as it could change the active displays.
@@ -1689,7 +1703,7 @@ namespace nvhttp {
       }
     }
 #ifndef _WIN32
-    else if (!isolated_sessions && no_active_sessions && proc::proc.virtual_display && !proc::proc.display_name.empty()) {
+    else if (!isolated_resume && no_active_shared_sessions && proc::proc.virtual_display && !proc::proc.display_name.empty()) {
       // A resumed app keeps its virtual display, but every client brings its
       // own mode. Without this, the first client's geometry outlives it: A
       // streams at 1440p and disconnects, B resumes the same app at 1080p and
@@ -1752,7 +1766,7 @@ namespace nvhttp {
 
 #ifdef __linux__
     if (config::video.virtual_display_backend == "hermes_kms" &&
-        !isolated_sessions &&
+        !isolated_resume &&
         config::video.hermes_kms_multi_output &&
         (proc::proc.virtual_display || launch_session->virtual_display || config::video.headless_mode)) {
       if (const int result = proc::proc.prepare_session_virtual_display(launch_session); result != 0) {
@@ -1814,16 +1828,24 @@ namespace nvhttp {
     tree.put("root.cancel", 1);
     tree.put("root.<xmlattr>.status_code", 200);
 
-    if (experimental_isolated_sessions_enabled()) {
-      rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+    const auto stream_route =
+      rtsp_stream::session_is_isolated(named_cert_p->uuid);
+    const bool cancel_isolated =
+      stream_route.value_or(
+        experimental_isolated_sessions_enabled() &&
+        proc::proc.isolated_client_present(named_cert_p->uuid)
+      );
+
+    rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+    if (cancel_isolated) {
       rtsp_stream::terminate_session(named_cert_p->uuid);
       proc::proc.terminate_isolated_client(named_cert_p->uuid);
     } else {
-      rtsp_stream::terminate_sessions();
+      rtsp_stream::terminate_shared_sessions();
       if (proc::proc.running() > 0) {
         proc::proc.terminate();
       }
-      // Legacy display configuration belongs to the global process/session.
+      // Shared-host display state does not belong to isolated runtimes.
       display_device::revert_configuration();
     }
   }

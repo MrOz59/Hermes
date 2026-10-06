@@ -2037,6 +2037,7 @@ namespace stream {
 
   namespace session {
     std::atomic_uint running_sessions;
+    std::atomic_uint shared_running_sessions;
 
     state_e state(session_t &session) {
       return session.state.load(std::memory_order_relaxed);
@@ -2271,24 +2272,22 @@ namespace stream {
         exec_thread.detach();
       }
 
-      // If this is the last session, invoke the platform callbacks
-      if (--running_sessions == 0) {
+      if (!session.isolated_session && --shared_running_sessions == 0) {
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
-        if (session.isolated_session) {
-          // The session destructor tears down only this compositor/app/output.
-          // Host display state and the legacy global process are unrelated.
-          revert_display_config = false;
-        } else if (proc::proc.running()) {
+
+        if (proc::proc.running()) {
           proc::proc.pause();
         } else {
-          // We have no app running and also no clients anymore.
           revert_display_config = true;
         }
 
         if (revert_display_config) {
           display_device::revert_configuration();
         }
+      }
 
+      // Platform-wide streaming state still spans both ownership domains.
+      if (--running_sessions == 0) {
         platf::streaming_will_stop();
       }
 
@@ -2331,12 +2330,14 @@ namespace stream {
 
       session.state.store(state_e::RUNNING, std::memory_order_relaxed);
 
-      // If this is the first session, invoke the platform callbacks
+      // Platform-wide callbacks track every stream, while the legacy process
+      // lifecycle belongs only to streams attached to the shared host session.
       if (++running_sessions == 1) {
         platf::streaming_will_start();
-        if (!session.isolated_session) {
-          proc::proc.resume();
-        }
+      }
+
+      if (!session.isolated_session && ++shared_running_sessions == 1) {
+        proc::proc.resume();
       }
 
       if (!session.do_cmds.empty()) {

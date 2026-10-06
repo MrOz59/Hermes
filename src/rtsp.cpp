@@ -612,6 +612,17 @@ namespace rtsp_stream {
       return _session_slots->size();
     }
 
+    int shared_session_count() {
+      auto lg = _session_slots.lock();
+      int count = 0;
+      for (const auto &slot : *_session_slots) {
+        if (slot && !stream::session::isolated(*slot)) {
+          ++count;
+        }
+      }
+      return count;
+    }
+
     safe::event_t<std::shared_ptr<launch_session_t>> launch_event;
 
     /**
@@ -756,12 +767,25 @@ namespace rtsp_stream {
     return server.session_count();
   }
 
+  int shared_session_count() {
+    server.clear(false);
+    return server.shared_session_count();
+  }
+
   std::string_view last_termination_reason() {
     return stream::session::termination_reason_str(stream::session::last_termination_reason());
   }
 
   std::shared_ptr<stream::session_t> find_session(const std::string_view& uuid) {
     return server.find_session(uuid);
+  }
+
+  std::optional<bool> session_is_isolated(const std::string_view &uuid) {
+    const auto session = server.find_session(uuid);
+    if (!session) {
+      return std::nullopt;
+    }
+    return stream::session::isolated(*session);
   }
 
   std::list<std::string> get_all_session_uuids() {

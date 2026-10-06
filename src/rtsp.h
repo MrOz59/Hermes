@@ -114,6 +114,8 @@ namespace rtsp_stream {
    */
   int session_count();
 
+  int shared_session_count();
+
   /**
    * @brief Get a short identifier for why the most recent session ended.
    * @return e.g. "client_quit", "client_lost", "server_stopped", "unknown".
@@ -122,6 +124,8 @@ namespace rtsp_stream {
 
   std::shared_ptr<stream::session_t>
   find_session(const std::string_view& uuid);
+
+  std::optional<bool> session_is_isolated(const std::string_view &uuid);
 
   std::list<std::string>
   get_all_session_uuids();

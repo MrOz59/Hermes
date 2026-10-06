@@ -208,6 +208,9 @@ namespace proc {
     /** Stop the isolated runtime associated with a paired client. */
     void terminate_isolated_client(const std::string &client_uuid);
 
+    /** True while this client owns or is launching an isolated runtime. */
+    bool isolated_client_present(const std::string &client_uuid);
+
     /** Stop every experimental isolated runtime. */
     void terminate_all_isolated();
 

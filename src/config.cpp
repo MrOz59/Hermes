@@ -1245,11 +1245,6 @@ namespace config {
     }
     bool_f(vars, "hermes_kms_multi_output", video.hermes_kms_multi_output);
     bool_f(vars, "hermes_kms_isolated_sessions", video.hermes_kms_isolated_sessions);
-    if (video.hermes_kms_multi_output && video.hermes_kms_isolated_sessions) {
-      BOOST_LOG(warning) << "hermes_kms_isolated_sessions supersedes "
-                            "hermes_kms_multi_output; shared-desktop output "
-                            "management will remain disabled.";
-    }
     string_restricted_f(vars, "gamescope_backend", video.gamescope_backend, {"auto"sv, "wayland"sv, "sdl"sv, "drm"sv});
     // Deliberately unrestricted: weston is the profile Hermes ships and tests,
     // and any other name is a profile the administrator dropped in themselves.

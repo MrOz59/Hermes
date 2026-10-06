@@ -1254,25 +1254,67 @@ namespace nvhttp {
     auto appid = util::from_view(appid_str);
     auto named_cert_p = get_verified_cert(request);
     const bool isolated_sessions = experimental_isolated_sessions_enabled();
-    auto current_appid = isolated_sessions ?
-                           proc::proc.running_for_client(named_cert_p->uuid) :
-                           proc::proc.running();
-    auto current_app_uuid = isolated_sessions ?
-                              proc::proc.running_app_uuid_for_client(named_cert_p->uuid) :
-                              proc::proc.get_running_app_uuid();
-    bool is_input_only = config::input.enable_input_only_mode && (appid == proc::input_only_app_id || (appuuid_str == REMOTE_INPUT_UUID));
+
+    const auto host_current_appid = proc::proc.running();
+    const auto host_current_app_uuid = proc::proc.get_running_app_uuid();
+    const auto isolated_current_appid = isolated_sessions ?
+                                          proc::proc.running_for_client(named_cert_p->uuid) :
+                                          0;
+    const auto isolated_current_app_uuid = isolated_sessions ?
+                                             proc::proc.running_app_uuid_for_client(named_cert_p->uuid) :
+                                             std::string {};
+
+    bool is_input_only =
+      config::input.enable_input_only_mode &&
+      (appid == proc::input_only_app_id || appuuid_str == REMOTE_INPUT_UUID);
+
+    const proc::ctx_t *requested_app = nullptr;
+    if (!is_input_only && (appid > 0 || !appuuid_str.empty())) {
+      const auto &apps = proc::proc.get_apps();
+      const auto app_iter = std::find_if(
+        apps.begin(),
+        apps.end(),
+        [&appid_str, &appuuid_str](const auto &app) {
+          return app.id == appid_str || app.uuid == appuuid_str;
+        }
+      );
+      if (app_iter != apps.end()) {
+        requested_app = &*app_iter;
+      }
+    }
 
     auto perm = PERM::launch;
 
     BOOST_LOG(verbose) << "Launching app [" << appid_str << "] with UUID [" << appuuid_str << "]";
     // BOOST_LOG(verbose) << "QS: " << request->query_string;
 
-    // If we have already launched an app, we should allow clients with view permission to join the input only or current app's session.
+    // Before Hestia one-shot state is consumed, only relax launch permission
+    // when this profile cannot become isolated. Detached auto is treated
+    // conservatively because Hestia may still request its virtual display.
+    bool permission_isolated = false;
+    if (requested_app) {
+      permission_isolated =
+        proc::resolve_session_route(
+          *requested_app,
+          isolated_sessions,
+          true
+        ) != proc::session_route_e::shared;
+    }
+
+    const auto permission_current_appid =
+      permission_isolated ? isolated_current_appid : host_current_appid;
+    const auto &permission_current_app_uuid =
+      permission_isolated ? isolated_current_app_uuid : host_current_app_uuid;
+
     if (
-      !isolated_sessions
-      && current_appid > 0
+      !permission_isolated
+      && permission_current_appid > 0
       && (appuuid_str != TERMINATE_APP_UUID || appid != proc::terminate_app_id)
-      && (is_input_only || appid == current_appid || (!appuuid_str.empty() && appuuid_str == current_app_uuid))
+      && (
+        is_input_only
+        || appid == permission_current_appid
+        || (!appuuid_str.empty() && appuuid_str == permission_current_app_uuid)
+      )
     ) {
       perm = PERM::_allow_view;
     }
@@ -1299,18 +1341,6 @@ namespace nvhttp {
       return;
     }
 
-    if (isolated_sessions && is_input_only) {
-      BOOST_LOG(warning) << "[IsolatedSession] Rejecting Remote Input because it has no "
-                            "unambiguous isolated seat/runtime target.";
-      tree.put("root.resume", 0);
-      tree.put("root.<xmlattr>.status_code", 409);
-      tree.put(
-        "root.<xmlattr>.status_message",
-        "Remote Input is unavailable while independent client sessions are enabled"
-      );
-      return;
-    }
-
     if (!is_input_only) {
       // Special handling for the "terminate" app
       if (
@@ -1332,21 +1362,6 @@ namespace nvhttp {
         return;
       }
 
-      if (
-        !isolated_sessions
-        && current_appid > 0
-        && current_appid != proc::input_only_app_id
-        && (
-          (appid > 0 && appid != current_appid)
-          || (!appuuid_str.empty() && appuuid_str != current_app_uuid)
-        )
-      ) {
-        tree.put("root.resume", 0);
-        tree.put("root.<xmlattr>.status_code", 400);
-        tree.put("root.<xmlattr>.status_message", "An app is already running on this host");
-
-        return;
-      }
     }
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
@@ -1367,6 +1382,45 @@ namespace nvhttp {
       }
     }
 
+    auto session_route = proc::session_route_e::shared;
+    if (requested_app) {
+      const bool virtual_display_requested =
+        proc::launch_requests_virtual_display(
+          *requested_app,
+          *launch_session,
+          config::video.headless_mode
+        );
+      session_route = proc::resolve_session_route(
+        *requested_app,
+        isolated_sessions,
+        virtual_display_requested
+      );
+    }
+
+    const bool isolated_launch =
+      session_route != proc::session_route_e::shared;
+
+    const auto current_appid =
+      isolated_launch ? isolated_current_appid : host_current_appid;
+    const auto &current_app_uuid =
+      isolated_launch ? isolated_current_app_uuid : host_current_app_uuid;
+
+    if (
+      !is_input_only
+      && !isolated_launch
+      && host_current_appid > 0
+      && host_current_appid != proc::input_only_app_id
+      && (
+        (appid > 0 && appid != host_current_appid)
+        || (!appuuid_str.empty() && appuuid_str != host_current_app_uuid)
+      )
+    ) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "An app is already running on this host");
+      return;
+    }
+
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
     if (!launch_session->rtsp_cipher && encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {
       BOOST_LOG(error) << "Rejecting client that cannot comply with mandatory encryption requirement"sv;
@@ -1378,7 +1432,7 @@ namespace nvhttp {
       return;
     }
 
-    bool no_active_sessions = rtsp_stream::session_count() == 0;
+    bool no_active_sessions = rtsp_stream::shared_session_count() == 0;
 
     if (is_input_only) {
       BOOST_LOG(info) << "Launching input only session..."sv;
@@ -1395,7 +1449,7 @@ namespace nvhttp {
         }
       }
     } else if (appid > 0 || !appuuid_str.empty()) {
-      if (isolated_sessions) {
+      if (isolated_launch) {
         const auto &apps = proc::proc.get_apps();
         const auto app_iter = std::find_if(
           apps.begin(),
@@ -1503,7 +1557,7 @@ namespace nvhttp {
 
 #ifdef __linux__
     if (!is_input_only &&
-        !isolated_sessions &&
+        !isolated_launch &&
         config::video.virtual_display_backend == "hermes_kms" &&
         config::video.hermes_kms_multi_output &&
         (proc::proc.virtual_display || launch_session->virtual_display || config::video.headless_mode) &&

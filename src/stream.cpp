@@ -2054,6 +2054,10 @@ namespace stream {
       return session.device_uuid == uuid;
     }
 
+    bool isolated(const session_t &session) {
+      return session.isolated_session;
+    }
+
     bool update_device_info(session_t& session, const std::string& name, const crypto::PERM& newPerm) {
       session.permission = newPerm;
       if (!(newPerm & crypto::PERM::_allow_view)) {

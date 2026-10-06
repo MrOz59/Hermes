@@ -1725,6 +1725,17 @@ namespace proc {
 #endif
   }
 
+  bool proc_t::isolated_client_present(const std::string &client_uuid) {
+#ifndef _WIN32
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    return isolated_launching_clients.contains(client_uuid) ||
+           find_isolated_client_locked(client_uuid) != nullptr;
+#else
+    (void) client_uuid;
+    return false;
+#endif
+  }
+
   void proc_t::terminate_all_isolated() {
 #ifndef _WIN32
     std::vector<std::shared_ptr<isolated_runtime_t>> runtimes;

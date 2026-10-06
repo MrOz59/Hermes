@@ -3063,9 +3063,15 @@ fi')CLIP";
           auto launch_session = nvhttp::make_launch_session(true, false, request->parse_query_string(), &named_cert);
           auto err = proc::proc.execute(app, launch_session);
           if (err) {
-            bad_request(response, request, err == 503 ?
-                        "Failed to initialize video capture/encoding. Is a display connected and turned on?" :
-                        "Failed to start the specified application");
+            // Same precedence as the client launch in nvhttp: a reason the
+            // launch recorded beats the guess made from the status code.
+            if (!launch_session->launch_error_message.empty()) {
+              bad_request(response, request, launch_session->launch_error_message);
+            } else {
+              bad_request(response, request, err == 503 ?
+                          "Failed to initialize video capture/encoding. Is a display connected and turned on?" :
+                          "Failed to start the specified application");
+            }
           } else {
             output_tree["status"] = true;
             send_response(response, output_tree);

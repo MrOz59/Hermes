@@ -32,6 +32,7 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: read
   packages: write
   id-token: write
@@ -45,7 +46,7 @@ jobs:
     if: >-
       github.event_name != 'workflow_run' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event != 'pull_request')
+       github.event.workflow_run.event == 'push')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -64,7 +65,7 @@ jobs:
           fi
 
       - name: Check out Hermes
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.source.outputs.revision }}
 
@@ -97,14 +98,47 @@ jobs:
           base_image="${base_image:-ghcr.io/ublue-os/bazzite}"
           base_tag="${base_tag:-stable}"
           output_tag="${output_tag:-stable}"
+          fedora="$(skopeo inspect "docker://${base_image}:${base_tag}" | jq -r \
+            '.Labels["org.opencontainers.image.version"] | split(".")[0]')"
+          if [[ ! "${fedora}" =~ ^[0-9]+$ ]]; then
+            printf 'Could not determine Fedora release from %s:%s\n' \
+              "${base_image}" "${base_tag}" >&2
+            exit 1
+          fi
 
           printf 'release=%s\n' "${release}" >> "$GITHUB_OUTPUT"
           printf 'base_image=%s\n' "${base_image}" >> "$GITHUB_OUTPUT"
           printf 'base_tag=%s\n' "${base_tag}" >> "$GITHUB_OUTPUT"
           printf 'output_tag=%s\n' "${output_tag}" >> "$GITHUB_OUTPUT"
+          printf 'fedora=%s\n' "${fedora}" >> "$GITHUB_OUTPUT"
           printf 'local_image=localhost/hermes-bazzite:%s\n' "${output_tag}" >> "$GITHUB_OUTPUT"
           printf 'remote_image=ghcr.io/%s/hermes-bazzite:%s\n' \
             "${owner}" "${output_tag}" >> "$GITHUB_OUTPUT"
+
+      # workflow_run builds must consume the package produced by that exact
+      # run. Downloading "nightly" here creates a race with release publishing
+      # and can combine a new source label with an older Hermes binary.
+      - name: Download RPM from triggering build
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hermes-rpm-fc${{ steps.image.outputs.fedora }}
+          path: ${{ runner.temp }}/hermes-rpm
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Select triggering RPM
+        if: github.event_name == 'workflow_run'
+        id: rpm
+        shell: bash
+        run: |
+          mapfile -t packages < <(find "${RUNNER_TEMP}/hermes-rpm" \
+            -type f -name '*.rpm' -print)
+          if [[ ${#packages[@]} -ne 1 ]]; then
+            printf 'Expected one RPM artifact, found %d\n' "${#packages[@]}" >&2
+            exit 1
+          fi
+          printf 'path=%s\n' "${packages[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare optional kernel-module signing key
         id: module-signing
@@ -131,7 +165,9 @@ jobs:
           IMAGE_NAME: ${{ steps.image.outputs.local_image }}
           BAZZITE_IMAGE: ${{ steps.image.outputs.base_image }}
           BAZZITE_TAG: ${{ steps.image.outputs.base_tag }}
+          FEDORA_VERSION: ${{ steps.image.outputs.fedora }}
           HERMES_RELEASE: ${{ steps.image.outputs.release }}
+          HERMES_RPM: ${{ steps.rpm.outputs.path }}
           HERMES_KMS_REF: main
           SOURCE_REVISION: ${{ steps.source.outputs.revision }}
           WITH_ISOLATED_SESSIONS: ${{ inputs.isolated_sessions && '1' || '0' }}
@@ -142,6 +178,10 @@ jobs:
             export MODULE_SIGN_CERT="${RUNNER_TEMP}/module-signing/MOK.der"
           fi
           packaging/bazzite/build-image.sh
+
+      - name: Remove module-signing material
+        if: always()
+        run: rm -rf -- "${RUNNER_TEMP}/module-signing"
 
       - name: Inspect image metadata
         env:

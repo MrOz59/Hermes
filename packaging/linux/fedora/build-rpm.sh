@@ -14,6 +14,10 @@ if [[ -z "${version}" ]]; then
   printf 'usage: %s BUILD_DIR VERSION [OUTPUT_DIR]\n' "$0" >&2
   exit 2
 fi
+if [[ ! "${version}" =~ ^[A-Za-z0-9.+~]+$ ]]; then
+  printf 'build-rpm: unsafe version: %s\n' "${version}" >&2
+  exit 2
+fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 build_dir="$(realpath "${build_dir}")"
@@ -24,60 +28,26 @@ work_dir="$(mktemp -d "${TMPDIR:-/tmp}/hermes-rpm.XXXXXX")"
 trap 'rm -rf "${work_dir}"' EXIT
 
 stage="${work_dir}/hermes-root-${version}"
-mkdir -p "${stage}"
-DESTDIR="${stage}" cmake --install "${build_dir}" --strip
-install -D -m 0644 "${repo_root}/LICENSE" \
-  "${stage}/usr/share/licenses/hermes/LICENSE"
-
-# The historical CMake target is still named sunshine and, because it carries a
-# VERSION property, installs a versioned file plus a symlink.  Packages expose
-# only the Hermes product name.
-installed_binary="$(find "${stage}/usr/bin" -maxdepth 1 -type f \
-  \( -name 'sunshine-*' -o -name sunshine \) -print -quit)"
-if [[ -z "${installed_binary}" ]]; then
-  printf 'CMake install did not produce a sunshine executable\n' >&2
-  exit 1
-fi
-rm -f "${stage}/usr/bin/sunshine"
-mv "${installed_binary}" "${stage}/usr/bin/hermes"
-
-if [[ -f "${stage}/usr/lib/systemd/user/sunshine.service" ]]; then
-  mv "${stage}/usr/lib/systemd/user/sunshine.service" \
-    "${stage}/usr/lib/systemd/user/hermes.service"
-fi
-
-# These are the minimum integration files promised by the installation docs.
-required_files=(
-  usr/bin/hermes
-  usr/bin/hermes-gamescope-launch
-  usr/bin/hermes-kms-card-broker
-  usr/bin/hermes-monitor-recovery
-  usr/bin/hermes-session-broker
-  usr/lib/modules-load.d/60-hermes.conf
-  usr/lib/systemd/system/hermes-kms-card-broker.service
-  usr/lib/systemd/system/hermes-kms-card-broker.socket
-  usr/lib/systemd/system/hermes-session-broker.service
-  usr/lib/systemd/system/hermes-session-broker.socket
-  usr/lib/systemd/user/hermes.service
-  usr/lib/udev/rules.d/60-hermes.rules
-  usr/share/applications/io.github.mroz59.Hermes.desktop
-  usr/share/hermes/web/index.html
-  usr/share/icons/hicolor/scalable/apps/hermes.svg
-  usr/share/metainfo/io.github.mroz59.Hermes.metainfo.xml
-  usr/share/polkit-1/rules.d/10-hermes-session-deny.rules
-)
-for required in "${required_files[@]}"; do
-  if [[ ! -e "${stage}/${required}" ]]; then
-    printf 'RPM staging tree is missing %s\n' "${required}" >&2
-    exit 1
-  fi
-done
+"${repo_root}/packaging/linux/stage-install.sh" \
+  "${build_dir}" "${stage}" >/dev/null
 
 topdir="${work_dir}/rpmbuild"
 mkdir -p "${topdir}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 tar -C "${work_dir}" -czf \
   "${topdir}/SOURCES/hermes-root-${version}.tar.gz" \
   "hermes-root-${version}"
+
+# Keep package contents synchronized with CMake. The two specially marked files
+# are excluded here and declared explicitly below with their RPM attributes.
+file_list="${work_dir}/file-list"
+(
+  cd "${stage}"
+  find . -type d -path './usr/share/hermes*' -printf '%%dir /%P\n'
+  find . \( -type f -o -type l \) \
+    ! -path './usr/bin/hermes' \
+    ! -path './usr/share/licenses/hermes/LICENSE' \
+    -printf '/%P\n'
+) | sort > "${file_list}"
 
 cat > "${topdir}/SPECS/hermes.spec" <<'EOF'
 Name:           hermes
@@ -106,24 +76,27 @@ mkdir -p %{buildroot}
 cp -a usr %{buildroot}/
 
 %files
+%defattr(-,root,root,-)
 %license /usr/share/licenses/hermes/LICENSE
 %caps(cap_sys_admin+p) /usr/bin/hermes
-/usr/bin/hermes-*
-/usr/lib/modules-load.d/60-hermes.conf
-/usr/lib/systemd/system/hermes-*.service
-/usr/lib/systemd/system/hermes-*.socket
-/usr/lib/systemd/user/hermes.service
-/usr/lib/sysusers.d/hermes.conf
-/usr/lib/udev/rules.d/60-hermes.rules
-/usr/share/applications/io.github.mroz59.Hermes*.desktop
-/usr/share/hermes
-/usr/share/icons/hicolor/scalable/apps/hermes.svg
-/usr/share/icons/hicolor/scalable/status/hermes*.svg
-/usr/share/metainfo/io.github.mroz59.Hermes.metainfo.xml
-/usr/share/polkit-1/rules.d/10-hermes-session-deny.rules
 EOF
+
+cat "${file_list}" >> "${topdir}/SPECS/hermes.spec"
 
 sed -i "s/__HERMES_VERSION__/${version}/" "${topdir}/SPECS/hermes.spec"
 rpmbuild -bb --define "_topdir ${topdir}" "${topdir}/SPECS/hermes.spec"
 
-find "${topdir}/RPMS" -type f -name '*.rpm' -exec cp -v {} "${output_dir}/" \;
+mapfile -t packages < <(find "${topdir}/RPMS" -type f -name '*.rpm')
+if [[ ${#packages[@]} -ne 1 ]]; then
+  printf 'build-rpm: expected one RPM, found %d\n' "${#packages[@]}" >&2
+  exit 1
+fi
+package_metadata="$(
+  rpm -qp --queryformat '[%{FILENAMES} %{FILECAPS}\n]' "${packages[0]}"
+)"
+grep -Fq '/usr/bin/hermes cap_sys_admin=p' <<< "${package_metadata}"
+package_contents="$(rpm -qlp "${packages[0]}")"
+grep -Fxq /usr/lib/systemd/user/hermes.service <<< "${package_contents}"
+grep -Fxq /usr/share/applications/io.github.mroz59.Hermes.desktop \
+  <<< "${package_contents}"
+cp -v "${packages[0]}" "${output_dir}/"

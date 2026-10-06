@@ -14,14 +14,34 @@ set -euo pipefail
 build_dir=${1:?usage: stage-install.sh <build-dir> <staging-dir>}
 root=${2:?usage: stage-install.sh <build-dir> <staging-dir>}
 
-rm -rf "$root"
+build_dir=$(realpath "$build_dir")
+root=$(realpath -m "$root")
+if [[ ! -f "$build_dir/cmake_install.cmake" ]]; then
+  printf 'stage-install: %s is not a configured CMake build directory\n' "$build_dir" >&2
+  exit 2
+fi
+if [[ -z "$root" || "$root" == / ]]; then
+  printf 'stage-install: refusing unsafe staging directory: %s\n' "$root" >&2
+  exit 2
+fi
+
+rm -rf -- "$root"
 mkdir -p "$root"
-DESTDIR="$root" cmake --install "$build_dir"
+DESTDIR="$root" cmake --install "$build_dir" --strip
 
 # CMake installs the versioned binary plus a `sunshine` symlink beside it; a
 # package ships one binary, named after this fork.
+mapfile -t installed_binaries < <(
+  find "$root/usr/bin" -maxdepth 1 -type f \
+    \( -name 'sunshine-*' -o -name sunshine \) -print
+)
+if [[ ${#installed_binaries[@]} -ne 1 ]]; then
+  printf 'stage-install: expected one Sunshine binary, found %d\n' \
+    "${#installed_binaries[@]}" >&2
+  exit 1
+fi
 rm -f "$root/usr/bin/sunshine"
-mv "$root"/usr/bin/sunshine-* "$root/usr/bin/hermes"
+mv "${installed_binaries[0]}" "$root/usr/bin/hermes"
 
 # Same for the unit, whose upstream name would collide with an apollo or
 # sunshine install on the same machine.
@@ -34,13 +54,26 @@ fi
 # started at all.
 required=(
   usr/bin/hermes
+  usr/bin/hermes-gamescope-launch
+  usr/bin/hermes-kms-card-broker
+  usr/bin/hermes-monitor-recovery
+  usr/bin/hermes-session-broker
+  usr/lib/modules-load.d/60-hermes.conf
+  usr/lib/systemd/system/hermes-kms-card-broker.service
+  usr/lib/systemd/system/hermes-kms-card-broker.socket
+  usr/lib/systemd/system/hermes-session-broker.service
+  usr/lib/systemd/system/hermes-session-broker.socket
   usr/lib/systemd/user/hermes.service
+  usr/lib/sysusers.d/hermes.conf
+  usr/lib/udev/rules.d/60-hermes.rules
   usr/share/applications/io.github.mroz59.Hermes.desktop
   usr/share/applications/io.github.mroz59.Hermes.terminal.desktop
-  usr/share/icons/hicolor/scalable/apps/hermes.svg
-  usr/share/metainfo/io.github.mroz59.Hermes.metainfo.xml
   usr/share/hermes/apps.json
   usr/share/hermes/web/index.html
+  usr/share/icons/hicolor/scalable/apps/hermes.svg
+  usr/share/licenses/hermes/LICENSE
+  usr/share/metainfo/io.github.mroz59.Hermes.metainfo.xml
+  usr/share/polkit-1/rules.d/10-hermes-session-deny.rules
 )
 missing=()
 for path in "${required[@]}"; do

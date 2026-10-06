@@ -9,6 +9,14 @@ on:
     branches: [master, main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  # Never interrupt a release tag halfway through publishing its artifacts.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
 env:
   BUILD_TYPE: Release
   COMMIT: ${{ github.sha }}
@@ -43,13 +51,14 @@ jobs:
   # sorts equal to the plain version instead of below it — which is correct: a
   # nightly is 0.5.1 *plus* commits, not a 0.5.1 pre-release.
   version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.compute.outputs.version }}
       build_version: ${{ steps.compute.outputs.build_version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Compute build version
         id: compute
@@ -64,13 +73,45 @@ jobs:
           echo "build_version=${build_version}" >> "$GITHUB_OUTPUT"
           echo "Build version: ${build_version}"
 
+  # Packaging logic lives in repository scripts so it can be checked locally
+  # and shared by CI jobs without large, divergent YAML heredocs.
+  validate-packaging:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y shellcheck
+
+      - name: Check packaging scripts
+        run: |
+          scripts=(
+            packaging/linux/stage-install.sh
+            packaging/linux/configure-package.sh
+            packaging/linux/debian/build-deb.sh
+            packaging/linux/fedora/build-rpm.sh
+            packaging/bazzite/build-image.sh
+            packaging/bazzite/files/usr/bin/hermes-bazzite-setup
+            packaging/bazzite/files/usr/bin/hermes-bazzite-doctor
+            scripts/install_cuda_host_gcc.sh
+            scripts/install_cuda_redist.sh
+            src_assets/linux/misc/postinst
+          )
+          bash -n "${scripts[@]}"
+          shellcheck "${scripts[@]}"
+
   # ===========================================
   # Unit / integration tests (Arch container)
   # ===========================================
   # Builds with -DBUILD_TESTS=ON and runs the GoogleTest suite via ctest.
   # Hardware-dependent cases self-skip with GTEST_SKIP on headless runners.
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     container:
       image: archlinux:latest
 
@@ -113,7 +154,7 @@ jobs:
             jq
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           fetch-depth: 0
@@ -257,85 +298,15 @@ jobs:
           echo "The live layout suite ran against the compositor."
 
   # ===========================================
-  # Windows Build
-  # ===========================================
-  # Temporarily disabled: Hermes targets Linux hosts, and the Windows build
-  # currently fails on a pre-existing Boost.Process v1 inline-namespace
-  # incompatibility with the MSYS2 GCC toolchain (unrelated to Hermes). Set
-  # `if: false` to skip rather than fail the run; remove to re-enable.
-  build-windows:
-    if: false
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: UCRT64
-          update: true
-          install: >-
-            mingw-w64-ucrt-x86_64-toolchain
-            mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-boost
-            mingw-w64-ucrt-x86_64-openssl
-            mingw-w64-ucrt-x86_64-opus
-            mingw-w64-ucrt-x86_64-ffmpeg
-            mingw-w64-ucrt-x86_64-curl
-            mingw-w64-ucrt-x86_64-miniupnpc
-            mingw-w64-ucrt-x86_64-nlohmann-json
-            mingw-w64-ucrt-x86_64-onevpl
-            mingw-w64-ucrt-x86_64-MinHook
-            mingw-w64-ucrt-x86_64-nodejs
-            mingw-w64-ucrt-x86_64-qt6-base
-            mingw-w64-ucrt-x86_64-qt6-svg
-            git
-
-      - name: Configure CMake
-        shell: msys2 {0}
-        run: |
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DSUNSHINE_ENABLE_WAYLAND=OFF \
-            -DSUNSHINE_ENABLE_X11=OFF \
-            -DSUNSHINE_ENABLE_DRM=OFF \
-            -DSUNSHINE_ENABLE_CUDA=ON \
-            -DFETCHCONTENT_FULLY_DISCONNECTED=OFF
-
-      - name: Build
-        shell: msys2 {0}
-        run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(nproc)
-
-      - name: Package
-        shell: msys2 {0}
-        run: |
-          mkdir -p package/apollo
-          cp build/sunshine*.exe package/apollo/apollo.exe 2>/dev/null || cp build/apollo*.exe package/apollo/ 2>/dev/null || true
-          cp -r build/assets/web package/apollo/ 2>/dev/null || true
-          
-      - name: Upload Windows Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: apollo-windows-x64
-          path: package/
-          retention-days: 30
-          if-no-files-found: ignore
-
-  # ===========================================
   # Arch Linux Package (PKGBUILD)
   # ===========================================
   build-arch-pkg:
     # Gate every package build on the test suite: nothing is compiled, and
     # therefore nothing is ever released or published as nightly, unless the
     # tests pass first.
-    needs: [test, version]
-    runs-on: ubuntu-latest
+    needs: [test, version, validate-packaging]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     container:
       image: archlinux:latest
     # Defining both BRANCH and BUILD_VERSION makes cmake/prep/build_version.cmake
@@ -350,7 +321,7 @@ jobs:
       # rather than the download; pacman keeps them in /var/cache/pacman/pkg.
       # The CUDA toolkit is no longer among them - see the CUDA step below.
       - name: Cache pacman packages
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /var/cache/pacman/pkg
           key: pacman-arch-cuda-${{ hashFiles('.github/workflows/build.yml') }}
@@ -401,7 +372,7 @@ jobs:
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           fetch-depth: 0
@@ -451,7 +422,7 @@ jobs:
             makepkg -sf --noconfirm"
 
       - name: Upload Arch Package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hermes-streaming-arch-pkg
           # Both the package and its symbols. The -debug package is what makes a
@@ -475,8 +446,9 @@ jobs:
   # Add a row when a new LTS ships and drop it at EOL:
   # https://wiki.ubuntu.com/Releases
   build-deb:
-    needs: [test, version]
-    runs-on: ubuntu-latest
+    needs: [test, version, validate-packaging]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -544,12 +516,13 @@ jobs:
       # keeps both packages' Web UI built by the same toolchain - the same major
       # the Fedora containers provide.
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
+          package-manager-cache: false
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           fetch-depth: 0
@@ -570,107 +543,19 @@ jobs:
           echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
 
       - name: Configure CMake
-        run: |
-          # SUNSHINE_ASSETS_DIR is baked into the binary at compile time and must
-          # match where the package actually puts the assets (/usr/share/hermes).
-          # Without it the default is `assets`, which unix.cmake turns into
-          # /usr/assets, and the Web UI 404s on every page it tries to serve.
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_INSTALL_PREFIX=/usr \
-            -DSUNSHINE_ASSETS_DIR=share/hermes \
-            -DSUNSHINE_ENABLE_WAYLAND=ON \
-            -DSUNSHINE_ENABLE_X11=ON \
-            -DSUNSHINE_ENABLE_DRM=ON \
-            -DCUDA_FAIL_ON_MISSING=ON
+        run: packaging/linux/configure-package.sh build
 
       - name: Build
         run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(nproc)
 
       - name: Create DEB Package
         run: |
-          VERSION="${BUILD_VERSION}"
-          PKGDIR="hermes_${VERSION}_amd64"
-
-          # Everything the package ships comes from the project's own install
-          # rules, as the Arch package already does. Assembling the tree here
-          # by hand is what left the .deb without icons and with a cut-down
-          # copy of the systemd unit, and the .rpm without a menu entry at
-          # all (#52).
-          packaging/linux/stage-install.sh build "${PKGDIR}" > /dev/null
-          mkdir -p ${PKGDIR}/DEBIAN
-
-          # Derive the dependencies from what the binary actually links, the
-          # way debhelper does for a normal Debian build. The hand-written list
-          # this replaces was wrong in both directions: it required
-          # libboost-all-dev - a build-time -dev metapackage, and Boost is
-          # linked statically here anyway - while naming neither libicu nor
-          # libminiupnpc, the two libraries whose sonames actually move between
-          # releases (24.04 has libicu74/libminiupnpc17, 26.04 libicu78/
-          # libminiupnpc21). A missing entry is the worse half of that: apt
-          # installs the package without complaint and the binary then fails to
-          # start, which is far harder to diagnose than a refused install.
-          #
-          # dpkg-shlibdeps reads debian/control for the package name, so give it
-          # a throwaway one rather than a full debian/ source tree.
-          BIN_PATH="$(readlink -f "${PKGDIR}/usr/bin/hermes")"
-          mkdir -p .shlibdeps/debian
-          printf 'Source: hermes\nPackage: hermes\nArchitecture: amd64\n' \
-            > .shlibdeps/debian/control
-          DEB_DEPENDS="$(cd .shlibdeps \
-            && dpkg-shlibdeps -O --ignore-missing-info "${BIN_PATH}" \
-            | sed 's/^shlibs:Depends=//')"
-          rm -rf .shlibdeps
-          if [ -z "${DEB_DEPENDS}" ]; then
-            echo "dpkg-shlibdeps produced no dependencies" >&2
-            exit 1
-          fi
-          echo "Generated Depends: ${DEB_DEPENDS}"
-
-          # Create control file
-          cat > ${PKGDIR}/DEBIAN/control << EOF
-          Package: hermes
-          Version: ${VERSION}
-          Section: net
-          Priority: optional
-          Architecture: amd64
-          Depends: ${DEB_DEPENDS}
-          Recommends: evdi-dkms
-          Maintainer: Hermes
-          Description: Self-hosted game stream host with Linux virtual display support
-           Hermes is an Apollo-derived game streaming server with low-latency
-           Linux virtual displays via Hermes-KMS (EVDI also supported).
-          EOF
-
-          # Create postinst script
-          cat > ${PKGDIR}/DEBIAN/postinst << 'EOF'
-          #!/bin/bash
-          set -e
-          setcap cap_sys_admin+p /usr/bin/hermes || true
-          if command -v modprobe &> /dev/null; then
-            modprobe evdi 2>/dev/null || true
-          fi
-          gtk-update-icon-cache -f /usr/share/icons/hicolor/ 2>/dev/null || true
-          update-desktop-database /usr/share/applications 2>/dev/null || true
-          EOF
-          chmod 755 ${PKGDIR}/DEBIAN/postinst
-
-          # The systemd unit and the three desktop entries come from the
-          # staged install. The unit written here before was a cut-down copy:
-          # it lacked the monitor recovery run on stop, and was wanted only by
-          # xdg-desktop-autostart.target, which Game Mode sessions never
-          # activate - so the package undid the fix that makes Hermes start
-          # there.
-
-          # Build package. The release goes in the filename so the two builds
-          # are told apart on the release page - the control Version stays the
-          # plain upstream version, so neither package looks like an upgrade of
-          # the other.
-          dpkg-deb --build ${PKGDIR} \
-            hermes_${VERSION}_ubuntu${{ matrix.ubuntu }}_amd64.deb
+          packaging/linux/debian/build-deb.sh \
+            build "${BUILD_VERSION}" "ubuntu${{ matrix.ubuntu }}" \
+            "${GITHUB_WORKSPACE}"
 
       - name: Upload DEB Package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hermes-deb-ubuntu${{ matrix.ubuntu }}
           # Only the Hermes package, not build-time debs (e.g. cuda-keyring).
@@ -691,8 +576,9 @@ jobs:
   # Add a row when Fedora branches a new release and drop it when that release
   # goes EOL: https://docs.fedoraproject.org/en-US/releases/eol/
   build-rpm:
-    needs: [test, version]
-    runs-on: ubuntu-latest
+    needs: [test, version, validate-packaging]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -746,7 +632,7 @@ jobs:
             npm
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           fetch-depth: 0
@@ -768,17 +654,7 @@ jobs:
           echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
 
       - name: Configure CMake
-        run: |
-          # Must match where the RPM installs the assets (/usr/share/hermes);
-          # see the DEB job for why the default would break the Web UI.
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr \
-            -DSUNSHINE_ASSETS_DIR=share/hermes \
-            -DSUNSHINE_ENABLE_WAYLAND=ON \
-            -DSUNSHINE_ENABLE_X11=ON \
-            -DSUNSHINE_ENABLE_DRM=ON \
-            -DCUDA_FAIL_ON_MISSING=ON
+        run: packaging/linux/configure-package.sh build
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -792,7 +668,7 @@ jobs:
       # artifact name; the packages themselves are already distinct, since
       # %{?dist} stamps the release as .fc43 / .fc44.
       - name: Upload RPM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hermes-rpm-fc${{ matrix.fedora }}
           path: "*.rpm"
@@ -810,13 +686,14 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-deb, build-arch-pkg, build-rpm]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: write
     
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts/
 
@@ -824,7 +701,7 @@ jobs:
         run: find artifacts/ -type f
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
         with:
           files: |
             artifacts/**/*
@@ -843,16 +720,17 @@ jobs:
   nightly:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [version, build-deb, build-arch-pkg, build-rpm]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts/
 
@@ -888,7 +766,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish nightly release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
         with:
           tag_name: nightly
           name: "Hermes nightly (v${{ needs.version.outputs.build_version }})"

@@ -54,7 +54,7 @@ const configFlagEnabled = (value) => {
 const hermesKmsMultiOutputEnabled = computed(() => configFlagEnabled(props.config.hermes_kms_multi_output))
 const hermesKmsIsolatedSessionsEnabled = computed(() => configFlagEnabled(props.config.hermes_kms_isolated_sessions))
 const hermesKmsSharedMultiOutputEnabled = computed(
-  () => hermesKmsMultiOutputEnabled.value && !hermesKmsIsolatedSessionsEnabled.value
+  () => hermesKmsMultiOutputEnabled.value
 )
 const isolatedVirtualDisplayEnabled = computed(() => configFlagEnabled(props.config.isolated_virtual_display_option))
 

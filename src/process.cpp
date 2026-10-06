@@ -1030,12 +1030,12 @@ namespace proc {
 #else
     if (!config::video.hermes_kms_isolated_sessions ||
         config::video.virtual_display_backend != "hermes_kms") {
-      return execute(app, std::move(launch_session));
+      launch_session->launch_error_message = "Independent-session capability is unavailable.";
+      return 503;
     }
     if (app.session_type == "shared") {
-      BOOST_LOG(error) << "[IsolatedSession] The legacy shared-host profile cannot run "
-                          "concurrently with independent sessions. Disable "
-                          "hermes_kms_isolated_sessions to use the host desktop.";
+      BOOST_LOG(error) << "[IsolatedSession] Shared-host profile was incorrectly routed "
+                          "to the isolated-session executor.";
       return 400;
     }
 
@@ -1938,6 +1938,10 @@ namespace proc {
     launch_session->display_guid = runtime->display_guid;
     launch_session->drm_device_path = runtime->drm_device_path;
     launch_session->wayland_display = runtime->wayland_display;
+    if (!runtime->app.allow_client_commands) {
+      launch_session->client_do_cmds.clear();
+      launch_session->client_undo_cmds.clear();
+    }
     return true;
 #else
     (void) launch_session;

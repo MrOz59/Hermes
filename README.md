@@ -124,50 +124,36 @@ The unreleased branch has two distinct opt-in experiments:
 sudo modprobe hermes_kms initial_enabled=0 outputs=2
 ```
 
-- `hermes_kms_isolated_sessions = true` is the independent-session prototype.
-  **It is under re-evaluation and is not recommended.** It will change in ways
-  that are not backwards compatible, so a setup built on it now is likely to
-  need rebuilding, and several things are known to be unfinished: a session
-  composites in software rather than on the GPU, nothing bounds what a session
-  may consume, a session given a Unix account of its own still hears the host's
-  audio, and Remote Input is disabled. A full desktop and simultaneous real
-  clients have not been validated. What follows describes what is built, not a
-  feature that is ready to use.
+- `hermes_kms_isolated_sessions = true` enables the independent-session capability.
+  It does not turn the whole server into an isolated-session mode. Shared-host
+  streams and independent sessions may coexist on the same Hermes server.
 
-  One Hermes server starts a separate compositor, application process tree,
-  capture path, and tagged virtual input set for each client. Application
-  profiles run directly in a DRM Gamescope session; desktop profiles run Weston
-  with its desktop shell and panel, or another compositor named by
-  `hermes_kms_session_compositor`. It requires a Hermes-KMS driver at UAPI v11
-  or newer — released drivers are older, so this means a 0.4.x development
-  build — with one independent DRM card per client:
+  With `session-type = auto`, an explicitly requested virtual display uses an
+  independent session only when `virtual-display-layout = detached`. A Detached
+  entry with no command becomes an independent desktop; one with a command
+  becomes an independent application session. Mirror, Extend, Exclusive, normal
+  Host Desktop launches, and launches without an explicit virtual-display request
+  stay on the shared host session. Explicit `desktop` and `application` session
+  types force the corresponding independent route, while `shared` always uses
+  the host session.
 
-```bash
-sudo modprobe hermes_kms initial_enabled=0 devices=2 outputs=1
-```
+  Each independent session receives its own Hermes-KMS DRM card and private DRM
+  seat, compositor, capture path, and tagged virtual input set. Application
+  profiles run in a DRM Gamescope session; desktop profiles use the compositor
+  selected by `hermes_kms_session_compositor`.
 
-The isolated prototype also requires the driver's session-seat udev rule,
-`gamescope`, `weston`, and one private seat broker per device. For the
-two-device example, install `seatd`, add the Hermes user to the `seat` group,
-and start:
+  The capability remains experimental. It requires Hermes-KMS UAPI v11 or newer,
+  the session-seat udev rule, `gamescope`, the selected session compositor, and a
+  private seat broker for each session device. Resource limits, GPU compositor
+  support, per-account audio isolation, and full Plasma-session validation remain
+  unfinished. Without `hermes-session-broker`, independent sessions run as the
+  Hermes user and do not isolate that user files or credentials.
 
-```bash
-sudo systemctl enable --now hermes-kms-seatd@1.service hermes-kms-seatd@2.service
-```
-
-Hermes selects `/run/hermes-kms-seatd/N/seatd.sock` for device `N`; it will
-reject an isolated launch with an actionable log message if that broker is not
-available. The brokers are experimental process/session plumbing, not a
-security boundary for mutually untrusted local users. Per-session audio, a
-full Plasma desktop, and real concurrent Moonlight clients have not been
-validated yet. Both experiments default to off; the existing single-output
-path remains the default. If both experimental flags are present,
-`hermes_kms_isolated_sessions` takes precedence and shared-desktop
-multi-output management stays inactive.
-
-The input-only/Remote Input application is intentionally unavailable in this
-mode because it has no compositor session that identifies which private seat
-should receive its events.
+  `hermes_kms_multi_output` may be enabled at the same time. It continues to
+  manage virtual outputs belonging to the shared host compositor, while
+  independent sessions allocate private session devices. Remote Input remains a
+  shared-host feature rather than being disabled merely because independent
+  sessions are available.
 
 The repository includes `scripts/vm-isolated-input-test.sh`, which uses a
 disposable virtme-ng guest to create two real uinput keyboards and verify that

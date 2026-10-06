@@ -1069,8 +1069,11 @@ namespace nvhttp {
     if constexpr (std::is_same_v<SunshineHTTPS, T>) {
       auto named_cert_p = get_verified_cert(request);
       const bool isolated_sessions = experimental_isolated_sessions_enabled();
-      int current_appid = isolated_sessions ?
-                            proc::proc.running_for_client(named_cert_p->uuid) :
+      const auto isolated_appid = isolated_sessions ?
+                                    proc::proc.running_for_client(named_cert_p->uuid) :
+                                    0;
+      int current_appid = isolated_appid > 0 ?
+                            isolated_appid :
                             proc::proc.running();
       // When input only mode is enabled, the only resume method should be launching the same app again.
       if (config::input.enable_input_only_mode && current_appid != proc::input_only_app_id) {
@@ -1079,7 +1082,7 @@ namespace nvhttp {
       tree.put("root.currentgame", current_appid);
       tree.put(
         "root.currentgameuuid",
-        isolated_sessions ?
+        isolated_appid > 0 ?
           proc::proc.running_app_uuid_for_client(named_cert_p->uuid) :
           proc::proc.get_running_app_uuid()
       );
@@ -1170,8 +1173,11 @@ namespace nvhttp {
 
     auto named_cert_p = get_verified_cert(request);
     if (!!(named_cert_p->perm & PERM::_all_actions)) {
-      auto current_appid = experimental_isolated_sessions_enabled() ?
-                             proc::proc.running_for_client(named_cert_p->uuid) :
+      const auto isolated_appid = experimental_isolated_sessions_enabled() ?
+                                    proc::proc.running_for_client(named_cert_p->uuid) :
+                                    0;
+      auto current_appid = isolated_appid > 0 ?
+                             isolated_appid :
                              proc::proc.running();
       auto should_hide_inactive_apps = config::input.enable_input_only_mode && current_appid > 0 && current_appid != proc::input_only_app_id;
 

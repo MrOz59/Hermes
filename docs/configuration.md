@@ -1355,19 +1355,9 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            @warning{Not recommended right now. This prototype is being
-            re-evaluated and will change in ways that are not backwards
-            compatible - do not build a setup on it yet. What is known to be
-            broken or unfinished: a session composites in software rather than
-            on the GPU (see <code>hermes_kms_session_compositor</code>); nothing
-            bounds what a session may consume, so one client can starve the
-            host; a session that was given a Unix account of its own still hears
-            the host's audio; and Remote Input is disabled. A full Plasma
-            desktop and simultaneous real clients have not been validated.}
+            @warning{Experimental and not recommended for production yet. Independent-session support now coexists with the shared host session rather than replacing it. Resource limits, GPU compositor support, per-account audio isolation, and full Plasma-session validation remain unfinished.}
 
-            Enables the highly experimental independent-session prototype.
-            One Hermes server gives each Moonlight client a session of its own
-            rather than sharing the host's desktop.
+            Enables the experimental independent-session capability. It does not switch the entire Hermes server into an isolated mode. Eligible launches may use independent sessions while ordinary Host Desktop, Remote Input, and other shared routes continue to use the existing host compositor.
 
             <b>What every isolated session gets.</b> Its own Hermes-KMS DRM card
             on its own private DRM seat, its own compositor, its own Wayland
@@ -1429,8 +1419,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             The Hermes user must be a member of the <code>seat</code> group.
             Hermes maps device N to
             <code>/run/hermes-kms-seatd/N/seatd.sock</code>.
-            If <code>hermes_kms_multi_output</code> is also set, independent
-            sessions take precedence and the shared-desktop mode is ignored.
+            <code>hermes_kms_multi_output</code> may be enabled at the same time. Shared-host launches continue to use host compositor outputs, while independent launches allocate private session devices.
             Audio follows the same split. A session that shares the Hermes
             user gets a sink of its own, named after the session; its
             applications play into it, capture records it by name, and the
@@ -1440,12 +1429,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             its user manager, which Hermes cannot reach through a
             <code>0700</code> runtime directory, so that case still hears the
             host's audio and says so in the log.
-            @warning{Audio is not yet isolated for sessions that have a Unix
-            account of their own - those clients hear the host. A full Plasma
-            desktop and simultaneous real clients are not validated. The private seat brokers are not a
-            security boundary between mutually untrusted local users. Remote
-            Input is rejected because it has no video session from which to
-            determine a target seat. Keep this disabled outside testing.}
+            @warning{Audio is not yet isolated for sessions that have a Unix account of their own - those clients hear the host. A full Plasma desktop and simultaneous real clients are not validated. The private seat brokers are not a security boundary between mutually untrusted local users. Remote Input remains a shared-host feature. Keep independent-session support disabled outside testing.}
         </td>
     </tr>
     <tr>

@@ -27,6 +27,21 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   entire host desktop, not only the streamed display; failure is non-fatal and
   application launch continues normally.
 
+### Changed
+- A session that asks for a virtual display now fails to start when that
+  display cannot be set up, instead of streaming a physical monitor ([#58]).
+  This holds for every way of asking for one (the application's
+  virtual-display setting, the client's virtual-display option, a client set
+  to always use one, headless mode, and a host with no active display) and for
+  every way the setup can fail: no working virtual-display driver, a display
+  created without a name, or a compositor that does not activate the output.
+  Hermes-KMS already refused the physical monitor in that last case; an EVDI
+  output now does too, where it used to stream the physical display behind a
+  warning in the Web UI, and that warning is gone. The launch error says the
+  virtual display failed, both to clients that show the host's message and
+  when launching from the Web UI; Artemis still shows only the error code.
+  Sessions that do not ask for a virtual display are unaffected.
+
 ### Fixed
 - Touch and pen now land where they are aimed on a host with more than one
   monitor. Their coordinates were measured against the whole desktop, while
@@ -1662,6 +1677,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#43]: https://github.com/MrOz59/Hermes/issues/43
 [#50]: https://github.com/MrOz59/Hermes/issues/50
 [#52]: https://github.com/MrOz59/Hermes/issues/52
+[#58]: https://github.com/MrOz59/Hermes/pull/58
 
 ## [0.4.0] - 2026-07-02
 

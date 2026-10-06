@@ -1130,8 +1130,7 @@ namespace VDISPLAY {
     }
 
     static bool multi_output_requested() {
-      return config::video.hermes_kms_multi_output &&
-             !config::video.hermes_kms_isolated_sessions;
+      return config::video.hermes_kms_multi_output;
     }
 
     static bool isolated_sessions_requested() {

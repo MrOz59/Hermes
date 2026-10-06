@@ -298,22 +298,28 @@ Both experiments default to off; the single-output path remains the default.
 printf '%s\n' 'options hermes_kms initial_enabled=0 outputs=2' | sudo tee /etc/modprobe.d/hermes-kms.conf
 ```
 
-- `hermes_kms_isolated_sessions = true` is the independent-session prototype.
-  **It is under re-evaluation and is not recommended.** It will change in ways
-  that are not backwards compatible, so a setup built on it now is likely to
-  need rebuilding, and several things are known to be unfinished: a session
-  composites in software rather than on the GPU, nothing bounds what a session
-  may consume, a session given a Unix account of its own still hears the host's
-  audio, and Remote Input is disabled. A full desktop and simultaneous real
-  clients have not been validated. What follows describes what is built, not a
-  feature that is ready to use.
+- `hermes_kms_isolated_sessions = true` enables the independent-session
+  capability. **It is experimental.** It may change in ways that are not
+  backwards compatible, nothing bounds what a session may consume, and a session
+  given a Unix account of its own still hears the host's audio. It does not turn
+  the whole server into an isolated-session mode: shared-host streams and
+  independent sessions may run on the same Hermes server at the same time.
 
-  One Hermes server starts a separate compositor, application process tree,
-  capture path, and tagged virtual input set for each client, each on its own
-  Hermes-KMS card and private DRM seat. Application profiles run directly in a
-  DRM Gamescope session; desktop profiles run Weston with its desktop shell and
-  panel, or another compositor named by `hermes_kms_session_compositor`. It
-  needs `gamescope`, `weston`, and the driver's optional private-seat broker
+  With `session-type = auto`, an explicitly requested virtual display uses an
+  independent session only when `virtual-display-layout = detached`. A Detached
+  entry with no command becomes an independent desktop; one with a command
+  becomes an independent application session. Mirror, Extend, Exclusive, normal
+  Host Desktop launches, and launches without an explicit virtual-display request
+  stay on the shared host session. Explicit `desktop` and `application` session
+  types force the corresponding independent route, while `shared` always uses
+  the host session.
+
+  An independent session gets a separate compositor, application process tree,
+  capture path, and tagged virtual input set, on its own Hermes-KMS card and
+  private DRM seat. Application profiles run directly in a DRM Gamescope
+  session; desktop profiles run Weston with its desktop shell and panel, or
+  another compositor named by `hermes_kms_session_compositor`. It needs
+  `gamescope`, `weston`, and the driver's optional private-seat broker
   (`hermes-kms-seatd-git`, or `sudo make INSTALL_BROKER=1 dkms-install` from a
   clone), configured for the user Hermes runs as:
 
@@ -329,11 +335,10 @@ enabling `hermes-kms-seatd@N.service` by hand, as older instructions said, is no
 longer needed — the helper removes that enablement. Hermes rejects an isolated
 launch with an actionable log message when a card's broker is not available.
 The brokers are experimental process/session plumbing, not a security boundary
-for mutually untrusted local users. If both experimental flags are present,
-`hermes_kms_isolated_sessions` takes precedence and shared-desktop multi-output
-management stays inactive. The input-only/Remote Input application is
-unavailable in this mode, because it has no compositor session that identifies
-which private seat should receive its events.
+for mutually untrusted local users. `hermes_kms_multi_output` may be enabled at
+the same time: it keeps managing the shared host compositor's outputs while
+independent sessions use their private cards. Remote Input stays a shared-host
+feature and is not disabled by the independent-session capability.
 
 The full reference, including the optional session and card brokers, is
 [`hermes_kms_isolated_sessions`](docs/configuration.md#hermes_kms_isolated_sessions)

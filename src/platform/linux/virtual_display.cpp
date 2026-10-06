@@ -6380,7 +6380,8 @@ namespace VDISPLAY {
     uint32_t fps,
     const uuid_util::uuid_t &guid,
     std::optional<uid_t> session_owner_uid,
-    virtual_display_layout_e layout
+    virtual_display_layout_e layout,
+    bool isolated_session
   ) {
     std::lock_guard<std::mutex> lock(vdisplay_mutex);
 
@@ -6474,7 +6475,7 @@ namespace VDISPLAY {
       hermes_kms::device_t device {};
       uint64_t session_id = 0;
       bool claimed = false;
-      if (config::video.hermes_kms_isolated_sessions) {
+      if (isolated_session) {
         claimed = hermes_kms::claim_available_device_output(
           device,
           width,
@@ -6547,7 +6548,7 @@ namespace VDISPLAY {
                         << " requested=" << status.requested_width << 'x' << status.requested_height
                         << '@' << status.requested_refresh_hz
                         << " flags=0x" << std::hex << status.flags << std::dec;
-        if (!config::video.hermes_kms_isolated_sessions &&
+        if (!isolated_session &&
             !vdinfo.connector_name.empty()) {
           kscreen::activate_evdi_output(
             vdinfo.name,

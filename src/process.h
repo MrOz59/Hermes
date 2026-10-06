@@ -51,6 +51,18 @@ namespace proc {
   typedef config::prep_cmd_t cmd_t;
 
   /**
+   * Where a launch belongs when independent Hermes-KMS sessions are available.
+   *
+   * This is deliberately a per-launch decision. Enabling the capability must
+   * not move ordinary host-desktop applications into a private compositor.
+   */
+  enum class session_route_e {
+    shared,
+    isolated_application,
+    isolated_desktop,
+  };
+
+  /**
    * pre_cmds -- guaranteed to be executed unless any of the commands fail.
    * detached -- commands detached from Sunshine
    * cmd -- Runs indefinitely until:
@@ -99,8 +111,8 @@ namespace proc {
     bool allow_client_commands;
     bool terminate_on_pause;
     bool unlock_host_session;
-    // auto: desktop when cmd is empty, application otherwise.
-    // shared: legacy marker; rejected while isolation is enabled.
+    // auto: Detached virtual displays isolate when the capability is enabled.
+    // shared: force the existing host session.
     // application/desktop: force the corresponding isolated profile.
     std::string session_type;
     // auto: extend the virtual display beside the physical outputs and follow
@@ -110,6 +122,32 @@ namespace proc {
     int  scale_factor;
     std::chrono::seconds exit_timeout;
   };
+
+  /**
+   * Return whether policy explicitly requests a virtual display for this launch.
+   *
+   * This is intentionally narrower than the legacy execute() fallback that may
+   * create a display merely because no active display is available. Losing a
+   * monitor must not by itself change session ownership.
+   */
+  bool launch_requests_virtual_display(
+    const ctx_t &app,
+    const rtsp_stream::launch_session_t &launch_session,
+    bool headless_mode
+  );
+
+  /**
+   * Resolve a launch to the host session or an independent private session.
+   *
+   * Explicit application/desktop profiles retain their isolated semantics.
+   * In auto mode, a requested Detached virtual display selects isolation;
+   * other layouts remain on the host. session-type=shared always stays host.
+   */
+  session_route_e resolve_session_route(
+    const ctx_t &app,
+    bool isolated_sessions_enabled,
+    bool virtual_display_requested
+  );
 
   class proc_t {
   public:
@@ -148,7 +186,8 @@ namespace proc {
       std::shared_ptr<rtsp_stream::launch_session_t> launch_session,
       bool apply_scale = true,
       const ctx_t *session_app = nullptr,
-      std::optional<uid_t> session_owner_uid = std::nullopt
+      std::optional<uid_t> session_owner_uid = std::nullopt,
+    bool isolated_session = false
     );
 
     /**

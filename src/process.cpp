@@ -90,6 +90,43 @@ namespace proc {
 
   VDISPLAY::DRIVER_STATUS vDisplayDriverStatus = VDISPLAY::DRIVER_STATUS::UNKNOWN;
 
+  bool launch_requests_virtual_display(
+    const ctx_t &app,
+    const rtsp_stream::launch_session_t &launch_session,
+    bool headless_mode
+  ) {
+    return headless_mode ||
+           launch_session.virtual_display ||
+           app.virtual_display;
+  }
+
+  session_route_e resolve_session_route(
+    const ctx_t &app,
+    bool isolated_sessions_enabled,
+    bool virtual_display_requested
+  ) {
+    if (!isolated_sessions_enabled || app.session_type == "shared") {
+      return session_route_e::shared;
+    }
+
+    if (app.session_type == "desktop") {
+      return session_route_e::isolated_desktop;
+    }
+
+    if (app.session_type == "application") {
+      return session_route_e::isolated_application;
+    }
+
+    if (!virtual_display_requested ||
+        app.virtual_display_layout != "detached") {
+      return session_route_e::shared;
+    }
+
+    return app.cmd.empty() ?
+             session_route_e::isolated_desktop :
+             session_route_e::isolated_application;
+  }
+
 #ifndef _WIN32
   namespace {
     VDISPLAY::virtual_display_layout_e linux_virtual_display_layout(const std::string &layout) {
@@ -837,18 +874,21 @@ namespace proc {
     std::shared_ptr<rtsp_stream::launch_session_t> launch_session,
     bool apply_scale,
     const ctx_t *session_app,
-    std::optional<uid_t> session_owner_uid
+    std::optional<uid_t> session_owner_uid,
+    bool isolated_session
   ) {
 #ifdef _WIN32
     (void) launch_session;
     (void) apply_scale;
     (void) session_app;
     (void) session_owner_uid;
+    (void) isolated_session;
     return 0;
 #else
     if (config::video.virtual_display_backend != "hermes_kms" ||
-        (!config::video.hermes_kms_multi_output &&
-         !config::video.hermes_kms_isolated_sessions)) {
+        (isolated_session ?
+           !config::video.hermes_kms_isolated_sessions :
+           !config::video.hermes_kms_multi_output)) {
       return 0;
     }
 
@@ -902,7 +942,7 @@ namespace proc {
       device_uuid = uuid_util::uuid_t::parse(launch_session->unique_id);
     }
 
-    if (config::video.hermes_kms_isolated_sessions) {
+    if (isolated_session) {
       // The display is a session resource. Mix in the launch ID so a stale
       // connection from the same paired client cannot collide with a new one.
       device_uuid.b32[2] ^= launch_session->id;
@@ -926,7 +966,8 @@ namespace proc {
       target_fps,
       launch_session->display_guid,
       session_owner_uid,
-      linux_virtual_display_layout(app.virtual_display_layout)
+      linux_virtual_display_layout(app.virtual_display_layout),
+      isolated_session
     );
     if (display_name.empty()) {
       return 503;
@@ -944,7 +985,7 @@ namespace proc {
       BOOST_LOG(warning) << "Virtual display did not reach "sv << launch_session->width << 'x'
                          << launch_session->height << "; streaming the display's active mode instead."sv;
     }
-    if (!config::video.hermes_kms_isolated_sessions &&
+    if (!isolated_session &&
         !VDISPLAY::activateVirtualDisplayOutput(display_name)) {
       BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] The compositor did not activate session output "
                        << display_name << "; removing it instead of capturing another monitor.";
@@ -957,7 +998,7 @@ namespace proc {
     launch_session->session_virtual_display_cleanup_pending = true;
     launch_session->display_name = display_name;
     launch_session->drm_device_path = VDISPLAY::getHermesKmsDevicePath(display_name);
-    if (config::video.hermes_kms_isolated_sessions &&
+    if (isolated_session &&
         launch_session->drm_device_path.empty()) {
       BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Could not resolve the independent DRM card for "
                        << display_name;
@@ -1144,7 +1185,8 @@ namespace proc {
           &app,
           runtime->account ?
             std::optional<uid_t> {runtime->account->uid} :
-            std::nullopt
+            std::nullopt,
+          true
         );
         result != 0) {
       return result;

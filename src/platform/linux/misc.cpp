@@ -1,3 +1,6 @@
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+#include "kwin_display.h"
+#endif
 /**
  * @file src/platform/linux/misc.cpp
  * @brief Miscellaneous definitions for Linux.
@@ -48,6 +51,7 @@
 #include "src/entry_handler.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/video.h"
 #include "vaapi.h"
 #include "virtual_display.h"
 
@@ -1081,6 +1085,19 @@ std::string get_local_ip_for_gateway() {
   }
 
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
+    if (!config.kwin_wayland_socket.empty() || !config.kwin_pipewire_socket.empty()) {
+      if (config.kwin_wayland_socket.empty() || config.kwin_pipewire_socket.empty()) {
+        BOOST_LOG(error) << "Incomplete private KWin endpoint; refusing host capture";
+        return nullptr;
+      }
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+      return kwin_display(hwdevice_type, config);
+#else
+      BOOST_LOG(error) << "Private KWin capture support was not built; refusing host capture";
+      return nullptr;
+#endif
+    }
+
 #ifdef SUNSHINE_BUILD_WAYLAND
     // A Hyprland headless output has no DRM device behind it, so the KMS
     // backend has nothing to open. Route it explicitly rather than letting it

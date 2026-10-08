@@ -3,6 +3,7 @@
  * @brief Definitions for inputtino keyboard input handling.
  */
 // lib includes
+#include <algorithm>
 #include <boost/locale.hpp>
 #include <inputtino/input.hpp>
 #include <libevdev/libevdev.h>
@@ -41,12 +42,13 @@ namespace platf::keyboard {
   /**
    * A map of linux scan code -> Moonlight keyboard code
    */
-  static const std::map<short, short> key_mappings = {
+  static const std::multimap<short, short> key_mappings = {
     {KEY_BACKSPACE, 0x08},
     {KEY_TAB, 0x09},
     {KEY_ENTER, 0x0D},
     {KEY_LEFTSHIFT, 0x10},
     {KEY_LEFTCTRL, 0x11},
+    {KEY_LEFTALT, 0x12},
     {KEY_CAPSLOCK, 0x14},
     {KEY_ESC, 0x1B},
     {KEY_SPACE, 0x20},
@@ -149,6 +151,14 @@ namespace platf::keyboard {
   };
 
   void update(input_raw_t *raw, uint16_t modcode, bool release, uint8_t flags) {
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+    if (raw->private_kwin) {
+      const auto key = std::find_if(key_mappings.begin(), key_mappings.end(),
+        [modcode](const auto &entry) { return entry.second == modcode; });
+      if (key != key_mappings.end()) raw->kwin_input->key(key->first, !release);
+      return;
+    }
+#endif
     if (raw->keyboard) {
       if (release) {
         (*raw->keyboard).release(modcode);
@@ -159,6 +169,24 @@ namespace platf::keyboard {
   }
 
   void unicode(input_raw_t *raw, char *utf8, int size) {
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+    if (raw->private_kwin) {
+      if (size <= 0) return;
+      try {
+        const auto text = boost::locale::conv::utf_to_utf<char32_t>(utf8, utf8 + size);
+        for (char32_t character : text) {
+          const std::uint32_t symbol = character <= 0xff ? character : (0x01000000u | character);
+          if (!raw->kwin_input->keysym(symbol, true) || !raw->kwin_input->keysym(symbol, false)) {
+            BOOST_LOG(warning) << "Private KWin Unicode input failed";
+            break;
+          }
+        }
+      } catch (const std::exception &error) {
+        BOOST_LOG(warning) << "Private KWin text input: " << error.what();
+      }
+      return;
+    }
+#endif
     if (raw->keyboard) {
       /* Reading input text as UTF-8 */
       auto utf8_str = boost::locale::conv::to_utf<wchar_t>(utf8, utf8 + size, "UTF-8");

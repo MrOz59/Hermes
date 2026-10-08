@@ -73,6 +73,8 @@ namespace rtsp_stream {
     std::string isolated_seat_id;
     std::string drm_device_path;
     std::string wayland_display;
+    std::string kwin_wayland_socket;
+    std::string kwin_pipewire_socket;
     uint32_t scale_factor;
     std::string launch_mode;
 

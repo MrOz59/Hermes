@@ -2295,12 +2295,22 @@ namespace stream {
     }
 
     int start(session_t &session, const std::string &addr_string) {
-      session.input = input::alloc(
-        session.mail,
-        session.isolated_session ?
-          session.isolated_seat_id :
-          std::string {}
-      );
+      // Reject incomplete private routes before allocating host input.
+      const auto &monitor = session.config.monitor;
+      if (monitor.kwin_wayland_socket.empty() != monitor.kwin_pipewire_socket.empty()) {
+        BOOST_LOG(error) << "Private KWin session requires both Wayland and PipeWire endpoints";
+        return -1;
+      }
+      try {
+        session.input = input::alloc(
+          session.mail,
+          session.isolated_session ? session.isolated_seat_id : std::string {},
+          session.config.monitor.kwin_wayland_socket
+        );
+      } catch (const std::exception &error) {
+        BOOST_LOG(::error) << "Could not initialize session input: " << error.what();
+        return -1;
+      }
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
@@ -2392,6 +2402,11 @@ namespace stream {
 
       session->config = config;
       session->config.monitor.display_name = launch_session.display_name;
+      session->config.monitor.kwin_wayland_socket = launch_session.kwin_wayland_socket;
+      session->config.monitor.kwin_pipewire_socket = launch_session.kwin_pipewire_socket;
+      if (!launch_session.kwin_wayland_socket.empty()) {
+        session->config.monitor.display_name = "kwin:" + launch_session.kwin_wayland_socket;
+      }
       // Preserve the session-scoped marker for process-level cleanup decisions,
       // but move responsibility for releasing the output into session_t.
       launch_session.session_virtual_display_cleanup_pending = false;

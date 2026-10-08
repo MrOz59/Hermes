@@ -807,6 +807,9 @@ namespace platf {
    * uinput phys/uniq metadata so a compositor seat can select only its client.
    */
   input_t input(const std::string &session_tag = {});
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+  input_t input_private_kwin(const std::string &wayland_socket);
+#endif
   /**
    * @brief Get the current mouse position on screen
    * @param input The input_t instance to use.

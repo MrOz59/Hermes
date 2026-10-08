@@ -25,7 +25,8 @@ namespace input {
 
   std::shared_ptr<input_t> alloc(
     safe::mail_t mail,
-    const std::string &session_tag = {}
+    const std::string &session_tag = {},
+    const std::string &wayland_socket = {}
   );
 
   /**

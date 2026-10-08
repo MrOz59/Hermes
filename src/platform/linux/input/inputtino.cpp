@@ -3,6 +3,7 @@
  * @brief Definitions for the inputtino Linux input handling.
  */
 // lib includes
+#include <stdexcept>
 #include <inputtino/input.hpp>
 #include <libevdev/libevdev.h>
 
@@ -24,6 +25,16 @@ namespace platf {
   input_t input(const std::string &session_tag) {
     return {new input_raw_t(session_tag)};
   }
+
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+  input_t input_private_kwin(const std::string &wayland_socket) {
+    auto raw = std::make_unique<input_raw_t>(std::string {}, true);
+    std::string error;
+    raw->kwin_input = kwin::connection_t::open({wayland_socket, {}, {}}, false, true, error);
+    if (!raw->kwin_input) throw std::runtime_error("Private KWin input: " + error);
+    return input_t {raw.release()};
+  }
+#endif
 
   std::unique_ptr<client_input_t> allocate_client_input_context(input_t &input) {
     return std::make_unique<client_input_raw_t>(input);
@@ -81,6 +92,10 @@ namespace platf {
 
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
     auto raw = (input_raw_t *) input.get();
+    if (raw->private_kwin) {
+      BOOST_LOG(warning) << "Private KWin gamepad routing is not implemented; refusing a host input device";
+      return -1;
+    }
     return platf::gamepad::alloc(raw, id, metadata, feedback_queue);
   }
 

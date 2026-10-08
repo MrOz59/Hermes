@@ -57,6 +57,9 @@ namespace video {
     std::string display_name;
     // Internal capability probing encodes synthetic frames, never a stream.
     bool encoder_probe {false};
+    // Explicit native detached endpoints; empty preserves existing capture.
+    std::string kwin_wayland_socket;
+    std::string kwin_pipewire_socket;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);

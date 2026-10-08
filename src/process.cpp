@@ -565,6 +565,20 @@ namespace proc {
       }
     }
 
+    void erase_host_graphical_session_environment(boost::process::v1::environment &env) {
+      for (const auto *name : {
+             "DBUS_SESSION_BUS_ADDRESS", "DBUS_SESSION_BUS_PID",
+             "DBUS_STARTER_ADDRESS", "DBUS_STARTER_BUS_TYPE",
+             "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "_WAYLAND_DISPLAY", "DISPLAY",
+             "XAUTHORITY",
+             "XDG_SESSION_ID", "XDG_SESSION_DESKTOP", "DESKTOP_SESSION",
+             "KDE_FULL_SESSION", "KDE_SESSION_UID", "KDE_SESSION_VERSION",
+             "GNOME_DESKTOP_SESSION_ID",
+           }) {
+        env.erase(name);
+      }
+    }
+
     void populate_session_environment(
       boost::process::v1::environment &env,
       const ctx_t &app,
@@ -582,6 +596,7 @@ namespace proc {
         // and setting it here would only be a chance to disagree with it.
         erase_host_session_environment(env);
       } else {
+        erase_host_graphical_session_environment(env);
         env["XDG_RUNTIME_DIR"] = runtime.runtime_dir;
         // That is also how a PulseAudio or PipeWire client finds its server,
         // and it has just been pointed at a directory with no server in it.
@@ -1099,6 +1114,20 @@ namespace proc {
       (std::filesystem::path {isolated_runtime_root()} / runtime->runtime_id).string();
     runtime->runtime_dir = runtime->assets_dir;
 
+    // Install cleanup before acquiring the audio sink or creating directories.
+    // Every failed launch must release the resources it has acquired so far.
+    auto cleanup = util::fail_guard([&]() {
+      stop_isolated_runtime(runtime);
+      if (launch_session->session_virtual_display_cleanup_pending) {
+        if (runtime->display_name.empty()) {
+          VDISPLAY::removeVirtualDisplay(launch_session->display_guid);
+        }
+        launch_session->session_virtual_display_cleanup_pending = false;
+        launch_session->session_scoped_virtual_display = false;
+        launch_session->display_name.clear();
+      }
+    });
+
     // With a broker present the session gets a uid of its own, and the single
     // runtime directory has to become two: the session's, which systemd made
     // for that uid and Hermes cannot write, and this one, which Hermes writes
@@ -1126,8 +1155,8 @@ namespace proc {
     // never plays into, and capturing it would hand the client silence, which
     // is worse than the host's audio it hears today.
     //
-    // A failure is not fatal either way: the session falls back to what it did
-    // before any of this existed.
+    // A same-user desktop must never fall back to recording the host's sink.
+    // The helper-account application path retains its existing audio policy.
     if (!runtime->account) {
       const int audio_channels = launch_session->surround_info & 65535;
       const std::string audio_sink = "sink-" + runtime->runtime_id;
@@ -1136,6 +1165,12 @@ namespace proc {
         BOOST_LOG(info) << "[IsolatedSession] Session " << runtime->runtime_id << " plays into "
                         << audio_sink << " (" << audio_channels << " channels).";
       } else {
+        if (runtime->profile == "desktop") {
+          launch_session->launch_error_message = "Could not create the detached desktop's private audio sink.";
+          BOOST_LOG(error) << "[IsolatedSession] Could not create a private audio sink for "
+                           << runtime->runtime_id << "; refusing to capture host audio.";
+          return 503;
+        }
         BOOST_LOG(warning) << "[IsolatedSession] Could not create a private audio sink for "
                            << runtime->runtime_id
                            << "; this session will share the host's audio, and the client will "
@@ -1161,20 +1196,6 @@ namespace proc {
                        << (dir_ec ? dir_ec.message() : std::strerror(errno));
       return -1;
     }
-
-    auto cleanup = util::fail_guard([&]() {
-      stop_isolated_runtime(runtime);
-      if (launch_session->session_virtual_display_cleanup_pending) {
-        // stop_isolated_runtime() owns the actual display removal once the
-        // runtime has copied display_name/display_guid.
-        if (runtime->display_name.empty()) {
-          VDISPLAY::removeVirtualDisplay(launch_session->display_guid);
-        }
-        launch_session->session_virtual_display_cleanup_pending = false;
-        launch_session->session_scoped_virtual_display = false;
-        launch_session->display_name.clear();
-      }
-    });
 
     // The account was ensured above, before the display exists, so a card the
     // broker creates here can be made for it: the session's compositor runs as
@@ -1622,7 +1643,8 @@ namespace proc {
       static std::mutex encoder_probe_mutex;
       std::lock_guard<std::mutex> probe_lock(encoder_probe_mutex);
       const auto previous_output = config::video.output_name;
-      config::video.output_name = display_device::map_display_name(runtime->display_name);
+      auto mapped_name = display_device::map_display_name(runtime->display_name);
+      config::video.output_name = mapped_name.empty() ? runtime->display_name : std::move(mapped_name);
       auto restore_output = util::fail_guard([&]() {
         config::video.output_name = previous_output;
       });
@@ -1870,7 +1892,14 @@ namespace proc {
     // registry lock across that would stall every launch and teardown behind a
     // round trip.
     const auto now = std::chrono::steady_clock::now();
+    std::vector<std::shared_ptr<isolated_runtime_t>> stopped;
     for (const auto &runtime : runtimes) {
+      const bool running = isolated_runtime_running(runtime);
+      if (!running) {
+        stopped.push_back(runtime);
+        continue;
+      }
+
       isolated_session_t session;
       session.launch_session_id = runtime->launch_session_id;
       session.client_uuid = runtime->client_uuid;
@@ -1887,10 +1916,28 @@ namespace proc {
       }
       session.unit = runtime->unit;
       session.audio_sink = runtime->audio_sink;
-      session.running = isolated_runtime_running(runtime);
+      session.running = true;
       session.uptime_seconds =
         std::chrono::duration_cast<std::chrono::seconds>(now - runtime->started_at).count();
       sessions.push_back(std::move(session));
+    }
+
+    std::vector<std::shared_ptr<isolated_runtime_t>> removed;
+    {
+      std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+      for (const auto &runtime : stopped) {
+        const auto it = isolated_runtimes.find(runtime->launch_session_id);
+        if (it != isolated_runtimes.end() && it->second == runtime) {
+          isolated_runtimes.erase(it);
+          removed.push_back(runtime);
+        }
+      }
+    }
+
+    for (const auto &runtime : removed) {
+      BOOST_LOG(info) << "[IsolatedSession] Removing stale runtime "
+                      << runtime->runtime_id << " while listing sessions.";
+      stop_isolated_runtime(runtime);
     }
 
     std::ranges::sort(sessions, [](const auto &left, const auto &right) {
@@ -1920,27 +1967,55 @@ namespace proc {
     std::shared_ptr<rtsp_stream::launch_session_t> launch_session
   ) {
 #ifndef _WIN32
-    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
-    const auto runtime = find_isolated_client_locked(launch_session->unique_id);
+    std::shared_ptr<isolated_runtime_t> runtime;
+    {
+      std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+      runtime = find_isolated_client_locked(launch_session->unique_id);
+    }
+
     if (!isolated_runtime_running(runtime)) {
+      if (runtime) {
+        bool removed = false;
+        {
+          std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+          const auto it = isolated_runtimes.find(runtime->launch_session_id);
+          if (it != isolated_runtimes.end() && it->second == runtime) {
+            isolated_runtimes.erase(it);
+            removed = true;
+          }
+        }
+        if (removed) {
+          BOOST_LOG(info) << "[IsolatedSession] Removing stale runtime "
+                          << runtime->runtime_id << " before resume.";
+          stop_isolated_runtime(runtime);
+        }
+      }
       return false;
     }
 
-    launch_session->isolated_session = true;
-    launch_session->isolated_runtime_owner_id = runtime->launch_session_id;
-    launch_session->isolated_session_profile = runtime->profile;
-    launch_session->isolated_runtime_id = runtime->runtime_id;
-    launch_session->isolated_seat_id = runtime->seat_id;
-    launch_session->session_scoped_virtual_display = true;
-    launch_session->session_virtual_display_cleanup_pending = false;
-    launch_session->virtual_display = true;
-    launch_session->display_name = runtime->display_name;
-    launch_session->display_guid = runtime->display_guid;
-    launch_session->drm_device_path = runtime->drm_device_path;
-    launch_session->wayland_display = runtime->wayland_display;
-    if (!runtime->app.allow_client_commands) {
-      launch_session->client_do_cmds.clear();
-      launch_session->client_undo_cmds.clear();
+    {
+      std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+      const auto current = find_isolated_client_locked(launch_session->unique_id);
+      if (current != runtime) {
+        return false;
+      }
+
+      launch_session->isolated_session = true;
+      launch_session->isolated_runtime_owner_id = runtime->launch_session_id;
+      launch_session->isolated_session_profile = runtime->profile;
+      launch_session->isolated_runtime_id = runtime->runtime_id;
+      launch_session->isolated_seat_id = runtime->seat_id;
+      launch_session->session_scoped_virtual_display = true;
+      launch_session->session_virtual_display_cleanup_pending = false;
+      launch_session->virtual_display = true;
+      launch_session->display_name = runtime->display_name;
+      launch_session->display_guid = runtime->display_guid;
+      launch_session->drm_device_path = runtime->drm_device_path;
+      launch_session->wayland_display = runtime->wayland_display;
+      if (!runtime->app.allow_client_commands) {
+        launch_session->client_do_cmds.clear();
+        launch_session->client_undo_cmds.clear();
+      }
     }
     return true;
 #else

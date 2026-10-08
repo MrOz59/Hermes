@@ -1139,11 +1139,6 @@ namespace rtsp_stream {
 
     std::int64_t configuredBitrateKbps;
     config.audio.flags[audio::config_t::HOST_AUDIO] = session.host_audio;
-    // An isolated session records the sink that was made for it at launch,
-    // rather than whichever one the machine currently defaults to. Empty for
-    // every session that shares the host's desktop, which leaves their capture
-    // exactly as it was.
-    config.audio.session_sink = proc::proc.isolated_audio_sink(session.id);
     try {
       config.audio.channels = util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
       config.audio.mask = util::from_view(args.at("x-nv-audio.surround.channelMask"sv));
@@ -1315,6 +1310,23 @@ namespace rtsp_stream {
       BOOST_LOG(info) << "Rejecting RTSP ANNOUNCE for cancelled launch "
                       << session.id << " from " << session.device_name;
       respond(sock, session, &option, 410, "Gone", req->sequenceNumber, {});
+      return;
+    }
+
+    // An isolated session records the sink that was made for it at launch,
+    // rather than whichever one the machine currently defaults to. Empty for
+    // every session that shares the host's desktop, which leaves their capture
+    // exactly as it was.
+    // A resumed connection has a new launch ID, but the retained desktop and
+    // its sink still belong to the original runtime.
+    config.audio.session_sink = proc::proc.isolated_audio_sink(
+      session.isolated_session ? session.isolated_runtime_owner_id : session.id
+    );
+    if (session.isolated_session && session.isolated_session_profile == "desktop" &&
+        config.audio.session_sink.empty()) {
+      BOOST_LOG(error) << "[IsolatedSession] The detached desktop has no private audio sink; "
+                          "refusing to capture host audio.";
+      respond(sock, session, &option, 503, "Service Unavailable", req->sequenceNumber, {});
       return;
     }
 

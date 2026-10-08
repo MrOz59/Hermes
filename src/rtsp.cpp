@@ -1379,6 +1379,14 @@ namespace rtsp_stream {
     }
 
     config.gcmap = session.gcmap;
+    if (session.isolated_session && session.isolated_session_profile == "desktop" &&
+        config.audio.session_sink.empty()) {
+      BOOST_LOG(error) << "[IsolatedSession] The detached desktop has no private audio sink; "
+                          "refusing to capture host audio.";
+      respond(sock, session, &option, 503, "Service Unavailable", req->sequenceNumber, {});
+      return;
+    }
+
     auto stream_session = stream::session::alloc(config, session);
     server->insert(stream_session);
     if (stream::session::start(*stream_session, sock.remote_endpoint().address().to_string())) {

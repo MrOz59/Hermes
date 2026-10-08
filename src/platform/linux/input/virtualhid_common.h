@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -83,5 +84,8 @@ namespace platf {
 
     input_raw_t *global;
     std::unique_ptr<virtualhid::client_devices_t> virtualhid_devices;
+    // Fingers this client has put down on a private KWin desktop, which tells
+    // a down from a motion: the protocol has separate requests for each.
+    std::set<std::uint32_t> kwin_touches;
   };
 }  // namespace platf

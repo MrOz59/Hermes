@@ -1,6 +1,6 @@
 /**
  * @file src/platform/linux/input/kwin_input.cpp
- * @brief Keyboard and mouse for a private KWin desktop, through its fake-input protocol.
+ * @brief Keyboard, mouse and touch for a private KWin desktop, through its fake-input protocol.
  */
 #include "kwin_input.h"
 
@@ -209,6 +209,40 @@ namespace platf::kwin_input {
       }
     } catch (const std::exception &error) {
       BOOST_LOG(warning) << "Private KWin text input: " << error.what();
+    }
+  }
+
+  void touch(client_input_raw_t *raw, const touch_input_t &touch) {
+    auto &kwin = *raw->global->kwin;
+    const auto &o = kwin.output();
+    // touch.x/y are normalized to the streamed output, which is the private
+    // desktop's only one.
+    const double x = o.x + touch.x * o.width / o.scale;
+    const double y = o.y + touch.y * o.height / o.scale;
+    switch (touch.eventType) {
+      case LI_TOUCH_EVENT_DOWN:
+      case LI_TOUCH_EVENT_MOVE:
+        if (raw->kwin_touches.insert(touch.pointerId).second) {
+          kwin.touch_down(touch.pointerId, x, y);
+        } else {
+          kwin.touch_motion(touch.pointerId, x, y);
+        }
+        break;
+      case LI_TOUCH_EVENT_UP:
+      case LI_TOUCH_EVENT_CANCEL:
+        if (raw->kwin_touches.erase(touch.pointerId)) {
+          kwin.touch_up(touch.pointerId);
+        }
+        break;
+      case LI_TOUCH_EVENT_CANCEL_ALL:
+        for (const auto id : raw->kwin_touches) {
+          kwin.touch_up(id);
+        }
+        raw->kwin_touches.clear();
+        break;
+      default:
+        // Hover has no equivalent in the fake-input protocol.
+        break;
     }
   }
 }  // namespace platf::kwin_input

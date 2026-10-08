@@ -103,6 +103,18 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   at the greeter's resolution. The steps and the limits are in
   [Getting Started](docs/getting_started.md). Run so far on KDE Plasma with
   SDDM and Hermes-KMS only.
+- Linux: `hermes_kms_session_compositor = plasma` turns an independent
+  `desktop` session into the user's own Plasma desktop, detached. It runs as
+  the same user with the same home, files and settings, in a transient unit of
+  the user's systemd manager with a private D-Bus and runtime directory, on a
+  stock KWin virtual output. It has no DRM device or libinput, so it never wakes
+  or rearranges a physical monitor and the keyboard and mouse at the machine
+  never reach it; PowerDevil does not run inside it. Hermes captures it through
+  KWin's screencast protocol over PipeWire and drives its keyboard, mouse and
+  touch through KWin's fake-input protocol, over explicit sockets with no
+  fallback to the host desktop. Frames are copied through system memory, and
+  the session is SDR only. Requires Plasma 6 and plasma-wayland-protocols 1.23
+  or newer at build time.
 
 ### Changed
 - Experimental isolated application sessions hand Gamescope the session's own

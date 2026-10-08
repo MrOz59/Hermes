@@ -1,6 +1,6 @@
 /**
  * @file src/platform/linux/input/kwin_input.h
- * @brief Keyboard and mouse for a private KWin desktop, through its fake-input protocol.
+ * @brief Keyboard, mouse and touch for a private KWin desktop, through its fake-input protocol.
  */
 #pragma once
 
@@ -19,6 +19,7 @@ namespace platf::kwin_input {
   void scroll(input_raw_t *raw, int high_resolution_distance, bool horizontal);
   void key(input_raw_t *raw, std::uint16_t key_code, bool release);
   void unicode(input_raw_t *raw, const char *utf8, int size);
+  void touch(client_input_raw_t *raw, const touch_input_t &touch);
 #else
   // Without the KWin transport no input is ever private, so these never run.
   inline bool active(const input_raw_t *) {
@@ -36,5 +37,7 @@ namespace platf::kwin_input {
   inline void key(input_raw_t *, std::uint16_t, bool) {}
 
   inline void unicode(input_raw_t *, const char *, int) {}
+
+  inline void touch(client_input_raw_t *, const touch_input_t &) {}
 #endif
 }  // namespace platf::kwin_input

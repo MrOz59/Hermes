@@ -162,6 +162,9 @@ namespace platf {
       return;
     }
     auto *raw = static_cast<client_input_raw_t *>(input);
+    if (raw && kwin_input::active(raw->global)) {
+      return kwin_input::touch(raw, touch);
+    }
     if (raw && raw->virtualhid_devices) {
       virtualhid::touch_update(*raw->virtualhid_devices, touch_port, touch);
     }

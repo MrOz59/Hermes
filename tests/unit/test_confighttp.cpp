@@ -90,7 +90,10 @@ TEST_F(ConfigResponseTest, EveryComputedFieldIsRegisteredAsOne) {
   // parser, which would otherwise warn about each as an unrecognized option,
   // and the merge above, which must not let a file overwrite one. A field added
   // to the response and forgotten here is the shape the bug had.
-  for (const auto &[name, _] : confighttp::computed_config_json().items()) {
+  // Held in a named object: items() only refers to the JSON it was called on,
+  // and a temporary in the range expression is gone before the first iteration.
+  const auto response = confighttp::computed_config_json();
+  for (const auto &[name, _] : response.items()) {
     EXPECT_TRUE(config::server_computed_keys().contains(name))
       << '\'' << name << "' is computed for the config response but is not in "
       << "config::server_computed_keys(), so a hermes.conf key of that name would "

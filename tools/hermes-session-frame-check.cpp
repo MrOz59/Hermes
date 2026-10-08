@@ -5,7 +5,10 @@
 #include <iostream>
 
 static void require(bool condition, const char *message) {
-  if (!condition) { std::cerr << message << '\n'; std::exit(1); }
+  if (!condition) {
+    std::cerr << message << '\n';
+    std::exit(1);
+  }
 }
 
 int main() {

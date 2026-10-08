@@ -3,9 +3,9 @@
  * @brief Definitions for the inputtino Linux input handling.
  */
 // lib includes
-#include <stdexcept>
 #include <inputtino/input.hpp>
 #include <libevdev/libevdev.h>
+#include <stdexcept>
 
 // local includes
 #include "inputtino_common.h"
@@ -31,7 +31,9 @@ namespace platf {
     auto raw = std::make_unique<input_raw_t>(std::string {}, true);
     std::string error;
     raw->kwin_input = kwin::connection_t::open({wayland_socket, {}, {}}, false, true, error);
-    if (!raw->kwin_input) throw std::runtime_error("Private KWin input: " + error);
+    if (!raw->kwin_input) {
+      throw std::runtime_error("Private KWin input: " + error);
+    }
     return input_t {raw.release()};
   }
 #endif

@@ -576,12 +576,21 @@ namespace proc {
 
     void erase_host_graphical_session_environment(boost::process::v1::environment &env) {
       for (const auto *name : {
-             "DBUS_SESSION_BUS_ADDRESS", "DBUS_SESSION_BUS_PID",
-             "DBUS_STARTER_ADDRESS", "DBUS_STARTER_BUS_TYPE",
-             "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "_WAYLAND_DISPLAY", "DISPLAY",
+             "DBUS_SESSION_BUS_ADDRESS",
+             "DBUS_SESSION_BUS_PID",
+             "DBUS_STARTER_ADDRESS",
+             "DBUS_STARTER_BUS_TYPE",
+             "WAYLAND_DISPLAY",
+             "WAYLAND_SOCKET",
+             "_WAYLAND_DISPLAY",
+             "DISPLAY",
              "XAUTHORITY",
-             "XDG_SESSION_ID", "XDG_SESSION_DESKTOP", "DESKTOP_SESSION",
-             "KDE_FULL_SESSION", "KDE_SESSION_UID", "KDE_SESSION_VERSION",
+             "XDG_SESSION_ID",
+             "XDG_SESSION_DESKTOP",
+             "DESKTOP_SESSION",
+             "KDE_FULL_SESSION",
+             "KDE_SESSION_UID",
+             "KDE_SESSION_VERSION",
              "GNOME_DESKTOP_SESSION_ID",
            }) {
         env.erase(name);
@@ -1414,12 +1423,12 @@ namespace proc {
         return 503;
       };
 
-#ifndef SUNSHINE_BUILD_KWIN_TRANSPORT
+  #ifndef SUNSHINE_BUILD_KWIN_TRANSPORT
       return plasma_failed(
         "is not available: Hermes was built without the KWin transport, which needs "
         "plasma-wayland-protocols 1.23 or newer"
       );
-#endif
+  #endif
       const auto systemd_run = find_program("systemd-run");
       const auto dbus_run_session = find_program("dbus-run-session");
       const auto session_tool = find_detached_session_tool();
@@ -1492,15 +1501,15 @@ namespace proc {
         command.push_back("--property=StopPropagatedFrom=" + owner);
       }
       command.insert(command.end(), {
-        "--",
-        dbus_run_session,
-        "--",
-        session_tool,
-        "--bootstrap",
-        std::to_string(width),
-        std::to_string(height),
-        self.string(),
-      });
+                                      "--",
+                                      dbus_run_session,
+                                      "--",
+                                      session_tool,
+                                      "--bootstrap",
+                                      std::to_string(width),
+                                      std::to_string(height),
+                                      self.string(),
+                                    });
 
       BOOST_LOG(info) << "[IsolatedSession] Starting detached desktop " << runtime->runtime_id
                       << " (" << width << 'x' << height << ") in user unit " << runtime->unit;

@@ -60,12 +60,23 @@ namespace platf::mouse {
     if (raw->private_kwin) {
       int code;
       switch (button) {
-        case BUTTON_LEFT: code = BTN_LEFT; break;
-        case BUTTON_MIDDLE: code = BTN_MIDDLE; break;
-        case BUTTON_RIGHT: code = BTN_RIGHT; break;
-        case BUTTON_X1: code = BTN_SIDE; break;
-        case BUTTON_X2: code = BTN_EXTRA; break;
-        default: return;
+        case BUTTON_LEFT:
+          code = BTN_LEFT;
+          break;
+        case BUTTON_MIDDLE:
+          code = BTN_MIDDLE;
+          break;
+        case BUTTON_RIGHT:
+          code = BTN_RIGHT;
+          break;
+        case BUTTON_X1:
+          code = BTN_SIDE;
+          break;
+        case BUTTON_X2:
+          code = BTN_EXTRA;
+          break;
+        default:
+          return;
       }
       raw->kwin_input->button(code, !release);
       return;

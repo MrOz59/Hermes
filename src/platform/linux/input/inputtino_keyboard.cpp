@@ -153,9 +153,12 @@ namespace platf::keyboard {
   void update(input_raw_t *raw, uint16_t modcode, bool release, uint8_t flags) {
 #ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
     if (raw->private_kwin) {
-      const auto key = std::find_if(key_mappings.begin(), key_mappings.end(),
-        [modcode](const auto &entry) { return entry.second == modcode; });
-      if (key != key_mappings.end()) raw->kwin_input->key(key->first, !release);
+      const auto key = std::find_if(key_mappings.begin(), key_mappings.end(), [modcode](const auto &entry) {
+        return entry.second == modcode;
+      });
+      if (key != key_mappings.end()) {
+        raw->kwin_input->key(key->first, !release);
+      }
       return;
     }
 #endif
@@ -171,7 +174,9 @@ namespace platf::keyboard {
   void unicode(input_raw_t *raw, char *utf8, int size) {
 #ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
     if (raw->private_kwin) {
-      if (size <= 0) return;
+      if (size <= 0) {
+        return;
+      }
       try {
         const auto text = boost::locale::conv::utf_to_utf<char32_t>(utf8, utf8 + size);
         for (char32_t character : text) {

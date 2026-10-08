@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+
 namespace platf::kwin {
   inline int connect_session_socket(const std::string &path, std::string &error) {
     sockaddr_un address {};
@@ -44,7 +45,7 @@ namespace platf::kwin {
         return fd;
       }
       error = result == 0 ? "Private session connection timed out" :
-                           std::strerror(socket_error ? socket_error : errno);
+                            std::strerror(socket_error ? socket_error : errno);
     } else {
       error = std::strerror(errno);
     }
@@ -52,4 +53,4 @@ namespace platf::kwin {
     return -1;
   }
 
-}
+}  // namespace platf::kwin

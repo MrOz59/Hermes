@@ -1,6 +1,3 @@
-#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
-#include "kwin_display.h"
-#endif
 /**
  * @file src/platform/linux/misc.cpp
  * @brief Miscellaneous definitions for Linux.
@@ -54,6 +51,10 @@
 #include "src/video.h"
 #include "vaapi.h"
 #include "virtual_display.h"
+
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+  #include "kwin_display.h"
+#endif
 
 #include <linux/rtnetlink.h>
 

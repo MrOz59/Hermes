@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -25,6 +26,9 @@
 
 #ifndef _WIN32
   #include <fcntl.h>
+  #include <sys/socket.h>
+  #include <sys/un.h>
+  #include <sys/wait.h>
   #include <unistd.h>
   #include <xf86drm.h>
   // For the GBM allocation probe: picking the render node an isolated session
@@ -157,6 +161,11 @@ namespace proc {
       std::string assets_dir;
       std::optional<platf::session_broker::account_t> account;
       std::string unit;
+      // A detached desktop runs as the user's own transient systemd unit, and
+      // Hermes reaches it only through these two explicit sockets.
+      bool user_unit {false};
+      std::string kwin_wayland_socket;
+      std::string kwin_pipewire_socket;
       std::string audio_sink;
       std::chrono::steady_clock::time_point started_at {std::chrono::steady_clock::now()};
       std::string wayland_display;
@@ -673,9 +682,164 @@ namespace proc {
       }
     }
 
+    /**
+     * Run a program by absolute path, without a shell, and wait at most
+     * `timeout` for it. Its output goes to Hermes' own, which is the journal.
+     */
+    int run_program(const std::vector<std::string> &arguments, std::chrono::seconds timeout) {
+      if (arguments.empty() || !arguments.front().starts_with('/')) {
+        return -1;
+      }
+      std::vector<char *> argv;
+      for (const auto &argument : arguments) {
+        argv.push_back(const_cast<char *>(argument.c_str()));
+      }
+      argv.push_back(nullptr);
+      const pid_t pid = ::fork();
+      if (pid < 0) {
+        return -1;
+      }
+      if (pid == 0) {
+        ::execv(argv.front(), argv.data());
+        ::_exit(127);
+      }
+      const auto deadline = std::chrono::steady_clock::now() + timeout;
+      int status = 0;
+      for (;;) {
+        const pid_t waited = ::waitpid(pid, &status, WNOHANG);
+        if (waited == pid) {
+          return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        }
+        if (waited < 0 && errno != EINTR) {
+          return -1;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+          ::kill(pid, SIGKILL);
+          ::waitpid(pid, &status, 0);
+          BOOST_LOG(error) << "[IsolatedSession] " << arguments.front() << " timed out.";
+          return -1;
+        }
+        std::this_thread::sleep_for(20ms);
+      }
+    }
+
+    std::string find_program(const std::string &name) {
+      const auto path = boost::process::v1::search_path(name);
+      return path.empty() ? std::string {} : boost::filesystem::absolute(path).string();
+    }
+
+    /**
+     * The session tool ships beside the Hermes executable, so a build tree
+     * runs its own copy rather than whichever one is installed.
+     */
+    std::string find_detached_session_tool() {
+      std::error_code ec;
+      const auto self = std::filesystem::canonical("/proc/self/exe", ec);
+      if (!ec) {
+        const auto sibling = self.parent_path() / "hermes-detached-session";
+        if (::access(sibling.c_str(), X_OK) == 0) {
+          return sibling.string();
+        }
+      }
+      return find_program("hermes-detached-session");
+    }
+
+    std::string detached_unit_name(const std::string &runtime_id) {
+      return "hermes-detached-" + runtime_id + ".service";
+    }
+
+    /**
+     * The unit Hermes itself runs in, so a detached desktop can stop when
+     * Hermes does. Empty when Hermes is not a service.
+     */
+    std::string own_service_unit() {
+      std::ifstream cgroup {"/proc/self/cgroup"};
+      std::string line;
+      while (std::getline(cgroup, line)) {
+        const auto slash = line.rfind('/');
+        if (slash == std::string::npos) {
+          continue;
+        }
+        const auto unit = line.substr(slash + 1);
+        if (unit.ends_with(".service") && !unit.starts_with("user@")) {
+          return unit;
+        }
+      }
+      return {};
+    }
+
+    void stop_user_unit(const std::string &unit) {
+      if (const auto systemctl = find_program("systemctl"); !systemctl.empty()) {
+        run_program({systemctl, "--user", "stop", unit}, 30s);
+      }
+    }
+
+    bool unix_socket_accepts(const std::string &path) {
+      sockaddr_un address {};
+      address.sun_family = AF_UNIX;
+      if (path.empty() || path.size() >= sizeof(address.sun_path)) {
+        return false;
+      }
+      std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+      const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+      if (fd < 0) {
+        return false;
+      }
+      const bool accepted = ::connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0;
+      ::close(fd);
+      return accepted;
+    }
+
+    std::string read_small_file(const std::filesystem::path &path) {
+      std::ifstream file {path};
+      std::string text {std::istreambuf_iterator<char> {file}, {}};
+      while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
+        text.pop_back();
+      }
+      return text.size() > 512 ? text.substr(0, 512) : text;
+    }
+
+    /**
+     * The KWin wrapper names its own socket, the first free one in the
+     * session's runtime directory, and the session tool reports that name in
+     * `ready` once Plasma is up. It removes `ready` the moment Plasma exits.
+     */
+    std::string detached_wayland_socket(const std::string &runtime_dir) {
+      std::ifstream ready {std::filesystem::path {runtime_dir} / "ready"};
+      std::string line;
+      constexpr std::string_view key {"WAYLAND_DISPLAY="};
+      while (std::getline(ready, line)) {
+        if (!line.starts_with(key)) {
+          continue;
+        }
+        const auto name = line.substr(key.size());
+        if (name.empty() || name.find('/') != std::string::npos) {
+          return {};
+        }
+        return (std::filesystem::path {runtime_dir} / name).string();
+      }
+      return {};
+    }
+
+    /**
+     * Alive means Plasma reported itself up and the compositor still answers
+     * on its socket: a socket nobody is listening on means the unit is gone.
+     */
+    bool detached_desktop_alive(const isolated_runtime_t &runtime) {
+      std::error_code ec;
+      if (std::filesystem::exists(std::filesystem::path {runtime.runtime_dir} / "failure", ec)) {
+        return false;
+      }
+      const auto socket = detached_wayland_socket(runtime.runtime_dir);
+      return !socket.empty() && unix_socket_accepts(socket);
+    }
+
     bool isolated_runtime_running(const std::shared_ptr<isolated_runtime_t> &runtime) {
       if (!runtime) {
         return false;
+      }
+      if (runtime->user_unit) {
+        return detached_desktop_alive(*runtime);
       }
       // A session with an account of its own is a systemd unit rather than a
       // child of this process, so there is no handle here to ask and systemd is
@@ -693,7 +857,13 @@ namespace proc {
 
       BOOST_LOG(info) << "[IsolatedSession] Stopping " << runtime->runtime_id
                       << " for client " << runtime->client_name;
-      if (!runtime->unit.empty()) {
+      if (runtime->user_unit) {
+        // Stopping the unit takes everything the desktop started with it.
+        if (!runtime->unit.empty()) {
+          stop_user_unit(runtime->unit);
+          runtime->unit.clear();
+        }
+      } else if (!runtime->unit.empty()) {
         // Stopping the unit takes the whole session with it: systemd kills the
         // cgroup, so a game that outlived its compositor goes too, which a
         // process group could only manage for children that stayed in it.
@@ -796,6 +966,14 @@ namespace proc {
   };
 
   std::unique_ptr<platf::deinit_t> init() {
+#ifndef _WIN32
+    // Detached desktops are units of the user's manager, not children of this
+    // process, so a Hermes that crashed or was killed leaves them running with
+    // nothing to stream them. None of them can belong to this instance yet.
+    if (const auto systemctl = find_program("systemctl"); !systemctl.empty()) {
+      run_program({systemctl, "--user", "--quiet", "stop", "hermes-detached-*.service"}, 30s);
+    }
+#endif
     return std::make_unique<deinit_t>();
   }
 
@@ -1132,7 +1310,11 @@ namespace proc {
     // runtime directory has to become two: the session's, which systemd made
     // for that uid and Hermes cannot write, and this one, which Hermes writes
     // the generated compositor config into and the session only reads.
-    if (platf::session_broker::available()) {
+    // A detached Plasma desktop is the user's own, by definition, so it never
+    // takes a helper account; every other isolated session still does.
+    const bool own_plasma_desktop =
+      runtime->profile == "desktop" && config::video.hermes_kms_session_compositor == "plasma";
+    if (!own_plasma_desktop && platf::session_broker::available()) {
       runtime->account = platf::session_broker::ensure(runtime->client_uuid);
       if (!runtime->account) {
         // Falling back to the host user here would quietly hand this client the
@@ -1195,6 +1377,181 @@ namespace proc {
                        << runtime->assets_dir << ": "
                        << (dir_ec ? dir_ec.message() : std::strerror(errno));
       return -1;
+    }
+
+    // hermes_kms_session_compositor = plasma: the user's own Plasma, detached.
+    //
+    // A detached desktop is stock KWin on a virtual output of its own, run as
+    // this same user in a transient unit of the user's own systemd manager:
+    // same uid, same home, same files, a private D-Bus and runtime directory.
+    // It has no DRM device, so it can neither wake nor rearrange a physical
+    // monitor, and no libinput, so the keyboard and mouse at the machine never
+    // reach it. Hermes captures it and drives its input over two explicit
+    // sockets, and never falls back to the host desktop.
+    if (runtime->profile == "desktop" && config::video.hermes_kms_session_compositor == "plasma") {
+      if (!app.cmd.empty() || !app.detached.empty()) {
+        launch_session->launch_error_message = "A detached desktop does not launch app commands yet.";
+        BOOST_LOG(error) << "[IsolatedSession] " << app.name
+                         << " has a command; a detached desktop does not launch app commands yet.";
+        return 400;
+      }
+      if (!app.prep_cmds.empty()) {
+        // They exist to rearrange the host's displays for a stream, which is
+        // exactly what a detached desktop must leave alone.
+        BOOST_LOG(info) << "[IsolatedSession] Not running " << app.prep_cmds.size()
+                        << " prep command(s) for a detached desktop; they act on the host desktop.";
+      }
+
+      const auto systemd_run = find_program("systemd-run");
+      const auto dbus_run_session = find_program("dbus-run-session");
+      const auto session_tool = find_detached_session_tool();
+      const auto host_runtime = host_runtime_dir();
+      std::error_code self_ec;
+      const auto self = std::filesystem::canonical("/proc/self/exe", self_ec);
+      if (systemd_run.empty() || dbus_run_session.empty() || session_tool.empty() ||
+          host_runtime.empty() || self_ec) {
+        launch_session->launch_error_message = "The detached desktop is not installed completely.";
+        BOOST_LOG(error) << "[IsolatedSession] A detached desktop needs systemd-run ["
+                         << systemd_run << "], dbus-run-session [" << dbus_run_session
+                         << "], hermes-detached-session [" << session_tool
+                         << "] and a user runtime directory [" << host_runtime << "].";
+        return 503;
+      }
+
+      const int width = static_cast<int>(launch_session->width ? launch_session->width : 1920);
+      const int height = static_cast<int>(launch_session->height ? launch_session->height : 1080);
+      runtime->user_unit = true;
+      runtime->unit = detached_unit_name(runtime->runtime_id);
+      // KWin's screencast node lives in the user's PipeWire, the one the host
+      // desktop uses too; the stream is addressed by its object serial.
+      runtime->kwin_pipewire_socket = host_runtime + "/pipewire-0";
+      // Runtime ids restart with Hermes, so an earlier instance may have left
+      // a unit of this name behind, and its status files with it.
+      stop_user_unit(runtime->unit);
+      for (const auto *stale : {"ready", "failure", "status"}) {
+        std::error_code remove_ec;
+        std::filesystem::remove(std::filesystem::path {runtime->runtime_dir} / stale, remove_ec);
+      }
+
+      std::vector<std::string> command {
+        systemd_run,
+        "--user",
+        "--quiet",
+        "--collect",
+        "--unit=" + runtime->unit,
+        "--description=Hermes detached desktop for " + runtime->client_name,
+        "--property=TimeoutStopSec=15",
+        // The user manager carries the host desktop's session variables once
+        // Plasma has imported them; none of them may leak into this one.
+        "--property=UnsetEnvironment=DISPLAY WAYLAND_DISPLAY WAYLAND_SOCKET XAUTHORITY "
+        "DBUS_SESSION_BUS_ADDRESS SESSION_MANAGER XDG_SESSION_ID XDG_SEAT XDG_VTNR "
+        "XDG_SESSION_DESKTOP XDG_CURRENT_DESKTOP DESKTOP_SESSION KDE_FULL_SESSION "
+        "KDE_SESSION_UID KDE_SESSION_VERSION KDE_APPLICATIONS_AS_SCOPE",
+        "--setenv=XDG_RUNTIME_DIR=" + runtime->runtime_dir,
+        "--setenv=XDG_SESSION_TYPE=wayland",
+        "--setenv=PULSE_SERVER=unix:" + host_runtime + "/pulse/native",
+        "--setenv=PIPEWIRE_REMOTE=" + runtime->kwin_pipewire_socket,
+      };
+      if (!runtime->audio_sink.empty()) {
+        command.push_back("--setenv=PULSE_SINK=" + runtime->audio_sink);
+      }
+      if (const auto owner = own_service_unit(); !owner.empty()) {
+        // Stopping Hermes stops every desktop it started. PartOf= would also
+        // restart one alongside Hermes, bringing up a desktop nobody asked for.
+        command.push_back("--property=StopPropagatedFrom=" + owner);
+      }
+      command.insert(command.end(), {
+        "--",
+        dbus_run_session,
+        "--",
+        session_tool,
+        "--bootstrap",
+        std::to_string(width),
+        std::to_string(height),
+        self.string(),
+      });
+
+      BOOST_LOG(info) << "[IsolatedSession] Starting detached desktop " << runtime->runtime_id
+                      << " (" << width << 'x' << height << ") in user unit " << runtime->unit;
+      if (const int status = run_program(command, 30s); status != 0) {
+        launch_session->launch_error_message = "Could not start the detached desktop.";
+        BOOST_LOG(error) << "[IsolatedSession] systemd-run exited with " << status
+                         << " starting " << runtime->unit << '.';
+        return 503;
+      }
+
+      const auto root = std::filesystem::path {runtime->runtime_dir};
+      const auto deadline = std::chrono::steady_clock::now() + 60s;
+      auto next_unit_check = std::chrono::steady_clock::now() + 1s;
+      const auto systemctl = find_program("systemctl");
+      for (;;) {
+        if (launch_was_cancelled()) {
+          return 503;
+        }
+        std::error_code ec;
+        if (std::filesystem::exists(root / "failure", ec)) {
+          const auto reason = read_small_file(root / "failure");
+          launch_session->launch_error_message = "The detached desktop failed to start.";
+          BOOST_LOG(error) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
+                           << " failed: " << reason << " (journalctl --user -u "
+                           << runtime->unit << ')';
+          return 503;
+        }
+        if (detached_desktop_alive(*runtime)) {
+          break;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_unit_check) {
+          next_unit_check = now + 1s;
+          if (!systemctl.empty() &&
+              run_program({systemctl, "--user", "--quiet", "is-active", runtime->unit}, 5s) != 0) {
+            launch_session->launch_error_message = "The detached desktop exited while starting.";
+            BOOST_LOG(error) << "[IsolatedSession] " << runtime->unit
+                             << " exited before Plasma was ready; last stage: ["
+                             << read_small_file(root / "status") << "]; see journalctl --user -u "
+                             << runtime->unit;
+            return 503;
+          }
+        }
+        if (now >= deadline) {
+          launch_session->launch_error_message = "The detached desktop did not start in time.";
+          BOOST_LOG(error) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
+                           << " was not ready within 60 seconds; last stage: ["
+                           << read_small_file(root / "status") << "]; see journalctl --user -u "
+                           << runtime->unit;
+          return 503;
+        }
+        std::this_thread::sleep_for(100ms);
+      }
+
+      runtime->kwin_wayland_socket = detached_wayland_socket(runtime->runtime_dir);
+      BOOST_LOG(info) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
+                      << " is up on " << runtime->kwin_wayland_socket;
+
+      launch_session->isolated_session = true;
+      launch_session->isolated_runtime_owner_id = runtime->launch_session_id;
+      launch_session->isolated_session_profile = runtime->profile;
+      launch_session->isolated_runtime_id = runtime->runtime_id;
+      launch_session->isolated_seat_id.clear();
+      launch_session->wayland_display = runtime->kwin_wayland_socket;
+      launch_session->kwin_wayland_socket = runtime->kwin_wayland_socket;
+      launch_session->kwin_pipewire_socket = runtime->kwin_pipewire_socket;
+      launch_session->virtual_display = true;
+
+      {
+        std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+        if (launch_cancelled->load(std::memory_order_relaxed)) {
+          BOOST_LOG(info) << "[IsolatedSession] Launch cancelled during runtime handoff for client "
+                          << launch_session->device_name;
+          return 503;
+        }
+        isolated_runtimes[runtime->launch_session_id] = runtime;
+      }
+      cleanup.disable();
+
+      BOOST_LOG(info) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
+                      << " ready at " << width << 'x' << height;
+      return 0;
     }
 
     // The account was ensured above, before the display exists, so a card the
@@ -2012,6 +2369,8 @@ namespace proc {
       launch_session->display_guid = runtime->display_guid;
       launch_session->drm_device_path = runtime->drm_device_path;
       launch_session->wayland_display = runtime->wayland_display;
+      launch_session->kwin_wayland_socket = runtime->kwin_wayland_socket;
+      launch_session->kwin_pipewire_socket = runtime->kwin_pipewire_socket;
       if (!runtime->app.allow_client_commands) {
         launch_session->client_do_cmds.clear();
         launch_session->client_undo_cmds.clear();

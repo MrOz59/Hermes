@@ -50,6 +50,11 @@ namespace platf::kwin {
     bool button(std::uint32_t evdev_button, bool pressed);
     bool axis(bool horizontal, double value);
     bool key(std::uint32_t evdev_key, bool pressed);
+    // Touch points are in the compositor's global logical coordinates. Every
+    // down, motion or up is followed by its own frame.
+    bool touch_down(std::uint32_t id, double x, double y);
+    bool touch_motion(std::uint32_t id, double x, double y);
+    bool touch_up(std::uint32_t id);
     bool keysym(std::uint32_t symbol, bool pressed);
     std::string error() const;
 

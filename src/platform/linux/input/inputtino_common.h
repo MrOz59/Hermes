@@ -8,6 +8,7 @@
 #include <boost/locale.hpp>
 #include <inputtino/input.hpp>
 #include <libevdev/libevdev.h>
+#include <set>
 
 // local includes
 #include "src/config.h"
@@ -133,6 +134,11 @@ namespace platf {
     // pen/touch events. To maintain separation, we expose separate pen and touch devices
     // for each client.
     inputtino::Result<inputtino::TouchScreen> touch;
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+    // Fingers this client has put down on a private KWin desktop, which tells
+    // a down from a motion: the protocol has separate requests for each.
+    std::set<std::uint32_t> kwin_touches;
+#endif
     inputtino::Result<inputtino::PenTablet> pen;
   };
 

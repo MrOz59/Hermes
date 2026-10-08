@@ -58,6 +58,12 @@ function(hermes_add_kwin_transport)
     set(SUNSHINE_DEFINITIONS ${SUNSHINE_DEFINITIONS} SUNSHINE_BUILD_KWIN_TRANSPORT PARENT_SCOPE)
 
 
+    add_executable(hermes-detached-session
+        "${CMAKE_SOURCE_DIR}/tools/hermes-detached-session.cpp")
+    target_link_libraries(hermes-detached-session PRIVATE Threads::Threads)
+    set_target_properties(hermes-detached-session PROPERTIES
+        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+
     # Explicit build/run targets; neither executable is installed or launched
     # automatically. The check needs authorization in the private desktop only.
     add_executable(hermes-kwin-transport-check EXCLUDE_FROM_ALL

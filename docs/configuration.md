@@ -1549,6 +1549,20 @@ editing the `conf` file in a text editor. Use the examples as reference.
             render node, and Hermes-KMS's is capture-only with no Mesa driver
             behind it, so every swapchain fails. Use <code>labwc</code> only
             with a KMS device whose render node Mesa can drive.}
+            @note{<code>plasma</code> is not a profile file. It starts the
+            user's own Plasma desktop, detached: stock KWin on a virtual output
+            of its own, run as the same user in a transient unit of the user's
+            systemd manager, with a private D-Bus and runtime directory. It
+            shares the user's home, files and settings, so changes made in it
+            are real; it has no DRM device and no libinput, so it never wakes or
+            rearranges a physical monitor and the keyboard and mouse at the
+            machine never reach it. Hermes captures it through KWin's screencast
+            protocol and drives its input through KWin's fake-input protocol.
+            Its frames are copied through system memory rather than exported as
+            DMA-BUFs. It needs KWin and Plasma 6, plasma-wayland-protocols at
+            build time, and <code>dbus-run-session</code>. PowerDevil does not
+            run inside it, so the host's alone manages the monitors and sleep.
+            It applies to the <code>desktop</code> profile without a command.}
             @note{The <code>labwc</code> profile sets the mode the client asked
             for with <code>wlr-randr</code>, which is a separate package. It is
             best-effort: without it the session still starts, but keeps whatever

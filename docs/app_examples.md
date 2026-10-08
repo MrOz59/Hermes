@@ -355,6 +355,8 @@ Mirror, Extend, Exclusive, ordinary Host Desktop launches, and launches without 
 
 The independent `desktop` profile is currently a reference compositor session such as Weston, not a complete Plasma session. Before an independent launch, start one packaged `hermes-kms-seatd@N.service` for every configured private Hermes-KMS session device; Hermes assigns the matching broker socket automatically. These requirements apply only to launches that actually resolve to an independent route.
 
+With `hermes_kms_session_compositor = plasma`, the independent `desktop` profile is instead the user's own Plasma desktop, detached: it runs as the same user with the same home, files and settings, on a virtual KWin output that no physical monitor or local keyboard and mouse can reach. It needs no Hermes-KMS card or seatd, and it does not run `cmd`, `detached` or prep commands.
+
 #### Linux (Flatpak)
 
 > [!CAUTION]

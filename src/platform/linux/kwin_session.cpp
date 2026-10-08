@@ -323,6 +323,30 @@ namespace platf::kwin {
     return impl->flush();
   }
 
+  bool connection_t::touch_down(std::uint32_t id, double x, double y) {
+    std::lock_guard lock(impl->mutex);
+    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || !fixed_valid(x) || !fixed_valid(y)) return false;
+    org_kde_kwin_fake_input_touch_down(impl->input, id, wl_fixed_from_double(x), wl_fixed_from_double(y));
+    org_kde_kwin_fake_input_touch_frame(impl->input);
+    return impl->flush();
+  }
+
+  bool connection_t::touch_motion(std::uint32_t id, double x, double y) {
+    std::lock_guard lock(impl->mutex);
+    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || !fixed_valid(x) || !fixed_valid(y)) return false;
+    org_kde_kwin_fake_input_touch_motion(impl->input, id, wl_fixed_from_double(x), wl_fixed_from_double(y));
+    org_kde_kwin_fake_input_touch_frame(impl->input);
+    return impl->flush();
+  }
+
+  bool connection_t::touch_up(std::uint32_t id) {
+    std::lock_guard lock(impl->mutex);
+    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input) return false;
+    org_kde_kwin_fake_input_touch_up(impl->input, id);
+    org_kde_kwin_fake_input_touch_frame(impl->input);
+    return impl->flush();
+  }
+
   bool connection_t::keysym(std::uint32_t symbol, bool pressed) {
     std::lock_guard lock(impl->mutex);
     if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || org_kde_kwin_fake_input_get_version(impl->input) < 6) return false;

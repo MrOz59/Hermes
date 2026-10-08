@@ -19,6 +19,42 @@ using namespace std::literals;
 
 namespace platf::touch {
   void update(client_input_raw_t *raw, const touch_port_t &touch_port, const touch_input_t &touch) {
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+    if (raw->global->private_kwin) {
+      auto &kwin = *raw->global->kwin_input;
+      const auto &o = kwin.output();
+      // touch.x/y are normalized to the streamed output, which is the private
+      // desktop's only one.
+      const double x = o.x + touch.x * o.width / o.scale;
+      const double y = o.y + touch.y * o.height / o.scale;
+      switch (touch.eventType) {
+        case LI_TOUCH_EVENT_DOWN:
+        case LI_TOUCH_EVENT_MOVE:
+          if (raw->kwin_touches.insert(touch.pointerId).second) {
+            kwin.touch_down(touch.pointerId, x, y);
+          } else {
+            kwin.touch_motion(touch.pointerId, x, y);
+          }
+          break;
+        case LI_TOUCH_EVENT_UP:
+        case LI_TOUCH_EVENT_CANCEL:
+          if (raw->kwin_touches.erase(touch.pointerId)) {
+            kwin.touch_up(touch.pointerId);
+          }
+          break;
+        case LI_TOUCH_EVENT_CANCEL_ALL:
+          for (const auto id : raw->kwin_touches) {
+            kwin.touch_up(id);
+          }
+          raw->kwin_touches.clear();
+          break;
+        default:
+          // Hover has no equivalent in the fake-input protocol.
+          break;
+      }
+      return;
+    }
+#endif
     if (raw->touch) {
       switch (touch.eventType) {
         case LI_TOUCH_EVENT_HOVER:

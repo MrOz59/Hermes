@@ -105,6 +105,10 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   SDDM and Hermes-KMS only.
 - Linux: `hermes_kms_session_compositor = plasma` turns an independent
   `desktop` session into the user's own Plasma desktop, detached. It runs as
+- Linux: an independent `desktop` session is now the user's own Plasma
+  desktop, detached (`hermes_kms_session_compositor = plasma`, the new
+  default; `weston` and `labwc` remain as opt-in fallbacks, and a Plasma
+  failure says so). It runs as
   the same user with the same home, files and settings, in a transient unit of
   the user's systemd manager with a private D-Bus and runtime directory, on a
   stock KWin virtual output. It has no DRM device or libinput, so it never wakes

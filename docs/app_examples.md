@@ -355,18 +355,21 @@ can select a `session-type` in the Web UI or `apps.json`:
 - `application`: always start only the configured application inside an
   independent DRM Gamescope session, without a desktop panel;
 - `desktop`: always start an independent desktop with the session compositor
-  chosen by `hermes_kms_session_compositor`; when `cmd` is set, Hermes launches
-  it after the desktop socket and scanout are ready, and ties it to the session
-  so that ending the session ends it too - as a member of the session's process
-  group where the session runs as the Hermes user, or as a unit bound to the
-  session's where the session broker gave it a user of its own;
+  chosen by `hermes_kms_session_compositor`, by default the user's own Plasma
+  desktop, detached. With a compositor profile such as `weston`, when `cmd` is
+  set, Hermes launches it after the desktop socket and scanout are ready, and
+  ties it to the session so that ending the session ends it too - as a member
+  of the session's process group where the session runs as the Hermes user, or
+  as a unit bound to the session's where the session broker gave it a user of
+  its own;
 - `shared` (available in `apps.json`): always use the existing host
   desktop/session.
 
 Mirror, Extend, Exclusive, ordinary Host Desktop launches, and launches without
 an explicit virtual-display request remain shared-host routes. Shared-host and
 independent sessions may run at the same time; enabling the capability does not
-disable host multi-output management or Remote Input.
+disable host multi-output management or Remote Input. These values have no
+effect while independent client sessions are disabled.
 
 An `application` session runs
 `gamescope --backend=drm -W -H -w -h -r <client mode> <scanout option> <card> <steam mode> <flags> -O <connector> -- <cmd>`,
@@ -414,10 +417,16 @@ Hermes sends it SIGTERM (it logs off and saves its settings, usually in a few
 seconds) before starting the session, and kills it and its children if it is
 still running after 30 seconds.
 
-The `desktop` profile is currently a reference Weston desktop, not a complete
-Plasma session. These values have no effect while independent client sessions
-are disabled. Before an independent launch, configure the driver's private-seat
-broker for the Hermes user with
+With `hermes_kms_session_compositor = plasma`, the default, the independent
+`desktop` profile is the user's own Plasma desktop, detached: it runs as the
+same user with the same home, files and settings, on a virtual KWin output that
+no physical monitor or local keyboard and mouse can reach. It needs no
+Hermes-KMS card or seatd, and it does not run `cmd`, `detached` or prep
+commands.
+
+With a compositor profile such as `weston` instead, the `desktop` profile is a
+reference Weston desktop, not a complete Plasma session. Before such a launch,
+configure the driver's private-seat broker for the Hermes user with
 `sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto`, which starts
 one broker per session card; Hermes assigns the corresponding private broker
 socket to the compositor automatically.
@@ -432,8 +441,6 @@ socket to the compositor automatically.
   "first-frame-timeout": 45
 }
 ```
-
-With `hermes_kms_session_compositor = plasma`, the independent `desktop` profile is instead the user's own Plasma desktop, detached: it runs as the same user with the same home, files and settings, on a virtual KWin output that no physical monitor or local keyboard and mouse can reach. It needs no Hermes-KMS card or seatd, and it does not run `cmd`, `detached` or prep commands.
 
 #### Linux (Flatpak)
 

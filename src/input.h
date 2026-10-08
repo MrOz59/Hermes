@@ -26,11 +26,13 @@ namespace input {
   /**
    * @param session_tag Seat of an isolated session; empty for the host's.
    * @param launch_gamepads Gamepads to plug in now (the client's gcmap).
+   * @param wayland_socket Private KWin desktop to drive instead; empty for none.
    */
   std::shared_ptr<input_t> alloc(
     safe::mail_t mail,
     const std::string &session_tag = {},
-    int launch_gamepads = 0
+    int launch_gamepads = 0,
+    const std::string &wayland_socket = {}
   );
 
 #ifdef SUNSHINE_TESTS

@@ -1530,16 +1530,20 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Which compositor an experimental isolated session starts on its
-            private DRM seat. The name selects a profile file, looked up first
-            in <code>~/.config/hermes/session-compositors/</code> and then in
-            the profiles Hermes ships; a profile declares the command line, any
+            Which desktop an experimental independent <code>desktop</code>
+            session starts. The default, <code>plasma</code>, is the user's own
+            Plasma desktop, detached (see below). Any other name selects a
+            compositor profile file, looked up first in
+            <code>~/.config/hermes/session-compositors/</code> and then in the
+            profiles Hermes ships; a profile declares the command line, any
             environment it needs, and whether it is told its Wayland socket name
-            or names its own.
-            @note{Hermes ships <code>weston</code> and <code>labwc</code>.
-            Dropping in a profile for a third compositor needs no code change
-            and is supported by nobody but you.}
-            @note{<code>weston</code> remains the profile to use with
+            or names its own, and the compositor runs on a private Hermes-KMS
+            DRM seat.
+            @note{Hermes ships <code>weston</code> and <code>labwc</code>
+            profiles as opt-in fallbacks for machines without Plasma 6. Neither
+            is required. Dropping in a profile for a third compositor needs no
+            code change and is supported by nobody but you.}
+            @note{Of the two profiles, <code>weston</code> is the one to use with
             Hermes-KMS. It takes KMS nodes only, for both its display and its
             rendering device, and the sole KMS node backed by a real GPU belongs
             to seat0 - which a session on a private seat cannot open - so a
@@ -1562,7 +1566,9 @@ editing the `conf` file in a text editor. Use the examples as reference.
             DMA-BUFs. It needs KWin and Plasma 6, plasma-wayland-protocols at
             build time, and <code>dbus-run-session</code>. PowerDevil does not
             run inside it, so the host's alone manages the monitors and sleep.
-            It applies to the <code>desktop</code> profile without a command.}
+            It applies to the <code>desktop</code> profile without a command.
+            If it cannot start, the error names the reason and suggests
+            <code>weston</code> as a fallback.}
             @note{The <code>labwc</code> profile sets the mode the client asked
             for with <code>wlr-randr</code>, which is a separate package. It is
             best-effort: without it the session still starts, but keeps whatever
@@ -1574,7 +1580,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            weston
+            plasma
             @endcode</td>
     </tr>
     <tr>

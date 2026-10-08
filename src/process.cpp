@@ -1379,7 +1379,8 @@ namespace proc {
       return -1;
     }
 
-    // hermes_kms_session_compositor = plasma: the user's own Plasma, detached.
+    // hermes_kms_session_compositor = plasma, the default: the user's own
+    // Plasma, detached.
     //
     // A detached desktop is stock KWin on a virtual output of its own, run as
     // this same user in a transient unit of the user's own systemd manager:
@@ -1402,20 +1403,50 @@ namespace proc {
                         << " prep command(s) for a detached desktop; they act on the host desktop.";
       }
 
+      // Weston is an opt-in fallback, never a requirement, so every way this
+      // can fail names it - for the client and in the log alike.
+      const auto plasma_failed = [&](const std::string &reason) {
+        constexpr std::string_view fallback {
+          " To use Weston instead, if it is installed, set hermes_kms_session_compositor = weston."
+        };
+        launch_session->launch_error_message = "The detached Plasma desktop " + reason + '.' + std::string {fallback};
+        BOOST_LOG(error) << "[IsolatedSession] " << launch_session->launch_error_message;
+        return 503;
+      };
+
+#ifndef SUNSHINE_BUILD_KWIN_TRANSPORT
+      return plasma_failed(
+        "is not available: Hermes was built without the KWin transport, which needs "
+        "plasma-wayland-protocols 1.23 or newer"
+      );
+#endif
       const auto systemd_run = find_program("systemd-run");
       const auto dbus_run_session = find_program("dbus-run-session");
       const auto session_tool = find_detached_session_tool();
       const auto host_runtime = host_runtime_dir();
       std::error_code self_ec;
       const auto self = std::filesystem::canonical("/proc/self/exe", self_ec);
-      if (systemd_run.empty() || dbus_run_session.empty() || session_tool.empty() ||
-          host_runtime.empty() || self_ec) {
-        launch_session->launch_error_message = "The detached desktop is not installed completely.";
-        BOOST_LOG(error) << "[IsolatedSession] A detached desktop needs systemd-run ["
-                         << systemd_run << "], dbus-run-session [" << dbus_run_session
-                         << "], hermes-detached-session [" << session_tool
-                         << "] and a user runtime directory [" << host_runtime << "].";
-        return 503;
+      std::vector<std::string> missing;
+      for (const auto &[name, path] : std::initializer_list<std::pair<const char *, std::string>> {
+             {"kwin_wayland_wrapper", find_program("kwin_wayland_wrapper")},
+             {"startplasma-wayland", find_program("startplasma-wayland")},
+             {"systemd-run", systemd_run},
+             {"dbus-run-session", dbus_run_session},
+             {"hermes-detached-session", session_tool},
+           }) {
+        if (path.empty()) {
+          missing.emplace_back(name);
+        }
+      }
+      if (!missing.empty()) {
+        std::string list;
+        for (const auto &name : missing) {
+          list += (list.empty() ? "" : ", ") + name;
+        }
+        return plasma_failed("cannot start: " + list + " not found");
+      }
+      if (host_runtime.empty() || self_ec) {
+        return plasma_failed("cannot start: Hermes has no user runtime directory");
       }
 
       const int width = static_cast<int>(launch_session->width ? launch_session->width : 1920);
@@ -1474,10 +1505,7 @@ namespace proc {
       BOOST_LOG(info) << "[IsolatedSession] Starting detached desktop " << runtime->runtime_id
                       << " (" << width << 'x' << height << ") in user unit " << runtime->unit;
       if (const int status = run_program(command, 30s); status != 0) {
-        launch_session->launch_error_message = "Could not start the detached desktop.";
-        BOOST_LOG(error) << "[IsolatedSession] systemd-run exited with " << status
-                         << " starting " << runtime->unit << '.';
-        return 503;
+        return plasma_failed("could not be started: systemd-run exited with " + std::to_string(status));
       }
 
       const auto root = std::filesystem::path {runtime->runtime_dir};
@@ -1490,12 +1518,10 @@ namespace proc {
         }
         std::error_code ec;
         if (std::filesystem::exists(root / "failure", ec)) {
-          const auto reason = read_small_file(root / "failure");
-          launch_session->launch_error_message = "The detached desktop failed to start.";
-          BOOST_LOG(error) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
-                           << " failed: " << reason << " (journalctl --user -u "
-                           << runtime->unit << ')';
-          return 503;
+          return plasma_failed(
+            "failed to start (" + read_small_file(root / "failure") + "; journalctl --user -u " +
+            runtime->unit + ")"
+          );
         }
         if (detached_desktop_alive(*runtime)) {
           break;
@@ -1505,21 +1531,17 @@ namespace proc {
           next_unit_check = now + 1s;
           if (!systemctl.empty() &&
               run_program({systemctl, "--user", "--quiet", "is-active", runtime->unit}, 5s) != 0) {
-            launch_session->launch_error_message = "The detached desktop exited while starting.";
-            BOOST_LOG(error) << "[IsolatedSession] " << runtime->unit
-                             << " exited before Plasma was ready; last stage: ["
-                             << read_small_file(root / "status") << "]; see journalctl --user -u "
-                             << runtime->unit;
-            return 503;
+            return plasma_failed(
+              "exited while starting (last stage: " + read_small_file(root / "status") +
+              "; journalctl --user -u " + runtime->unit + ")"
+            );
           }
         }
         if (now >= deadline) {
-          launch_session->launch_error_message = "The detached desktop did not start in time.";
-          BOOST_LOG(error) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
-                           << " was not ready within 60 seconds; last stage: ["
-                           << read_small_file(root / "status") << "]; see journalctl --user -u "
-                           << runtime->unit;
-          return 503;
+          return plasma_failed(
+            "was not ready within 60 seconds (last stage: " + read_small_file(root / "status") +
+            "; journalctl --user -u " + runtime->unit + ")"
+          );
         }
         std::this_thread::sleep_for(100ms);
       }

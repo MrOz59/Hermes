@@ -3,7 +3,10 @@
  * @brief Private KWin Wayland transport; no implicit host connection.
  */
 #include "kwin_session.h"
+
+#include "fake-input.h"
 #include "session_socket.h"
+#include "zkde-screencast-unstable-v1.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -17,10 +20,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <vector>
-
 #include <wayland-client.h>
-#include "fake-input.h"
-#include "zkde-screencast-unstable-v1.h"
 
 namespace platf::kwin {
   namespace {
@@ -35,7 +35,7 @@ namespace platf::kwin {
     bool fixed_valid(double value) {
       return std::isfinite(value) && value >= -8388608.0 && value < 8388608.0;
     }
-  }
+  }  // namespace
 
   struct connection_t::impl_t {
     struct monitor_t {
@@ -62,21 +62,37 @@ namespace platf::kwin {
     std::string failure;
 
     ~impl_t() {
-      if (stream) zkde_screencast_stream_unstable_v1_close(stream);
-      if (input) org_kde_kwin_fake_input_destroy(input);
-      if (capture) zkde_screencast_unstable_v1_destroy(capture);
-      for (const auto &monitor : monitors) wl_output_destroy(monitor->proxy);
-      if (registry) wl_registry_destroy(registry);
-      if (display) wl_display_disconnect(display);
+      if (stream) {
+        zkde_screencast_stream_unstable_v1_close(stream);
+      }
+      if (input) {
+        org_kde_kwin_fake_input_destroy(input);
+      }
+      if (capture) {
+        zkde_screencast_unstable_v1_destroy(capture);
+      }
+      for (const auto &monitor : monitors) {
+        wl_output_destroy(monitor->proxy);
+      }
+      if (registry) {
+        wl_registry_destroy(registry);
+      }
+      if (display) {
+        wl_display_disconnect(display);
+      }
     }
 
     void fail(std::string message) {
-      if (!dead) failure = std::move(message);
+      if (!dead) {
+        failure = std::move(message);
+      }
       dead = true;
     }
 
     bool flush() {
-      if (dead) return false;
+      if (dead) {
+        return false;
+      }
       if (wl_display_flush(display) < 0 && errno != EAGAIN) {
         fail("Private Wayland connection failed: " + std::string(std::strerror(errno)));
       }
@@ -84,14 +100,18 @@ namespace platf::kwin {
     }
 
     bool pump(std::chrono::milliseconds timeout) {
-      if (dead) return false;
+      if (dead) {
+        return false;
+      }
       const auto deadline = clock_t::now() + timeout;
       while (wl_display_prepare_read(display) != 0) {
         if (wl_display_dispatch_pending(display) < 0) {
           fail("Private Wayland event dispatch failed");
           return false;
         }
-        if (dead) return false;
+        if (dead) {
+          return false;
+        }
       }
       short events = POLLIN;
       if (wl_display_flush(display) < 0) {
@@ -121,8 +141,12 @@ namespace platf::kwin {
       } else {
         wl_display_cancel_read(display);
       }
-      if ((event.revents & POLLOUT) && !flush()) return false;
-      if (wl_display_dispatch_pending(display) < 0) fail("Private Wayland protocol error");
+      if ((event.revents & POLLOUT) && !flush()) {
+        return false;
+      }
+      if (wl_display_dispatch_pending(display) < 0) {
+        fail("Private Wayland protocol error");
+      }
       if (selected && (selected->info.width != geometry.width || selected->info.height != geometry.height ||
                        selected->info.x != geometry.x || selected->info.y != geometry.y || selected->info.scale != geometry.scale)) {
         fail("Private output geometry changed; a new capture session is required");
@@ -138,7 +162,9 @@ namespace platf::kwin {
         return false;
       }
       static const wl_callback_listener listener {
-        [](void *data, wl_callback *, std::uint32_t) { *static_cast<bool *>(data) = true; },
+        [](void *data, wl_callback *, std::uint32_t) {
+          *static_cast<bool *>(data) = true;
+        },
       };
       wl_callback_add_listener(callback, &listener, &complete);
       const auto deadline = clock_t::now() + setup_timeout;
@@ -146,7 +172,9 @@ namespace platf::kwin {
         pump(std::chrono::milliseconds(remaining_ms(deadline)));
       }
       wl_callback_destroy(callback);
-      if (!complete && !dead) fail("Private compositor synchronization timed out");
+      if (!complete && !dead) {
+        fail("Private compositor synchronization timed out");
+      }
       return complete && !dead;
     }
 
@@ -169,10 +197,16 @@ namespace platf::kwin {
               info.height = height;
             }
           },
-          [](void *, wl_output *) {},
-          [](void *data, wl_output *, int scale) { static_cast<monitor_t *>(data)->info.scale = scale; },
-          [](void *data, wl_output *, const char *name) { static_cast<monitor_t *>(data)->info.name = name; },
-          [](void *, wl_output *, const char *) {},
+          [](void *, wl_output *) {
+          },
+          [](void *data, wl_output *, int scale) {
+            static_cast<monitor_t *>(data)->info.scale = scale;
+          },
+          [](void *data, wl_output *, const char *name) {
+            static_cast<monitor_t *>(data)->info.name = name;
+          },
+          [](void *, wl_output *, const char *) {
+          },
         };
         wl_output_add_listener(monitor->proxy, &listener, monitor.get());
         self.monitors.emplace_back(std::move(monitor));
@@ -191,21 +225,29 @@ namespace platf::kwin {
       for (auto &monitor : self.monitors) {
         if (monitor->global == name) {
           monitor->removed = true;
-          if (self.selected == monitor.get()) self.fail("Private output was removed");
+          if (self.selected == monitor.get()) {
+            self.fail("Private output was removed");
+          }
         }
       }
-      if (name == self.capture_global || name == self.input_global) self.fail("Private compositor removed a required protocol");
+      if (name == self.capture_global || name == self.input_global) {
+        self.fail("Private compositor removed a required protocol");
+      }
     }
   };
 
-  connection_t::connection_t(std::unique_ptr<impl_t> state): impl(std::move(state)) {}
+  connection_t::connection_t(std::unique_ptr<impl_t> state):
+      impl(std::move(state)) {}
+
   connection_t::~connection_t() = default;
 
   std::unique_ptr<connection_t> connection_t::open(const endpoint_t &endpoint, bool capture, bool input, std::string &error) {
     error.clear();
     auto state = std::make_unique<impl_t>();
     int fd = connect_session_socket(endpoint.wayland_socket, error);
-    if (fd < 0) return nullptr;
+    if (fd < 0) {
+      return nullptr;
+    }
     // libwayland takes ownership, including on connection-construction failure.
     state->display = wl_display_connect_to_fd(fd);
     if (!state->display) {
@@ -229,7 +271,9 @@ namespace platf::kwin {
     }
     std::vector<impl_t::monitor_t *> matches;
     for (auto &monitor : state->monitors) {
-      if (!monitor->removed && (endpoint.output_name.empty() || monitor->info.name == endpoint.output_name)) matches.push_back(monitor.get());
+      if (!monitor->removed && (endpoint.output_name.empty() || monitor->info.name == endpoint.output_name)) {
+        matches.push_back(monitor.get());
+      }
     }
     if (matches.size() != 1 || matches.front()->info.width <= 0 || matches.front()->info.height <= 0 || matches.front()->info.scale <= 0) {
       error = "Private output selection is missing, ambiguous, or has no valid mode";
@@ -247,7 +291,9 @@ namespace platf::kwin {
     return std::unique_ptr<connection_t>(new connection_t(std::move(state)));
   }
 
-  const output_t &connection_t::output() const { return impl->geometry; }
+  const output_t &connection_t::output() const {
+    return impl->geometry;
+  }
 
   bool connection_t::start_capture(bool cursor, std::uint64_t &serial, std::string &error) {
     std::lock_guard lock(impl->mutex);
@@ -262,9 +308,14 @@ namespace platf::kwin {
       return false;
     }
     static const zkde_screencast_stream_unstable_v1_listener listener {
-      [](void *data, zkde_screencast_stream_unstable_v1 *) { static_cast<impl_t *>(data)->fail("Private capture stream closed"); },
-      [](void *, zkde_screencast_stream_unstable_v1 *, std::uint32_t) {},
-      [](void *data, zkde_screencast_stream_unstable_v1 *, const char *message) { static_cast<impl_t *>(data)->fail("Private capture failed: " + std::string(message)); },
+      [](void *data, zkde_screencast_stream_unstable_v1 *) {
+        static_cast<impl_t *>(data)->fail("Private capture stream closed");
+      },
+      [](void *, zkde_screencast_stream_unstable_v1 *, std::uint32_t) {
+      },
+      [](void *data, zkde_screencast_stream_unstable_v1 *, const char *message) {
+        static_cast<impl_t *>(data)->fail("Private capture failed: " + std::string(message));
+      },
       [](void *data, zkde_screencast_stream_unstable_v1 *, std::uint32_t high, std::uint32_t low) {
         auto &self = *static_cast<impl_t *>(data);
         self.serial = (static_cast<std::uint64_t>(high) << 32) | low;
@@ -273,8 +324,12 @@ namespace platf::kwin {
     };
     zkde_screencast_stream_unstable_v1_add_listener(impl->stream, &listener, impl.get());
     const auto deadline = clock_t::now() + setup_timeout;
-    while (!impl->node_ready && !impl->dead && clock_t::now() < deadline) impl->pump(std::chrono::milliseconds(remaining_ms(deadline)));
-    if (!impl->node_ready && !impl->dead) impl->fail("Private capture stream creation timed out");
+    while (!impl->node_ready && !impl->dead && clock_t::now() < deadline) {
+      impl->pump(std::chrono::milliseconds(remaining_ms(deadline)));
+    }
+    if (!impl->node_ready && !impl->dead) {
+      impl->fail("Private capture stream creation timed out");
+    }
     if (impl->dead) {
       error = impl->failure;
       return false;
@@ -290,42 +345,54 @@ namespace platf::kwin {
 
   bool connection_t::pointer_motion(double dx, double dy) {
     std::lock_guard lock(impl->mutex);
-    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || !fixed_valid(dx) || !fixed_valid(dy)) return false;
+    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || !fixed_valid(dx) || !fixed_valid(dy)) {
+      return false;
+    }
     org_kde_kwin_fake_input_pointer_motion(impl->input, wl_fixed_from_double(dx), wl_fixed_from_double(dy));
     return impl->flush();
   }
 
   bool connection_t::pointer_absolute(double x, double y) {
     std::lock_guard lock(impl->mutex);
-    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || !fixed_valid(x) || !fixed_valid(y)) return false;
+    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || !fixed_valid(x) || !fixed_valid(y)) {
+      return false;
+    }
     org_kde_kwin_fake_input_pointer_motion_absolute(impl->input, wl_fixed_from_double(x), wl_fixed_from_double(y));
     return impl->flush();
   }
 
   bool connection_t::button(std::uint32_t button, bool pressed) {
     std::lock_guard lock(impl->mutex);
-    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input) return false;
+    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input) {
+      return false;
+    }
     org_kde_kwin_fake_input_button(impl->input, button, pressed ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED);
     return impl->flush();
   }
 
   bool connection_t::axis(bool horizontal, double value) {
     std::lock_guard lock(impl->mutex);
-    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || !fixed_valid(value)) return false;
+    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || !fixed_valid(value)) {
+      return false;
+    }
     org_kde_kwin_fake_input_axis(impl->input, horizontal ? WL_POINTER_AXIS_HORIZONTAL_SCROLL : WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(value));
     return impl->flush();
   }
 
   bool connection_t::key(std::uint32_t key, bool pressed) {
     std::lock_guard lock(impl->mutex);
-    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input) return false;
+    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input) {
+      return false;
+    }
     org_kde_kwin_fake_input_keyboard_key(impl->input, key, pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
     return impl->flush();
   }
 
   bool connection_t::touch_down(std::uint32_t id, double x, double y) {
     std::lock_guard lock(impl->mutex);
-    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || !fixed_valid(x) || !fixed_valid(y)) return false;
+    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || !fixed_valid(x) || !fixed_valid(y)) {
+      return false;
+    }
     org_kde_kwin_fake_input_touch_down(impl->input, id, wl_fixed_from_double(x), wl_fixed_from_double(y));
     org_kde_kwin_fake_input_touch_frame(impl->input);
     return impl->flush();
@@ -333,7 +400,9 @@ namespace platf::kwin {
 
   bool connection_t::touch_motion(std::uint32_t id, double x, double y) {
     std::lock_guard lock(impl->mutex);
-    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || !fixed_valid(x) || !fixed_valid(y)) return false;
+    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || !fixed_valid(x) || !fixed_valid(y)) {
+      return false;
+    }
     org_kde_kwin_fake_input_touch_motion(impl->input, id, wl_fixed_from_double(x), wl_fixed_from_double(y));
     org_kde_kwin_fake_input_touch_frame(impl->input);
     return impl->flush();
@@ -341,7 +410,9 @@ namespace platf::kwin {
 
   bool connection_t::touch_up(std::uint32_t id) {
     std::lock_guard lock(impl->mutex);
-    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input) return false;
+    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input) {
+      return false;
+    }
     org_kde_kwin_fake_input_touch_up(impl->input, id);
     org_kde_kwin_fake_input_touch_frame(impl->input);
     return impl->flush();
@@ -349,9 +420,10 @@ namespace platf::kwin {
 
   bool connection_t::keysym(std::uint32_t symbol, bool pressed) {
     std::lock_guard lock(impl->mutex);
-    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || org_kde_kwin_fake_input_get_version(impl->input) < 6) return false;
-    org_kde_kwin_fake_input_keyboard_keysym(impl->input, symbol,
-      pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
+    if (!impl->pump(std::chrono::milliseconds(0)) || !impl->input || org_kde_kwin_fake_input_get_version(impl->input) < 6) {
+      return false;
+    }
+    org_kde_kwin_fake_input_keyboard_keysym(impl->input, symbol, pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
     return impl->flush();
   }
 

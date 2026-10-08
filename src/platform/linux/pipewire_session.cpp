@@ -2,6 +2,7 @@
  *  @brief Bounded mapped-buffer capture from a private KWin stream.
  */
 #include "pipewire_session.h"
+
 #include "session_frame.h"
 #include "session_socket.h"
 
@@ -30,7 +31,9 @@ namespace platf::kwin {
     frame_t latest;
 
     ~impl_t() {
-      if (started) pw_thread_loop_stop(loop);
+      if (started) {
+        pw_thread_loop_stop(loop);
+      }
       stopping = true;
       if (stream) {
         spa_hook_remove(&stream_listener);
@@ -40,29 +43,47 @@ namespace platf::kwin {
         spa_hook_remove(&core_listener);
         pw_core_disconnect(core);
       }
-      if (context) pw_context_destroy(context);
-      if (loop) pw_thread_loop_destroy(loop);
+      if (context) {
+        pw_context_destroy(context);
+      }
+      if (loop) {
+        pw_thread_loop_destroy(loop);
+      }
     }
 
     void fail(std::string message) {
-      if (failure.empty()) failure = std::move(message);
+      if (failure.empty()) {
+        failure = std::move(message);
+      }
       pw_thread_loop_signal(loop, false);
     }
 
     static void state_changed(void *data, pw_stream_state, pw_stream_state state, const char *error) {
       auto &self = *static_cast<impl_t *>(data);
-      if (self.stopping) return;
-      if (state == PW_STREAM_STATE_ERROR) self.fail(error ? error : "Private PipeWire stream failed");
-      if (state == PW_STREAM_STATE_STREAMING) self.streaming = true;
-      if (state == PW_STREAM_STATE_UNCONNECTED && self.streaming) self.fail("Private PipeWire stream disconnected");
+      if (self.stopping) {
+        return;
+      }
+      if (state == PW_STREAM_STATE_ERROR) {
+        self.fail(error ? error : "Private PipeWire stream failed");
+      }
+      if (state == PW_STREAM_STATE_STREAMING) {
+        self.streaming = true;
+      }
+      if (state == PW_STREAM_STATE_UNCONNECTED && self.streaming) {
+        self.fail("Private PipeWire stream disconnected");
+      }
       pw_thread_loop_signal(self.loop, false);
     }
 
     static void param_changed(void *data, std::uint32_t id, const spa_pod *param) {
       auto &self = *static_cast<impl_t *>(data);
-      if (id != SPA_PARAM_Format) return;
+      if (id != SPA_PARAM_Format) {
+        return;
+      }
       if (!param) {
-        if (self.format_ready) self.fail("Private capture format was removed");
+        if (self.format_ready) {
+          self.fail("Private capture format was removed");
+        }
         return;
       }
       spa_video_info_raw format {};
@@ -76,16 +97,19 @@ namespace platf::kwin {
       std::uint8_t buffer[512];
       spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
       const spa_pod *params[] = {
-        static_cast<const spa_pod *>(spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
-          SPA_PARAM_BUFFERS_dataType, SPA_POD_CHOICE_FLAGS_Int((1 << SPA_DATA_MemFd) | (1 << SPA_DATA_MemPtr)))),
+        static_cast<const spa_pod *>(spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers, SPA_PARAM_BUFFERS_dataType, SPA_POD_CHOICE_FLAGS_Int((1 << SPA_DATA_MemFd) | (1 << SPA_DATA_MemPtr)))),
       };
-      if (pw_stream_update_params(self.stream, params, 1) < 0) self.fail("Could not negotiate mapped private capture buffers");
+      if (pw_stream_update_params(self.stream, params, 1) < 0) {
+        self.fail("Could not negotiate mapped private capture buffers");
+      }
     }
 
     static void process(void *data) {
       auto &self = *static_cast<impl_t *>(data);
       auto buffer = pw_stream_dequeue_buffer(self.stream);
-      if (!buffer) return;
+      if (!buffer) {
+        return;
+      }
       bool valid = false;
       auto *spa = buffer->buffer;
       if (self.format_ready && spa && spa->n_datas == 1) {
@@ -93,8 +117,7 @@ namespace platf::kwin {
         if ((plane.type == SPA_DATA_MemFd || plane.type == SPA_DATA_MemPtr) && plane.chunk &&
             !(plane.chunk->flags & SPA_CHUNK_FLAG_CORRUPTED)) {
           try {
-            valid = copy_bgrx(self.latest.bgrx, plane.data, plane.maxsize, plane.chunk->offset,
-                              plane.chunk->size, plane.chunk->stride, self.width, self.height);
+            valid = copy_bgrx(self.latest.bgrx, plane.data, plane.maxsize, plane.chunk->offset, plane.chunk->size, plane.chunk->stride, self.width, self.height);
           } catch (...) {
             // No C++ exception may unwind through a PipeWire callback.
             pw_stream_queue_buffer(self.stream, buffer);
@@ -116,12 +139,12 @@ namespace platf::kwin {
     }
   };
 
-  video_receiver_t::video_receiver_t(std::unique_ptr<impl_t> state): impl(std::move(state)) {}
+  video_receiver_t::video_receiver_t(std::unique_ptr<impl_t> state):
+      impl(std::move(state)) {}
+
   video_receiver_t::~video_receiver_t() = default;
 
-  std::unique_ptr<video_receiver_t> video_receiver_t::open(const std::string &socket, std::uint64_t serial,
-                                                         std::uint32_t width, std::uint32_t height,
-                                                         std::uint32_t framerate, std::string &error) {
+  std::unique_ptr<video_receiver_t> video_receiver_t::open(const std::string &socket, std::uint64_t serial, std::uint32_t width, std::uint32_t height, std::uint32_t framerate, std::string &error) {
     error.clear();
     if (socket.empty() || socket.front() != '/' || socket.find('\0') != std::string::npos || serial == 0 ||
         !width || !height || width > 16384 || height > 16384 || !framerate || framerate > 1000) {
@@ -129,18 +152,28 @@ namespace platf::kwin {
       return nullptr;
     }
     static std::once_flag initialized;
-    std::call_once(initialized, [] { pw_init(nullptr, nullptr); });
+    std::call_once(initialized, [] {
+      pw_init(nullptr, nullptr);
+    });
     auto state = std::make_unique<impl_t>();
     state->width = width;
     state->height = height;
     state->loop = pw_thread_loop_new("hermes-private-capture", nullptr);
-    if (!state->loop) { error = "Could not create private PipeWire loop"; return nullptr; }
+    if (!state->loop) {
+      error = "Could not create private PipeWire loop";
+      return nullptr;
+    }
     state->context = pw_context_new(pw_thread_loop_get_loop(state->loop), nullptr, 0);
-    if (!state->context) { error = "Could not create private PipeWire context"; return nullptr; }
+    if (!state->context) {
+      error = "Could not create private PipeWire context";
+      return nullptr;
+    }
     // PIPEWIRE_REMOTE overrides even an absolute remote.name property. Supply
     // an already connected fd so environment settings cannot select the host.
     const int fd = connect_session_socket(socket, error);
-    if (fd < 0) return nullptr;
+    if (fd < 0) {
+      return nullptr;
+    }
     // PipeWire takes ownership of fd, including on error.
     state->core = pw_context_connect_fd(state->context, fd, nullptr, 0);
     if (!state->core) {
@@ -157,9 +190,11 @@ namespace platf::kwin {
     }();
     pw_core_add_listener(state->core, &state->core_listener, &core_events, state.get());
     const auto target = std::to_string(serial);
-    state->stream = pw_stream_new(state->core, "Hermes detached desktop",
-      pw_properties_new(PW_KEY_TARGET_OBJECT, target.c_str(), PW_KEY_MEDIA_TYPE, "Video", PW_KEY_MEDIA_CATEGORY, "Capture", PW_KEY_MEDIA_ROLE, "Screen", nullptr));
-    if (!state->stream) { error = "Could not create private PipeWire stream"; return nullptr; }
+    state->stream = pw_stream_new(state->core, "Hermes detached desktop", pw_properties_new(PW_KEY_TARGET_OBJECT, target.c_str(), PW_KEY_MEDIA_TYPE, "Video", PW_KEY_MEDIA_CATEGORY, "Capture", PW_KEY_MEDIA_ROLE, "Screen", nullptr));
+    if (!state->stream) {
+      error = "Could not create private PipeWire stream";
+      return nullptr;
+    }
     static const auto stream_events = [] {
       pw_stream_events events {};
       events.version = PW_VERSION_STREAM_EVENTS;
@@ -196,7 +231,10 @@ namespace platf::kwin {
       error = "Could not activate private capture stream";
       return nullptr;
     }
-    if (pw_thread_loop_start(state->loop) < 0) { error = "Could not start private PipeWire loop"; return nullptr; }
+    if (pw_thread_loop_start(state->loop) < 0) {
+      error = "Could not start private PipeWire loop";
+      return nullptr;
+    }
     state->started = true;
     return std::unique_ptr<video_receiver_t>(new video_receiver_t(std::move(state)));
   }
@@ -207,8 +245,13 @@ namespace platf::kwin {
     pw_thread_loop_get_time(impl->loop, &deadline, std::chrono::duration_cast<std::chrono::nanoseconds>(timeout).count());
     while (!impl->pending && impl->failure.empty()) {
       int result = pw_thread_loop_timed_wait_full(impl->loop, &deadline);
-      if (result == -ETIMEDOUT) break;
-      if (result < 0) { impl->fail("Private PipeWire wait failed"); break; }
+      if (result == -ETIMEDOUT) {
+        break;
+      }
+      if (result < 0) {
+        impl->fail("Private PipeWire wait failed");
+        break;
+      }
     }
     auto result = frame_result_t::timeout;
     if (!impl->failure.empty()) {

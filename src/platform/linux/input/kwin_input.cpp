@@ -17,7 +17,7 @@ namespace platf {
   namespace {
     // evdev keys to the Moonlight key codes (Windows virtual keys) they serve.
     // An evdev key can serve more than one, so the lookup goes by virtual key.
-      const std::multimap<short, short> key_mappings = {
+    const std::multimap<short, short> key_mappings = {
       {KEY_BACKSPACE, 0x08},
       {KEY_TAB, 0x09},
       {KEY_ENTER, 0x0D},

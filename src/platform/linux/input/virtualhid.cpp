@@ -2,9 +2,9 @@
  * @file virtualhid.cpp
  * @brief Linux platform input implementation backed exclusively by libvirtualhid.
  */
+#include "kwin_input.h"
 #include "src/config.h"
 #include "src/logging.h"
-#include "kwin_input.h"
 #include "virtualhid_common.h"
 #include "virtualhid_gamepad.h"
 #include "virtualhid_keyboard.h"

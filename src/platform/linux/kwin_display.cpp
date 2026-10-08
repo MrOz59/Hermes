@@ -1,13 +1,15 @@
 /** @file kwin_display.cpp
  *  @brief Feed private KWin PipeWire frames into Hermes' existing encoder path.
  */
-#include <algorithm>
 #include "kwin_display.h"
+
+#include "cuda.h"
 #include "kwin_session.h"
 #include "pipewire_session.h"
 #include "src/video.h"
-#include "cuda.h"
 #include "vaapi.h"
+
+#include <algorithm>
 
 namespace platf {
   namespace {
@@ -28,7 +30,11 @@ namespace platf {
         pipewire_socket = config.kwin_pipewire_socket;
         std::string error;
         connection = kwin::connection_t::open(
-          {config.kwin_wayland_socket, config.kwin_pipewire_socket, {}}, true, false, error);
+          {config.kwin_wayland_socket, config.kwin_pipewire_socket, {}},
+          true,
+          false,
+          error
+        );
         if (!connection) {
           BOOST_LOG(::error) << "Private KWin capture: " << error;
           return false;
@@ -61,7 +67,9 @@ namespace platf {
 
       int dummy_img(img_t *image) override {
         auto *mapped = dynamic_cast<kwin_image_t *>(image);
-        if (!mapped) return -1;
+        if (!mapped) {
+          return -1;
+        }
         std::fill(mapped->pixels.begin(), mapped->pixels.end(), 0);
         mapped->frame_timestamp.reset();
         return 0;
@@ -88,7 +96,9 @@ namespace platf {
           }
           // Cursor mode is a stream property; recreate on the same explicit
           // endpoint when the client changes it. Disconnects never fall back.
-          if (*cursor != capture_cursor) return capture_e::reinit;
+          if (*cursor != capture_cursor) {
+            return capture_e::reinit;
+          }
           kwin::frame_t frame;
           auto result = receiver->next(frame, std::chrono::milliseconds(100), error);
           if (result == kwin::frame_result_t::failed) {
@@ -101,26 +111,38 @@ namespace platf {
           }
           std::shared_ptr<img_t> image;
           if (result == kwin::frame_result_t::timeout) {
-            if (!push(std::move(image), false)) return capture_e::ok;
+            if (!push(std::move(image), false)) {
+              return capture_e::ok;
+            }
             continue;
           }
-          if (!pull(image)) return capture_e::interrupted;
+          if (!pull(image)) {
+            return capture_e::interrupted;
+          }
           auto *mapped = dynamic_cast<kwin_image_t *>(image.get());
           if (!mapped || frame.width != static_cast<std::uint32_t>(width) ||
-              frame.height != static_cast<std::uint32_t>(height)) return capture_e::error;
+              frame.height != static_cast<std::uint32_t>(height)) {
+            return capture_e::error;
+          }
           mapped->pixels = std::move(frame.bgrx);
           mapped->data = mapped->pixels.data();
           mapped->frame_timestamp = frame.timestamp;
-          if (!push(std::move(image), true)) return capture_e::ok;
+          if (!push(std::move(image), true)) {
+            return capture_e::ok;
+          }
         }
       }
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e) override {
 #ifdef SUNSHINE_BUILD_VAAPI
-        if (memory_type == mem_type_e::vaapi) return va::make_avcodec_encode_device(width, height, false);
+        if (memory_type == mem_type_e::vaapi) {
+          return va::make_avcodec_encode_device(width, height, false);
+        }
 #endif
 #ifdef SUNSHINE_BUILD_CUDA
-        if (memory_type == mem_type_e::cuda) return cuda::make_avcodec_encode_device(width, height, false);
+        if (memory_type == mem_type_e::cuda) {
+          return cuda::make_avcodec_encode_device(width, height, false);
+        }
 #endif
         return std::make_unique<avcodec_encode_device_t>();
       }
@@ -132,11 +154,13 @@ namespace platf {
       std::unique_ptr<kwin::connection_t> connection;
       std::unique_ptr<kwin::video_receiver_t> receiver;
     };
-  }
+  }  // namespace
 
   std::shared_ptr<display_t> kwin_display(mem_type_e memory, const video::config_t &config) {
     auto display = std::make_shared<kwin_display_t>();
-    if (!display->init(memory, config)) return nullptr;
+    if (!display->init(memory, config)) {
+      return nullptr;
+    }
     return display;
   }
-}
+}  // namespace platf

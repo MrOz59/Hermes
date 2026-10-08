@@ -17,16 +17,15 @@ namespace platf::kwin {
     std::chrono::steady_clock::time_point timestamp;
   };
 
-  enum class frame_result_t { ready, timeout, failed };
+  enum class frame_result_t {
+    ready,
+    timeout,
+    failed
+  };
 
   class video_receiver_t {
   public:
-    static std::unique_ptr<video_receiver_t> open(const std::string &socket,
-                                                 std::uint64_t serial,
-                                                 std::uint32_t width,
-                                                 std::uint32_t height,
-                                                 std::uint32_t framerate,
-                                                 std::string &error);
+    static std::unique_ptr<video_receiver_t> open(const std::string &socket, std::uint64_t serial, std::uint32_t width, std::uint32_t height, std::uint32_t framerate, std::string &error);
     ~video_receiver_t();
     video_receiver_t(const video_receiver_t &) = delete;
     video_receiver_t &operator=(const video_receiver_t &) = delete;

@@ -34,9 +34,7 @@ namespace platf::kwin {
    */
   class connection_t {
   public:
-    static std::unique_ptr<connection_t> open(const endpoint_t &endpoint,
-                                             bool capture, bool input,
-                                             std::string &error);
+    static std::unique_ptr<connection_t> open(const endpoint_t &endpoint, bool capture, bool input, std::string &error);
     ~connection_t();
     connection_t(const connection_t &) = delete;
     connection_t &operator=(const connection_t &) = delete;

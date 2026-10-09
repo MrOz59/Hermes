@@ -374,6 +374,17 @@ namespace video {
    */
   int probe_encoders();
 
+#ifdef __linux__
+  /**
+   * @brief Probe encoders without opening any screen.
+   * @details For when no screen can be captured - every monitor asleep, say.
+   * Creating a virtual output instead would wake every monitor the compositor
+   * has, so the encoders are validated on a display with nothing behind it.
+   * @return 0 on success, -1 if no encoder works.
+   */
+  int probe_encoders_without_display();
+#endif
+
   /**
    * @brief Result of the last encoder probe, for diagnostics/metrics.
    *

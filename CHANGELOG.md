@@ -43,6 +43,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Linux: starting Hermes no longer wakes the monitors. When no screen could
+  be opened for the startup encoder probe - every monitor asleep, typically -
+  Hermes created a temporary virtual output instead, which the compositor
+  treats as a monitor being plugged in and wakes every display for; the
+  power manager does not count that as activity, so the screens could stay
+  lit for the full idle timeout. Encoders are now validated on a display with
+  nothing behind it, since validation only ever encodes synthetic frames.
 - Linux: streams are encoded on the best GPU in the machine rather than the
   first one the kernel lists. Without `adapter_name`, Hermes ranks every real
   GPU by the video it can encode through VAAPI - AV1, then HEVC Main10, HEVC,

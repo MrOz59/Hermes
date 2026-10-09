@@ -643,6 +643,15 @@ namespace platf {
    */
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
 
+#ifdef __linux__
+  /**
+   * @brief A display with no screen behind it, for validating encoders.
+   * @details It captures nothing; validation encodes only the synthetic frames
+   * it fills in, so no monitor or virtual output is needed or touched.
+   */
+  std::shared_ptr<display_t> encoder_probe_display(mem_type_e hwdevice_type, const video::config_t &config);
+#endif
+
   // A list of names of displays accepted as display_name with the mem_type_e
   std::vector<std::string> display_names(mem_type_e hwdevice_type);
 

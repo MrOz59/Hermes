@@ -1158,7 +1158,18 @@ namespace video {
     true
   };
 
+#ifdef __linux__
+  // Set only for the duration of probe_encoders_without_display().
+  bool probe_without_display = false;
+#endif
+
   void reset_display(std::shared_ptr<platf::display_t> &disp, const platf::mem_type_e &type, const std::string &display_name, const config_t &config) {
+#ifdef __linux__
+    if (probe_without_display && config.encoder_probe) {
+      disp = platf::encoder_probe_display(type, config);
+      return;
+    }
+#endif
     // We try this twice, in case we still get an error on reinitialization
     for (int x = 0; x < 2; ++x) {
       disp.reset();
@@ -2900,6 +2911,16 @@ namespace video {
     fg.disable();
     return true;
   }
+
+#ifdef __linux__
+  int probe_encoders_without_display() {
+    probe_without_display = true;
+    auto reset = util::fail_guard([]() {
+      probe_without_display = false;
+    });
+    return probe_encoders();
+  }
+#endif
 
   int probe_encoders() {
     if (!allow_encoder_probing()) {

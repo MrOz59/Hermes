@@ -1133,10 +1133,6 @@ namespace VDISPLAY {
       return config::video.hermes_kms_multi_output;
     }
 
-    static bool isolated_sessions_requested() {
-      return config::video.hermes_kms_isolated_sessions;
-    }
-
     static uint32_t required_uapi_version() {
       // Secure capture always uses the generic session-capability handoff.
       return session_access_uapi_version;
@@ -1149,7 +1145,7 @@ namespace VDISPLAY {
     static bool has_required_caps(
       uint64_t flags,
       bool require_multi_output = multi_output_requested(),
-      bool require_multi_device = isolated_sessions_requested()
+      bool require_multi_device = false
     ) {
       constexpr uint64_t required = cap_virtual_output | cap_output_control | cap_frame_acquire |
                                     cap_dmabuf_export | cap_output_identity | cap_session_owner |

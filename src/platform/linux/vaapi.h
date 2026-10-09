@@ -26,4 +26,13 @@ namespace va {
 
   // Ensure the render device pointed to by fd is capable of encoding h264 with the hevc_mode configured
   bool validate(int fd);
+
+  /**
+   * @brief Rank what the GPU behind fd can encode, for choosing between GPUs.
+   * @return 0 when it cannot encode H.264 through VAAPI at all; otherwise 1
+   * for H.264, plus 2 for HEVC, 4 for HEVC Main10 and 8 for AV1. Nothing is
+   * logged: this is asked of every GPU, including ones that are not meant to
+   * encode.
+   */
+  int encode_capability(int fd);
 }  // namespace va

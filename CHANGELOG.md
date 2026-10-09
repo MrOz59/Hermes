@@ -43,6 +43,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Linux: streams are encoded on the best GPU in the machine rather than the
+  first one the kernel lists. Without `adapter_name`, Hermes ranks every real
+  GPU by the video it can encode through VAAPI - AV1, then HEVC Main10, HEVC,
+  H.264 - with more video memory breaking a tie, so a dedicated card wins over
+  an integrated one; NVENC streams prefer an NVIDIA GPU. The startup encoder
+  probe, Hermes-KMS streams and system-memory capture all use the same
+  choice, which also means the codecs Hermes advertises are the
+  ones the stream's GPU can encode. Previously that was `renderD128` in some
+  paths and the first GPU in others, and render-node numbering can change
+  between boots.
 - Touch and pen now land where they are aimed on a host with more than one
   monitor. Their coordinates were measured against the whole desktop, while
   KDE and GNOME map such a device onto a single output, so every touch fell

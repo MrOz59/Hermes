@@ -2270,7 +2270,7 @@ namespace platf {
         // The Hermes render node only exports DMA-BUFs; it is not a render GPU,
         // so VAAPI must run on a real GPU (e.g. amdgpu/renderD128). Honour an
         // explicitly configured adapter; only auto-scan when none was set.
-        encode_render_fd.el = open_real_render_node();
+        encode_render_fd.el = open_encode_render_node(mem_type == mem_type_e::cuda);
         if (encode_render_fd.el < 0) {
           BOOST_LOG(error) << "Hermes-KMS capture: no render GPU found for encoding."sv;
           return -1;
@@ -2292,75 +2292,6 @@ namespace platf {
 
         BOOST_LOG(info) << "Hermes-KMS zero-copy capture ready: "sv << w << 'x' << h;
         return 0;
-      }
-
-      // Open the render node of a real GPU (not the Hermes virtual device),
-      // used to import the captured DMA-BUFs and run the encoder.
-      //
-      // The auto-scan walks every render node on the machine and is meant to
-      // reject some of them, the Hermes node above all; only an adapter the
-      // user named explicitly deserves an error, the rest is the search
-      // talking to itself.
-      static bool is_usable_encode_node(int fd, std::string_view node, bool log_failures) {
-        version_t version {drmGetVersion(fd)};
-        if (!version || !version->name) {
-          BOOST_LOG(log_failures ? error : debug)
-            << "Hermes-KMS capture: could not identify DRM adapter "sv << node;
-          return false;
-        }
-        if (std::string_view {version->name} == "hermes-kms"sv) {
-          BOOST_LOG(log_failures ? error : debug)
-            << "Hermes-KMS capture: adapter "sv << node
-            << " is the capture-only Hermes render node, not an encoding GPU."sv;
-          return false;
-        }
-        return true;
-      }
-
-      static int open_real_render_node() {
-        if (!config::video.adapter_name.empty()) {
-          const auto &node = config::video.adapter_name;
-          const int candidate = ::open(node.c_str(), O_RDWR | O_CLOEXEC);
-          if (candidate < 0) {
-            BOOST_LOG(error) << "Hermes-KMS capture: could not open configured adapter "sv
-                             << node << ": "sv << strerror(errno);
-            return -1;
-          }
-          if (!is_usable_encode_node(candidate, node, true)) {
-            ::close(candidate);
-            return -1;
-          }
-          return candidate;
-        }
-
-        std::array<drmDevicePtr, DRM_MAX_MINOR> devices {};
-        const int n = drmGetDevices2(0, devices.data(), static_cast<int>(devices.size()));
-        if (n <= 0) {
-          return -1;
-        }
-        const int device_count = std::min(n, static_cast<int>(devices.size()));
-        int fd = -1;
-        for (int i = 0; i < device_count; ++i) {
-          if (!devices[i] || !(devices[i]->available_nodes & (1U << DRM_NODE_RENDER))) {
-            continue;
-          }
-          const char *node = devices[i]->nodes[DRM_NODE_RENDER];
-          if (!node) {
-            continue;
-          }
-          const int candidate = ::open(node, O_RDWR | O_CLOEXEC);
-          if (candidate < 0) {
-            continue;
-          }
-          if (!is_usable_encode_node(candidate, node, false)) {
-            ::close(candidate);
-            continue;
-          }
-          fd = candidate;
-          break;
-        }
-        drmFreeDevices(devices.data(), device_count);
-        return fd;
       }
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {

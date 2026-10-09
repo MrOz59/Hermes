@@ -1069,8 +1069,11 @@ namespace nvhttp {
     if constexpr (std::is_same_v<SunshineHTTPS, T>) {
       auto named_cert_p = get_verified_cert(request);
       const bool isolated_sessions = experimental_isolated_sessions_enabled();
-      int current_appid = isolated_sessions ?
-                            proc::proc.running_for_client(named_cert_p->uuid) :
+      const auto isolated_appid = isolated_sessions ?
+                                    proc::proc.running_for_client(named_cert_p->uuid) :
+                                    0;
+      int current_appid = isolated_appid > 0 ?
+                            isolated_appid :
                             proc::proc.running();
       // When input only mode is enabled, the only resume method should be launching the same app again.
       if (config::input.enable_input_only_mode && current_appid != proc::input_only_app_id) {
@@ -1079,7 +1082,7 @@ namespace nvhttp {
       tree.put("root.currentgame", current_appid);
       tree.put(
         "root.currentgameuuid",
-        isolated_sessions ?
+        isolated_appid > 0 ?
           proc::proc.running_app_uuid_for_client(named_cert_p->uuid) :
           proc::proc.get_running_app_uuid()
       );
@@ -1170,8 +1173,11 @@ namespace nvhttp {
 
     auto named_cert_p = get_verified_cert(request);
     if (!!(named_cert_p->perm & PERM::_all_actions)) {
-      auto current_appid = experimental_isolated_sessions_enabled() ?
-                             proc::proc.running_for_client(named_cert_p->uuid) :
+      const auto isolated_appid = experimental_isolated_sessions_enabled() ?
+                                    proc::proc.running_for_client(named_cert_p->uuid) :
+                                    0;
+      auto current_appid = isolated_appid > 0 ?
+                             isolated_appid :
                              proc::proc.running();
       auto should_hide_inactive_apps = config::input.enable_input_only_mode && current_appid > 0 && current_appid != proc::input_only_app_id;
 
@@ -1254,25 +1260,67 @@ namespace nvhttp {
     auto appid = util::from_view(appid_str);
     auto named_cert_p = get_verified_cert(request);
     const bool isolated_sessions = experimental_isolated_sessions_enabled();
-    auto current_appid = isolated_sessions ?
-                           proc::proc.running_for_client(named_cert_p->uuid) :
-                           proc::proc.running();
-    auto current_app_uuid = isolated_sessions ?
-                              proc::proc.running_app_uuid_for_client(named_cert_p->uuid) :
-                              proc::proc.get_running_app_uuid();
-    bool is_input_only = config::input.enable_input_only_mode && (appid == proc::input_only_app_id || (appuuid_str == REMOTE_INPUT_UUID));
+
+    const auto host_current_appid = proc::proc.running();
+    const auto host_current_app_uuid = proc::proc.get_running_app_uuid();
+    const auto isolated_current_appid = isolated_sessions ?
+                                          proc::proc.running_for_client(named_cert_p->uuid) :
+                                          0;
+    const auto isolated_current_app_uuid = isolated_sessions ?
+                                             proc::proc.running_app_uuid_for_client(named_cert_p->uuid) :
+                                             std::string {};
+
+    bool is_input_only =
+      config::input.enable_input_only_mode &&
+      (appid == proc::input_only_app_id || appuuid_str == REMOTE_INPUT_UUID);
+
+    const proc::ctx_t *requested_app = nullptr;
+    if (!is_input_only && (appid > 0 || !appuuid_str.empty())) {
+      const auto &apps = proc::proc.get_apps();
+      const auto app_iter = std::find_if(
+        apps.begin(),
+        apps.end(),
+        [&appid_str, &appuuid_str](const auto &app) {
+          return app.id == appid_str || app.uuid == appuuid_str;
+        }
+      );
+      if (app_iter != apps.end()) {
+        requested_app = &*app_iter;
+      }
+    }
 
     auto perm = PERM::launch;
 
     BOOST_LOG(verbose) << "Launching app [" << appid_str << "] with UUID [" << appuuid_str << "]";
     // BOOST_LOG(verbose) << "QS: " << request->query_string;
 
-    // If we have already launched an app, we should allow clients with view permission to join the input only or current app's session.
+    // Before Hestia one-shot state is consumed, only relax launch permission
+    // when this profile cannot become isolated. Detached auto is treated
+    // conservatively because Hestia may still request its virtual display.
+    bool permission_isolated = false;
+    if (requested_app) {
+      permission_isolated =
+        proc::resolve_session_route(
+          *requested_app,
+          isolated_sessions,
+          true
+        ) != proc::session_route_e::shared;
+    }
+
+    const auto permission_current_appid =
+      permission_isolated ? isolated_current_appid : host_current_appid;
+    const auto &permission_current_app_uuid =
+      permission_isolated ? isolated_current_app_uuid : host_current_app_uuid;
+
     if (
-      !isolated_sessions
-      && current_appid > 0
+      !permission_isolated
+      && permission_current_appid > 0
       && (appuuid_str != TERMINATE_APP_UUID || appid != proc::terminate_app_id)
-      && (is_input_only || appid == current_appid || (!appuuid_str.empty() && appuuid_str == current_app_uuid))
+      && (
+        is_input_only
+        || appid == permission_current_appid
+        || (!appuuid_str.empty() && appuuid_str == permission_current_app_uuid)
+      )
     ) {
       perm = PERM::_allow_view;
     }
@@ -1299,26 +1347,22 @@ namespace nvhttp {
       return;
     }
 
-    if (isolated_sessions && is_input_only) {
-      BOOST_LOG(warning) << "[IsolatedSession] Rejecting Remote Input because it has no "
-                            "unambiguous isolated seat/runtime target.";
-      tree.put("root.resume", 0);
-      tree.put("root.<xmlattr>.status_code", 409);
-      tree.put(
-        "root.<xmlattr>.status_message",
-        "Remote Input is unavailable while independent client sessions are enabled"
-      );
-      return;
-    }
-
     if (!is_input_only) {
       // Special handling for the "terminate" app
       if (
         (config::input.enable_input_only_mode && appid == proc::terminate_app_id)
         || appuuid_str == TERMINATE_APP_UUID
       ) {
-        if (isolated_sessions) {
-          rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+        const auto stream_route =
+          rtsp_stream::session_is_isolated(named_cert_p->uuid);
+        const bool terminate_isolated =
+          stream_route.value_or(
+            isolated_sessions &&
+            proc::proc.isolated_client_present(named_cert_p->uuid)
+          );
+
+        rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+        if (terminate_isolated) {
           rtsp_stream::terminate_session(named_cert_p->uuid);
           proc::proc.terminate_isolated_client(named_cert_p->uuid);
         } else {
@@ -1332,21 +1376,6 @@ namespace nvhttp {
         return;
       }
 
-      if (
-        !isolated_sessions
-        && current_appid > 0
-        && current_appid != proc::input_only_app_id
-        && (
-          (appid > 0 && appid != current_appid)
-          || (!appuuid_str.empty() && appuuid_str != current_app_uuid)
-        )
-      ) {
-        tree.put("root.resume", 0);
-        tree.put("root.<xmlattr>.status_code", 400);
-        tree.put("root.<xmlattr>.status_message", "An app is already running on this host");
-
-        return;
-      }
     }
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
@@ -1367,6 +1396,45 @@ namespace nvhttp {
       }
     }
 
+    auto session_route = proc::session_route_e::shared;
+    if (requested_app) {
+      const bool virtual_display_requested =
+        proc::launch_requests_virtual_display(
+          *requested_app,
+          *launch_session,
+          config::video.headless_mode
+        );
+      session_route = proc::resolve_session_route(
+        *requested_app,
+        isolated_sessions,
+        virtual_display_requested
+      );
+    }
+
+    const bool isolated_launch =
+      session_route != proc::session_route_e::shared;
+
+    const auto current_appid =
+      isolated_launch ? isolated_current_appid : host_current_appid;
+    const auto &current_app_uuid =
+      isolated_launch ? isolated_current_app_uuid : host_current_app_uuid;
+
+    if (
+      !is_input_only
+      && !isolated_launch
+      && host_current_appid > 0
+      && host_current_appid != proc::input_only_app_id
+      && (
+        (appid > 0 && appid != host_current_appid)
+        || (!appuuid_str.empty() && appuuid_str != host_current_app_uuid)
+      )
+    ) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "An app is already running on this host");
+      return;
+    }
+
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
     if (!launch_session->rtsp_cipher && encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {
       BOOST_LOG(error) << "Rejecting client that cannot comply with mandatory encryption requirement"sv;
@@ -1378,7 +1446,7 @@ namespace nvhttp {
       return;
     }
 
-    bool no_active_sessions = rtsp_stream::session_count() == 0;
+    bool no_active_sessions = rtsp_stream::shared_session_count() == 0;
 
     if (is_input_only) {
       BOOST_LOG(info) << "Launching input only session..."sv;
@@ -1395,7 +1463,7 @@ namespace nvhttp {
         }
       }
     } else if (appid > 0 || !appuuid_str.empty()) {
-      if (isolated_sessions) {
+      if (isolated_launch) {
         const auto &apps = proc::proc.get_apps();
         const auto app_iter = std::find_if(
           apps.begin(),
@@ -1503,7 +1571,7 @@ namespace nvhttp {
 
 #ifdef __linux__
     if (!is_input_only &&
-        !isolated_sessions &&
+        !isolated_launch &&
         config::video.virtual_display_backend == "hermes_kms" &&
         config::video.hermes_kms_multi_output &&
         (proc::proc.virtual_display || launch_session->virtual_display || config::video.headless_mode) &&
@@ -1550,7 +1618,7 @@ namespace nvhttp {
     });
 
     auto named_cert_p = get_verified_cert(request);
-    const bool isolated_sessions = experimental_isolated_sessions_enabled();
+    const bool isolated_sessions_enabled = experimental_isolated_sessions_enabled();
     if (!(named_cert_p->perm & PERM::_allow_view)) {
       BOOST_LOG(debug) << "Permission ViewApp denied for [" << named_cert_p->name << "] (" << (uint32_t)named_cert_p->perm << ")";
 
@@ -1561,10 +1629,15 @@ namespace nvhttp {
       return;
     }
 
-    auto current_appid = isolated_sessions ?
-                           proc::proc.running_for_client(named_cert_p->uuid) :
-                           proc::proc.running();
-    if (isolated_sessions && rtsp_stream::find_session(named_cert_p->uuid)) {
+    const auto isolated_current_appid = isolated_sessions_enabled ?
+                                          proc::proc.running_for_client(named_cert_p->uuid) :
+                                          0;
+    const bool isolated_resume = isolated_current_appid > 0;
+    const auto current_appid = isolated_resume ?
+                                 isolated_current_appid :
+                                 proc::proc.running();
+
+    if (isolated_resume && rtsp_stream::find_session(named_cert_p->uuid)) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 409);
       tree.put("root.<xmlattr>.status_message", "This client already has an active stream");
@@ -1594,18 +1667,19 @@ namespace nvhttp {
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
     const bool no_active_sessions {rtsp_stream::session_count() == 0};
+    const bool no_active_shared_sessions {rtsp_stream::shared_session_count() == 0};
     if (no_active_sessions && args.find("localAudioPlayMode"s) != std::end(args)) {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }
     auto launch_session = make_launch_session(host_audio, false, args, named_cert_p);
 
-    if ((!isolated_sessions && !proc::proc.allow_client_commands) ||
+    if ((!isolated_resume && !proc::proc.allow_client_commands) ||
         !named_cert_p->allow_client_commands) {
       launch_session->client_do_cmds.clear();
       launch_session->client_undo_cmds.clear();
     }
 
-    if (isolated_sessions && !proc::proc.prepare_isolated_resume(launch_session)) {
+    if (isolated_resume && !proc::proc.prepare_isolated_resume(launch_session)) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 503);
       tree.put("root.<xmlattr>.status_message", "No isolated session is available to resume");
@@ -1616,7 +1690,7 @@ namespace nvhttp {
       launch_session->input_only = true;
     }
 
-    if (!isolated_sessions && no_active_sessions && !proc::proc.virtual_display) {
+    if (!isolated_resume && no_active_shared_sessions && !proc::proc.virtual_display) {
       // We want to prepare display only if there are no active sessions
       // and the current session isn't virtual display at the moment.
       // This should be done before probing encoders as it could change the active displays.
@@ -1635,7 +1709,7 @@ namespace nvhttp {
       }
     }
 #ifndef _WIN32
-    else if (!isolated_sessions && no_active_sessions && proc::proc.virtual_display && !proc::proc.display_name.empty()) {
+    else if (!isolated_resume && no_active_shared_sessions && proc::proc.virtual_display && !proc::proc.display_name.empty()) {
       // A resumed app keeps its virtual display, but every client brings its
       // own mode. Without this, the first client's geometry outlives it: A
       // streams at 1440p and disconnects, B resumes the same app at 1080p and
@@ -1698,7 +1772,7 @@ namespace nvhttp {
 
 #ifdef __linux__
     if (config::video.virtual_display_backend == "hermes_kms" &&
-        !isolated_sessions &&
+        !isolated_resume &&
         config::video.hermes_kms_multi_output &&
         (proc::proc.virtual_display || launch_session->virtual_display || config::video.headless_mode)) {
       if (const int result = proc::proc.prepare_session_virtual_display(launch_session); result != 0) {
@@ -1760,16 +1834,24 @@ namespace nvhttp {
     tree.put("root.cancel", 1);
     tree.put("root.<xmlattr>.status_code", 200);
 
-    if (experimental_isolated_sessions_enabled()) {
-      rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+    const auto stream_route =
+      rtsp_stream::session_is_isolated(named_cert_p->uuid);
+    const bool cancel_isolated =
+      stream_route.value_or(
+        experimental_isolated_sessions_enabled() &&
+        proc::proc.isolated_client_present(named_cert_p->uuid)
+      );
+
+    rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+    if (cancel_isolated) {
       rtsp_stream::terminate_session(named_cert_p->uuid);
       proc::proc.terminate_isolated_client(named_cert_p->uuid);
     } else {
-      rtsp_stream::terminate_sessions();
+      rtsp_stream::terminate_shared_sessions();
       if (proc::proc.running() > 0) {
         proc::proc.terminate();
       }
-      // Legacy display configuration belongs to the global process/session.
+      // Shared-host display state does not belong to isolated runtimes.
       display_device::revert_configuration();
     }
   }

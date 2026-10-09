@@ -263,7 +263,8 @@ namespace VDISPLAY {
     uint32_t fps,
     const uuid_util::uuid_t &guid,
     std::optional<uid_t> session_owner_uid = std::nullopt,
-    virtual_display_layout_e layout = virtual_display_layout_e::extend
+    virtual_display_layout_e layout = virtual_display_layout_e::extend,
+    bool isolated_session = false
   );
 
   /**

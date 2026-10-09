@@ -612,6 +612,17 @@ namespace rtsp_stream {
       return _session_slots->size();
     }
 
+    int shared_session_count() {
+      auto lg = _session_slots.lock();
+      int count = 0;
+      for (const auto &slot : *_session_slots) {
+        if (slot && !stream::session::isolated(*slot)) {
+          ++count;
+        }
+      }
+      return count;
+    }
+
     safe::event_t<std::shared_ptr<launch_session_t>> launch_event;
 
     /**
@@ -723,6 +734,20 @@ namespace rtsp_stream {
       return false;
     }
 
+    void terminate_shared_sessions() {
+      auto lg = _session_slots.lock();
+      for (auto it = _session_slots->begin(); it != _session_slots->end();) {
+        const auto &slot = *it;
+        if (!slot || stream::session::isolated(*slot)) {
+          ++it;
+          continue;
+        }
+        stream::session::stop(*slot, stream::session::termination_reason_e::SERVER_STOPPED);
+        stream::session::join(*slot);
+        it = _session_slots->erase(it);
+      }
+    }
+
   private:
     std::unordered_map<std::string_view, cmd_func_t> _map_cmd_cb;
 
@@ -756,6 +781,11 @@ namespace rtsp_stream {
     return server.session_count();
   }
 
+  int shared_session_count() {
+    server.clear(false);
+    return server.shared_session_count();
+  }
+
   std::string_view last_termination_reason() {
     return stream::session::termination_reason_str(stream::session::last_termination_reason());
   }
@@ -764,12 +794,24 @@ namespace rtsp_stream {
     return server.find_session(uuid);
   }
 
+  std::optional<bool> session_is_isolated(const std::string_view &uuid) {
+    const auto session = server.find_session(uuid);
+    if (!session) {
+      return std::nullopt;
+    }
+    return stream::session::isolated(*session);
+  }
+
   std::list<std::string> get_all_session_uuids() {
     return server.get_all_session_uuids();
   }
 
   bool terminate_session(const std::string_view &uuid) {
     return server.terminate_session(uuid);
+  }
+
+  void terminate_shared_sessions() {
+    server.terminate_shared_sessions();
   }
 
   void terminate_sessions() {
@@ -1097,11 +1139,6 @@ namespace rtsp_stream {
 
     std::int64_t configuredBitrateKbps;
     config.audio.flags[audio::config_t::HOST_AUDIO] = session.host_audio;
-    // An isolated session records the sink that was made for it at launch,
-    // rather than whichever one the machine currently defaults to. Empty for
-    // every session that shares the host's desktop, which leaves their capture
-    // exactly as it was.
-    config.audio.session_sink = proc::proc.isolated_audio_sink(session.id);
     try {
       config.audio.channels = util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
       config.audio.mask = util::from_view(args.at("x-nv-audio.surround.channelMask"sv));
@@ -1273,6 +1310,23 @@ namespace rtsp_stream {
       BOOST_LOG(info) << "Rejecting RTSP ANNOUNCE for cancelled launch "
                       << session.id << " from " << session.device_name;
       respond(sock, session, &option, 410, "Gone", req->sequenceNumber, {});
+      return;
+    }
+
+    // An isolated session records the sink that was made for it at launch,
+    // rather than whichever one the machine currently defaults to. Empty for
+    // every session that shares the host's desktop, which leaves their capture
+    // exactly as it was.
+    // A resumed connection has a new launch ID, but the retained desktop and
+    // its sink still belong to the original runtime.
+    config.audio.session_sink = proc::proc.isolated_audio_sink(
+      session.isolated_session ? session.isolated_runtime_owner_id : session.id
+    );
+    if (session.isolated_session && session.isolated_session_profile == "desktop" &&
+        config.audio.session_sink.empty()) {
+      BOOST_LOG(error) << "[IsolatedSession] The detached desktop has no private audio sink; "
+                          "refusing to capture host audio.";
+      respond(sock, session, &option, 503, "Service Unavailable", req->sequenceNumber, {});
       return;
     }
 

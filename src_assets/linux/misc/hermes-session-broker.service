@@ -12,6 +12,7 @@ ExecStart=/usr/bin/hermes-session-broker
 Restart=on-failure
 RestartSec=1s
 UMask=0077
+StateDirectory=hermes
 
 # This service creates user accounts, so it is confined harder than its
 # privilege suggests rather than softer. It reaches exactly three trees: the

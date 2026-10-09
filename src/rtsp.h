@@ -73,6 +73,8 @@ namespace rtsp_stream {
     std::string isolated_seat_id;
     std::string drm_device_path;
     std::string wayland_display;
+    std::string kwin_wayland_socket;
+    std::string kwin_pipewire_socket;
     uint32_t scale_factor;
     std::string launch_mode;
 
@@ -114,6 +116,8 @@ namespace rtsp_stream {
    */
   int session_count();
 
+  int shared_session_count();
+
   /**
    * @brief Get a short identifier for why the most recent session ended.
    * @return e.g. "client_quit", "client_lost", "server_stopped", "unknown".
@@ -123,11 +127,16 @@ namespace rtsp_stream {
   std::shared_ptr<stream::session_t>
   find_session(const std::string_view& uuid);
 
+  std::optional<bool> session_is_isolated(const std::string_view &uuid);
+
   std::list<std::string>
   get_all_session_uuids();
 
   /** Terminates only the session associated with a paired client. */
   bool terminate_session(const std::string_view &uuid);
+
+  /** Terminates only shared-host streaming sessions. */
+  void terminate_shared_sessions();
 
   /**
    * @brief Terminates all running streaming sessions.

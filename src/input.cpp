@@ -13,6 +13,7 @@ extern "C" {
 #include <chrono>
 #include <cmath>
 #include <list>
+#include <stdexcept>
 #include <thread>
 #include <unordered_map>
 
@@ -163,6 +164,17 @@ namespace input {
     button_state_e back_button_state;
   };
 
+  static std::shared_ptr<platf::input_t> platform_input_for(const std::string &tag, const std::string &socket) {
+    if (!socket.empty()) {
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+      return std::make_shared<platf::input_t>(platf::input_private_kwin(socket));
+#else
+      throw std::runtime_error("Private KWin input support was not built");
+#endif
+    }
+    return tag.empty() ? shared_platform_input : std::make_shared<platf::input_t>(platf::input(tag));
+  }
+
   struct input_t {
     enum shortkey_e {
       CTRL = 0x1,  ///< Control key
@@ -174,12 +186,11 @@ namespace input {
     input_t(
       safe::mail_raw_t::event_t<input::touch_port_t> touch_port_event,
       platf::feedback_queue_t feedback_queue,
-      const std::string &session_tag
+      const std::string &session_tag,
+      const std::string &wayland_socket
     ):
         platform_input {
-          session_tag.empty() ?
-            shared_platform_input :
-            std::make_shared<platf::input_t>(platf::input(session_tag))
+          platform_input_for(session_tag, wayland_socket)
         },
         shortcutFlags {},
         client_context {platf::allocate_client_input_context(*platform_input)},
@@ -1758,12 +1769,14 @@ namespace input {
 
   std::shared_ptr<input_t> alloc(
     safe::mail_t mail,
-    const std::string &session_tag
+    const std::string &session_tag,
+    const std::string &wayland_socket
   ) {
     auto input = std::make_shared<input_t>(
       mail->event<input::touch_port_t>(mail::touch_port),
       mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback),
-      session_tag
+      session_tag,
+      wayland_socket
     );
 
     // Workaround to ensure new frames will be captured when a client connects

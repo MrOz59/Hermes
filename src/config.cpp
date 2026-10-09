@@ -502,7 +502,7 @@ namespace config {
     false,  // hermes_kms_multi_output
     false,  // hermes_kms_isolated_sessions
     "auto"s,  // gamescope_backend
-    "weston"s,  // hermes_kms_session_compositor
+    "plasma"s,  // hermes_kms_session_compositor
 
     {
       video_t::dd_t::config_option_e::disabled,  // configuration_option
@@ -1245,14 +1245,10 @@ namespace config {
     }
     bool_f(vars, "hermes_kms_multi_output", video.hermes_kms_multi_output);
     bool_f(vars, "hermes_kms_isolated_sessions", video.hermes_kms_isolated_sessions);
-    if (video.hermes_kms_multi_output && video.hermes_kms_isolated_sessions) {
-      BOOST_LOG(warning) << "hermes_kms_isolated_sessions supersedes "
-                            "hermes_kms_multi_output; shared-desktop output "
-                            "management will remain disabled.";
-    }
     string_restricted_f(vars, "gamescope_backend", video.gamescope_backend, {"auto"sv, "wayland"sv, "sdl"sv, "drm"sv});
-    // Deliberately unrestricted: weston is the profile Hermes ships and tests,
-    // and any other name is a profile the administrator dropped in themselves.
+    // Deliberately unrestricted: plasma is the user's own desktop, weston and
+    // labwc are the profiles Hermes ships as opt-in fallbacks, and any other
+    // name is a profile the administrator dropped in themselves.
     string_f(vars, "hermes_kms_session_compositor", video.hermes_kms_session_compositor);
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);

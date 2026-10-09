@@ -21,12 +21,26 @@ using namespace std::literals;
 namespace platf::mouse {
 
   void move(input_raw_t *raw, int deltaX, int deltaY) {
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+    if (raw->private_kwin) {
+      const auto &o = raw->kwin_input->output();
+      raw->kwin_input->pointer_motion(double(deltaX) / o.scale, double(deltaY) / o.scale);
+      return;
+    }
+#endif
     if (raw->mouse) {
       (*raw->mouse).move(deltaX, deltaY);
     }
   }
 
   void move_abs(input_raw_t *raw, const touch_port_t &touch_port, float x, float y) {
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+    if (raw->private_kwin) {
+      const auto &o = raw->kwin_input->output();
+      raw->kwin_input->pointer_absolute(o.x + double(x) / o.scale, o.y + double(y) / o.scale);
+      return;
+    }
+#endif
     if (raw->mouse) {
       // x/y are in the virtual display's own pixel space; the uinput device's
       // absolute range covers the whole host desktop (touch_port.width/height
@@ -42,6 +56,32 @@ namespace platf::mouse {
   }
 
   void button(input_raw_t *raw, int button, bool release) {
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+    if (raw->private_kwin) {
+      int code;
+      switch (button) {
+        case BUTTON_LEFT:
+          code = BTN_LEFT;
+          break;
+        case BUTTON_MIDDLE:
+          code = BTN_MIDDLE;
+          break;
+        case BUTTON_RIGHT:
+          code = BTN_RIGHT;
+          break;
+        case BUTTON_X1:
+          code = BTN_SIDE;
+          break;
+        case BUTTON_X2:
+          code = BTN_EXTRA;
+          break;
+        default:
+          return;
+      }
+      raw->kwin_input->button(code, !release);
+      return;
+    }
+#endif
     if (raw->mouse) {
       inputtino::Mouse::MOUSE_BUTTON btn_type;
       switch (button) {
@@ -73,12 +113,24 @@ namespace platf::mouse {
   }
 
   void scroll(input_raw_t *raw, int high_res_distance) {
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+    if (raw->private_kwin) {
+      raw->kwin_input->axis(false, -double(high_res_distance) / 8.0);
+      return;
+    }
+#endif
     if (raw->mouse) {
       (*raw->mouse).vertical_scroll(high_res_distance);
     }
   }
 
   void hscroll(input_raw_t *raw, int high_res_distance) {
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+    if (raw->private_kwin) {
+      raw->kwin_input->axis(true, double(high_res_distance) / 8.0);
+      return;
+    }
+#endif
     if (raw->mouse) {
       (*raw->mouse).horizontal_scroll(high_res_distance);
     }

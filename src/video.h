@@ -57,6 +57,9 @@ namespace video {
     std::string display_name;
     // Internal capability probing encodes synthetic frames, never a stream.
     bool encoder_probe {false};
+    // Explicit native detached endpoints; empty preserves existing capture.
+    std::string kwin_wayland_socket;
+    std::string kwin_pipewire_socket;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);
@@ -373,6 +376,17 @@ namespace video {
    * @warning This is only safe to call when there is no client actively streaming.
    */
   int probe_encoders();
+
+#ifdef __linux__
+  /**
+   * @brief Probe encoders without opening any screen.
+   * @details For when no screen can be captured - every monitor asleep, say.
+   * Creating a virtual output instead would wake every monitor the compositor
+   * has, so the encoders are validated on a display with nothing behind it.
+   * @return 0 on success, -1 if no encoder works.
+   */
+  int probe_encoders_without_display();
+#endif
 
   /**
    * @brief Result of the last encoder probe, for diagnostics/metrics.

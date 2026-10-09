@@ -26,6 +26,20 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   unlock only when needed. The option is off by default because it unlocks the
   entire host desktop, not only the streamed display; failure is non-fatal and
   application launch continues normally.
+- Linux: an independent `desktop` session is now the user's own Plasma
+  desktop, detached (`hermes_kms_session_compositor = plasma`, the new
+  default; `weston` and `labwc` remain as opt-in fallbacks, and a Plasma
+  failure says so). It runs as
+  the same user with the same home, files and settings, in a transient unit of
+  the user's systemd manager with a private D-Bus and runtime directory, on a
+  stock KWin virtual output. It has no DRM device or libinput, so it never wakes
+  or rearranges a physical monitor and the keyboard and mouse at the machine
+  never reach it; PowerDevil does not run inside it. Hermes captures it through
+  KWin's screencast protocol over PipeWire and drives its keyboard, mouse and
+  touch through KWin's fake-input protocol, over explicit sockets with no
+  fallback to the host desktop. Frames are copied through system memory, and
+  the session is SDR only. Requires Plasma 6 and plasma-wayland-protocols 1.23
+  or newer at build time.
 
 ### Changed
 - A session that asks for a virtual display now fails to start when that
@@ -43,6 +57,23 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Linux: starting Hermes no longer wakes the monitors. When no screen could
+  be opened for the startup encoder probe - every monitor asleep, typically -
+  Hermes created a temporary virtual output instead, which the compositor
+  treats as a monitor being plugged in and wakes every display for; the
+  power manager does not count that as activity, so the screens could stay
+  lit for the full idle timeout. Encoders are now validated on a display with
+  nothing behind it, since validation only ever encodes synthetic frames.
+- Linux: streams are encoded on the best GPU in the machine rather than the
+  first one the kernel lists. Without `adapter_name`, Hermes ranks every real
+  GPU by the video it can encode through VAAPI - AV1, then HEVC Main10, HEVC,
+  H.264 - with more video memory breaking a tie, so a dedicated card wins over
+  an integrated one; NVENC streams prefer an NVIDIA GPU. The startup encoder
+  probe, Hermes-KMS streams and system-memory capture all use the same
+  choice, which also means the codecs Hermes advertises are the
+  ones the stream's GPU can encode. Previously that was `renderD128` in some
+  paths and the first GPU in others, and render-node numbering can change
+  between boots.
 - Touch and pen now land where they are aimed on a host with more than one
   monitor. Their coordinates were measured against the whole desktop, while
   KDE and GNOME map such a device onto a single output, so every touch fell

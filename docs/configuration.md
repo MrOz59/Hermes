@@ -1355,19 +1355,9 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            @warning{Not recommended right now. This prototype is being
-            re-evaluated and will change in ways that are not backwards
-            compatible - do not build a setup on it yet. What is known to be
-            broken or unfinished: a session composites in software rather than
-            on the GPU (see <code>hermes_kms_session_compositor</code>); nothing
-            bounds what a session may consume, so one client can starve the
-            host; a session that was given a Unix account of its own still hears
-            the host's audio; and Remote Input is disabled. A full Plasma
-            desktop and simultaneous real clients have not been validated.}
+            @warning{Experimental and not recommended for production yet. Independent-session support now coexists with the shared host session rather than replacing it. Resource limits, GPU compositor support, per-account audio isolation, and full Plasma-session validation remain unfinished.}
 
-            Enables the highly experimental independent-session prototype.
-            One Hermes server gives each Moonlight client a session of its own
-            rather than sharing the host's desktop.
+            Enables the experimental independent-session capability. It does not switch the entire Hermes server into an isolated mode. Eligible launches may use independent sessions while ordinary Host Desktop, Remote Input, and other shared routes continue to use the existing host compositor.
 
             <b>What every isolated session gets.</b> Its own Hermes-KMS DRM card
             on its own private DRM seat, its own compositor, its own Wayland
@@ -1429,8 +1419,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             The Hermes user must be a member of the <code>seat</code> group.
             Hermes maps device N to
             <code>/run/hermes-kms-seatd/N/seatd.sock</code>.
-            If <code>hermes_kms_multi_output</code> is also set, independent
-            sessions take precedence and the shared-desktop mode is ignored.
+            <code>hermes_kms_multi_output</code> may be enabled at the same time. Shared-host launches continue to use host compositor outputs, while independent launches allocate private session devices.
             Audio follows the same split. A session that shares the Hermes
             user gets a sink of its own, named after the session; its
             applications play into it, capture records it by name, and the
@@ -1440,12 +1429,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             its user manager, which Hermes cannot reach through a
             <code>0700</code> runtime directory, so that case still hears the
             host's audio and says so in the log.
-            @warning{Audio is not yet isolated for sessions that have a Unix
-            account of their own - those clients hear the host. A full Plasma
-            desktop and simultaneous real clients are not validated. The private seat brokers are not a
-            security boundary between mutually untrusted local users. Remote
-            Input is rejected because it has no video session from which to
-            determine a target seat. Keep this disabled outside testing.}
+            @warning{Audio is not yet isolated for sessions that have a Unix account of their own - those clients hear the host. A full Plasma desktop and simultaneous real clients are not validated. The private seat brokers are not a security boundary between mutually untrusted local users. Remote Input remains a shared-host feature. Keep independent-session support disabled outside testing.}
         </td>
     </tr>
     <tr>
@@ -1546,16 +1530,20 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Which compositor an experimental isolated session starts on its
-            private DRM seat. The name selects a profile file, looked up first
-            in <code>~/.config/hermes/session-compositors/</code> and then in
-            the profiles Hermes ships; a profile declares the command line, any
+            Which desktop an experimental independent <code>desktop</code>
+            session starts. The default, <code>plasma</code>, is the user's own
+            Plasma desktop, detached (see below). Any other name selects a
+            compositor profile file, looked up first in
+            <code>~/.config/hermes/session-compositors/</code> and then in the
+            profiles Hermes ships; a profile declares the command line, any
             environment it needs, and whether it is told its Wayland socket name
-            or names its own.
-            @note{Hermes ships <code>weston</code> and <code>labwc</code>.
-            Dropping in a profile for a third compositor needs no code change
-            and is supported by nobody but you.}
-            @note{<code>weston</code> remains the profile to use with
+            or names its own, and the compositor runs on a private Hermes-KMS
+            DRM seat.
+            @note{Hermes ships <code>weston</code> and <code>labwc</code>
+            profiles as opt-in fallbacks for machines without Plasma 6. Neither
+            is required. Dropping in a profile for a third compositor needs no
+            code change and is supported by nobody but you.}
+            @note{Of the two profiles, <code>weston</code> is the one to use with
             Hermes-KMS. It takes KMS nodes only, for both its display and its
             rendering device, and the sole KMS node backed by a real GPU belongs
             to seat0 - which a session on a private seat cannot open - so a
@@ -1565,6 +1553,22 @@ editing the `conf` file in a text editor. Use the examples as reference.
             render node, and Hermes-KMS's is capture-only with no Mesa driver
             behind it, so every swapchain fails. Use <code>labwc</code> only
             with a KMS device whose render node Mesa can drive.}
+            @note{<code>plasma</code> is not a profile file. It starts the
+            user's own Plasma desktop, detached: stock KWin on a virtual output
+            of its own, run as the same user in a transient unit of the user's
+            systemd manager, with a private D-Bus and runtime directory. It
+            shares the user's home, files and settings, so changes made in it
+            are real; it has no DRM device and no libinput, so it never wakes or
+            rearranges a physical monitor and the keyboard and mouse at the
+            machine never reach it. Hermes captures it through KWin's screencast
+            protocol and drives its input through KWin's fake-input protocol.
+            Its frames are copied through system memory rather than exported as
+            DMA-BUFs. It needs KWin and Plasma 6, plasma-wayland-protocols at
+            build time, and <code>dbus-run-session</code>. PowerDevil does not
+            run inside it, so the host's alone manages the monitors and sleep.
+            It applies to the <code>desktop</code> profile without a command.
+            If it cannot start, the error names the reason and suggests
+            <code>weston</code> as a fallback.}
             @note{The <code>labwc</code> profile sets the mode the client asked
             for with <code>wlr-randr</code>, which is a separate package. It is
             best-effort: without it the session still starts, but keeps whatever
@@ -1576,7 +1580,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            weston
+            plasma
             @endcode</td>
     </tr>
     <tr>

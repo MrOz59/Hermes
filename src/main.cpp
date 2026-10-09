@@ -370,6 +370,17 @@ int main(int argc, char *argv[]) {
 
   if (video::probe_encoders()) {
     bool allow_probing = video::allow_encoder_probing();
+#ifdef __linux__
+    // No screen could be opened - typically because every monitor is asleep.
+    // A temporary virtual output would be a monitor plugged in and unplugged,
+    // which wakes every display the compositor drives, at every start of
+    // Hermes. An encoder does not depend on a screen, so validate it on a
+    // display with nothing behind it instead.
+    BOOST_LOG(info) << "No screen to probe encoders on; probing them without one."sv;
+    if (video::probe_encoders_without_display()) {
+      BOOST_LOG(error) << (allow_probing ? "Video failed to find working encoder: allow probing but failed"sv : "Video failed to find working encoder"sv);
+    }
+#else
     // Create a temporary virtual display for encoder capability probing
     if (proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
       std::string probe_uuid_str = PROBE_DISPLAY_UUID;
@@ -425,6 +436,7 @@ int main(int argc, char *argv[]) {
     } else if (!allow_probing) {
       BOOST_LOG(error) << "Video failed to find working encoder: probe failed and virtual display driver isn't initialized"sv;
     }
+#endif
   }
 
   if (http::init()) {

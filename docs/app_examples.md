@@ -344,28 +344,18 @@ third-party tool, you can use *QRes* as an example.
 > recommended**. They will change in ways that are not backwards compatible, so
 > an app configuration built on the fields below is likely to need rebuilding.
 
-When `hermes_kms_isolated_sessions` is enabled, each application can select a
-`session-type` in the Web UI or `apps.json`:
+When `hermes_kms_isolated_sessions` is enabled, it acts as a server capability rather than switching the entire server into an isolated mode. Each application can select a `session-type`:
 
-- `auto` (default): use `application` when `cmd` is present, otherwise
-  `desktop`;
-- `application`: start only the configured application inside a DRM Gamescope
-  session, without a desktop panel;
-- `desktop`: start a desktop session with the session compositor chosen by
-  `hermes_kms_session_compositor`; when `cmd` is set, Hermes launches it after
-  the desktop socket and scanout are ready, and ties it to the session so that
-  ending the session ends it too - as a member of the session's process group
-  where the session runs as the Hermes user, or as a unit bound to the
-  session's where the session broker gave it a user of its own.
+- `auto` (default): stay on the shared host session unless the launch explicitly requests a virtual display and `virtual-display-layout = detached`; a Detached entry with no `cmd` becomes an independent desktop, while one with a `cmd` becomes an independent application session;
+- `application`: always start the configured application in an independent DRM Gamescope session;
+- `desktop`: always start an independent desktop selected by `hermes_kms_session_compositor`, by default the user's own Plasma desktop, detached; with a compositor profile such as `weston`, `cmd` is launched once the desktop is ready;
+- `shared` (available in `apps.json`): always use the existing host desktop/session.
 
-The `desktop` profile is currently a reference Weston desktop, not a complete
-Plasma session. To use the shared host session, disable
-`hermes_kms_isolated_sessions`; mixing shared and isolated app profiles in one
-server is intentionally rejected by this prototype. These values have no
-effect while independent client sessions are disabled. Before launching, start
-one packaged `hermes-kms-seatd@N.service` for every configured Hermes-KMS
-device; Hermes assigns the corresponding private broker socket to the
-compositor automatically.
+Mirror, Extend, Exclusive, ordinary Host Desktop launches, and launches without an explicit virtual-display request remain shared-host routes. Shared-host and independent sessions may run at the same time; enabling the capability does not disable host multi-output management or Remote Input.
+
+With a compositor profile such as `weston` instead of the default `plasma`, the independent `desktop` profile is a reference compositor session, not a complete Plasma session. Before such a launch, start one packaged `hermes-kms-seatd@N.service` for every configured private Hermes-KMS session device; Hermes assigns the matching broker socket automatically. These requirements apply only to launches that actually resolve to an independent route.
+
+With `hermes_kms_session_compositor = plasma`, the default, the independent `desktop` profile is the user's own Plasma desktop, detached: it runs as the same user with the same home, files and settings, on a virtual KWin output that no physical monitor or local keyboard and mouse can reach. It needs no Hermes-KMS card or seatd, and it does not run `cmd`, `detached` or prep commands.
 
 #### Linux (Flatpak)
 

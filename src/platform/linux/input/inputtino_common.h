@@ -8,6 +8,7 @@
 #include <boost/locale.hpp>
 #include <inputtino/input.hpp>
 #include <libevdev/libevdev.h>
+#include <set>
 
 // local includes
 #include "src/config.h"
@@ -15,6 +16,9 @@
 #include "src/platform/common.h"
 #include "src/platform/linux/virtual_display.h"
 #include "src/utility.h"
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+  #include "src/platform/linux/kwin_session.h"
+#endif
 
 using namespace std::literals;
 
@@ -49,29 +53,30 @@ namespace platf {
   };
 
   struct input_raw_t {
-    explicit input_raw_t(std::string session_tag = {}):
+    explicit input_raw_t(std::string session_tag = {}, bool native_kwin = false):
         session_tag(std::move(session_tag)),
-        mouse(inputtino::Mouse::create({
-          .name = this->session_tag.empty() ? "Mouse passthrough" : "Hermes Session Mouse",
-          .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
-          .product_id = VIRTUAL_INPUT_PRODUCT_ID,
-          .version = 0x111,
-          .device_phys = this->session_tag,
-          .device_uniq = this->session_tag,
-        })),
-        keyboard(inputtino::Keyboard::create({
-          .name = this->session_tag.empty() ? "Keyboard passthrough" : "Hermes Session Keyboard",
-          .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
-          .product_id = VIRTUAL_INPUT_PRODUCT_ID,
-          .version = 0x111,
-          .device_phys = this->session_tag,
-          .device_uniq = this->session_tag,
-        })),
+        private_kwin(native_kwin),
+        mouse(native_kwin ? inputtino::Result<inputtino::Mouse>(inputtino::Error("Private KWin input")) : inputtino::Mouse::create({
+                                                                                                            .name = this->session_tag.empty() ? "Mouse passthrough" : "Hermes Session Mouse",
+                                                                                                            .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
+                                                                                                            .product_id = VIRTUAL_INPUT_PRODUCT_ID,
+                                                                                                            .version = 0x111,
+                                                                                                            .device_phys = this->session_tag,
+                                                                                                            .device_uniq = this->session_tag,
+                                                                                                          })),
+        keyboard(native_kwin ? inputtino::Result<inputtino::Keyboard>(inputtino::Error("Private KWin input")) : inputtino::Keyboard::create({
+                                                                                                                  .name = this->session_tag.empty() ? "Keyboard passthrough" : "Hermes Session Keyboard",
+                                                                                                                  .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
+                                                                                                                  .product_id = VIRTUAL_INPUT_PRODUCT_ID,
+                                                                                                                  .version = 0x111,
+                                                                                                                  .device_phys = this->session_tag,
+                                                                                                                  .device_uniq = this->session_tag,
+                                                                                                                })),
         gamepads(MAX_GAMEPADS) {
-      if (!mouse) {
+      if (!private_kwin && !mouse) {
         BOOST_LOG(warning) << "Unable to create virtual mouse: " << mouse.getErrorMessage();
       }
-      if (!keyboard) {
+      if (!private_kwin && !keyboard) {
         BOOST_LOG(warning) << "Unable to create virtual keyboard: " << keyboard.getErrorMessage();
       }
     }
@@ -79,6 +84,10 @@ namespace platf {
     ~input_raw_t() = default;
 
     std::string session_tag;
+    bool private_kwin {};
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+    std::unique_ptr<kwin::connection_t> kwin_input;
+#endif
 
     // All devices are wrapped in Result because it might be that we aren't able to create them (ex: udev permission denied)
     inputtino::Result<inputtino::Mouse> mouse;
@@ -94,26 +103,26 @@ namespace platf {
   struct client_input_raw_t: public client_input_t {
     client_input_raw_t(input_t &input):
         global((input_raw_t *) input.get()),
-        touch(inputtino::TouchScreen::create({
-          .name = global->session_tag.empty() ? VDISPLAY::VIRTUAL_TOUCH_DEVICE_NAME : "Hermes Session Touch",
-          .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
-          .product_id = VIRTUAL_INPUT_PRODUCT_ID,
-          .version = 0x111,
-          .device_phys = global->session_tag,
-          .device_uniq = global->session_tag,
-        })),
-        pen(inputtino::PenTablet::create({
-          .name = global->session_tag.empty() ? VDISPLAY::VIRTUAL_PEN_DEVICE_NAME : "Hermes Session Pen",
-          .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
-          .product_id = VIRTUAL_INPUT_PRODUCT_ID,
-          .version = 0x111,
-          .device_phys = global->session_tag,
-          .device_uniq = global->session_tag,
-        })) {
-      if (!touch) {
+        touch(global->private_kwin ? inputtino::Result<inputtino::TouchScreen>(inputtino::Error("Private KWin input")) : inputtino::TouchScreen::create({
+                                                                                                                           .name = global->session_tag.empty() ? VDISPLAY::VIRTUAL_TOUCH_DEVICE_NAME : "Hermes Session Touch",
+                                                                                                                           .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
+                                                                                                                           .product_id = VIRTUAL_INPUT_PRODUCT_ID,
+                                                                                                                           .version = 0x111,
+                                                                                                                           .device_phys = global->session_tag,
+                                                                                                                           .device_uniq = global->session_tag,
+                                                                                                                         })),
+        pen(global->private_kwin ? inputtino::Result<inputtino::PenTablet>(inputtino::Error("Private KWin input")) : inputtino::PenTablet::create({
+                                                                                                                       .name = global->session_tag.empty() ? VDISPLAY::VIRTUAL_PEN_DEVICE_NAME : "Hermes Session Pen",
+                                                                                                                       .vendor_id = VIRTUAL_INPUT_VENDOR_ID,
+                                                                                                                       .product_id = VIRTUAL_INPUT_PRODUCT_ID,
+                                                                                                                       .version = 0x111,
+                                                                                                                       .device_phys = global->session_tag,
+                                                                                                                       .device_uniq = global->session_tag,
+                                                                                                                     })) {
+      if (!global->private_kwin && !touch) {
         BOOST_LOG(warning) << "Unable to create virtual touch screen: " << touch.getErrorMessage();
       }
-      if (!pen) {
+      if (!global->private_kwin && !pen) {
         BOOST_LOG(warning) << "Unable to create virtual pen tablet: " << pen.getErrorMessage();
       }
     }
@@ -125,6 +134,11 @@ namespace platf {
     // pen/touch events. To maintain separation, we expose separate pen and touch devices
     // for each client.
     inputtino::Result<inputtino::TouchScreen> touch;
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+    // Fingers this client has put down on a private KWin desktop, which tells
+    // a down from a motion: the protocol has separate requests for each.
+    std::set<std::uint32_t> kwin_touches;
+#endif
     inputtino::Result<inputtino::PenTablet> pen;
   };
 

@@ -5,6 +5,7 @@
 
 #include "cuda.h"
 #include "kwin_session.h"
+#include "misc.h"
 #include "pipewire_session.h"
 #include "src/video.h"
 #include "vaapi.h"
@@ -136,7 +137,14 @@ namespace platf {
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e) override {
 #ifdef SUNSHINE_BUILD_VAAPI
         if (memory_type == mem_type_e::vaapi) {
-          return va::make_avcodec_encode_device(width, height, false);
+          // The best GPU, as the encoder probe chose it, not whichever one
+          // happens to be renderD128 this boot.
+          file_t card {open_encode_render_node()};
+          if (card.el < 0) {
+            BOOST_LOG(::error) << "Private KWin capture: no GPU to encode on";
+            return nullptr;
+          }
+          return va::make_avcodec_encode_device(width, height, std::move(card), 0, 0, false);
         }
 #endif
 #ifdef SUNSHINE_BUILD_CUDA

@@ -81,6 +81,25 @@ namespace video {
     return false;
   }
 
+  bool display_present() {
+#ifdef __linux__
+    // display_device has no Linux backend, so the device list above is always
+    // empty here and allow_encoder_probing() says yes with every monitor
+    // unplugged. The kernel knows better, but only about monitors on real KMS
+    // devices: a nested or headless compositor has none and still captures, so
+    // a "no" is only acted on when a virtual display can take over.
+    if (proc::vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
+      return true;
+    }
+    if (!VDISPLAY::matchDisplay("VIRTUAL-").empty()) {
+      return true;
+    }
+    return VDISPLAY::displayConnectorLit().value_or(true);
+#else
+    return allow_encoder_probing();
+#endif
+  }
+
   void free_ctx(AVCodecContext *ctx) {
     avcodec_free_context(&ctx);
   }

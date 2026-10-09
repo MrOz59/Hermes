@@ -43,6 +43,19 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- A Linux host with no monitor lit now uses a virtual display on its own, at
+  startup and for every session ([#61]). Hermes asked whether a monitor was
+  present through an interface only Windows implements, so on Linux the answer
+  was always yes. Startup probed the encoders against nothing, logged the fatal
+  "Unable to find display or encoder during startup" that the Web UI shows as a
+  startup error, and only then fell back to a temporary virtual display. Even
+  then the probe was never pointed at that display and opened whichever output
+  capture picks by default. A session that did not itself ask for a virtual
+  display failed to start. Hermes now reads each monitor connector's state
+  from the kernel. When none is lit, it goes straight to a virtual display and
+  probes on that one. A monitor that is switched off but still connected and
+  driven counts as present, as does any setup where the kernel cannot see the
+  monitors, such as NVIDIA without modesetting under X11.
 - Touch and pen now land where they are aimed on a host with more than one
   monitor. Their coordinates were measured against the whole desktop, while
   KDE and GNOME map such a device onto a single output, so every touch fell
@@ -1678,6 +1691,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#50]: https://github.com/MrOz59/Hermes/issues/50
 [#52]: https://github.com/MrOz59/Hermes/issues/52
 [#58]: https://github.com/MrOz59/Hermes/pull/58
+[#61]: https://github.com/MrOz59/Hermes/issues/61
 
 ## [0.4.0] - 2026-07-02
 

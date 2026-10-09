@@ -365,6 +365,16 @@ namespace video {
   bool allow_encoder_probing();
 
   /**
+   * @brief Whether the host has a display to capture without creating one.
+   *
+   * False means a virtual display has to stand in, both to probe the encoders
+   * and to stream. On Windows this is allow_encoder_probing(). On Linux it asks
+   * the kernel whether any connector lights a monitor, and answers yes whenever
+   * no virtual display could stand in or one already does.
+   */
+  bool display_present();
+
+  /**
    * @brief Probe encoders and select the preferred encoder.
    * This is called once at startup and each time a stream is launched to
    * ensure the best encoder is selected. Encoder availability can change

@@ -368,14 +368,23 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(warning) << "No gamepad input is available"sv;
   }
 
-  if (video::probe_encoders()) {
+  // A host with no monitor has nothing to probe until a virtual display stands
+  // in, so go straight to one. Probing first would fail and log the fatal "no
+  // display" error - which the Web UI shows as a startup failure - before the
+  // fallback below had even run.
+  const bool display_present = video::display_present();
+  if (!display_present || video::probe_encoders()) {
     bool allow_probing = video::allow_encoder_probing();
     // Create a temporary virtual display for encoder capability probing
     if (proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
       std::string probe_uuid_str = PROBE_DISPLAY_UUID;
       auto probe_uuid = uuid_util::uuid_t::parse(probe_uuid_str);
 
-      BOOST_LOG(info) << "Creating a temporary virtual display to probe for encoders..."sv;
+      if (display_present) {
+        BOOST_LOG(info) << "Creating a temporary virtual display to probe for encoders..."sv;
+      } else {
+        BOOST_LOG(info) << "No monitor is lit; creating a temporary virtual display to probe for encoders..."sv;
+      }
 
       if (!config::video.adapter_name.empty()) {
 #ifdef _WIN32
@@ -396,7 +405,7 @@ int main(int argc, char *argv[]) {
         *probe_guid
       );
 #else
-      VDISPLAY::createVirtualDisplay(
+      const auto probe_display = VDISPLAY::createVirtualDisplay(
         probe_uuid_str.c_str(),
         "Probe",
         800,
@@ -407,6 +416,17 @@ int main(int argc, char *argv[]) {
 #endif
 
       std::this_thread::sleep_for(500ms);
+
+#ifndef _WIN32
+      // Windows makes the new display the one capture opens by default; Linux
+      // does not. Left unnamed, the probe below would open the default output
+      // again - the one that just failed, or none at all - and never look at
+      // the display made for it. Sessions name theirs the same way.
+      const auto previous_output = config::video.output_name;
+      if (!probe_display.empty()) {
+        config::video.output_name = probe_display;
+      }
+#endif
 
       // Probe again anyways
       if (video::probe_encoders()) {
@@ -420,6 +440,7 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
       VDISPLAY::removeVirtualDisplay(*probe_guid);
 #else
+      config::video.output_name = previous_output;
       VDISPLAY::removeVirtualDisplay(probe_uuid);
 #endif
     } else if (!allow_probing) {

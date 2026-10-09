@@ -1974,13 +1974,19 @@ namespace proc {
       launch_session->virtual_display = false;
     }
 
+    const bool virtual_display_requested =
+      config::video.headless_mode         // Headless mode
+      || launch_session->virtual_display  // User requested virtual display
+      || _app.virtual_display;            // App is configured to use virtual display
     const bool needs_virtual_display =
       !gamescope_session &&                 // Not in a standalone Gamescope session
-      (config::video.headless_mode        // Headless mode
-       || launch_session->virtual_display // User requested virtual display
-       || _app.virtual_display            // App is configured to use virtual display
-       || !video::allow_encoder_probing() // No active display presents
+      (virtual_display_requested ||
+       !video::display_present()            // No active display presents
       );
+
+    if (needs_virtual_display && !virtual_display_requested) {
+      BOOST_LOG(info) << "No monitor is lit on this host; using a virtual display for this session.";
+    }
 
 #ifndef _WIN32
     // A nested application launched into the host compositor cannot appear above

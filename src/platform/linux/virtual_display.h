@@ -9,6 +9,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
@@ -447,6 +448,23 @@ namespace VDISPLAY {
    * on seat0, where the host compositor claims it.
    */
   bool hermesKmsSeatIsolationActive();
+
+  /**
+   * @brief Whether any DRM connector is lighting a monitor right now.
+   *
+   * A connector counts once something is attached to it and the compositor has
+   * bound it to a CRTC - the kernel's own `status` and `enabled` attributes, so
+   * the answer does not depend on which compositor is running or whether there
+   * is one. A monitor that is unplugged, switched off far enough to drop the
+   * link, or disabled in the display settings does not count.
+   *
+   * @param drm_class The sysfs DRM class directory; tests point it at a fake tree.
+   * @return std::nullopt when sysfs cannot answer: the directory is unreadable
+   *         or lists no card, or nothing is lit and some card exposes no
+   *         connector at all - a GPU driven without kernel modesetting, such as
+   *         NVIDIA with modeset=0 under X11, lights monitors sysfs never sees.
+   */
+  std::optional<bool> displayConnectorLit(const std::filesystem::path &drm_class = "/sys/class/drm");
 
   /**
    * @brief Classify a compositor from an XDG_CURRENT_DESKTOP-style value.

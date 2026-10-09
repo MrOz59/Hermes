@@ -2120,7 +2120,7 @@ namespace confighttp {
 
     // A capturable display must be present (unless a virtual display will be
     // created on demand).
-    if (video::allow_encoder_probing()) {
+    if (video::display_present()) {
       add("display", "ok", "A capturable display is available.");
     } else {
       add("display", "warn",

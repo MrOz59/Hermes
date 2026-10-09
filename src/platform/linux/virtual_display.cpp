@@ -2210,6 +2210,50 @@ namespace VDISPLAY {
     return false;
   }
 
+  std::optional<bool> displayConnectorLit(const std::filesystem::path &drm_class) {
+    const auto read_attribute = [](const std::filesystem::path &file) {
+      std::ifstream in {file};
+      std::string value;
+      std::getline(in, value);
+      return value;
+    };
+
+    // Every card is recorded, and marked once a connector of its turns up, so
+    // a card with no connector at all - one sysfs cannot see the monitors of -
+    // is told apart from one whose monitors are all dark.
+    std::map<std::string, bool> card_has_connector;
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator {drm_class, ec}) {
+      const auto name = entry.path().filename().string();
+      if (!name.starts_with("card")) {
+        continue;  // renderD128, version
+      }
+      const auto dash = name.find('-');
+      if (dash == std::string::npos) {
+        card_has_connector.try_emplace(name, false);
+        continue;
+      }
+      if (name.find("-Writeback-") != std::string::npos) {
+        continue;  // A capture sink the compositor can enable, never a monitor.
+      }
+      card_has_connector[name.substr(0, dash)] = true;
+      if (read_attribute(entry.path() / "status") != "disconnected" &&
+          read_attribute(entry.path() / "enabled") == "enabled") {
+        return true;
+      }
+    }
+
+    if (ec || card_has_connector.empty()) {
+      return std::nullopt;
+    }
+    for (const auto &[card, has_connector] : card_has_connector) {
+      if (!has_connector) {
+        return std::nullopt;
+      }
+    }
+    return false;
+  }
+
   /**
    * Output names reach kscreen-doctor and xrandr as words of a shell command.
    * They come from the compositor or from sysfs, but the guard is what makes

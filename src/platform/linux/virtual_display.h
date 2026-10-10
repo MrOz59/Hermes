@@ -467,6 +467,28 @@ namespace VDISPLAY {
   std::optional<bool> displayConnectorLit(const std::filesystem::path &drm_class = "/sys/class/drm");
 
   /**
+   * @brief Whether Hermes runs inside a graphical session (Wayland or X11).
+   *
+   * False when it was started before anyone logged in - by a lingering user
+   * manager at boot - or under a session that publishes no display variables,
+   * such as gamescope-session.
+   */
+  bool windowSystemAttached();
+
+  /**
+   * @brief Wait until some compositor has bound @p connector to a CRTC.
+   *
+   * @param connector DRM connector name as the driver reports it ("Virtual-1").
+   * @param drm_class The sysfs DRM class directory; tests point it at a fake tree.
+   * @return true once its `enabled` attribute reads "enabled", false on timeout.
+   */
+  bool waitForConnectorEnabled(
+    const std::string &connector,
+    std::chrono::milliseconds timeout,
+    const std::filesystem::path &drm_class = "/sys/class/drm"
+  );
+
+  /**
    * @brief Classify a compositor from an XDG_CURRENT_DESKTOP-style value.
    *
    * The variable holds a colon-separated list whose case is not guaranteed

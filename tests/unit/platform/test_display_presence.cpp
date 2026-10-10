@@ -1,6 +1,6 @@
 /**
  * @file tests/unit/platform/test_display_presence.cpp
- * @brief Test VDISPLAY::displayConnectorLit() against fake sysfs DRM trees.
+ * @brief Test VDISPLAY::displayConnectorLit() and waitForConnectorEnabled() against fake sysfs DRM trees.
  *
  * Whether a host has a monitor decides whether Hermes stands up a virtual
  * display at startup and for every session, and getting it wrong in either
@@ -12,9 +12,11 @@
 
 #include <src/platform/linux/virtual_display.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 #include <unistd.h>
 
@@ -146,4 +148,50 @@ TEST_F(FakeDrmClass, RenderNodesAreNeitherCardsNorConnectors) {
   std::ofstream {root / "version"} << "drm 1.1.0 20060810\n";
 
   EXPECT_EQ(VDISPLAY::displayConnectorLit(root), std::optional<bool> {false});
+}
+
+// Before login nothing can configure the virtual output, so a session waits for
+// the greeter to light it by itself. These trees are what that wait reads.
+
+TEST_F(FakeDrmClass, AConnectorTheGreeterAlreadyLitNeedsNoWait) {
+  card("card0");
+  connector("card0-Virtual-1", "connected", "enabled");
+
+  EXPECT_TRUE(VDISPLAY::waitForConnectorEnabled("Virtual-1", std::chrono::milliseconds {0}, root));
+}
+
+TEST_F(FakeDrmClass, AConnectorNothingLitsTimesOut) {
+  card("card0");
+  // The X11 greeter's view: hotplugged and probed, never bound to a CRTC.
+  connector("card0-Virtual-1", "connected", "disabled");
+
+  EXPECT_FALSE(VDISPLAY::waitForConnectorEnabled("Virtual-1", std::chrono::milliseconds {250}, root));
+}
+
+TEST_F(FakeDrmClass, OnlyTheNamedConnectorCounts) {
+  card("card0");
+  card("card6");
+  connector("card0-Virtual-1", "connected", "disabled");
+  connector("card6-Virtual-11", "connected", "enabled");
+
+  EXPECT_FALSE(VDISPLAY::waitForConnectorEnabled("Virtual-1", std::chrono::milliseconds {0}, root));
+}
+
+TEST_F(FakeDrmClass, TheWaitEndsWhenTheGreeterLightsTheConnector) {
+  card("card0");
+  connector("card0-Virtual-1", "disconnected", "disabled");
+  std::thread greeter {[this]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds {300});
+    connector("card0-Virtual-1", "connected", "enabled");
+  }};
+
+  EXPECT_TRUE(VDISPLAY::waitForConnectorEnabled("Virtual-1", std::chrono::seconds {5}, root));
+  greeter.join();
+}
+
+TEST_F(FakeDrmClass, AnEmptyConnectorNameNeverMatches) {
+  card("card0");
+  connector("card0-Virtual-1", "connected", "enabled");
+
+  EXPECT_FALSE(VDISPLAY::waitForConnectorEnabled("", std::chrono::milliseconds {0}, root));
 }

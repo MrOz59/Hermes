@@ -373,7 +373,21 @@ int main(int argc, char *argv[]) {
   // display" error - which the Web UI shows as a startup failure - before the
   // fallback below had even run.
   const bool display_present = video::display_present();
-  if (!display_present || video::probe_encoders()) {
+#ifdef __linux__
+  // Started before anyone logged in, with no monitor, the only thing on screen
+  // is the login greeter. SDDM's greeter quits for good when its last output
+  // goes away, so the probe display's removal would leave nothing for the
+  // first client to log in on. Leave the greeter alone: the first session
+  // probes on the display it brings up.
+  const bool defer_probe = !display_present && !VDISPLAY::windowSystemAttached();
+  if (defer_probe) {
+    BOOST_LOG(info) << "No monitor is lit and no graphical session is attached; "
+                       "probing encoders when the first session brings up its virtual display."sv;
+  }
+#else
+  constexpr bool defer_probe = false;
+#endif
+  if (!defer_probe && (!display_present || video::probe_encoders())) {
     bool allow_probing = video::allow_encoder_probing();
     // Create a temporary virtual display for encoder capability probing
     if (proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {

@@ -26,6 +26,26 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   unlock only when needed. The option is off by default because it unlocks the
   entire host desktop, not only the streamed display; failure is non-fatal and
   application launch continues normally.
+- Experimental: a Linux host that boots with no monitor and no autologin can
+  stream its login screen ([#61]). Started before anyone has logged in, Hermes
+  brings up its virtual display when a client connects, the greeter draws on
+  it, the client types the password, and the same stream carries on into the
+  desktop. Two things stood in the way. With no session there was nothing to
+  configure the new output through, so the launch gave up at once; Hermes now
+  waits for whatever owns the seat to light it. And the temporary display
+  that probes the encoders at startup took SDDM's greeter down with it, since
+  that greeter exits when its last output goes away and is not restarted;
+  with no monitor and no session the probe now waits for the first client.
+  The package does not set any of this up, and it has limits that matter on a
+  machine you cannot otherwise reach: it needs a greeter that lights a new
+  output by itself (SDDM's Wayland greeter, not its X11 one), a lingering
+  user manager and a unit that starts with it; quitting the application or a
+  failed launch before login still leaves no login screen until SDDM is
+  restarted; and a Hermes started before login does not learn about the
+  session afterwards, so it launches nothing into it and cannot change its
+  layout. The steps and the limits are in
+  [Getting Started](docs/getting_started.md). Run so far on KDE Plasma with
+  SDDM and Hermes-KMS only.
 
 ### Changed
 - A session that asks for a virtual display now fails to start when that

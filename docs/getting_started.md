@@ -191,6 +191,91 @@ systemctl --user restart hermes
 To make this persistent, add the same `import-environment` line to your
 compositor's startup (e.g. an autostart script) so it runs at every login.
 
+#### Before anyone logs in (experimental)
+
+A host that reboots with no monitor and no autologin has no session for the
+service to start in, so there is nothing to connect to until someone logs in
+at the machine. Hermes can instead be started at boot and stream the login
+screen: the client types the password, and the same stream carries on into the
+desktop.
+
+This has been run on one setup - KDE Plasma with SDDM, Hermes-KMS, an AMD GPU
+and an Artemis client - and the package does not set it up. Read the limits
+below before relying on it for a machine you cannot reach any other way.
+
+**What it needs**
+
+1. Hermes-KMS as the virtual display, set up with `hermes-kms-setup`, which
+   gives your user the driver's device regardless of who is logged in.
+2. A greeter that lights a new output by itself. With SDDM that is the Wayland
+   greeter; the X11 greeter never lights a virtual output:
+
+   ```ini
+   # /etc/sddm.conf.d/10-wayland.conf
+   [General]
+   DisplayServer=wayland
+   GreeterEnvironment=QT_WAYLAND_SHELL_INTEGRATION=layer-shell
+
+   [Wayland]
+   CompositorCommand=kwin_wayland --drm --no-lockscreen --no-global-shortcuts --locale1
+   ```
+
+   `/etc/sddm.conf` overrides the files in `sddm.conf.d`: if it sets
+   `DisplayServer=x11`, change it there. SDDM logs in automatically whenever
+   `User=` is set under `[Autologin]`, whatever else that section says.
+3. Your user manager running from boot: `loginctl enable-linger $USER`.
+4. A unit that starts with it and is not tied to the graphical session. Do
+   not just enable the packaged unit for `default.target`: it wants
+   `graphical-session.target`, and started at boot it would mark a graphical
+   session as running when there is none. Override it instead:
+
+   ```ini
+   # ~/.config/systemd/user/hermes.service
+   [Unit]
+   Description=Hermes (from boot)
+
+   [Service]
+   ExecStartPre=/bin/sleep 5
+   ExecStart=/usr/bin/hermes
+   ExecStopPost=-/usr/bin/hermes-monitor-recovery
+   Restart=on-failure
+   RestartSec=5s
+
+   [Install]
+   WantedBy=default.target
+   ```
+
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user enable hermes
+   ```
+
+5. Your user in the `input` group. Before login the seat belongs to the
+   greeter, so the per-session grant to `/dev/uinput` does not reach Hermes.
+
+**Limits**
+
+- **The greeter must not lose its last output.** SDDM's greeter exits when
+  that happens and SDDM does not start another, so there is no login screen
+  left to stream. Hermes avoids causing this at startup, but before you have
+  logged in, quitting the application from the client, or a launch that
+  fails, still removes the virtual display and takes the greeter with it.
+  Disconnecting without quitting does not. To recover, run
+  `sudo systemctl restart sddm` over SSH. None of this applies once you are
+  logged in.
+- **Hermes does not learn about the session that starts afterwards.** The
+  stream, input and audio carry on through the login, but a Hermes that
+  started before it has none of the session's environment. Applications it
+  launches do not find the desktop, and it cannot change the resolution of a
+  display that is already lit, apply the exclusive, mirror or detached
+  layouts, or share the clipboard.
+  `systemctl --user restart hermes` from inside the session fixes that and
+  ends the stream.
+- **Encoders are not probed until the first session.** Until then the host
+  reports H.264 only. In the test the first connection still negotiated HEVC;
+  a client that decides from that report alone may start in H.264 once.
+- Other greeters and desktops (GDM, GNOME, LightDM, greetd) are untested.
+
 #### SteamOS and Game Mode
 
 A machine that boots straight into Game Mode - SteamOS, or CachyOS with

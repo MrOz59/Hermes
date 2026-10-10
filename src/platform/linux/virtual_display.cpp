@@ -2254,6 +2254,41 @@ namespace VDISPLAY {
     return false;
   }
 
+  bool windowSystemAttached() {
+    return window_system != window_system_e::NONE;
+  }
+
+  bool waitForConnectorEnabled(const std::string &connector, std::chrono::milliseconds timeout, const std::filesystem::path &drm_class) {
+    if (connector.empty()) {
+      return false;
+    }
+    // Connector type ids are numbered across every DRM device, so the name
+    // alone identifies one; only the card prefix of its sysfs entry is unknown.
+    const auto suffix = "-" + connector;
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (true) {
+      std::error_code ec;
+      for (const auto &entry : std::filesystem::directory_iterator {drm_class, ec}) {
+        const auto name = entry.path().filename().string();
+        if (!name.starts_with("card") || !name.ends_with(suffix)) {
+          continue;
+        }
+        // `enabled` follows the committed state; `status` is only a cache of
+        // the last probe and can still say "disconnected" here.
+        std::ifstream in {entry.path() / "enabled"};
+        std::string value;
+        std::getline(in, value);
+        if (value == "enabled") {
+          return true;
+        }
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds {100});
+    }
+  }
+
   /**
    * Output names reach kscreen-doctor and xrandr as words of a shell command.
    * They come from the compositor or from sysfs, but the guard is what makes
@@ -7256,6 +7291,24 @@ namespace VDISPLAY {
       return activated;
     }
 #endif
+
+    if (window_system == window_system_e::NONE) {
+      // Started before anyone logged in, there is no session to drive a layout
+      // through - but whatever owns the seat, the login greeter included,
+      // adopts a hotplugged connector on its own. Wait for it to, and stream
+      // whatever mode it picks: the virtual output offers the client's mode as
+      // its preferred one.
+      if (waitForConnectorEnabled(connector, std::chrono::seconds {10})) {
+        BOOST_LOG(info) << "[VDISPLAY] " << connector << " was lit by the compositor on the seat; "
+                           "no graphical session is attached, so its layout is left as it chose.";
+        return true;
+      }
+      BOOST_LOG(warning) << "[VDISPLAY] Nothing lit " << connector << " within 10 seconds, and no graphical "
+                            "session is attached to configure it. Before login the greeter must be one that "
+                            "adopts new outputs by itself - with SDDM, the Wayland greeter (DisplayServer=wayland); "
+                            "the X11 greeter never lights a virtual output.";
+      return false;
+    }
 
     if (window_system != window_system_e::X11) {
       BOOST_LOG(warning) << "[VDISPLAY] No display-layout backend is available for this session.";

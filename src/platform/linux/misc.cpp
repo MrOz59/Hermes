@@ -44,6 +44,7 @@
 // local includes
 #include "graphics.h"
 #include "misc.h"
+#include "session_attach.h"
 #include "src/config.h"
 #include "src/entry_handler.h"
 #include "src/logging.h"
@@ -488,11 +489,22 @@ std::string get_local_ip_for_gateway() {
       close(fd);
     }
 
-    // Re-exec ourselves with the same arguments
-    if (execv(executable, lifetime::get_argv()) < 0) {
-      BOOST_LOG(fatal) << "execv() failed: "sv << errno;
-      return;
+    // Re-exec ourselves with the same arguments. The environment is the same
+    // too unless a graphical session started after Hermes did, in which case
+    // this is where Hermes joins it.
+    const auto &environment = session_attach::restart_environment();
+    if (!environment.empty()) {
+      std::vector<char *> envp;
+      envp.reserve(environment.size() + 1);
+      for (const auto &assignment : environment) {
+        envp.push_back(const_cast<char *>(assignment.c_str()));
+      }
+      envp.push_back(nullptr);
+      execve(executable, lifetime::get_argv(), envp.data());
+    } else {
+      execv(executable, lifetime::get_argv());
     }
+    BOOST_LOG(fatal) << "execv() failed: "sv << errno;
   }
 
   void restart() {

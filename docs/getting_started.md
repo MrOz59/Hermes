@@ -257,20 +257,30 @@ below before relying on it for a machine you cannot reach any other way.
 
 - **The greeter must not lose its last output.** SDDM's greeter exits when
   that happens and SDDM does not start another, so there is no login screen
-  left to stream. Hermes avoids causing this at startup, but before you have
-  logged in, quitting the application from the client, or a launch that
-  fails, still removes the virtual display and takes the greeter with it.
-  Disconnecting without quitting does not. To recover, run
-  `sudo systemctl restart sddm` over SSH. None of this applies once you are
-  logged in.
-- **Hermes does not learn about the session that starts afterwards.** The
+  left to stream. Hermes does not probe the encoders at startup for that
+  reason, and when a display is removed before login - the application is
+  quit from the client, or a launch fails - it keeps the output connected for
+  the greeter, hands it to the next session, and lets it go once someone has
+  logged in. A kept output stays at the resolution the greeter is using, so
+  the next client streams that resolution whatever it asks for. Quitting the
+  application has been run on real hardware; a launch that fails, in a
+  virtual machine only. If the login screen is gone anyway,
+  `sudo systemctl restart sddm` over SSH brings it back.
+- **Hermes joins the session only once no client is connected.** The
   stream, input and audio carry on through the login, but a Hermes that
-  started before it has none of the session's environment. Applications it
-  launches do not find the desktop, and it cannot change the resolution of a
-  display that is already lit, apply the exclusive, mirror or detached
-  layouts, or share the clipboard.
-  `systemctl --user restart hermes` from inside the session fixes that and
-  ends the stream.
+  started before it has none of the session's environment, and a running
+  process cannot be given one. Until it has, applications it launches do not
+  find the desktop, and it cannot change the resolution of a display that is
+  already lit, apply the exclusive, mirror or detached layouts, or share the
+  clipboard. About fifteen seconds after the last client disconnects, Hermes
+  restarts itself with the environment the session published - what
+  `systemctl --user restart hermes` would do - and is unreachable for the few
+  seconds that takes. If that restart stalls, Hermes' own ten-second shutdown
+  watchdog ends it and systemd starts it again, inside the session either
+  way. When you log out, Hermes exits with the compositor and systemd brings
+  it back for the login screen within about ten seconds. The restart after
+  the last client leaves has been run on real hardware; the watchdog path and
+  the logout, in a virtual machine only.
 - **Encoders are not probed until the first session.** Until then the host
   reports H.264 only. In the test the first connection still negotiated HEVC;
   a client that decides from that report alone may start in H.264 once.

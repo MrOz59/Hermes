@@ -38,8 +38,10 @@
 #include <nlohmann/json.hpp>
 
 // platform includes
+#include <csignal>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -137,6 +139,122 @@ namespace VDISPLAY {
     return 0;
   }
 #endif
+
+  /** Whether something accepts connections on a Unix socket. */
+  static bool unix_socket_answers(const std::string &path, bool abstract_namespace = false) {
+    sockaddr_un address {};
+    address.sun_family = AF_UNIX;
+    // An abstract name starts with a NUL byte and is not NUL-terminated.
+    const size_t offset = abstract_namespace ? 1 : 0;
+    if (path.empty() || path.size() + offset >= sizeof(address.sun_path)) {
+      return false;
+    }
+    std::memcpy(address.sun_path + offset, path.data(), path.size());
+    const auto length = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + offset + path.size());
+
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (fd < 0) {
+      return false;
+    }
+    // A listening Unix socket accepts at once or refuses at once; EAGAIN means
+    // its backlog is full, which still means somebody is there.
+    const bool answers = ::connect(fd, reinterpret_cast<const sockaddr *>(&address), length) == 0 || errno == EAGAIN;
+    ::close(fd);
+    return answers;
+  }
+
+  bool displayServerReachable(const std::string &wayland_display, const std::string &x_display, const std::string &runtime_dir) {
+    if (!wayland_display.empty()) {
+      const auto socket_path = wayland_display.front() == '/' ? wayland_display : runtime_dir + "/" + wayland_display;
+      if (unix_socket_answers(socket_path)) {
+        return true;
+      }
+    }
+    if (!x_display.empty()) {
+      // "host:display.screen". Only a local display has a socket to try; a
+      // remote one is the business of whoever set it.
+      const auto colon = x_display.rfind(':');
+      if (colon == std::string::npos) {
+        return false;
+      }
+      const auto host = x_display.substr(0, colon);
+      if (!host.empty() && host != "unix") {
+        return true;
+      }
+      const auto number = x_display.substr(colon + 1, x_display.find('.', colon) - colon - 1);
+      if (number.empty() || number.find_first_not_of("0123456789") != std::string::npos) {
+        return false;
+      }
+      const auto socket_path = "/tmp/.X11-unix/X" + number;
+      return unix_socket_answers(socket_path) || unix_socket_answers(socket_path, true);
+    }
+    return false;
+  }
+
+  std::optional<bool> graphicalSessionPresent() {
+#ifdef SUNSHINE_BUILD_SDBUS
+    char *session_raw = nullptr;
+    const int status = sd_uid_get_display(::getuid(), &session_raw);
+    const std::unique_ptr<char, decltype(&std::free)> session {session_raw, &std::free};
+    if (status == -ENODATA || status == -ENXIO) {
+      return false;  // logind knows this user and has no graphical session for it.
+    }
+    if (status < 0) {
+      return std::nullopt;
+    }
+    return session && *session;
+#else
+    return std::nullopt;
+#endif
+  }
+
+  bool inLoginSession() {
+#ifdef SUNSHINE_BUILD_SDBUS
+    char *session_raw = nullptr;
+    const int status = sd_pid_get_session(0, &session_raw);
+    std::free(session_raw);
+    return status >= 0;
+#else
+    return false;
+#endif
+  }
+
+  std::optional<std::vector<std::string>> userManagerEnvironment() {
+#ifdef SUNSHINE_BUILD_SDBUS
+    sd_bus *bus = nullptr;
+    if (open_user_bus(&bus) < 0 || !bus) {
+      return std::nullopt;
+    }
+    const std::unique_ptr<sd_bus, decltype(&sd_bus_unref)> bus_guard {bus, &sd_bus_unref};
+
+    sd_bus_error error = SD_BUS_ERROR_NULL;
+    sd_bus_message *reply = nullptr;
+    const int status = sd_bus_get_property(
+      bus,
+      "org.freedesktop.systemd1",
+      "/org/freedesktop/systemd1",
+      "org.freedesktop.systemd1.Manager",
+      "Environment",
+      &error,
+      &reply,
+      "as"
+    );
+    sd_bus_error_free(&error);
+    const std::unique_ptr<sd_bus_message, decltype(&sd_bus_message_unref)> reply_guard {reply, &sd_bus_message_unref};
+    if (status < 0 || !reply || sd_bus_message_enter_container(reply, 'a', "s") < 0) {
+      return std::nullopt;
+    }
+
+    std::vector<std::string> environment;
+    const char *assignment = nullptr;
+    while (sd_bus_message_read_basic(reply, 's', &assignment) > 0) {
+      environment.emplace_back(assignment);
+    }
+    return environment;
+#else
+    return std::nullopt;
+#endif
+  }
 
   bool unlockHostSessionIfLocked() {
 #ifdef SUNSHINE_BUILD_SDBUS
@@ -1773,6 +1891,29 @@ namespace VDISPLAY {
   };
 
   static std::map<std::string, VirtualDisplayInfo> virtual_displays;
+
+  /**
+   * A Hermes-KMS output kept connected for the login greeter after the display
+   * that used it was removed. Its owner fd stays open and nothing is bound to
+   * it. The next display adopts it; the watchdog lets it go once the greeter
+   * no longer holds the seat. Guarded by vdisplay_mutex.
+   */
+  static std::optional<VirtualDisplayInfo> parked_display;
+
+  /** Disconnect the parked output, if there is one. Caller holds vdisplay_mutex. */
+  static void release_parked_locked(const char *reason) {
+    if (!parked_display) {
+      return;
+    }
+    BOOST_LOG(info) << "[VDISPLAY] Releasing " << parked_display->name << ", which was kept for the login greeter: "
+                    << reason;
+    if (parked_display->drm_fd >= 0) {
+      hermes_kms::set_output(parked_display->drm_fd, false, 0, 0, 0, parked_display->session_id);
+      ::close(parked_display->drm_fd);
+    }
+    parked_display.reset();
+  }
+
   static std::atomic<bool> evdi_events_running {false};
   static std::thread evdi_events_thread;
   static std::string evdi_connector_name(int card_index);
@@ -2210,13 +2351,14 @@ namespace VDISPLAY {
     return false;
   }
 
-  std::optional<bool> displayConnectorLit(const std::filesystem::path &drm_class) {
+  std::optional<bool> displayConnectorLit(const std::filesystem::path &drm_class, const std::string &ignored_connector) {
     const auto read_attribute = [](const std::filesystem::path &file) {
       std::ifstream in {file};
       std::string value;
       std::getline(in, value);
       return value;
     };
+    const auto ignored_suffix = ignored_connector.empty() ? std::string {} : "-" + ignored_connector;
 
     // Every card is recorded, and marked once a connector of its turns up, so
     // a card with no connector at all - one sysfs cannot see the monitors of -
@@ -2237,6 +2379,9 @@ namespace VDISPLAY {
         continue;  // A capture sink the compositor can enable, never a monitor.
       }
       card_has_connector[name.substr(0, dash)] = true;
+      if (!ignored_suffix.empty() && name.ends_with(ignored_suffix)) {
+        continue;
+      }
       if (read_attribute(entry.path() / "status") != "disconnected" &&
           read_attribute(entry.path() / "enabled") == "enabled") {
         return true;
@@ -2256,6 +2401,47 @@ namespace VDISPLAY {
 
   bool windowSystemAttached() {
     return window_system != window_system_e::NONE;
+  }
+
+  /**
+   * Whether the session in front on seat0 is a display manager's greeter.
+   *
+   * std::nullopt when logind could not be asked. The two callers resolve that
+   * in opposite directions, each towards doing nothing: an output is not kept
+   * for a greeter nobody saw, and one already kept is not released on a guess.
+   */
+  static std::optional<bool> greeter_holds_seat() {
+#ifdef SUNSHINE_BUILD_SDBUS
+    char *session_raw = nullptr;
+    const int status = sd_seat_get_active("seat0", &session_raw, nullptr);
+    const std::unique_ptr<char, decltype(&std::free)> session {session_raw, &std::free};
+    if (status == -ENODATA || status == -ENXIO) {
+      return false;  // Nothing is in front: between sessions, or a text console.
+    }
+    if (status < 0 || !session) {
+      return std::nullopt;
+    }
+    char *class_raw = nullptr;
+    if (sd_session_get_class(session.get(), &class_raw) < 0 || !class_raw) {
+      return std::nullopt;
+    }
+    const std::unique_ptr<char, decltype(&std::free)> session_class {class_raw, &std::free};
+    return std::string_view {session_class.get()} == "greeter";
+#else
+    return std::nullopt;
+#endif
+  }
+
+  bool removalStrandsGreeter(bool greeter_on_seat, bool output_lit, std::optional<bool> another_connector_lit) {
+    // Only a monitor known to be lit lets the output go. When sysfs cannot
+    // say, keeping an output the greeter did not need costs a spare screen at
+    // the login prompt; dropping one it did need costs the login prompt.
+    return greeter_on_seat && output_lit && another_connector_lit != std::optional<bool> {true};
+  }
+
+  std::string parkedConnector() {
+    std::lock_guard<std::mutex> lock(vdisplay_mutex);
+    return parked_display ? parked_display->connector_name : std::string {};
   }
 
   bool waitForConnectorEnabled(const std::string &connector, std::chrono::milliseconds timeout, const std::filesystem::path &drm_class) {
@@ -2547,8 +2733,100 @@ namespace VDISPLAY {
     return std::nullopt;
   }
 
+  std::optional<std::string> boundedCommandOutput(const std::string &command, std::chrono::milliseconds timeout, bool *timed_out) {
+    if (timed_out) {
+      *timed_out = false;
+    }
+    int out[2];
+    if (::pipe2(out, O_CLOEXEC) != 0) {
+      return std::nullopt;
+    }
+    const pid_t child = ::fork();
+    if (child < 0) {
+      ::close(out[0]);
+      ::close(out[1]);
+      return std::nullopt;
+    }
+    if (child == 0) {
+      // Its own process group, so that running over takes down whatever the
+      // shell started along with the shell.
+      ::setpgid(0, 0);
+      ::dup2(out[1], STDOUT_FILENO);
+      ::execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char *>(nullptr));
+      ::_exit(127);
+    }
+    ::close(out[1]);
+
+    std::string output;
+    std::array<char, 4096> buffer {};
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    bool pipe_open = true;
+    bool exited = false;
+    bool expired = false;
+    int status = -1;
+    while (pipe_open || !exited) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        expired = true;
+        break;
+      }
+      if (pipe_open) {
+        // Once the command has exited, whatever is still in the pipe is all
+        // there will be: a descendant that kept it open is not waited for.
+        pollfd readable {out[0], POLLIN, 0};
+        const int ready = ::poll(&readable, 1, exited ? 0 : 20);
+        if (ready > 0) {
+          const ssize_t got = ::read(out[0], buffer.data(), buffer.size());
+          if (got > 0) {
+            output.append(buffer.data(), static_cast<size_t>(got));
+          } else if (got == 0 || errno != EINTR) {
+            pipe_open = false;
+          }
+        } else if (exited && ready == 0) {
+          pipe_open = false;
+        }
+      } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds {10});
+      }
+      if (!exited) {
+        const pid_t reaped = ::waitpid(child, &status, WNOHANG);
+        if (reaped == child) {
+          exited = true;
+        } else if (reaped < 0 && errno != EINTR) {
+          exited = true;  // Not ours to wait for any more; the status is unknown.
+          status = -1;
+        }
+      }
+    }
+    ::close(out[0]);
+
+    if (expired) {
+      ::kill(-child, SIGKILL);
+      ::kill(child, SIGKILL);
+      if (!exited) {
+        while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
+        }
+      }
+      if (timed_out) {
+        *timed_out = true;
+      }
+      return std::nullopt;
+    }
+    if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+      return std::nullopt;
+    }
+    return output;
+  }
+
   namespace kscreen {
     using output_t = kscreen_output_t;
+
+    /**
+     * kscreen-doctor answers in tens of milliseconds, and a layout change in a
+     * second or two. It has also been seen never to answer at all, when asked
+     * while Plasma was still starting - and every caller here holds the display
+     * registry's lock while it waits.
+     */
+    constexpr std::chrono::seconds command_timeout {10};
 
     struct layout_t {
       // Every physical output that was enabled before the virtual connector
@@ -2572,20 +2850,13 @@ namespace VDISPLAY {
     }
 
     static std::string command_output(const char *command) {
-      std::array<char, 4096> buffer {};
-      std::string output;
-      FILE *pipe = ::popen(command, "r");
-      if (!pipe) {
-        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Failed to run " << command;
-        return {};
+      bool timed_out = false;
+      auto output = boundedCommandOutput(command, command_timeout, &timed_out);
+      if (timed_out) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] " << command << " did not answer within "
+                           << command_timeout.count() << " seconds and was stopped.";
       }
-      while (::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
-        output += buffer.data();
-      }
-      if (::pclose(pipe) != 0) {
-        return {};
-      }
-      return output;
+      return output.value_or(std::string {});
     }
 
     static std::vector<output_t> outputs() {
@@ -2643,8 +2914,10 @@ namespace VDISPLAY {
     }
 
     static bool run_layout_command(const std::string &command) {
-      if (::system((command + " >/dev/null 2>&1").c_str()) != 0) {
-        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Layout command failed: " << command;
+      bool timed_out = false;
+      if (!boundedCommandOutput(command + " >/dev/null 2>&1", command_timeout, &timed_out)) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Layout command "
+                           << (timed_out ? "did not finish in time and was stopped: " : "failed: ") << command;
         return false;
       }
       return true;
@@ -6350,6 +6623,8 @@ namespace VDISPLAY {
 
     std::lock_guard<std::mutex> lock(vdisplay_mutex);
 
+    release_parked_locked("Hermes is shutting down.");
+
     // Clean up all virtual displays
     for (auto &[guid, vdinfo] : virtual_displays) {
       if (vdinfo.active) {
@@ -6404,6 +6679,12 @@ namespace VDISPLAY {
         bool display_lost = false;
         {
           std::lock_guard<std::mutex> lock(vdisplay_mutex);
+          // The output kept for the greeter has done its job once a user
+          // session is in front: a desktop survives losing an output, and left
+          // connected it would stay on that desktop as a monitor nobody asked for.
+          if (parked_display && greeter_holds_seat() == std::optional<bool> {false}) {
+            release_parked_locked("the greeter no longer holds the seat.");
+          }
           for (const auto &[guid, vdinfo] : virtual_displays) {
             if (vdinfo.active && vdinfo.using_evdi && vdinfo.handle) {
               // Check EVDI device health
@@ -6553,7 +6834,61 @@ namespace VDISPLAY {
       hermes_kms::device_t device {};
       uint64_t session_id = 0;
       bool claimed = false;
-      if (config::video.hermes_kms_isolated_sessions) {
+      bool adopted = false;
+      std::array<uint64_t, 2> session_token {};
+
+      // An output kept connected for the login greeter is the one this display
+      // has to use: releasing it to claim a fresh one would be the very unplug
+      // it was kept to avoid. It is already owned and lit, so only the mode and
+      // a capability for the new consumers are needed.
+      if (parked_display && !config::video.hermes_kms_isolated_sessions) {
+        uint64_t parked_session = parked_display->session_id;
+        bool mode_set = false;
+        // The driver rate-limits output changes; like a fresh claim, a refusal
+        // for that reason is worth a moment's patience.
+        for (unsigned int attempt = 0; attempt < 6 && !mode_set; ++attempt) {
+          mode_set = hermes_kms::set_output(parked_display->drm_fd, true, width, height, fps_hz, parked_session, false);
+          if (!mode_set) {
+            if (errno != EAGAIN) {
+              break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds {200});
+          }
+        }
+        if (mode_set &&
+            parked_session == parked_display->session_id &&
+            hermes_kms::get_session_token(
+              parked_display->drm_fd,
+              static_cast<uint32_t>(parked_display->output_index),
+              parked_session,
+              session_token
+            )) {
+          const auto parked = std::move(*parked_display);
+          parked_display.reset();
+          vdinfo.drm_fd = parked.drm_fd;
+          vdinfo.device_index = parked.device_index;
+          vdinfo.session_index = parked.session_index;
+          vdinfo.output_index = parked.output_index;
+          vdinfo.drm_card_index = parked.drm_card_index;
+          vdinfo.session_id = parked.session_id;
+          vdinfo.session_token = session_token;
+          vdinfo.using_hermes_kms = true;
+          vdinfo.hermes_kms_session_lifecycle = parked.hermes_kms_session_lifecycle;
+          vdinfo.connector_name = parked.connector_name;
+          vdinfo.name = parked.name;
+          display_name = parked.name;
+          adopted = true;
+          BOOST_LOG(info) << "[VDISPLAY/Hermes-KMS] Reusing " << display_name << " (connector "
+                          << vdinfo.connector_name << "), which was kept connected for the login greeter, at "
+                          << width << 'x' << height << '@' << fps_hz;
+        } else {
+          release_parked_locked("it could not be handed to the new session, so a fresh output is claimed instead.");
+        }
+      }
+
+      if (adopted) {
+        // Nothing to claim.
+      } else if (config::video.hermes_kms_isolated_sessions) {
         claimed = hermes_kms::claim_available_device_output(
           device,
           width,
@@ -6573,7 +6908,6 @@ namespace VDISPLAY {
         );
       }
 
-      std::array<uint64_t, 2> session_token {};
       if (claimed && !hermes_kms::get_session_token(
                        device.fd,
                        device.selected_output_index,
@@ -6775,6 +7109,32 @@ namespace VDISPLAY {
                          << (revoked ? " bindings revoked before disable." :
                                        " bindings could not be revoked; the disable ends them.");
       }
+
+      // SDDM's greeter exits when its last output goes away, and SDDM does not
+      // start another: on a host with no monitor that is the login prompt gone
+      // until the display manager is restarted by hand. So while a greeter is
+      // what this output is showing, the display goes and the output stays.
+      // Only the host seat's card qualifies - a private seat or a broker card
+      // never carries the greeter.
+      if (!parked_display && vdinfo.broker_card.empty() && vdinfo.session_index < 0 &&
+          removalStrandsGreeter(
+            greeter_holds_seat().value_or(false),
+            waitForConnectorEnabled(vdinfo.connector_name, std::chrono::milliseconds {0}),
+            displayConnectorLit("/sys/class/drm", vdinfo.connector_name)
+          )) {
+        BOOST_LOG(info) << "[VDISPLAY] Keeping " << vdinfo.connector_name << " connected: the login greeter is on "
+                           "the seat and this is its only output. The next session reuses it, and it is released "
+                           "once someone has logged in.";
+        hermes_kms::forget_secret(vdinfo.session_token.data(), sizeof(vdinfo.session_token));
+        kscreen::restore(vdinfo.name);
+        kscreen::unmap_input_devices(vdinfo.name);
+        mutter::restore(vdinfo.name);
+        mutter::unmap_input_devices();
+        parked_display = std::move(vdinfo);
+        virtual_displays.erase(it);
+        return true;
+      }
+
       hermes_kms::set_output(vdinfo.drm_fd, false, 0, 0, 0, vdinfo.session_id);
     }
     // A headless output outlives the session that asked for it - Hyprland keeps
@@ -7292,7 +7652,17 @@ namespace VDISPLAY {
     }
 #endif
 
-    if (window_system == window_system_e::NONE) {
+    // A Hermes that outlives the session it was attached to - the user logged
+    // out and the greeter is back - still carries that session's display
+    // variables, and every layout backend it would reach through them is gone.
+    // That is the same position as never having had a session.
+    const auto variable = [](const char *name) {
+      const char *value = std::getenv(name);
+      return std::string {value ? value : ""};
+    };
+    const bool session_gone = window_system != window_system_e::NONE &&
+                              !displayServerReachable(variable("WAYLAND_DISPLAY"), variable("DISPLAY"), variable("XDG_RUNTIME_DIR"));
+    if (window_system == window_system_e::NONE || session_gone) {
       // Started before anyone logged in, there is no session to drive a layout
       // through - but whatever owns the seat, the login greeter included,
       // adopts a hotplugged connector on its own. Wait for it to, and stream

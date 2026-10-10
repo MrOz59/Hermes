@@ -94,7 +94,8 @@ namespace video {
     if (!VDISPLAY::matchDisplay("VIRTUAL-").empty()) {
       return true;
     }
-    return VDISPLAY::displayConnectorLit().value_or(true);
+    // An output Hermes itself keeps lit for the login greeter is not a monitor.
+    return VDISPLAY::displayConnectorLit("/sys/class/drm", VDISPLAY::parkedConnector()).value_or(true);
 #else
     return allow_encoder_probing();
 #endif

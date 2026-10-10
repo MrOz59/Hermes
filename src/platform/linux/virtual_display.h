@@ -459,12 +459,17 @@ namespace VDISPLAY {
    * link, or disabled in the display settings does not count.
    *
    * @param drm_class The sysfs DRM class directory; tests point it at a fake tree.
+   * @param ignored_connector A connector ("Virtual-1") to leave out of the
+   *        answer, for asking whether anything *else* is lit.
    * @return std::nullopt when sysfs cannot answer: the directory is unreadable
    *         or lists no card, or nothing is lit and some card exposes no
    *         connector at all - a GPU driven without kernel modesetting, such as
    *         NVIDIA with modeset=0 under X11, lights monitors sysfs never sees.
    */
-  std::optional<bool> displayConnectorLit(const std::filesystem::path &drm_class = "/sys/class/drm");
+  std::optional<bool> displayConnectorLit(
+    const std::filesystem::path &drm_class = "/sys/class/drm",
+    const std::string &ignored_connector = {}
+  );
 
   /**
    * @brief Whether Hermes runs inside a graphical session (Wayland or X11).
@@ -474,6 +479,61 @@ namespace VDISPLAY {
    * such as gamescope-session.
    */
   bool windowSystemAttached();
+
+  /**
+   * @brief Run a shell command and collect its standard output, waiting no
+   *        longer than @p timeout for it.
+   *
+   * For the desktop's own tools, which Hermes calls while holding locks a
+   * session cannot start without: one that never answers must cost a feature,
+   * not the host.
+   *
+   * @param timed_out Set to whether the command was stopped for running over.
+   * @return The output when the command exited with status 0; std::nullopt
+   *         when it failed, could not be started, or ran over - in which case
+   *         it and everything it started have been killed.
+   */
+  std::optional<std::string> boundedCommandOutput(
+    const std::string &command,
+    std::chrono::milliseconds timeout,
+    bool *timed_out = nullptr
+  );
+
+  /**
+   * @brief Whether a display server is listening where these variables point.
+   *
+   * Asked of the socket itself, so it holds for any compositor and any way a
+   * session was started. A Wayland name is tried first, then a local X
+   * display; an X display on another host counts as reachable untested.
+   *
+   * @param wayland_display WAYLAND_DISPLAY: a socket name under @p runtime_dir, or a path.
+   * @param x_display DISPLAY.
+   * @param runtime_dir XDG_RUNTIME_DIR.
+   */
+  bool displayServerReachable(const std::string &wayland_display, const std::string &x_display, const std::string &runtime_dir);
+
+  /**
+   * @brief Whether this user has a session of their own, as logind sees it -
+   *        graphical or not, so a "yes" does not mean a desktop is up.
+   * @return std::nullopt when logind could not be asked.
+   */
+  std::optional<bool> graphicalSessionPresent();
+
+  /**
+   * @brief Whether Hermes itself runs inside a login session - started from a
+   *        terminal or over SSH - rather than as a service of the user manager.
+   */
+  bool inLoginSession();
+
+  /**
+   * @brief The environment the systemd user manager hands to the units it
+   *        starts, as "NAME=value" strings.
+   *
+   * A desktop publishes its display variables there at login, so this is what
+   * a Hermes started before that login would have been given had it started
+   * after it. std::nullopt when the manager could not be asked.
+   */
+  std::optional<std::vector<std::string>> userManagerEnvironment();
 
   /**
    * @brief Wait until some compositor has bound @p connector to a CRTC.
@@ -487,6 +547,27 @@ namespace VDISPLAY {
     std::chrono::milliseconds timeout,
     const std::filesystem::path &drm_class = "/sys/class/drm"
   );
+
+  /**
+   * @brief Whether removing a virtual display would leave the login greeter
+   *        with nothing to draw on.
+   *
+   * SDDM's greeter exits when its last output goes away and is not started
+   * again, so a display removed before login takes the login prompt with it.
+   * When this says yes the display's Hermes-KMS output is kept connected
+   * instead, for the next session to reuse.
+   *
+   * @param greeter_on_seat A display manager's greeter is the session in front.
+   * @param output_lit The output being removed is one a compositor drives.
+   * @param another_connector_lit displayConnectorLit() with that output left out.
+   */
+  bool removalStrandsGreeter(bool greeter_on_seat, bool output_lit, std::optional<bool> another_connector_lit);
+
+  /**
+   * @brief The connector of the output being kept for the login greeter, or
+   *        empty. It is lit, but it is not a monitor the host has.
+   */
+  std::string parkedConnector();
 
   /**
    * @brief Classify a compositor from an XDG_CURRENT_DESKTOP-style value.

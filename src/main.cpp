@@ -29,6 +29,9 @@
 #else
   #include "platform/linux/virtual_display.h"
 #endif
+#ifdef __linux__
+  #include "platform/linux/session_attach.h"
+#endif
 
 #define PROBE_DISPLAY_UUID "38F72B96-B00C-4F21-8B6C-E1BFF1602B0E"
 
@@ -340,6 +343,10 @@ int main(int argc, char *argv[]) {
   // If any of the following fail, we log an error and continue event though sunshine will not function correctly.
   // This allows access to the UI to fix configuration problems or view the logs.
 
+#ifdef __linux__
+  platf::session_attach::drop_stale_display_environment();
+#endif
+
   auto platf_deinit_guard = platf::init();
   if (!platf_deinit_guard) {
     BOOST_LOG(error) << "Platform failed to initialize"sv;
@@ -493,6 +500,12 @@ int main(int argc, char *argv[]) {
   std::thread httpThread {nvhttp::start};
   std::thread configThread {confighttp::start};
   std::thread rtspThread {rtsp_stream::start};
+
+#ifdef __linux__
+  // Started at boot, before anyone logged in, Hermes joins the graphical
+  // session once there is one and no client is in the way.
+  auto session_attach_guard = platf::session_attach::start();
+#endif
 
 #ifdef _WIN32
   // If we're using the default port and GameStream is enabled, warn the user

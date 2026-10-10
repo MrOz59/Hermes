@@ -36,14 +36,22 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   that probes the encoders at startup took SDDM's greeter down with it, since
   that greeter exits when its last output goes away and is not restarted;
   with no monitor and no session the probe now waits for the first client.
+  For the same reason a display removed before login - the application quit
+  from the client, or a launch that failed - no longer takes the output away
+  from the greeter: Hermes keeps it connected, hands it to the next session,
+  and releases it once someone has logged in. A Hermes started before login
+  has none of the session's environment, so it could launch nothing into the
+  desktop or change its layout; about fifteen seconds after the last client
+  disconnects it now restarts itself with the environment the session
+  published. Both have been run on real hardware for the common case - the
+  application quit at the login screen, then a login and a disconnect - and
+  in a virtual machine only for a launch that fails and for a logout.
   The package does not set any of this up, and it has limits that matter on a
   machine you cannot otherwise reach: it needs a greeter that lights a new
   output by itself (SDDM's Wayland greeter, not its X11 one), a lingering
-  user manager and a unit that starts with it; quitting the application or a
-  failed launch before login still leaves no login screen until SDDM is
-  restarted; and a Hermes started before login does not learn about the
-  session afterwards, so it launches nothing into it and cannot change its
-  layout. The steps and the limits are in
+  user manager and a unit that starts with it; and until that restart, during
+  the stream you logged in through, Hermes still cannot launch applications
+  or change the layout. The steps and the limits are in
   [Getting Started](docs/getting_started.md). Run so far on KDE Plasma with
   SDDM and Hermes-KMS only.
 
@@ -63,6 +71,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Hermes no longer waits without limit for `kscreen-doctor`. A call that did
+  not return held the lock every virtual display needs, so Hermes neither
+  finished starting nor accepted a session. Each call now has ten seconds,
+  after which it is stopped and Hermes carries on without that layout step.
+- Hermes started with display variables left over from a session that has
+  ended - a lingering user manager can keep them - now ignores them and starts
+  as if nobody were logged in. Qt aborts a process whose display variables
+  point at nothing, and Hermes' tray is Qt.
 - A Linux host with no monitor lit now uses a virtual display on its own, at
   startup and for every session ([#61]). Hermes asked whether a monitor was
   present through an interface only Windows implements, so on Linux the answer

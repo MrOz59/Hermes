@@ -162,6 +162,10 @@ namespace nvhttp {
   client_t client_root;
   std::atomic<uint32_t> session_id_counter;
 
+  uint32_t launch_count() {
+    return session_id_counter.load();
+  }
+
   /**
    * @brief The clients whose pairing requests are waiting for a PIN, if any.
    *

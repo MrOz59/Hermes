@@ -1,6 +1,7 @@
 /**
  * @file tests/unit/platform/test_display_presence.cpp
- * @brief Test VDISPLAY::displayConnectorLit() and waitForConnectorEnabled() against fake sysfs DRM trees.
+ * @brief Test VDISPLAY::displayConnectorLit(), waitForConnectorEnabled() and removalStrandsGreeter()
+ *        against fake sysfs DRM trees.
  *
  * Whether a host has a monitor decides whether Hermes stands up a virtual
  * display at startup and for every session, and getting it wrong in either
@@ -194,4 +195,109 @@ TEST_F(FakeDrmClass, AnEmptyConnectorNameNeverMatches) {
   connector("card0-Virtual-1", "connected", "enabled");
 
   EXPECT_FALSE(VDISPLAY::waitForConnectorEnabled("", std::chrono::milliseconds {0}, root));
+}
+
+// A display removed while the login greeter is on the seat keeps its output
+// connected when that output is all the greeter has. These are the cases the
+// decision turns on.
+
+TEST_F(FakeDrmClass, TheOutputKeptForTheGreeterIsNotAMonitor) {
+  card("card0");
+  card("card1");
+  connector("card0-HDMI-A-1", "disconnected", "disabled");
+  connector("card1-Virtual-1", "connected", "enabled");
+
+  EXPECT_EQ(VDISPLAY::displayConnectorLit(root), std::optional<bool> {true});
+  EXPECT_EQ(VDISPLAY::displayConnectorLit(root, "Virtual-1"), std::optional<bool> {false});
+}
+
+TEST_F(FakeDrmClass, AMonitorNextToTheIgnoredOutputStillCounts) {
+  card("card0");
+  card("card1");
+  connector("card0-HDMI-A-1", "connected", "enabled");
+  connector("card1-Virtual-1", "connected", "enabled");
+
+  EXPECT_EQ(VDISPLAY::displayConnectorLit(root, "Virtual-1"), std::optional<bool> {true});
+}
+
+TEST_F(FakeDrmClass, IgnoringOneConnectorDoesNotIgnoreItsNamesake) {
+  card("card1");
+  card("card6");
+  connector("card1-Virtual-1", "connected", "disabled");
+  connector("card6-Virtual-11", "connected", "enabled");
+
+  EXPECT_EQ(VDISPLAY::displayConnectorLit(root, "Virtual-1"), std::optional<bool> {true});
+}
+
+TEST(GreeterOutput, TheGreetersOnlyOutputIsKept) {
+  EXPECT_TRUE(VDISPLAY::removalStrandsGreeter(true, true, std::optional<bool> {false}));
+}
+
+TEST(GreeterOutput, WhenSysfsCannotSayTheOutputIsKept) {
+  // A spare screen at the login prompt is the cheaper mistake.
+  EXPECT_TRUE(VDISPLAY::removalStrandsGreeter(true, true, std::nullopt));
+}
+
+TEST(GreeterOutput, AGreeterWithARealMonitorLosesNothing) {
+  EXPECT_FALSE(VDISPLAY::removalStrandsGreeter(true, true, std::optional<bool> {true}));
+}
+
+TEST(GreeterOutput, ADesktopSessionSurvivesLosingTheOutput) {
+  EXPECT_FALSE(VDISPLAY::removalStrandsGreeter(false, true, std::optional<bool> {false}));
+}
+
+TEST(GreeterOutput, AnOutputNothingDrivesIsNotWhatTheGreeterIsOn) {
+  // The X11 greeter never lights a virtual output; keeping it would hold a
+  // connector for nobody.
+  EXPECT_FALSE(VDISPLAY::removalStrandsGreeter(true, false, std::optional<bool> {false}));
+}
+
+// The desktop's tools are called with a deadline: kscreen-doctor has been seen
+// never to answer when asked while Plasma was still starting.
+
+TEST(BoundedCommand, OutputOfACommandThatSucceedsIsReturned) {
+  bool timed_out = true;
+  const auto output = VDISPLAY::boundedCommandOutput("printf 'one\\ntwo\\n'", std::chrono::seconds {5}, &timed_out);
+
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(*output, "one\ntwo\n");
+  EXPECT_FALSE(timed_out);
+}
+
+TEST(BoundedCommand, ACommandThatFailsHasNoOutput) {
+  bool timed_out = true;
+  EXPECT_FALSE(VDISPLAY::boundedCommandOutput("echo partial; exit 3", std::chrono::seconds {5}, &timed_out).has_value());
+  EXPECT_FALSE(timed_out);
+}
+
+TEST(BoundedCommand, ACommandThatNeverAnswersIsStopped) {
+  bool timed_out = false;
+  const auto started = std::chrono::steady_clock::now();
+  const auto output = VDISPLAY::boundedCommandOutput("sleep 30", std::chrono::milliseconds {300}, &timed_out);
+  const auto took = std::chrono::steady_clock::now() - started;
+
+  EXPECT_FALSE(output.has_value());
+  EXPECT_TRUE(timed_out);
+  EXPECT_LT(took, std::chrono::seconds {5});
+}
+
+TEST(BoundedCommand, ClosingItsOutputDoesNotLetACommandRunOn) {
+  // A layout command is run with its output discarded, so the pipe is at
+  // end-of-file from the start; the deadline has to hold on the process.
+  bool timed_out = false;
+  const auto started = std::chrono::steady_clock::now();
+  const auto output = VDISPLAY::boundedCommandOutput("sleep 30 >/dev/null 2>&1", std::chrono::milliseconds {300}, &timed_out);
+
+  EXPECT_FALSE(output.has_value());
+  EXPECT_TRUE(timed_out);
+  EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds {5});
+}
+
+TEST(BoundedCommand, ADescendantHoldingThePipeIsNotWaitedFor) {
+  const auto started = std::chrono::steady_clock::now();
+  const auto output = VDISPLAY::boundedCommandOutput("echo done; sleep 30 &", std::chrono::seconds {10});
+
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(*output, "done\n");
+  EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds {5});
 }

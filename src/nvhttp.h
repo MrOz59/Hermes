@@ -63,6 +63,14 @@ namespace nvhttp {
    */
   void start();
 
+  /**
+   * @brief How many launch and resume requests have been accepted so far.
+   *
+   * A request counted here is not a streaming session until its RTSP handshake
+   * completes; a caller waiting for a quiet moment compares two readings.
+   */
+  uint32_t launch_count();
+
   std::string
   get_arg(const args_t &args, const char *name, const char *default_value = nullptr);
 

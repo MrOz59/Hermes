@@ -151,4 +151,39 @@ describe('hostWarnings', () => {
     const ids = warnings.map(w => w.id)
     expect(new Set(ids).size).toBe(ids.length)
   })
+  describe('a host set to start before login', () => {
+    const blocked = {
+      enabled: true,
+      ready: false,
+      checks: [
+        { id: 'unit', state: 'ready', title: 'Start at boot', detail: 'hermes.service starts with the user manager.', fix: '' },
+        { id: 'greeter', state: 'missing', title: 'Login screen', detail: 'SDDM uses its X11 greeter.', fix: 'Set DisplayServer=wayland.' },
+        { id: 'autologin', state: 'note', title: 'Autologin', detail: 'SDDM logs ana in by itself.', fix: '' },
+      ],
+    }
+
+    it('is told what stands in the way, and only that', () => {
+      const warning = hostWarnings({ ...healthyHost, preloginInfo: blocked }).find(w => w.id === 'prelogin-not-ready')
+      expect(warning).toBeDefined()
+      expect(warning.message).toContain('Login screen: SDDM uses its X11 greeter. Set DisplayServer=wayland.')
+      expect(warning.message).not.toContain('Start at boot')
+      expect(warning.message).not.toContain('Autologin')
+    })
+
+    it('is told nothing once everything is in place', () => {
+      const ready = { enabled: true, ready: true, checks: blocked.checks.map(c => ({ ...c, state: 'ready' })) }
+      expect(hostWarnings({ ...healthyHost, preloginInfo: ready })).toEqual([])
+    })
+
+    it('is not asked of a host that starts Hermes with the session', () => {
+      // The same requirements, unmet, on a host that never opted in.
+      expect(hostWarnings({ ...healthyHost, preloginInfo: { ...blocked, enabled: false } })).toEqual([])
+    })
+
+    it('survives a preloginInfo of the wrong shape', () => {
+      for (const broken of ['{}', null, 7, [], { enabled: true, ready: false, checks: 'none' }, { enabled: true, checks: [null, 'x', 3] }]) {
+        expect(hostWarnings({ ...healthyHost, preloginInfo: broken })).toEqual([])
+      }
+    })
+  })
 })

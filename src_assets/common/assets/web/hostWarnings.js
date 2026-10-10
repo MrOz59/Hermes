@@ -35,6 +35,7 @@ export function hostWarnings(config) {
   const evdiInfo = asObject(c.evdiInfo);
   const hermesKmsInfo = asObject(c.hermesKmsInfo);
   const clipboardInfo = asObject(c.clipboardInfo);
+  const preloginInfo = asObject(c.preloginInfo);
   const backend = c.virtual_display_backend;
   // Only the EVDI backend gets EVDI's readiness warnings. Treating
   // "not hermes_kms" as EVDI meant a host configured for no virtual-display
@@ -73,6 +74,26 @@ export function hostWarnings(config) {
       message: `Clipboard diagnostic: ${clipboardInfo.diagnostic}. Install wl-clipboard on Wayland or xclip on X11 if you want Hestia clipboard sync.`,
       href: './config#Audio/Video',
       action: 'Open clipboard setup',
+    });
+  }
+
+  // A host set to start Hermes at boot is one somebody means to reach with
+  // nobody at it. Said only then: on every other host these are requirements
+  // of a mode it does not use.
+  const preloginBlockers = asArray(preloginInfo.checks)
+    .map(asObject)
+    .filter(check => check.state === 'missing' || check.state === 'unknown');
+  if (c.platform === 'linux' && preloginInfo.enabled === true && preloginInfo.ready !== true && preloginBlockers.length > 0) {
+    warnings.push({
+      id: 'prelogin-not-ready',
+      level: 'warning',
+      title: 'This host cannot be reached before login yet',
+      message: 'Hermes starts at boot, but after a reboot with nobody logged in a client would not get to the login screen. '
+        + preloginBlockers
+          .map(check => `${check.title}: ${check.detail}${check.fix ? ' ' + check.fix : ''}`)
+          .join(' '),
+      href: 'https://github.com/MrOz59/Hermes/blob/main/docs/getting_started.md#before-anyone-logs-in-experimental',
+      action: 'Read the setup steps',
     });
   }
 

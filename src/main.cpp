@@ -3,6 +3,7 @@
  * @brief Definitions for the main entry point for Sunshine.
  */
 // standard includes
+#include <algorithm>
 #include <codecvt>
 #include <csignal>
 #include <fstream>
@@ -30,7 +31,10 @@
   #include "platform/linux/virtual_display.h"
 #endif
 #ifdef __linux__
+  #include "platform/linux/prelogin.h"
   #include "platform/linux/session_attach.h"
+
+  #include <boost/log/core.hpp>
 #endif
 
 #define PROBE_DISPLAY_UUID "38F72B96-B00C-4F21-8B6C-E1BFF1602B0E"
@@ -163,10 +167,28 @@ int main(int argc, char *argv[]) {
 
   mail::man = std::make_shared<safe::mail_raw_t>();
 
+#ifdef __linux__
+  // `--prelogin` answers on the terminal and nowhere else. Reading the
+  // configuration logs every setting, and starting the log rotates the log
+  // file - of a Hermes that is very likely running while this is asked.
+  const bool prelogin_command = std::any_of(argv + 1, argv + argc, [](const char *argument) {
+    return argument == "--prelogin"sv;
+  });
+  if (prelogin_command) {
+    boost::log::core::get()->set_logging_enabled(false);
+  }
+#endif
+
   // parse config file
   if (config::parse(argc, argv)) {
     return 0;
   }
+
+#ifdef __linux__
+  if (prelogin_command && config::sunshine.cmd.name == "prelogin"sv) {
+    return platf::prelogin::command(argv[0], config::sunshine.cmd.argc, config::sunshine.cmd.argv);
+  }
+#endif
 
   auto log_deinit_guard = logging::init(config::sunshine.min_log_level, config::sunshine.log_file);
   if (!log_deinit_guard) {
@@ -366,6 +388,7 @@ int main(int argc, char *argv[]) {
   // configuration a user can fix, and the alternative to saying so at startup
   // is that they find out from a black stream.
   VDISPLAY::logSessionAssessment();
+  platf::prelogin::log_report();
 #endif
 
   reed_solomon_init();

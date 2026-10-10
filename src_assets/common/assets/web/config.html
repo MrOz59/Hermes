@@ -401,6 +401,10 @@
           this.clipboardInfo = this.config.clipboardInfo;
           delete this.config.clipboardInfo;
 
+          // Computed by the server on every read; saved, it would come back
+          // from hermes.conf as a string.
+          delete this.config.preloginInfo;
+
           fallbackDisplayModeCache = this.config.fallback_mode || "";
 
           // TODO: let each tab's Component handle it's own data instead of doing it here

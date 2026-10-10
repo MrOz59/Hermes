@@ -56,6 +56,9 @@
 #ifdef _WIN32
   #include "platform/windows/utils.h"
 #endif
+#ifdef __linux__
+  #include "platform/linux/prelogin.h"
+#endif
 
 using namespace std::literals;
 
@@ -469,6 +472,29 @@ namespace confighttp {
     }
 
     return output;
+  }
+
+  /**
+   * What it takes for this host to be reached before anyone logs in, for the
+   * home page: silent unless Hermes is set to start at boot.
+   */
+  static nlohmann::json prelogin_status_json() {
+    const auto report = platf::prelogin::report();
+    auto checks = nlohmann::json::array();
+    for (const auto &check : report.checks) {
+      checks.push_back({
+        {"id", check.id},
+        {"state", platf::prelogin::state_name(check.state)},
+        {"title", check.title},
+        {"detail", check.detail},
+        {"fix", check.fix},
+      });
+    }
+    return {
+      {"enabled", report.enabled},
+      {"ready", report.ready},
+      {"checks", std::move(checks)},
+    };
   }
 
   static nlohmann::json clipboard_status_json() {
@@ -1459,6 +1485,7 @@ namespace confighttp {
     output_tree["hermesKmsInfo"] = hermes_kms_status_json();
     output_tree["hermesKmsDiagnostic"] = output_tree["hermesKmsInfo"]["diagnostic"];
     output_tree["clipboardInfo"] = clipboard_status_json();
+    output_tree["preloginInfo"] = prelogin_status_json();
 #endif
     return output_tree;
   }

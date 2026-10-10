@@ -46,12 +46,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   published. Both have been run on real hardware for the common case - the
   application quit at the login screen, then a login and a disconnect - and
   in a virtual machine only for a launch that fails and for a logout.
-  The package does not set any of this up, and it has limits that matter on a
-  machine you cannot otherwise reach: it needs a greeter that lights a new
-  output by itself (SDDM's Wayland greeter, not its X11 one), a lingering
-  user manager and a unit that starts with it; and until that restart, during
-  the stream you logged in through, Hermes still cannot launch applications
-  or change the layout. The steps and the limits are in
+  It is off until asked for: `hermes --prelogin enable` writes a copy of the
+  packaged unit that starts with the user manager and turns lingering on, and
+  `hermes --prelogin status` - like a banner on the Web UI's home page -
+  lists what else is in the way. That is whatever lies outside Hermes: a
+  greeter that lights a new output by itself (SDDM's Wayland greeter, not its
+  X11 one), and devices Hermes can open with nobody on the seat. It still has
+  limits that matter on a machine you cannot otherwise reach: until that
+  restart, during the stream you logged in through, Hermes cannot launch
+  applications or change the layout, and a display kept for the greeter stays
+  at the greeter's resolution. The steps and the limits are in
   [Getting Started](docs/getting_started.md). Run so far on KDE Plasma with
   SDDM and Hermes-KMS only.
 

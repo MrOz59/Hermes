@@ -200,15 +200,32 @@ screen: the client types the password, and the same stream carries on into the
 desktop.
 
 This has been run on one setup - KDE Plasma with SDDM, Hermes-KMS, an AMD GPU
-and an Artemis client - and the package does not set it up. Read the limits
-below before relying on it for a machine you cannot reach any other way.
+and an Artemis client - and installing the package does not turn it on. Read
+the limits below before relying on it for a machine you cannot reach any other
+way.
 
-**What it needs**
+**Setting it up**
 
-1. Hermes-KMS as the virtual display, set up with `hermes-kms-setup`, which
-   gives your user the driver's device regardless of who is logged in.
-2. A greeter that lights a new output by itself. With SDDM that is the Wayland
-   greeter; the X11 greeter never lights a virtual output:
+As the user Hermes streams for:
+
+```bash
+hermes --prelogin enable
+```
+
+That does the part that is Hermes' to do, and neither step needs root. It
+writes a copy of the packaged unit that starts with your user manager instead
+of the graphical session, and it turns on lingering so that manager runs from
+boot. Enabling the packaged unit for `default.target` by hand is not the same
+thing: it wants `graphical-session.target`, and started at boot it would mark
+a graphical session as running when there is none. The change takes effect the
+next time Hermes starts.
+
+It then lists what is still in the way, as `hermes --prelogin status` does at
+any time. The Web UI shows the same list on its home page for as long as
+something on it is missing. What can be left is outside Hermes:
+
+1. **A greeter that lights a new output by itself.** With SDDM that is the
+   Wayland greeter; the X11 greeter never lights a virtual output. As root:
 
    ```ini
    # /etc/sddm.conf.d/10-wayland.conf
@@ -222,36 +239,18 @@ below before relying on it for a machine you cannot reach any other way.
 
    `/etc/sddm.conf` overrides the files in `sddm.conf.d`: if it sets
    `DisplayServer=x11`, change it there. SDDM logs in automatically whenever
-   `User=` is set under `[Autologin]`, whatever else that section says.
-3. Your user manager running from boot: `loginctl enable-linger $USER`.
-4. A unit that starts with it and is not tied to the graphical session. Do
-   not just enable the packaged unit for `default.target`: it wants
-   `graphical-session.target`, and started at boot it would mark a graphical
-   session as running when there is none. Override it instead:
+   `User=` is set under `[Autologin]`, whatever else that section says, and
+   with autologin on none of this is used.
+2. **Input devices without a session.** Before login the seat belongs to the
+   greeter, so the per-session grant to `/dev/uinput` does not reach Hermes:
+   `sudo usermod -aG input $USER`, then reboot.
+3. **The virtual display without a session.** Hermes-KMS is the only virtual
+   display this has been run with; `sudo hermes-kms-setup configure --user
+   auto` gives your user its device regardless of who is logged in.
 
-   ```ini
-   # ~/.config/systemd/user/hermes.service
-   [Unit]
-   Description=Hermes (from boot)
-
-   [Service]
-   ExecStartPre=/bin/sleep 5
-   ExecStart=/usr/bin/hermes
-   ExecStopPost=-/usr/bin/hermes-monitor-recovery
-   Restart=on-failure
-   RestartSec=5s
-
-   [Install]
-   WantedBy=default.target
-   ```
-
-   ```bash
-   systemctl --user daemon-reload
-   systemctl --user enable hermes
-   ```
-
-5. Your user in the `input` group. Before login the seat belongs to the
-   greeter, so the per-session grant to `/dev/uinput` does not reach Hermes.
+`hermes --prelogin disable` goes back to starting Hermes with the graphical
+session, and turns lingering off again if `enable` was what turned it on. A
+unit of your own in `~/.config/systemd/user` is never replaced or removed.
 
 **Limits**
 

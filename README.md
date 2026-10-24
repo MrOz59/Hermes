@@ -427,3 +427,6 @@ Report issues for the host at
 three things a report needs to be actionable: the Hermes version, one
 copy-paste block of host information, and a debug-level log. See
 [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md) for what each form is for.
+
+
+<!-- Automated fix for issue #67: [Bug] Fedora package does not contain service files contained in the Arch/Ubuntu package -->

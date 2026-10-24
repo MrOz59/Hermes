@@ -153,7 +153,9 @@ namespace cuda {
 
     void apply_colorspace(const video::sunshine_colorspace_t &colorspace);
 
-    int load_ram(platf::img_t &img, cudaArray_t array);
+    // With a stream, the caller must retain img until that stream finishes
+    // reading it. A null stream preserves the synchronous dummy-frame path.
+    int load_ram(platf::img_t &img, cudaArray_t array, stream_t::pointer stream = nullptr);
 
     ptr_t color_matrix;
 

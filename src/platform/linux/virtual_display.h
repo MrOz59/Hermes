@@ -1232,6 +1232,12 @@ namespace VDISPLAY {
   /** Whether the driver behind a capture descriptor reports frame colour (UAPI 14). */
   bool hermesKmsReportsFrameColor(int render_fd);
 
+  /**
+   * Format modifier of the framebuffer currently latched for scanout, without
+   * exporting it. Fails with EAGAIN while no frame is valid.
+   */
+  bool hermesKmsScanoutModifier(int render_fd, uint64_t &modifier);
+
   bool hermesKmsAcquireFrame(int render_fd, uint64_t after_sequence,
                              uint32_t timeout_ms, HermesKmsFrame &out, bool capture_color = false);
 

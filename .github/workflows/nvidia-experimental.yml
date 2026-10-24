@@ -1,0 +1,76 @@
+name: Experimental NVIDIA
+
+on:
+  push:
+    branches: [experimental/nvidia-zero-copy]
+  pull_request:
+    branches: [experimental/nvidia-zero-copy]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nvidia-experimental-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upload-ownership:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise capture-pool ownership during asynchronous DMA
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -pedantic -I. \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/standalone/cuda-upload-lifetime.cc -o /tmp/upload-lifetime
+          /tmp/upload-lifetime
+      - name: Exercise the EGL import cache and NVENC routing (C++17 and C++23)
+        run: |
+          for std in c++17 c++23; do
+            for test in dmabuf-import-cache hermes-nvenc-route; do
+              c++ -std=$std -Wall -Wextra -Werror -pedantic -I. \
+                -fsanitize=address,undefined -fno-omit-frame-pointer \
+                tests/standalone/$test.cc -o /tmp/$test-$std
+              /tmp/$test-$std
+            done
+          done
+
+  cuda-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    container:
+      # CUDA 12.9 still generates Maxwell/Pascal/Volta kernels. No GPU is
+      # required to compile; this job makes no hardware/performance claim.
+      image: nvidia/cuda:12.9.1-devel-ubuntu24.04
+    steps:
+      - name: Install Linux build dependencies
+        run: |
+          apt-get update
+          apt-get install --no-install-recommends -y \
+            ca-certificates git git-lfs build-essential cmake ninja-build \
+            libssl-dev libboost-all-dev libpulse-dev libopus-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libdrm-dev libgbm-dev libwayland-dev libx11-dev libxrandr-dev \
+            libxfixes-dev libxcb1-dev libxcb-shm0-dev libxcb-xfixes0-dev \
+            libva-dev libvdpau-dev libcap-dev libcurl4-openssl-dev \
+            libevdev-dev libudev-dev libsystemd-dev systemd-dev \
+            libminiupnpc-dev libicu-dev libnuma-dev libqt6svg6-dev qt6-base-dev
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Configure the CUDA-enabled host
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+            -DSUNSHINE_ASSETS_DIR=share/hermes \
+            -DSUNSHINE_ENABLE_WAYLAND=ON -DSUNSHINE_ENABLE_X11=ON \
+            -DSUNSHINE_ENABLE_DRM=ON -DSUNSHINE_ENABLE_CUDA=ON \
+            -DCUDA_FAIL_ON_MISSING=ON
+      - name: Compile the host, including CUDA upload and conversion
+        run: cmake --build build -j2

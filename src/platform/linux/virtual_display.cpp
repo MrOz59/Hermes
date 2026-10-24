@@ -8285,6 +8285,24 @@ namespace VDISPLAY {
     return true;
   }
 
+  bool hermesKmsScanoutModifier(int render_fd, uint64_t &modifier) {
+    modifier = 0;
+    if (render_fd < 0) {
+      errno = EBADF;
+      return false;
+    }
+    hermes_kms::status_t status {};
+    if (::ioctl(render_fd, hermes_kms::ioctl_get_status, &status) != 0) {
+      return false;
+    }
+    if (!(status.flags & hermes_kms::status_frame_valid) || !status.framebuffer_id) {
+      errno = EAGAIN;
+      return false;
+    }
+    modifier = status.framebuffer_modifier;
+    return true;
+  }
+
   bool hermesKmsReportsFrameColor(int render_fd) {
     hermes_kms::caps_t caps {};
     return ::ioctl(render_fd, hermes_kms::ioctl_get_caps, &caps) == 0 &&

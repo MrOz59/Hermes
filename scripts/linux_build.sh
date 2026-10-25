@@ -179,6 +179,7 @@ function add_arch_deps() {
     'libdrm'
     'libevdev'
     'libmfx'
+    'libpipewire'
     'libpulse'
     'libva'
     'libx11'
@@ -235,6 +236,7 @@ function add_debian_based_deps() {
     "libminiupnpc-dev"
     "libnuma-dev"
     "libopus-dev"
+    "libpipewire-0.3-dev"
     "libpulse-dev"
     "libssl-dev"
     "libwayland-dev"  # Wayland
@@ -310,6 +312,7 @@ function add_fedora_deps() {
     "numactl-devel"
     "openssl-devel"
     "opus-devel"
+    "pipewire-devel"
     "pulseaudio-libs-devel"
     "qt6-qtbase-devel"
     "qt6-qtsvg-devel"

@@ -7,17 +7,19 @@
 #endif
 
 // standard includes
-#include <cerrno>
+#include <algorithm>
+#include <array>
 #include <chrono>
-#include <climits>
 #include <csignal>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <thread>
 
 // platform includes
-#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 // lib includes
@@ -27,6 +29,8 @@
 #include <boost/process/v1/handles.hpp>
 #include <boost/process/v1/io.hpp>
 #include <boost/process/v1/search_path.hpp>
+#include <pipewire/pipewire.h>
+#include <spa/param/audio/format-utils.h>
 #include <pulse/pulseaudio.h>
 
 // local includes
@@ -50,10 +54,10 @@ namespace platf::session_audio {
       }
     }
 
-    // No ALSA, Bluetooth or camera monitors: the sink and the mic below are
-    // the only devices. The pulse server takes no D-Bus name, which the
+    // No ALSA, Bluetooth or camera monitors: the sink below and Hermes' mic
+    // stream are the only devices. The pulse server takes no D-Bus name, which the
     // host's already owns.
-    std::string pipewire_conf(const std::string &sink, int channels, const std::string &mic) {
+    std::string pipewire_conf(const std::string &sink, int channels) {
       std::string conf = R"(context.properties = {
     core.daemon = true
     core.name = pipewire-0
@@ -76,18 +80,6 @@ context.modules = [
     { name = libpipewire-module-link-factory }
     { name = libpipewire-module-protocol-pulse }
 )";
-      if (!mic.empty()) {
-        conf += R"(    { name = libpipewire-module-pipe-tunnel args = {
-        tunnel.mode = source
-        pipe.filename = ")" + session_mic_fifo(mic) + R"("
-        audio.format = S16LE
-        audio.rate = 48000
-        audio.channels = 1
-        audio.position = [ MONO ]
-        stream.props = { node.name = )" + mic + R"( node.description = "Client microphone" }
-    } }
-)";
-      }
       conf += R"(]
 pulse.properties = {
     server.address = [ "unix:native" ]
@@ -155,6 +147,149 @@ wireplumber.profiles = {
       child.wait();
     }
 
+    // The client's microphone between Hermes and the session: a jitter buffer
+    // just deep enough for Wi-Fi. (PipeWire's pipe-tunnel holds 8192 frames,
+    // 171 ms, to match clocks; dropping a few samples does that here.)
+    class mic_buffer_t {
+    public:
+      void write(const std::int16_t *samples, int count) {
+        std::lock_guard lock {mutex};
+        for (int i = 0; i < count; ++i) {
+          // Full: the oldest go, so a fast client clock or a burst after a
+          // stall never turns into delay.
+          if (fill == ring.size()) {
+            head = (head + 1) % ring.size();
+            --fill;
+          }
+          ring[(head + fill++) % ring.size()] = samples[i];
+        }
+      }
+
+      // Real-time side: never waits for the writer.
+      void read(std::int16_t *out, std::size_t count) {
+        std::size_t n = 0;
+        if (std::unique_lock lock {mutex, std::try_to_lock}; lock.owns_lock()) {
+          playing = playing || fill >= start_fill;
+          if (playing) {
+            n = std::min(count, fill);
+            for (std::size_t i = 0; i < n; ++i) {
+              out[i] = ring[(head + i) % ring.size()];
+            }
+            head = (head + n) % ring.size();
+            fill -= n;
+            // Underrun: silence until start_fill is buffered again.
+            playing = n == count;
+          }
+        }
+        std::fill(out + n, out + count, 0);
+      }
+
+    private:
+      static constexpr std::size_t start_fill = 48 * 30;
+      std::array<std::int16_t, 48 * 80> ring {};
+      std::size_t head {};
+      std::size_t fill {};
+      bool playing {};
+      std::mutex mutex;
+    };
+
+    std::mutex mics_mutex;
+    std::map<std::string, std::weak_ptr<mic_buffer_t>> mics;
+
+    int connect_socket(const std::string &path) {
+      sockaddr_un address {.sun_family = AF_UNIX};
+      if (path.size() >= sizeof address.sun_path) {
+        return -1;
+      }
+      path.copy(address.sun_path, path.size());
+      const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+      if (fd >= 0 && ::connect(fd, reinterpret_cast<const sockaddr *>(&address), sizeof address) < 0) {
+        ::close(fd);
+        return -1;
+      }
+      return fd;
+    }
+
+    // The session's mic: an Audio/Source stream on its server, fed from buffer.
+    class mic_stream_t {
+    public:
+      mic_stream_t(const std::string &remote, const std::string &name, std::shared_ptr<mic_buffer_t> buffer):
+          buffer {std::move(buffer)} {
+        static std::once_flag initialized;
+        std::call_once(initialized, [] {
+          pw_init(nullptr, nullptr);
+        });
+
+        loop = pw_thread_loop_new("hermes-mic", nullptr);
+        context = pw_context_new(pw_thread_loop_get_loop(loop), nullptr, 0);
+        // PIPEWIRE_REMOTE overrides a remote name, so connect the socket ourselves.
+        const int fd = connect_socket(remote);
+        core = fd < 0 ? nullptr : pw_context_connect_fd(context, fd, nullptr, 0);
+        if (!core) {
+          return;
+        }
+
+        stream = pw_stream_new(core, "Client microphone", pw_properties_new(PW_KEY_MEDIA_TYPE, "Audio", PW_KEY_MEDIA_CLASS, "Audio/Source", PW_KEY_NODE_NAME, name.c_str(), PW_KEY_NODE_DESCRIPTION, "Client microphone", PW_KEY_NODE_LATENCY, "480/48000", nullptr));
+        static const pw_stream_events events {.version = PW_VERSION_STREAM_EVENTS, .process = process};
+        pw_stream_add_listener(stream, &listener, &events, this);
+
+        spa_audio_info_raw info {};
+        info.format = SPA_AUDIO_FORMAT_S16;
+        info.rate = 48000;
+        info.channels = 1;
+        info.position[0] = SPA_AUDIO_CHANNEL_MONO;
+        std::uint8_t pod[1024];
+        auto builder = SPA_POD_BUILDER_INIT(pod, sizeof pod);
+        const spa_pod *params[] {spa_format_audio_raw_build(&builder, SPA_PARAM_EnumFormat, &info)};
+        if (pw_stream_connect(stream, PW_DIRECTION_OUTPUT, PW_ID_ANY, static_cast<pw_stream_flags>(PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS), params, 1) == 0 &&
+            pw_thread_loop_start(loop) == 0) {
+          connected = true;
+        }
+      }
+
+      ~mic_stream_t() {
+        pw_thread_loop_stop(loop);
+        if (stream) {
+          pw_stream_destroy(stream);
+        }
+        if (core) {
+          pw_core_disconnect(core);
+        }
+        pw_context_destroy(context);
+        pw_thread_loop_destroy(loop);
+      }
+
+      bool connected {};
+
+    private:
+      static void process(void *data) {
+        auto *self = static_cast<mic_stream_t *>(data);
+        pw_buffer *buffer = pw_stream_dequeue_buffer(self->stream);
+        if (!buffer) {
+          return;
+        }
+        spa_data &out = buffer->buffer->datas[0];
+        if (out.data) {
+          auto frames = out.maxsize / sizeof(std::int16_t);
+          if (buffer->requested) {
+            frames = std::min<std::size_t>(frames, buffer->requested);
+          }
+          self->buffer->read(static_cast<std::int16_t *>(out.data), frames);
+          out.chunk->offset = 0;
+          out.chunk->stride = sizeof(std::int16_t);
+          out.chunk->size = frames * sizeof(std::int16_t);
+        }
+        pw_stream_queue_buffer(self->stream, buffer);
+      }
+
+      std::shared_ptr<mic_buffer_t> buffer;
+      pw_thread_loop *loop {};
+      pw_context *context {};
+      pw_core *core {};
+      pw_stream *stream {};
+      spa_hook listener {};
+    };
+
     class pipewire_t: public server_t {
     public:
       pipewire_t(std::string runtime_dir, std::string mic):
@@ -163,12 +298,13 @@ wireplumber.profiles = {
       }
 
       ~pipewire_t() override {
+        if (!mic.empty()) {
+          std::lock_guard lock {mics_mutex};
+          mics.erase(mic);
+        }
+        mic_stream.reset();
         stop(wireplumber);
         stop(pipewire);
-        if (!mic.empty()) {
-          std::error_code ec;
-          fs::remove(session_mic_fifo(mic), ec);
-        }
       }
 
       std::string pulse_server() const override {
@@ -181,6 +317,7 @@ wireplumber.profiles = {
 
       std::string runtime_dir;
       std::string mic;
+      std::unique_ptr<mic_stream_t> mic_stream;
       bp::child pipewire;
       bp::child wireplumber;
     };
@@ -284,11 +421,6 @@ wireplumber.profiles = {
     }
   }  // namespace
 
-  std::string session_mic_fifo(const std::string &mic) {
-    const char *runtime = std::getenv("XDG_RUNTIME_DIR");
-    return (fs::path {runtime && *runtime ? runtime : "/tmp"} / "hermes" / (mic + ".fifo")).string();
-  }
-
   std::unique_ptr<server_t> start(const std::string &runtime_dir, const std::string &sink, int channels, const std::string &mic) {
     const auto pipewire = bp::search_path("pipewire");
     const auto wireplumber = bp::search_path("wireplumber");
@@ -300,16 +432,12 @@ wireplumber.profiles = {
     const fs::path dir = fs::path {runtime_dir} / "audio";
     // Not named pipewire.conf, so no system or user fragments apply.
     const auto conf = dir / "hermes-session.conf";
-    if (!write_file(conf, pipewire_conf(sink, channels, mic)) ||
+    if (!write_file(conf, pipewire_conf(sink, channels)) ||
         !write_file(dir / "config/wireplumber/wireplumber.conf.d/hermes-session.conf", wireplumber_conf)) {
       BOOST_LOG(warning) << "Couldn't write the private audio server's config to "sv << dir.string();
       return nullptr;
     }
     std::error_code ec;
-    if (!mic.empty()) {
-      fs::create_directories(fs::path {session_mic_fifo(mic)}.parent_path(), ec);
-      fs::remove(session_mic_fifo(mic), ec);
-    }
 
     // The user's own PipeWire config and WirePlumber state stay out of it.
     auto env = bp::environment {boost::this_process::environment()};
@@ -342,6 +470,18 @@ wireplumber.profiles = {
       BOOST_LOG(warning) << "Couldn't start WirePlumber: "sv << ec.message();
       return nullptr;
     }
+    // The mic is Hermes' own stream, so the graph is only complete once it exists.
+    if (!mic.empty()) {
+      auto buffer = std::make_shared<mic_buffer_t>();
+      server->mic_stream = std::make_unique<mic_stream_t>(server->pipewire_remote(), mic, buffer);
+      if (!server->mic_stream->connected) {
+        BOOST_LOG(warning) << "Couldn't create the session mic ["sv << mic << ']';
+        return nullptr;
+      }
+      std::lock_guard lock {mics_mutex};
+      mics[mic] = buffer;
+    }
+
     if (!wait_for_audio_graph(*server, sink, mic)) {
       BOOST_LOG(warning) << "The private audio graph was not ready in "sv << runtime_dir
                          << "; expected sink [" << sink << "] and source [" << mic << ']';
@@ -354,46 +494,29 @@ wireplumber.profiles = {
   }
 
   namespace {
-    class fifo_mic_writer_t: public mic_writer_t {
+    class buffer_mic_writer_t: public mic_writer_t {
     public:
-      fifo_mic_writer_t(int fd, std::string mic):
-          fd {fd},
-          mic {std::move(mic)} {
+      explicit buffer_mic_writer_t(std::shared_ptr<mic_buffer_t> buffer):
+          buffer {std::move(buffer)} {
       }
 
-      ~fifo_mic_writer_t() override {
-        close(fd);
-      }
-
-      // The caller blocks SIGPIPE: the FIFO loses its reader with its server.
-      // While nobody records, the full FIFO drops writes.
       void write(const std::int16_t *samples, int count) override {
-        // Writes up to PIPE_BUF are all or nothing, so a full FIFO never
-        // splits a sample.
-        constexpr int chunk = PIPE_BUF / sizeof(std::int16_t);
-        for (int offset = 0; offset < count; offset += chunk) {
-          const auto bytes = std::min(chunk, count - offset) * sizeof(std::int16_t);
-          if (::write(fd, samples + offset, bytes) < 0 && errno == EPIPE && !broken) {
-            broken = true;
-            BOOST_LOG(warning) << "Session mic ["sv << mic << "] is gone; dropping the client's microphone"sv;
-          }
-        }
+        buffer->write(samples, count);
       }
 
     private:
-      int fd;
-      std::string mic;
-      bool broken {};
+      std::shared_ptr<mic_buffer_t> buffer;
     };
   }  // namespace
 
   std::unique_ptr<mic_writer_t> open_mic(const std::string &mic) {
-    const auto fifo = session_mic_fifo(mic);
-    const int fd = open(fifo.c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC);
-    if (fd < 0) {
-      BOOST_LOG(warning) << "Couldn't open session mic ["sv << fifo << "]: "sv << std::strerror(errno);
+    std::lock_guard lock {mics_mutex};
+    const auto it = mics.find(mic);
+    auto buffer = it == mics.end() ? nullptr : it->second.lock();
+    if (!buffer) {
+      BOOST_LOG(warning) << "No session mic ["sv << mic << ']';
       return nullptr;
     }
-    return std::make_unique<fifo_mic_writer_t>(fd, mic);
+    return std::make_unique<buffer_mic_writer_t>(std::move(buffer));
   }
 }  // namespace platf::session_audio

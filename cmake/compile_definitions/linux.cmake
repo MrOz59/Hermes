@@ -370,8 +370,13 @@ list(APPEND PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/third-party/glad/include/glad/gl.h"
         "${CMAKE_SOURCE_DIR}/third-party/glad/include/glad/egl.h")
 
+# Isolated sessions' microphones are streams on their private PipeWire servers.
+pkg_check_modules(PIPEWIRE libpipewire-0.3 REQUIRED)
+include_directories(SYSTEM ${PIPEWIRE_INCLUDE_DIRS})
+
 list(APPEND PLATFORM_LIBRARIES
         dl
+        ${PIPEWIRE_LIBRARIES}
         pulse
         pulse-simple)
 

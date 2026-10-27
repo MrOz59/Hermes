@@ -2968,6 +2968,17 @@ namespace proc {
     return {};
   }
 
+  bool proc_t::isolated_session_has_account(uint32_t launch_session_id) {
+#ifndef _WIN32
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    const auto it = isolated_runtimes.find(launch_session_id);
+    return it != isolated_runtimes.end() && it->second && it->second->account;
+#else
+    (void) launch_session_id;
+    return false;
+#endif
+  }
+
   bool proc_t::prepare_isolated_resume(
     std::shared_ptr<rtsp_stream::launch_session_t> launch_session
   ) {

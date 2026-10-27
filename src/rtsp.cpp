@@ -1379,8 +1379,11 @@ namespace rtsp_stream {
     }
 
     config.gcmap = session.gcmap;
+    // A desktop on a helper account plays into that account's own audio
+    // server, so it never has a sink here; only a same-user desktop must.
+    const auto runtime_owner = session.isolated_runtime_owner_id ? session.isolated_runtime_owner_id : session.id;
     if (session.isolated_session && session.isolated_session_profile == "desktop" &&
-        config.audio.session_sink.empty()) {
+        config.audio.session_sink.empty() && !proc::proc.isolated_session_has_account(runtime_owner)) {
       BOOST_LOG(error) << "[IsolatedSession] The detached desktop has no private audio sink; "
                           "refusing to capture host audio.";
       respond(sock, session, &option, 503, "Service Unavailable", req->sequenceNumber, {});

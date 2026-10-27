@@ -33,8 +33,6 @@
   #include <poll.h>
   #include <signal.h>
   #include <spawn.h>
-  #include <sys/socket.h>
-  #include <sys/un.h>
   #include <sys/wait.h>
   #include <unistd.h>
   #include <xf86drm.h>
@@ -1084,22 +1082,6 @@ namespace proc {
     // one at a time, since a probe resets the chosen encoder while it runs.
     std::mutex encoder_probe_mutex;
 
-    bool unix_socket_accepts(const std::string &path) {
-      sockaddr_un address {};
-      address.sun_family = AF_UNIX;
-      if (path.empty() || path.size() >= sizeof(address.sun_path)) {
-        return false;
-      }
-      std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
-      const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-      if (fd < 0) {
-        return false;
-      }
-      const bool accepted = ::connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0;
-      ::close(fd);
-      return accepted;
-    }
-
     std::string read_small_file(const std::filesystem::path &path) {
       std::ifstream file {path};
       std::string text {std::istreambuf_iterator<char> {file}, {}};
@@ -1140,8 +1122,11 @@ namespace proc {
       if (std::filesystem::exists(std::filesystem::path {runtime.runtime_dir} / "failure", ec)) {
         return false;
       }
+      // Never a blocking connect: this runs under the runtime registry lock,
+      // and a compositor that stopped accepting would hold that lock forever
+      // once its backlog filled. A full backlog still means it is there.
       const auto socket = detached_wayland_socket(runtime.runtime_dir);
-      return !socket.empty() && unix_socket_accepts(socket);
+      return !socket.empty() && VDISPLAY::displayServerReachable(socket, {}, {});
     }
 
     bool isolated_runtime_running(const std::shared_ptr<isolated_runtime_t> &runtime) {

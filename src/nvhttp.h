@@ -169,6 +169,13 @@ namespace nvhttp {
    */
   void remove_session(const pair_session_t &sess);
 
+  /** Begin a fresh handshake, replacing a stale attempt for the same uniqueID. */
+  pair_session_t &begin_pairing_session(pair_session_t session);
+
+  /** Cancel only an incomplete handshake; never revoke an authorized client. */
+  bool cancel_pending_pairing(const std::string &unique_id);
+
+
   /**
    * @brief Pair, phase 1
    *

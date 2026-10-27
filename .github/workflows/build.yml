@@ -3,7 +3,7 @@ name: Build Hermes
 on:
   push:
     # Build test packages for #71; release/nightly jobs remain gated below.
-    branches: [master, main, fix/issue-71-stream-reconnect, feature/pyrowave-codec, release/october-integration, 'release/*-rc*']
+    branches: [master, main, fix/pairing-reliability, fix/issue-71-stream-reconnect, feature/pyrowave-codec, release/october-integration, 'release/*-rc*']
     tags:
       - 'v*'
   pull_request:

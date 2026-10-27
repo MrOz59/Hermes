@@ -443,6 +443,9 @@ jobs:
               if [ "$rc_number" -ge 3 ]; then
                 test "$(vercmp "$BUILD_VERSION" '0.6.0+20261026.rc2.f8ae5a5')" -gt 0
               fi
+              if [ "$rc_number" -ge 4 ]; then
+                test "$(vercmp "$BUILD_VERSION" '0.6.0+20261027.rc3.7417762')" -gt 0
+              fi
               ;;
           esac
 
@@ -590,6 +593,9 @@ jobs:
               rc_number="${BRANCH##*-rc}"
               if [ "$rc_number" -ge 3 ]; then
                 dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+20261026.rc2.f8ae5a5'
+              fi
+              if [ "$rc_number" -ge 4 ]; then
+                dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+20261027.rc3.7417762'
               fi
               ;;
           esac
@@ -833,6 +839,9 @@ jobs:
               rc_number="${BRANCH##*-rc}"
               if [ "$rc_number" -ge 3 ]; then
                 test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+20261026.rc2.f8ae5a5'))}")" -gt 0
+              fi
+              if [ "$rc_number" -ge 4 ]; then
+                test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+20261027.rc3.7417762'))}")" -gt 0
               fi
               ;;
           esac

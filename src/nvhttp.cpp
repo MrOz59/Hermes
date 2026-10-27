@@ -159,6 +159,9 @@ namespace nvhttp {
 
   // uniqueID, session
   std::unordered_map<std::string, pair_session_t> map_id_sess;
+  // HTTP pairing, HTTPS pairing and Web UI PIN submission run on different
+  // server threads. Helpers can remove a session while the caller holds this.
+  std::recursive_mutex pair_session_mutex;
   client_t client_root;
   std::atomic<uint32_t> session_id_counter;
 
@@ -535,8 +538,41 @@ namespace nvhttp {
   }
 
   void remove_session(const pair_session_t &sess) {
-    clear_pending_pair(sess.client.uniqueID);
-    map_id_sess.erase(sess.client.uniqueID);
+    std::lock_guard lock {pair_session_mutex};
+    // The argument can itself be owned by map_id_sess. Do not keep a reference
+    // to its identifier while destroying that map element.
+    const std::string unique_id = sess.client.uniqueID;
+    clear_pending_pair(unique_id);
+    map_id_sess.erase(unique_id);
+  }
+
+  bool cancel_pending_pairing(const std::string &unique_id) {
+    std::lock_guard lock {pair_session_mutex};
+    auto it = map_id_sess.find(unique_id);
+    if (it == map_id_sess.end()) {
+      return false;
+    }
+    const std::string id = unique_id;
+    // Release an old request parked waiting for a PIN before replacing it.
+    auto &response = it->second.async_insert_pin.response;
+    const std::string cancelled = "<root status_code=\"409\" status_message=\"Pairing cancelled\"><paired>0</paired></root>";
+    if (response.has_left() && response.left()) {
+      response.left()->close_connection_after_response = true;
+      response.left()->write(cancelled);
+    } else if (response.has_right() && response.right()) {
+      response.right()->close_connection_after_response = true;
+      response.right()->write(cancelled);
+    }
+    clear_pending_pair(id);
+    map_id_sess.erase(it);
+    return true;
+  }
+
+  pair_session_t &begin_pairing_session(pair_session_t session) {
+    std::lock_guard lock {pair_session_mutex};
+    const std::string id = session.client.uniqueID;
+    cancel_pending_pairing(id);
+    return map_id_sess.emplace(id, std::move(session)).first->second;
   }
 
   void fail_pair(pair_session_t &sess, pt::ptree &tree, const std::string status_msg) {
@@ -701,11 +737,8 @@ namespace nvhttp {
       named_cert_p->allow_client_commands = true;
       named_cert_p->always_use_virtual_display = false;
 
-      if (auto it = map_id_sess.find(client.uniqueID); it != std::end(map_id_sess)) {
-        clear_pending_pair(client.uniqueID);
-        map_id_sess.erase(it);
-      }
-
+      // Keep sess alive until the single remove_session() below. Erasing it
+      // here made that later cleanup dereference a destroyed map value.
       add_authorized_client(named_cert_p);
     } else {
       tree.put("root.paired", 0);
@@ -769,7 +802,7 @@ namespace nvhttp {
 
   template <class T>
   void pair(std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request) {
-    print_req<T>(request);
+    std::lock_guard lock {pair_session_mutex};
 
     pt::ptree tree;
 
@@ -813,10 +846,9 @@ namespace nvhttp {
         sess.client.name = std::move(deviceName);
         sess.client.cert = util::from_hex_vec(get_arg(args, "clientcert"), true);
 
-        BOOST_LOG(debug) << sess.client.cert;
-        auto ptr = map_id_sess.emplace(sess.client.uniqueID, std::move(sess)).first;
+        auto &new_session = begin_pairing_session(std::move(sess));
 
-        ptr->second.async_insert_pin.salt = std::move(get_arg(args, "salt"));
+        new_session.async_insert_pin.salt = std::move(get_arg(args, "salt"));
 
         auto it = args.find("otpauth");
         if (it != std::end(args)) {
@@ -827,15 +859,15 @@ namespace nvhttp {
             tree.put("root.<xmlattr>.status_code", 503);
             tree.put("root.<xmlattr>.status_message", "OTP auth not available.");
           } else {
-            auto hash = util::hex(crypto::hash(one_time_pin + ptr->second.async_insert_pin.salt + otp_passphrase), true);
+            auto hash = util::hex(crypto::hash(one_time_pin + new_session.async_insert_pin.salt + otp_passphrase), true);
 
             if (hash.to_string_view() == it->second) {
 
               if (!otp_device_name.empty()) {
-                ptr->second.client.name = std::move(otp_device_name);
+                new_session.client.name = std::move(otp_device_name);
               }
 
-              getservercert(ptr->second, tree, one_time_pin);
+              getservercert(new_session, tree, one_time_pin);
 
               one_time_pin.clear();
               otp_passphrase.clear();
@@ -845,7 +877,7 @@ namespace nvhttp {
           }
 
           // Always return positive, attackers will fail in the next steps.
-          getservercert(ptr->second, tree, crypto::rand(16));
+          getservercert(new_session, tree, crypto::rand(16));
           return;
         }
 
@@ -855,13 +887,13 @@ namespace nvhttp {
           std::cout << "Please insert pin: "sv;
           std::getline(std::cin, pin);
 
-          getservercert(ptr->second, tree, pin);
+          getservercert(new_session, tree, pin);
         } else {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
           system_tray::update_tray_require_pin();
 #endif
-          set_pending_pair(ptr->second.client.uniqueID, ptr->second.client.name);
-          ptr->second.async_insert_pin.response = std::move(response);
+          set_pending_pair(new_session.client.uniqueID, new_session.client.name);
+          new_session.async_insert_pin.response = std::move(response);
 
           fg.disable();
           return;
@@ -896,6 +928,27 @@ namespace nvhttp {
     }
   }
 
+  void cancel_pairing_request(std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTP>::Response> response,
+                              std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTP>::Request> request) {
+    auto args = request->parse_query_string();
+    pt::ptree tree;
+    auto id = args.find("uniqueid");
+    if (id == args.end() || id->second.empty()) {
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "Missing uniqueid parameter");
+    } else {
+      // Unauthenticated legacy /unpair cancels only the pending handshake.
+      // Revoking a trusted certificate still requires the authenticated Web UI.
+      cancel_pending_pairing(id->second);
+      tree.put("root.<xmlattr>.status_code", 200);
+      tree.put("root.paired", 0);
+    }
+    std::ostringstream data;
+    pt::write_xml(data, tree);
+    response->write(data.str());
+    response->close_connection_after_response = true;
+  }
+
   std::optional<std::string> pending_pair_client() {
     std::lock_guard lock {pending_pair_mutex};
     if (pending_pairs.empty()) {
@@ -905,6 +958,7 @@ namespace nvhttp {
   }
 
   bool pin(std::string pin, std::string name) {
+    std::lock_guard lock {pair_session_mutex};
     pt::ptree tree;
     if (map_id_sess.empty()) {
       return false;
@@ -929,22 +983,32 @@ namespace nvhttp {
       return false;
     }
 
-    auto &sess = std::begin(map_id_sess)->second;
-    // Somebody typed the four digits, so nothing is waiting for them any more -
-    // whether or not they were the right four. Only this client's flag clears;
-    // another device parked behind it is still waiting.
+    // A previous client can still be exchanging challenges. Submit the PIN
+    // only to a request actually waiting for it, not an arbitrary map entry.
+    auto pending = std::find_if(map_id_sess.begin(), map_id_sess.end(), [](const auto &entry) {
+      const auto &session = entry.second;
+      const auto &response = session.async_insert_pin.response;
+      return session.last_phase == PAIR_PHASE::NONE &&
+             ((response.has_left() && response.left()) || (response.has_right() && response.right()));
+    });
+    if (pending == map_id_sess.end()) {
+      return false;
+    }
+    auto &sess = pending->second;
     clear_pending_pair(sess.client.uniqueID);
-    getservercert(sess, tree, pin);
-
     if (!name.empty()) {
       sess.client.name = name;
     }
+    // getservercert() can reject and erase sess. Keep the waiting response
+    // independently so both the success and rejection paths can reply safely.
+    auto async_response = std::move(sess.async_insert_pin.response);
+    sess.async_insert_pin.response = std::decay_t<decltype(async_response.left())>();
+    getservercert(sess, tree, pin);
 
     // response to the request for pin
     std::ostringstream data;
     pt::write_xml(data, tree);
 
-    auto &async_response = sess.async_insert_pin.response;
     if (async_response.has_left() && async_response.left()) {
       async_response.left()->write(data.str());
     } else if (async_response.has_right() && async_response.right()) {
@@ -953,8 +1017,6 @@ namespace nvhttp {
       return false;
     }
 
-    // reset async_response
-    async_response = std::decay_t<decltype(async_response.left())>();
     // response to the current request
     return true;
   }
@@ -2059,6 +2121,7 @@ namespace nvhttp {
     http_server.default_resource["GET"] = not_found<SimpleWeb::HTTP>;
     http_server.resource["^/serverinfo$"]["GET"] = serverinfo<SimpleWeb::HTTP>;
     http_server.resource["^/pair$"]["GET"] = pair<SimpleWeb::HTTP>;
+    http_server.resource["^/unpair$"]["GET"] = cancel_pairing_request;
 
     http_server.config.reuse_address = true;
     http_server.config.address = net::af_to_any_address_string(address_family);
@@ -2085,8 +2148,11 @@ namespace nvhttp {
     // Wait for any event
     shutdown_event->view();
 
-    clear_pending_pairs();
-    map_id_sess.clear();
+    {
+      std::lock_guard lock {pair_session_mutex};
+      clear_pending_pairs();
+      map_id_sess.clear();
+    }
 
     https_server.stop();
     http_server.stop();

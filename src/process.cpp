@@ -188,6 +188,7 @@ namespace proc {
       pid_t namespace_pid {};  ///< Holds the session's mount namespace, where it has a private /dev.
       std::unique_ptr<platf::session_devices::mirror_t> device_mirror;
       std::string isolated_seat_flag;  ///< Tells the ACL rule to leave the seat's host nodes alone.
+      std::vector<int> held_x_displays;  ///< Locks keeping gamescope's Xwaylands adjacent.
       std::chrono::steady_clock::time_point started_at {std::chrono::steady_clock::now()};
       std::string wayland_display;
       std::string drm_device_path;
@@ -219,6 +220,58 @@ namespace proc {
     std::string host_runtime_dir() {
       if (const char *dir = std::getenv("XDG_RUNTIME_DIR"); dir && *dir) {
         return dir;
+      }
+      return {};
+    }
+
+    std::string x_lock_path(int display) {
+      return "/tmp/.X" + std::to_string(display) + "-lock";
+    }
+
+    // Takes a display's lock as Xorg and wlroots do; a lock whose pid is gone is stale.
+    bool take_x_display(int display) {
+      const auto path = x_lock_path(display);
+      for (int attempt = 0; attempt < 2; ++attempt) {
+        if (const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0444); fd >= 0) {
+          const auto pid = std::format("{:>10}\n", ::getpid());
+          const bool written = ::write(fd, pid.data(), pid.size()) == static_cast<ssize_t>(pid.size());
+          ::close(fd);
+          if (!written) {
+            ::unlink(path.c_str());
+          }
+          return written;
+        }
+        std::ifstream lock {path};
+        long owner = 0;
+        if (!(lock >> owner) || owner <= 0 || ::kill(static_cast<pid_t>(owner), 0) == 0 || errno != ESRCH) {
+          return false;
+        }
+        ::unlink(path.c_str());
+      }
+      return false;
+    }
+
+    // Steam in gamescope's Steam mode sends games to its own DISPLAY plus one,
+    // but wlroots gives each Xwayland the lowest free display. An X server in
+    // between (desktop Xorg restarted on :1) puts the games on it. Hold every
+    // free display below the first `count` adjacent free ones; returns those held.
+    std::vector<int> hold_x_display_gaps(int count) {
+      std::vector<int> taken;
+      for (int display = 0; display <= 32; ++display) {
+        if (!take_x_display(display)) {
+          continue;
+        }
+        taken.push_back(display);
+        if (taken.size() >= static_cast<size_t>(count) && taken[taken.size() - count] == display - count + 1) {
+          for (int i = 0; i < count; ++i) {
+            ::unlink(x_lock_path(taken.back()).c_str());
+            taken.pop_back();
+          }
+          return taken;
+        }
+      }
+      for (const int display : taken) {
+        ::unlink(x_lock_path(display).c_str());
       }
       return {};
     }
@@ -1292,6 +1345,10 @@ namespace proc {
         std::filesystem::remove(runtime->isolated_seat_flag, flag_ec);
         runtime->isolated_seat_flag.clear();
       }
+      for (const int display : runtime->held_x_displays) {
+        ::unlink(x_lock_path(display).c_str());
+      }
+      runtime->held_x_displays.clear();
 
       runtime->pipe.reset();
       if (!runtime->display_name.empty()) {
@@ -2385,6 +2442,13 @@ namespace proc {
       if (const char *forced_steam_mode = std::getenv("HERMES_ISOLATED_GAMESCOPE_STEAM_MODE");
           forced_steam_mode && std::string_view {forced_steam_mode} == "1") {
         steam_mode = true;
+      }
+      if (steam_mode) {
+        runtime->held_x_displays = hold_x_display_gaps(2);
+        if (!runtime->held_x_displays.empty()) {
+          BOOST_LOG(info) << "[IsolatedSession] Holding X displays below gamescope's so Steam's games land on its Xwayland: "
+                          << std::format("{}", runtime->held_x_displays);
+        }
       }
 
       launch_command = platf::gamescope::launch_command({

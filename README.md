@@ -315,9 +315,8 @@ printf '%s\n' 'options hermes_kms initial_enabled=0 outputs=2' | sudo tee /etc/m
   the host session.
 
   An independent session gets a separate compositor, application process tree,
-  capture path, and tagged virtual input set, on its own Hermes-KMS card and
-  private DRM seat. Application profiles run directly in a DRM Gamescope
-  session. Desktop profiles run the compositor named by
+  capture path, and input of its own. Application profiles run directly in a
+  DRM Gamescope session, on their own Hermes-KMS card and private DRM seat. Desktop profiles run the compositor named by
   `hermes_kms_session_compositor`: by default the user's own Plasma desktop,
   detached on a virtual KWin output, which needs no Hermes-KMS card or seat
   broker; or, opt-in, Weston with its desktop shell and panel. Application

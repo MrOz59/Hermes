@@ -1452,7 +1452,10 @@ alias; new configurations should use the key above.
 
             Enables the experimental independent-session capability. It does not switch the entire Hermes server into an isolated mode. Eligible launches may use independent sessions while ordinary Host Desktop, Remote Input, and other shared routes continue to use the existing host compositor.
 
-            <b>What every isolated session gets.</b> Its own Hermes-KMS DRM card
+            <b>What every isolated session gets.</b> The detached Plasma
+            desktop (<code>hermes_kms_session_compositor = plasma</code>) runs
+            on a virtual KWin output instead; every
+            other isolated session gets its own Hermes-KMS DRM card
             on its own private DRM seat, its own compositor, its own Wayland
             socket, its own capture pipeline, and its own set of virtual input
             devices, tagged so that one client's keyboard and mouse cannot enter

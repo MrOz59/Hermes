@@ -103,8 +103,6 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   at the greeter's resolution. The steps and the limits are in
   [Getting Started](docs/getting_started.md). Run so far on KDE Plasma with
   SDDM and Hermes-KMS only.
-- Linux: `hermes_kms_session_compositor = plasma` turns an independent
-  `desktop` session into the user's own Plasma desktop, detached. It runs as
 - Linux: an independent `desktop` session is now the user's own Plasma
   desktop, detached (`hermes_kms_session_compositor = plasma`, the new
   default; `weston` and `labwc` remain as opt-in fallbacks, and a Plasma

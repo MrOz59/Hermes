@@ -1080,6 +1080,10 @@ namespace proc {
       }
     }
 
+    // Isolated launches probe encoders while another may be doing the same;
+    // one at a time, since a probe resets the chosen encoder while it runs.
+    std::mutex encoder_probe_mutex;
+
     bool unix_socket_accepts(const std::string &path) {
       sockaddr_un address {};
       address.sun_family = AF_UNIX;
@@ -1876,6 +1880,20 @@ namespace proc {
       if (host_runtime.empty() || self_ec) {
         return plasma_failed("cannot start: Hermes has no user runtime directory");
       }
+      // Startup leaves the encoders unprobed when nothing is on screen, and a
+      // probe can fail; capture needs a chosen encoder either way. Validate one
+      // before starting the desktop, without a screen, as startup would have:
+      // a temporary host output would wake the monitors this desktop leaves
+      // alone. A failure here cannot be ignored, as there is nothing to encode
+      // with.
+      {
+        std::lock_guard<std::mutex> probe_lock(encoder_probe_mutex);
+        if (rtsp_stream::session_count() == 0 && video::probe_encoders_without_display()) {
+          launch_session->launch_error_message = "No working video encoder was found for the detached desktop.";
+          BOOST_LOG(error) << "[IsolatedSession] " << launch_session->launch_error_message;
+          return 503;
+        }
+      }
 
       const int width = static_cast<int>(launch_session->width ? launch_session->width : 1920);
       const int height = static_cast<int>(launch_session->height ? launch_session->height : 1080);
@@ -2601,7 +2619,6 @@ namespace proc {
     }
 
     {
-      static std::mutex encoder_probe_mutex;
       std::lock_guard<std::mutex> probe_lock(encoder_probe_mutex);
       const auto previous_output = config::video.output_name;
       auto mapped_name = display_device::map_display_name(runtime->display_name);

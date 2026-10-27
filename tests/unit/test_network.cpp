@@ -11,7 +11,10 @@
 #endif
 
 #ifdef __linux__
+  #include <cerrno>
+  #include <chrono>
   #include <csignal>
+  #include <poll.h>
   #include <spawn.h>
   #include <sys/wait.h>
   #include <unistd.h>
@@ -28,6 +31,87 @@ namespace {
     }
     return ntohs(reinterpret_cast<const sockaddr_in6 *>(&address.address)->sin6_port);
   }
+
+#ifdef __linux__
+  /**
+   * Whether no waitable exit has been observed for the helper. WNOWAIT
+   * leaves an exited child for the caller's cleanup to reap. A child can
+   * release its files during exit before its exit status becomes waitable.
+   */
+  bool helper_alive(pid_t child) {
+    siginfo_t info {};
+    int result;
+    while ((result = waitid(P_PID, static_cast<id_t>(child), &info, WEXITED | WNOHANG | WNOWAIT)) < 0 && errno == EINTR) {}
+    return result == 0 && info.si_pid == 0;
+  }
+
+  /** Waits at most timeout, across interruptions, for end of file on fd. */
+  bool wait_for_end_of_file(int fd, std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    for (;;) {
+      const auto left = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+      if (left.count() <= 0) {
+        return false;
+      }
+      pollfd readable {fd, POLLIN, 0};
+      const int polled = poll(&readable, 1, static_cast<int>(left.count()));
+      if (polled < 0 && errno == EINTR) {
+        continue;
+      }
+      if (polled <= 0 || (readable.revents & (POLLERR | POLLNVAL))) {
+        return false;
+      }
+      char byte;
+      ssize_t got;
+      while ((got = read(fd, &byte, 1)) < 0 && errno == EINTR) {}
+      // Nothing writes to this pipe; it only ever reaches end of file.
+      return got == 0;
+    }
+  }
+
+  /**
+   * Starts the long-lived helper and waits for its close-on-exec pipe EOF.
+   * During normal exec, this follows the child's CLOEXEC descriptor walk.
+   *
+   * posix_spawn() can return before that: until commit e780259b54e6 ("exec:
+   * do_close_on_exec() before taking exec_update_lock"), the kernel resumed a
+   * vfork parent before the child's close-on-exec walk, so a port the child
+   * merely inherited could still be held for a moment. The child also
+   * inherits the write end of a close-on-exec pipe. The caller still holds
+   * its sockets, so the child's copies are not their last references; the
+   * pipe's is, and its release, which ends the file, follows that walk.
+   *
+   * Exit also produces EOF. Reject an already-waitable exit here; callers
+   * check again after their port assertions. These checks do not eliminate
+   * the interval between file release and publication of exit status.
+   */
+  bool spawn_executed_helper(pid_t &child) {
+    constexpr std::chrono::milliseconds exec_timeout {10000};
+
+    int exec_pipe[2];
+    if (pipe2(exec_pipe, O_CLOEXEC) != 0) {
+      return false;
+    }
+    char program[] = "/bin/sleep";
+    char duration[] = "30";
+    char *arguments[] = {program, duration, nullptr};
+    const bool spawned = posix_spawn(&child, program, nullptr, nullptr, arguments, environ) == 0;
+    close(exec_pipe[1]);
+    if (!spawned) {
+      close(exec_pipe[0]);
+      return false;
+    }
+
+    const bool executed = wait_for_end_of_file(exec_pipe[0], exec_timeout);
+    close(exec_pipe[0]);
+    if (!executed || !helper_alive(child)) {
+      kill(child, SIGKILL);
+      while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
+      return false;
+    }
+    return true;
+  }
+#endif
 }  // namespace
 
 struct MdnsInstanceNameTest: testing::TestWithParam<std::tuple<std::string, std::string>> {};
@@ -230,10 +314,7 @@ TEST_P(HostCreateTest, VideoAndAudioPortsAreReleasedWhileAnExecutedHelperLives) 
   }
 
   pid_t child;
-  char program[] = "/bin/sleep";
-  char duration[] = "30";
-  char *arguments[] = {program, duration, nullptr};
-  ASSERT_EQ(posix_spawn(&child, program, nullptr, nullptr, arguments, environ), 0);
+  ASSERT_TRUE(spawn_executed_helper(child));
   auto cleanup = util::fail_guard([child]() {
     kill(child, SIGTERM);
     while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
@@ -248,6 +329,7 @@ TEST_P(HostCreateTest, VideoAndAudioPortsAreReleasedWhileAnExecutedHelperLives) 
     retry.bind(ip::udp::endpoint(protocol, port), error);
     EXPECT_FALSE(static_cast<bool>(error)) << "port " << port << ": " << error.message();
   }
+  EXPECT_TRUE(helper_alive(child)) << "the helper exited before the ports were checked";
 }
 
 TEST_P(HostCreateTest, AnExecutedHelperDoesNotKeepTheControlPortAlive) {
@@ -260,10 +342,7 @@ TEST_P(HostCreateTest, AnExecutedHelperDoesNotKeepTheControlPortAlive) {
   ASSERT_NE(port, 0);
 
   pid_t child;
-  char program[] = "/bin/sleep";
-  char duration[] = "30";
-  char *arguments[] = {program, duration, nullptr};
-  ASSERT_EQ(posix_spawn(&child, program, nullptr, nullptr, arguments, environ), 0);
+  ASSERT_TRUE(spawn_executed_helper(child));
   auto cleanup = util::fail_guard([child]() {
     kill(child, SIGTERM);
     while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
@@ -274,6 +353,7 @@ TEST_P(HostCreateTest, AnExecutedHelperDoesNotKeepTheControlPortAlive) {
   boost::system::error_code error;
   auto retry = net::host_create(GetParam(), address, port, &error);
   EXPECT_TRUE(static_cast<bool>(retry)) << error.message();
+  EXPECT_TRUE(helper_alive(child)) << "the helper exited before the port was checked";
 }
 #endif
 

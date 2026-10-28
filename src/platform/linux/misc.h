@@ -25,6 +25,19 @@ enum class window_system_e {
 
 extern window_system_e window_system;
 
+namespace platf {
+  /**
+   * @brief Open the render node of the best GPU to encode a stream on.
+   * @details adapter_name when it is set. Otherwise every real GPU is ranked
+   * by the video it can encode - AV1, then HEVC Main10, HEVC, H.264 - with
+   * more video memory breaking a tie, and the best one wins; for NVENC an
+   * NVIDIA GPU comes first. The capture-only Hermes-KMS node never qualifies.
+   * @param nvenc Whether the stream encodes with NVENC rather than VAAPI.
+   * @return An owned file descriptor, or -1.
+   */
+  int open_encode_render_node(bool nvenc = false);
+}  // namespace platf
+
 namespace dyn {
   typedef void (*apiproc)(void);
 

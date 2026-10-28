@@ -4,9 +4,11 @@
  */
 
 // standard includes
+#include <csignal>
 #include <fstream>
 #include <future>
 #include <queue>
+#include <system_error>
 
 // lib includes
 #include <boost/endian/arithmetic.hpp>
@@ -21,6 +23,7 @@ extern "C" {
 
 // local includes
 #include "client_link_monitor.h"
+#include "client_mic_router.h"
 #include "config.h"
 #include "crypto.h"
 #include "display_device.h"
@@ -239,6 +242,18 @@ namespace stream {
     AUDIO_FEC_HEADER fecHeader;
   };
 
+  // A client microphone packet (Apollo's mic passthrough), followed by Opus.
+  struct mic_packet_header_t {
+    std::uint8_t flags;
+    std::uint8_t packetType;
+    boost::endian::little_uint16_at sequenceNumber;
+    boost::endian::little_uint32_at timestamp;
+    boost::endian::little_uint32_at ssrc;
+  };
+
+  constexpr std::uint8_t MIC_PACKET_TYPE_OPUS = 0x61;
+  constexpr std::uint32_t MIC_PACKET_MAGIC = 0x12345678;
+
 #pragma pack(pop)
 
   constexpr std::size_t round_to_pkcs7_padded(std::size_t size) {
@@ -273,8 +288,8 @@ namespace stream {
 
   class control_server_t {
   public:
-    int bind(net::af_e address_family, std::uint16_t port) {
-      _host = net::host_create(address_family, _addr, port);
+    int bind(net::af_e address_family, std::uint16_t port, boost::system::error_code &ec) {
+      _host = net::host_create(address_family, _addr, port, &ec);
 
       return !(bool) _host;
     }
@@ -336,6 +351,7 @@ namespace stream {
     message_queue_queue_t message_queue_queue;
 
     std::thread recv_thread;
+    std::thread mic_thread;
     std::thread video_thread;
     std::thread audio_thread;
     std::thread control_thread;
@@ -344,6 +360,7 @@ namespace stream {
 
     udp::socket video_sock {io_context};
     udp::socket audio_sock {io_context};
+    udp::socket mic_sock {io_context};
 
     control_server_t control_server;
   };
@@ -406,6 +423,11 @@ namespace stream {
 
       audio_fec_packet_t fec_packet;
       std::unique_ptr<platf::deinit_t> qos;
+
+      /// Set before the session is listed, and only read after.
+      std::shared_ptr<audio::client_mic_t> mic;
+      bool mic_heard {};
+      udp::endpoint mic_peer;
     } audio;
 
     struct {
@@ -1390,6 +1412,68 @@ namespace stream {
     }
   }
 
+  void micRecvThread(broadcast_ctx_t &ctx) {
+#ifndef _WIN32
+    // A session mic whose source is gone fails writes with EPIPE instead.
+    sigset_t sigpipe;
+    sigemptyset(&sigpipe);
+    sigaddset(&sigpipe, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &sigpipe, nullptr);
+#endif
+
+    auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
+    std::array<char, 2048> buf;
+    udp::endpoint peer;
+
+    while (!broadcast_shutdown_event->peek()) {
+      boost::system::error_code ec;
+      const auto bytes = ctx.mic_sock.receive_from(asio::buffer(buf), peer, 0, ec);
+      if (ec == boost::asio::error::would_block || ec == boost::asio::error::try_again) {
+        std::this_thread::sleep_for(2ms);
+        continue;
+      }
+      if (ec || bytes <= sizeof(mic_packet_header_t)) {
+        continue;
+      }
+
+      const auto *header = reinterpret_cast<const mic_packet_header_t *>(buf.data());
+      if (header->packetType != MIC_PACKET_TYPE_OPUS || header->ssrc != MIC_PACKET_MAGIC) {
+        continue;
+      }
+      const std::uint16_t sequence = header->sequenceNumber;
+      const std::string_view cipher {buf.data() + sizeof(mic_packet_header_t), bytes - sizeof(mic_packet_header_t)};
+
+      std::shared_ptr<audio::client_mic_t> mic;
+      std::optional<audio::routed_mic_packet_t> decoded;
+      {
+        auto lg = ctx.control_server._sessions.lock();
+        std::vector<session_t *> sessions;
+        std::vector<audio::mic_candidate_t> candidates;
+        for (auto *session : *ctx.control_server._sessions) {
+          if (!session->audio.mic || session->audio.peer.address() != peer.address() || (session->audio.mic_peer.port() != 0 && session->audio.mic_peer != peer) || session->state.load(std::memory_order_relaxed) != session::state_e::RUNNING) {
+            continue;
+          }
+          sessions.push_back(session);
+          candidates.push_back({&session->audio.cipher, session->audio.avRiKeyId});
+        }
+        decoded = audio::route_mic_packet(candidates, sequence, cipher);
+        if (decoded) {
+          auto *session = sessions[decoded->candidate];
+          session->audio.mic_peer = peer;
+          if (!session->audio.mic_heard) {
+            session->audio.mic_heard = true;
+            BOOST_LOG(info) << "Receiving the microphone of ["sv << session->device_name << "] into ["sv << session->config.mic_source << ']';
+          }
+          mic = session->audio.mic;
+        }
+      }
+
+      if (mic) {
+        mic->write(sequence, decoded->opus.data(), decoded->opus.size());
+      }
+    }
+  }
+
   void videoBroadcastThread(udp::socket &sock) {
     auto shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     auto packets = mail::man->queue<video::packet_t>(mail::video_packets);
@@ -1840,20 +1924,29 @@ namespace stream {
     auto video_port = net::map_port(VIDEO_STREAM_PORT);
     auto audio_port = net::map_port(AUDIO_STREAM_PORT);
 
-    if (ctx.control_server.bind(address_family, control_port)) {
-      report_stream_start_failure(
-        "Port " + std::to_string(control_port) +
-        " is already in use, so the stream could not start. Another Hermes may still be running, or "
-        "another program has taken the port."
-      );
+    boost::system::error_code ec;
+    const auto report_bind_failure = [](const char *transport, std::uint16_t port, const boost::system::error_code &error) {
+      auto reason = std::string {"Could not initialize the "} + transport + " stream on UDP port " +
+                    std::to_string(port) + ": " + error.message() + " (" + error.category().name() +
+                    ':' + std::to_string(error.value()) + ").";
+      if (error == boost::asio::error::address_in_use) {
+        reason += " The port is already in use. Check which process holds it, including any remaining Hermes or helper process.";
+      }
+      report_stream_start_failure(reason);
+    };
+
+    if (ctx.control_server.bind(address_family, control_port, ec)) {
+      report_bind_failure("control", control_port, ec);
 
       return -1;
     }
 
-    boost::system::error_code ec;
     ctx.video_sock.open(protocol, ec);
+    if (!ec) {
+      net::prevent_socket_inheritance(ctx.video_sock.native_handle(), ec);
+    }
     if (ec) {
-      BOOST_LOG(fatal) << "Couldn't open socket for Video server: "sv << ec.message();
+      report_bind_failure("video", video_port, ec);
 
       return -1;
     }
@@ -1867,38 +1960,71 @@ namespace stream {
 
     ctx.video_sock.bind(udp::endpoint(protocol, video_port), ec);
     if (ec) {
-      report_stream_start_failure(
-        "Port " + std::to_string(video_port) + " is already in use, so the stream could not start (" +
-        ec.message() + "). Another Hermes may still be running, or another program has taken the port."
-      );
+      report_bind_failure("video", video_port, ec);
 
       return -1;
     }
 
     ctx.audio_sock.open(protocol, ec);
+    if (!ec) {
+      net::prevent_socket_inheritance(ctx.audio_sock.native_handle(), ec);
+    }
     if (ec) {
-      BOOST_LOG(fatal) << "Couldn't open socket for Audio server: "sv << ec.message();
+      report_bind_failure("audio", audio_port, ec);
 
       return -1;
     }
 
     ctx.audio_sock.bind(udp::endpoint(protocol, audio_port), ec);
     if (ec) {
-      report_stream_start_failure(
-        "Port " + std::to_string(audio_port) + " is already in use, so the stream could not start (" +
-        ec.message() + "). Another Hermes may still be running, or another program has taken the port."
-      );
+      report_bind_failure("audio", audio_port, ec);
 
       return -1;
     }
 
     ctx.message_queue_queue = std::make_shared<message_queue_queue_t::element_type>(30);
 
-    ctx.video_thread = std::thread {videoBroadcastThread, std::ref(ctx.video_sock)};
-    ctx.audio_thread = std::thread {audioBroadcastThread, std::ref(ctx.audio_sock)};
-    ctx.control_thread = std::thread {controlBroadcastThread, &ctx.control_server};
-
-    ctx.recv_thread = std::thread {recvThread, std::ref(ctx)};
+    // If a later thread cannot start, join the ones already created before
+    // shared_t destroys this partially initialized context.
+    auto rollback = util::fail_guard([&ctx]() {
+      end_broadcast(ctx);
+    });
+    try {
+      ctx.video_thread = std::thread {videoBroadcastThread, std::ref(ctx.video_sock)};
+      ctx.audio_thread = std::thread {audioBroadcastThread, std::ref(ctx.audio_sock)};
+      ctx.control_thread = std::thread {controlBroadcastThread, &ctx.control_server};
+      ctx.recv_thread = std::thread {recvThread, std::ref(ctx)};
+    } catch (const std::system_error &error) {
+      report_stream_start_failure(std::string {"Could not start streaming threads: "} + error.what());
+      return -1;
+    }
+    if (config::audio.stream_mic) {
+      const auto mic_port = net::map_port(MIC_STREAM_PORT);
+      ctx.mic_sock.open(protocol, ec);
+      if (!ec) {
+        net::prevent_socket_inheritance(ctx.mic_sock.native_handle(), ec);
+      }
+      if (!ec) {
+        ctx.mic_sock.bind(udp::endpoint(protocol, mic_port), ec);
+      }
+      if (!ec) {
+        ctx.mic_sock.non_blocking(true, ec);
+      }
+      if (ec) {
+        BOOST_LOG(error) << "Couldn't listen for client microphones on port ["sv << mic_port << "]: "sv << ec.message();
+        ctx.mic_sock.close(ec);
+      } else {
+        try {
+          ctx.mic_thread = std::thread {micRecvThread, std::ref(ctx)};
+        } catch (const std::system_error &error) {
+          report_stream_start_failure(std::string {"Could not start client microphone thread: "} + error.what());
+          return -1;
+        }
+      }
+    }
+    rollback.disable();
+    BOOST_LOG(debug) << "Streaming transports ready: control=" << control_port
+                     << " video=" << video_port << " audio=" << audio_port;
 
     return 0;
   }
@@ -1918,21 +2044,40 @@ namespace stream {
     ctx.message_queue_queue->stop();
     ctx.io_context.stop();
 
-    ctx.video_sock.close();
-    ctx.audio_sock.close();
+    boost::system::error_code ec;
+    ctx.video_sock.close(ec);
+    ctx.audio_sock.close(ec);
 
     video_packets.reset();
     audio_packets.reset();
 
     BOOST_LOG(debug) << "Waiting for main listening thread to end..."sv;
-    ctx.recv_thread.join();
+    if (ctx.recv_thread.joinable()) {
+      ctx.recv_thread.join();
+    }
     BOOST_LOG(debug) << "Waiting for main video thread to end..."sv;
-    ctx.video_thread.join();
+    if (ctx.video_thread.joinable()) {
+      ctx.video_thread.join();
+    }
     BOOST_LOG(debug) << "Waiting for main audio thread to end..."sv;
-    ctx.audio_thread.join();
+    if (ctx.audio_thread.joinable()) {
+      ctx.audio_thread.join();
+    }
     BOOST_LOG(debug) << "Waiting for main control thread to end..."sv;
-    ctx.control_thread.join();
-    BOOST_LOG(debug) << "All broadcasting threads ended"sv;
+    if (ctx.control_thread.joinable()) {
+      ctx.control_thread.join();
+    }
+    if (ctx.mic_thread.joinable()) {
+      // Nonblocking receive observes broadcast_shutdown within 2 ms, even
+      // when a client never sent a microphone packet.
+      ctx.mic_thread.join();
+    }
+    boost::system::error_code mic_ec;
+    ctx.mic_sock.close(mic_ec);
+
+    // ENet must be released after its last user joins.
+    ctx.control_server._host.reset();
+    BOOST_LOG(debug) << "All broadcasting threads ended; streaming sockets released"sv;
 
     broadcast_shutdown_event->reset();
   }
@@ -2296,7 +2441,8 @@ namespace stream {
         session.mail,
         session.isolated_session ?
           session.isolated_seat_id :
-          std::string {}
+          std::string {},
+        session.isolated_session ? session.config.gcmap.value_or(0) : 0
       );
 
       session.broadcast_ref = broadcast.ref();
@@ -2306,6 +2452,10 @@ namespace stream {
 
       session.control.expected_peer_address = addr_string;
       BOOST_LOG(debug) << "Expecting incoming session connections from "sv << addr_string;
+
+      if (!session.config.mic_source.empty()) {
+        session.audio.mic = audio::open_client_mic(session.config.mic_source);
+      }
 
       // Insert this session into the session list
       {

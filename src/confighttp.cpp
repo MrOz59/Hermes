@@ -1538,7 +1538,7 @@ namespace confighttp {
   }
 
   nlohmann::json hestia_capabilities_json() {
-    const nlohmann::json capabilities {
+    nlohmann::json capabilities {
       {"ok", true},
       {"server_name", "Hermes"},
       // "base" is a protocol-compatibility identifier the Hestia client checks
@@ -1549,7 +1549,10 @@ namespace confighttp {
       {"hestia_protocol", 1},
       {"min_client_protocol", 1},
       {"max_client_protocol", 1},
-      {"server_version", "0.1.0-hermes"},
+      // Same version the web UI and the log report (the VERSION file, plus
+      // the commit suffix on non-release branches), so clients show the
+      // Hermes version the user actually installed.
+      {"server_version", PROJECT_VERSION},
       {"compatibility", {
         {"gamestream", true},
         {"moonlight", true},
@@ -1588,6 +1591,10 @@ namespace confighttp {
         {"supported_codecs", {"h264", "hevc", "av1"}},
       }},
     };
+
+    if (config::video.pyrowave && video::pyrowave_available()) {
+      capabilities["limits"]["supported_codecs"].push_back("pyrowave");
+    }
 
     return capabilities;
   }
@@ -1688,7 +1695,7 @@ namespace confighttp {
     const auto &stream = request["stream"];
     if (!hestia_has_exact_keys(stream, stream_keys) || !hestia_is_positive_integer(stream["requested_width"]) ||
         !hestia_is_positive_integer(stream["requested_height"]) || !hestia_is_positive_integer(stream["requested_fps"]) ||
-        !hestia_is_one_of(stream["codec"], {"h264", "hevc", "av1"}) || !hestia_is_positive_integer(stream["bitrate_kbps"]) ||
+        !hestia_is_one_of(stream["codec"], {"h264", "hevc", "av1", "pyrowave"}) || !hestia_is_positive_integer(stream["bitrate_kbps"]) ||
         !hestia_is_one_of(stream["hdr_mode"], {"sdr", "hdr"}) || !hestia_is_positive_integer(stream["scale_factor"])) {
       error = "Invalid stream object";
       return false;
@@ -1751,6 +1758,15 @@ namespace confighttp {
       const auto &stream = input["stream"];
       const auto &virtual_display = input["virtual_display"];
       const auto &app = input["app"];
+      if (stream["codec"] == "pyrowave" &&
+          (!config::video.pyrowave || !video::pyrowave_available())) {
+        send_hestia_error(response, SimpleWeb::StatusCode::client_error_bad_request, "unsupported_codec", "PyroWave is not enabled or unavailable on this host");
+        return;
+      }
+      if (stream["codec"] == "pyrowave" && stream["hdr_mode"] != "sdr") {
+        send_hestia_error(response, SimpleWeb::StatusCode::client_error_bad_request, "unsupported_codec_mode", "PyroWave currently supports SDR streams only");
+        return;
+      }
 #ifdef _WIN32
       if (app["launch_mode"] == "gamescope") {
         send_hestia_error(response, SimpleWeb::StatusCode::client_error_bad_request, "unsupported_feature", "Gamescope is only available on Linux hosts");
@@ -1775,7 +1791,10 @@ namespace confighttp {
       BOOST_LOG(debug) << "[HestiaAPI] session prepare requested: width=" << stream["requested_width"]
                        << " height=" << stream["requested_height"] << " fps=" << stream["requested_fps"]
                        << " virtual_display=" << virtual_display["enabled"]
-                       << " launch_mode=" << app["launch_mode"];
+                       << " launch_mode=" << app["launch_mode"]
+                       << " client_name=" << input["client"]["name"]
+                       << " client_version=" << input["client"]["version"]
+                       << " client_platform=" << input["client"]["platform"];
 
       const nlohmann::json output {
         {"ok", true},
@@ -1982,6 +2001,9 @@ namespace confighttp {
       }
       if (enc.av1) {
         codecs.push_back("av1");
+      }
+      if (config::video.pyrowave && video::pyrowave_available()) {
+        codecs.push_back("pyrowave");
       }
       nlohmann::json attempts = nlohmann::json::array();
       for (const auto &attempt : enc.attempts) {

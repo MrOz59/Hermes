@@ -2,12 +2,17 @@ name: Build Hermes
 
 on:
   push:
-    branches: [master, main]
+    # Build test packages for #71; release/nightly jobs remain gated below.
+    branches: [master, main, fix/pairing-reliability, fix/issue-71-stream-reconnect, feature/pyrowave-codec, release/october-integration, 'release/*-rc*']
     tags:
       - 'v*'
   pull_request:
     branches: [master, main]
   workflow_dispatch:
+
+concurrency:
+  group: hermes-build-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   BUILD_TYPE: Release
@@ -30,6 +35,11 @@ env:
   CUDA_HOST_GCC: "14"
 
 jobs:
+  package-loader:
+    uses: ./.github/workflows/package-loader.yml
+    permissions:
+      contents: read
+
   # ===========================================
   # Build version (VERSION file + commit stamp)
   # ===========================================
@@ -57,6 +67,13 @@ jobs:
           version="$(tr -d '[:space:]' < VERSION)"
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             build_version="${version}"
+          elif [[ "${GITHUB_REF_NAME}" =~ ^release/[a-z]+-[0-9]{4}-rc([0-9]+)$ ]]; then
+            # RPM/ALPM sort numeric segments above alpha segments. A numeric
+            # source date sorts after RC1's seven-character hexadecimal suffix
+            # on all three package managers; use the commit date for repeatability.
+            rc_number="${BASH_REMATCH[1]}"
+            source_date="$(git show -s --format=%cs HEAD | tr -d '-')"
+            build_version="${version}+${source_date}.rc${rc_number}.${GITHUB_SHA:0:7}"
           else
             build_version="${version}+${GITHUB_SHA:0:7}"
           fi
@@ -97,6 +114,7 @@ jobs:
             libva \
             libvdpau \
             libcap \
+            acl \
             curl \
             libevdev \
             systemd \
@@ -110,6 +128,8 @@ jobs:
             numactl \
             xorg-server-xvfb \
             sway \
+            vulkan-headers \
+            vulkan-icd-loader \
             jq
 
       - name: Checkout
@@ -121,6 +141,9 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
+      - name: Build pinned PyroWave SDK
+        run: bash scripts/build-pyrowave-sdk.sh
+
       - name: Configure CMake (with tests)
         run: |
           cmake -B build -G Ninja \
@@ -130,7 +153,8 @@ jobs:
             -DSUNSHINE_ENABLE_X11=ON \
             -DSUNSHINE_ENABLE_DRM=ON \
             -DSUNSHINE_ENABLE_CUDA=OFF \
-            -DBUILD_TESTS=ON
+            -DBUILD_TESTS=ON \
+            -DSUNSHINE_REQUIRE_PYROWAVE=ON
 
       - name: Build tests
         run: cmake --build build --target test_sunshine -j$(nproc)
@@ -384,6 +408,7 @@ jobs:
             libva \
             libvdpau \
             libcap \
+            acl \
             curl \
             libevdev \
             systemd \
@@ -409,6 +434,18 @@ jobs:
       # makepkg cannot take pkgver from the environment, so rewrite it in the
       # CI checkout. This keeps the package filename, the pacman version and
       # the version the binary reports all in agreement.
+      - name: Check candidate upgrade ordering
+        run: |
+          case "$BRANCH" in
+            release/*-rc*)
+              test "$(vercmp "$BUILD_VERSION" '0.6.0+964c5fa')" -gt 0
+              rc_number="${BRANCH##*-rc}"
+              if [ "$rc_number" -ge 3 ]; then
+                test "$(vercmp "$BUILD_VERSION" '0.6.0+20261026.rc2.f8ae5a5')" -gt 0
+              fi
+              ;;
+          esac
+
       - name: Stamp the build version into the PKGBUILD
         run: |
           sed -i "s/^pkgver=.*/pkgver=${BUILD_VERSION}/" PKGBUILD
@@ -516,6 +553,7 @@ jobs:
             libswscale-dev \
             libdrm-dev \
             libgbm-dev \
+            libvulkan-dev \
             libwayland-dev \
             libx11-dev \
             libxrandr-dev \
@@ -526,6 +564,7 @@ jobs:
             libva-dev \
             libvdpau-dev \
             libcap-dev \
+            libacl1-dev \
             libcurl4-openssl-dev \
             libevdev-dev \
             libudev-dev \
@@ -543,6 +582,18 @@ jobs:
       # which went EOL in April 2025, while 26.04 ships 22. Pinning one version
       # keeps both packages' Web UI built by the same toolchain - the same major
       # the Fedora containers provide.
+      - name: Check candidate upgrade ordering
+        run: |
+          case "$BRANCH" in
+            release/*-rc*)
+              dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+964c5fa'
+              rc_number="${BRANCH##*-rc}"
+              if [ "$rc_number" -ge 3 ]; then
+                dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+20261026.rc2.f8ae5a5'
+              fi
+              ;;
+          esac
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -569,6 +620,9 @@ jobs:
           echo "CUDAHOSTCXX=${host_cxx}" >> "${GITHUB_ENV}"
           echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
 
+      - name: Build pinned PyroWave SDK
+        run: bash scripts/build-pyrowave-sdk.sh
+
       - name: Configure CMake
         run: |
           # SUNSHINE_ASSETS_DIR is baked into the binary at compile time and must
@@ -578,16 +632,20 @@ jobs:
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_INSTALL_LIBDIR="lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)" \
             -DSUNSHINE_ASSETS_DIR=share/hermes \
             -DSUNSHINE_ENABLE_WAYLAND=ON \
             -DSUNSHINE_ENABLE_X11=ON \
             -DSUNSHINE_ENABLE_DRM=ON \
-            -DCUDA_FAIL_ON_MISSING=ON
+            -DCUDA_FAIL_ON_MISSING=ON \
+            -DSUNSHINE_REQUIRE_PYROWAVE=ON \
+            -DSUNSHINE_BUNDLE_PYROWAVE=ON
 
       - name: Build
         run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(nproc)
 
       - name: Create DEB Package
+        shell: bash
         run: |
           VERSION="${BUILD_VERSION}"
           PKGDIR="hermes_${VERSION}_amd64"
@@ -613,12 +671,24 @@ jobs:
           #
           # dpkg-shlibdeps reads debian/control for the package name, so give it
           # a throwaway one rather than a full debian/ source tree.
-          BIN_PATH="$(readlink -f "${PKGDIR}/usr/bin/hermes")"
+          LIBDIR="$(bash scripts/cmake-install-libdir.sh build/CMakeCache.txt)"
+          test -n "${LIBDIR}"
+          CODEC_LIB_PATH="$(readlink -f "${PKGDIR}/usr/${LIBDIR}/hermes")"
+          # The session broker is a separate executable with its own dependencies
+          # (notably libacl). Scan every staged ELF, including the private codec,
+          # rather than deriving the package's dependencies only from Hermes.
+          ELF_ARGS=()
+          while IFS= read -r -d '' candidate; do
+            if readelf -h "$candidate" >/dev/null 2>&1; then
+              ELF_ARGS+=("-e$(readlink -f "$candidate")")
+            fi
+          done < <(find "${PKGDIR}/usr/bin" "${CODEC_LIB_PATH}" -type f -print0)
+          (( ${#ELF_ARGS[@]} > 0 ))
           mkdir -p .shlibdeps/debian
           printf 'Source: hermes\nPackage: hermes\nArchitecture: amd64\n' \
             > .shlibdeps/debian/control
           DEB_DEPENDS="$(cd .shlibdeps \
-            && dpkg-shlibdeps -O --ignore-missing-info "${BIN_PATH}" \
+            && dpkg-shlibdeps -O --ignore-missing-info -l"${CODEC_LIB_PATH}" "${ELF_ARGS[@]}" \
             | sed 's/^shlibs:Depends=//')"
           rm -rf .shlibdeps
           if [ -z "${DEB_DEPENDS}" ]; then
@@ -634,7 +704,7 @@ jobs:
           Section: net
           Priority: optional
           Architecture: amd64
-          Depends: ${DEB_DEPENDS}
+          Depends: ${DEB_DEPENDS}, libvulkan1, libcap2-bin
           Recommends: evdi-dkms
           Maintainer: Hermes
           Description: Self-hosted game stream host with Linux virtual display support
@@ -646,7 +716,7 @@ jobs:
           cat > ${PKGDIR}/DEBIAN/postinst << 'EOF'
           #!/bin/bash
           set -e
-          setcap cap_sys_admin+p /usr/bin/hermes || true
+          setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p /usr/bin/hermes || true
           if command -v modprobe &> /dev/null; then
             modprobe evdi 2>/dev/null || true
           fi
@@ -668,6 +738,13 @@ jobs:
           # the other.
           dpkg-deb --build ${PKGDIR} \
             hermes_${VERSION}_ubuntu${{ matrix.ubuntu }}_amd64.deb
+
+      - name: Install and test DEB with file capabilities
+        shell: bash
+        run: |
+          apt-get install -y libcap2-bin util-linux
+          apt-get install -y ./hermes_*_ubuntu${{ matrix.ubuntu }}_amd64.deb
+          bash scripts/tests/package-loader-smoke.sh "/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/hermes"
 
       - name: Upload DEB Package
         uses: actions/upload-artifact@v4
@@ -723,6 +800,8 @@ jobs:
             ffmpeg-free-devel \
             libdrm-devel \
             mesa-libgbm-devel \
+            vulkan-headers \
+            vulkan-loader-devel \
             wayland-devel \
             libX11-devel \
             libXrandr-devel \
@@ -731,6 +810,7 @@ jobs:
             libva-devel \
             libvdpau-devel \
             libcap-devel \
+            libacl-devel \
             libcurl-devel \
             libevdev-devel \
             systemd-devel \
@@ -744,6 +824,18 @@ jobs:
             wget \
             nodejs \
             npm
+
+      - name: Check candidate upgrade ordering
+        run: |
+          case "$BRANCH" in
+            release/*-rc*)
+              test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+964c5fa'))}")" -gt 0
+              rc_number="${BRANCH##*-rc}"
+              if [ "$rc_number" -ge 3 ]; then
+                test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+20261026.rc2.f8ae5a5'))}")" -gt 0
+              fi
+              ;;
+          esac
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -767,6 +859,9 @@ jobs:
           echo "CUDAHOSTCXX=${host_cxx}" >> "${GITHUB_ENV}"
           echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
 
+      - name: Build pinned PyroWave SDK
+        run: bash scripts/build-pyrowave-sdk.sh
+
       - name: Configure CMake
         run: |
           # Must match where the RPM installs the assets (/usr/share/hermes);
@@ -774,11 +869,14 @@ jobs:
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_INSTALL_LIBDIR="$(rpm --eval '%{_lib}')" \
             -DSUNSHINE_ASSETS_DIR=share/hermes \
             -DSUNSHINE_ENABLE_WAYLAND=ON \
             -DSUNSHINE_ENABLE_X11=ON \
             -DSUNSHINE_ENABLE_DRM=ON \
-            -DCUDA_FAIL_ON_MISSING=ON
+            -DCUDA_FAIL_ON_MISSING=ON \
+            -DSUNSHINE_REQUIRE_PYROWAVE=ON \
+            -DSUNSHINE_BUNDLE_PYROWAVE=ON
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -810,6 +908,8 @@ jobs:
           License:        GPLv3
           URL:            https://github.com/MrOz59/Hermes
           Source0:        hermes-%{version}.tar.gz
+          # PyroWave loads Vulkan through volk; ELF scanning cannot guarantee it.
+          Requires:       vulkan-loader, libcap
 
           # The binary is built by the job above and only copied in %install, so
           # there are no sources for a debuginfo package to point at. Left on,
@@ -832,7 +932,7 @@ jobs:
           ${FILE_LIST}
 
           %post
-          setcap cap_sys_admin+p /usr/bin/hermes || true
+          setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p /usr/bin/hermes || true
           EOF
 
           rpmbuild -bb ~/rpmbuild/SPECS/hermes.spec
@@ -841,6 +941,13 @@ jobs:
       # The release jobs collect artifacts/**/*, so each leg needs its own
       # artifact name; the packages themselves are already distinct, since
       # %{?dist} stamps the release as .fc43 / .fc44.
+      - name: Install and test RPM with file capabilities
+        shell: bash
+        run: |
+          dnf install -y util-linux
+          dnf install -y ./hermes-*.rpm
+          bash scripts/tests/package-loader-smoke.sh "$(rpm --eval '%{_libdir}')/hermes"
+
       - name: Upload RPM
         uses: actions/upload-artifact@v4
         with:
@@ -859,7 +966,7 @@ jobs:
   # build job needs [test], this release cannot publish unless the suite passed.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-deb, build-arch-pkg, build-rpm]
+    needs: [build-deb, build-arch-pkg, build-rpm, package-loader]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -892,7 +999,7 @@ jobs:
   # commit so the release always points at the newest build.
   nightly:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [version, build-deb, build-arch-pkg, build-rpm]
+    needs: [version, build-deb, build-arch-pkg, build-rpm, package-loader]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -958,3 +1065,72 @@ jobs:
           prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # A release/<tag> branch builds and publishes a new immutable candidate only
+  # after the host suite, all native packages and the secure loader matrix pass.
+  release-candidate:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/') && contains(github.ref_name, '-rc')
+    needs: [version, test, build-deb, build-arch-pkg, build-rpm, package-loader]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+      - name: Prepare verified candidate payloads
+        env:
+          BUILD_VERSION: ${{ needs.version.outputs.build_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME#release/}"
+          [[ "$tag" =~ ^[a-z]+-[0-9]{4}-rc[0-9]+$ ]]
+          # Refuse to replace an already published candidate or an existing tag.
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" >/dev/null 2>&1; then
+            echo "Candidate ${tag} already exists; choose the next RC." >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}"; then
+            echo "Candidate tag ${tag} already exists; refusing to move it." >&2
+            exit 1
+          fi
+          current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${GITHUB_REF_NAME}" --jq .object.sha)"
+          test "$current_sha" = "$GITHUB_SHA"
+          mkdir payload
+          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) -exec cp -t payload -- {} +
+          test "$(find payload -name '*.deb' | wc -l)" -eq 2
+          test "$(find payload -name '*.rpm' | wc -l)" -eq 2
+          test "$(find payload -name 'hermes-streaming-*.pkg.tar.zst' | wc -l)" -ge 1
+          notes="docs/${tag}-notes.md"
+          test -s "$notes"
+          export RC_TAG="$tag"
+          printf 'RC_NOTES=%s\n' "$notes" >> "$GITHUB_ENV"
+          python3 - <<'PYTHON'
+          import hashlib, json, os
+          from pathlib import Path
+          payload = Path('payload')
+          files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(payload.iterdir())}
+          manifest = {
+              'tag': os.environ['RC_TAG'],
+              'source_commit': os.environ['GITHUB_SHA'],
+              'build_version': os.environ['BUILD_VERSION'],
+              'workflow_run': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              'validation': ['host-tests', 'fedora-43-44-secure-loader', 'ubuntu-24.04-26.04-secure-loader', 'installed-rpm-deb-non-root-startup'],
+              'payload_sha256': files,
+          }
+          (payload / 'RC_MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PYTHON
+          (cd payload && sha256sum *.deb *.rpm *.pkg.tar.zst RC_MANIFEST.json > SHA256SUMS)
+          printf 'RC_TAG=%s\n' "$tag" >> "$GITHUB_ENV"
+      - name: Publish tested release candidate
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RC_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: "Hermes — ${{ env.RC_TAG }}"
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          body_path: ${{ env.RC_NOTES }}
+          files: payload/*

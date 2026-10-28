@@ -901,6 +901,16 @@ namespace rtsp_stream {
     uint32_t encryption_flags_supported = SS_ENC_CONTROL_V2 | SS_ENC_AUDIO;
     uint32_t encryption_flags_requested = SS_ENC_CONTROL_V2;
 
+    // A client microphone is offered where a session mic exists, and always
+    // encrypted: it is heard by the session's applications.
+    const bool mic = !proc::proc.isolated_mic_source(
+                        session.isolated_runtime_owner_id ? session.isolated_runtime_owner_id : session.id
+    ).empty();
+    if (mic) {
+      encryption_flags_supported |= SS_ENC_MICROPHONE;
+      encryption_flags_requested |= SS_ENC_MICROPHONE;
+    }
+
     // Determine the encryption desired for this remote endpoint
     auto encryption_mode = net::encryption_mode_for_address(sock.remote_endpoint().address());
     if (encryption_mode != config::ENCRYPTION_MODE_NEVER) {
@@ -930,10 +940,20 @@ namespace rtsp_stream {
       ss << "a=rtpmap:98 AV1/90000"sv << std::endl;
     }
 
+    if (config::video.pyrowave && video::pyrowave_available()) {
+      ss << "a=rtpmap:98 PYROWAVE/90000"sv << std::endl;
+    }
+
     if (!session.surround_params.empty()) {
       // If we have our own surround parameters, advertise them twice first
       ss << "a=fmtp:97 surround-params="sv << session.surround_params << std::endl;
       ss << "a=fmtp:97 surround-params="sv << session.surround_params << std::endl;
+    }
+
+    if (mic) {
+      ss << "m=audio "sv << net::map_port(stream::MIC_STREAM_PORT) << " RTP/AVP 96"sv << std::endl;
+      ss << "a=rtpmap:96 opus/48000/1"sv << std::endl;
+      ss << "a=fmtp:96 minptime=10;useinbandfec=1"sv << std::endl;
     }
 
     for (int x = 0; x < audio::MAX_STREAM_CONFIG; ++x) {
@@ -991,6 +1011,9 @@ namespace rtsp_stream {
       port = net::map_port(stream::VIDEO_STREAM_PORT);
     } else if (type == "control"sv) {
       port = net::map_port(stream::CONTROL_PORT);
+    } else if (type == "mic"sv && config::audio.stream_mic) {
+      port = net::map_port(stream::MIC_STREAM_PORT);
+      session.enable_mic = true;
     } else {
       cmd_not_found(sock, session, std::move(req));
 
@@ -1101,7 +1124,18 @@ namespace rtsp_stream {
     // rather than whichever one the machine currently defaults to. Empty for
     // every session that shares the host's desktop, which leaves their capture
     // exactly as it was.
-    config.audio.session_sink = proc::proc.isolated_audio_sink(session.id);
+    //
+    // The runtime registry is keyed by the launch that started the session.
+    // A resumed stream arrives with a launch id of its own, so asking by
+    // session.id finds nothing, the sink comes back empty, and capture falls
+    // through to the host path - which moves the host's default sink onto the
+    // stream's virtual sink and takes the desktop's audio with it.
+    config.audio.session_sink = proc::proc.isolated_audio_sink(
+      session.isolated_runtime_owner_id ? session.isolated_runtime_owner_id : session.id
+    );
+    config.audio.session_server = proc::proc.isolated_audio_server(
+      session.isolated_runtime_owner_id ? session.isolated_runtime_owner_id : session.id
+    );
     try {
       config.audio.channels = util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
       config.audio.mask = util::from_view(args.at("x-nv-audio.surround.channelMask"sv));
@@ -1258,6 +1292,22 @@ namespace rtsp_stream {
       return;
     }
 
+    if (config.monitor.videoFormat == video::PYROWAVE_VIDEO_FORMAT &&
+        (!config::video.pyrowave || !video::pyrowave_available())) {
+      BOOST_LOG(warning) << "PyroWave is unavailable, yet the client requested PyroWave"sv;
+
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+
+    if (config.monitor.videoFormat == video::PYROWAVE_VIDEO_FORMAT &&
+        (config.monitor.dynamicRange != 0 || config.monitor.chromaSamplingType != 0)) {
+      BOOST_LOG(warning) << "PyroWave currently supports only 8-bit YUV 4:2:0 streams"sv;
+
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+
     // Check that any required encryption is enabled
     auto encryption_mode = net::encryption_mode_for_address(sock.remote_endpoint().address());
     if (encryption_mode == config::ENCRYPTION_MODE_MANDATORY &&
@@ -1268,6 +1318,16 @@ namespace rtsp_stream {
       return;
     }
 
+    if (session.enable_mic) {
+      if (config.encryptionFlagsEnabled & SS_ENC_MICROPHONE) {
+        config.mic_source = proc::proc.isolated_mic_source(
+          session.isolated_runtime_owner_id ? session.isolated_runtime_owner_id : session.id
+        );
+      } else {
+        BOOST_LOG(warning) << "Ignoring the microphone of ["sv << session.device_name << "]: it is not encrypted"sv;
+      }
+    }
+
     std::lock_guard<std::mutex> lifecycle_lock {session.lifecycle_mutex};
     if (session.cancelled.load(std::memory_order_acquire)) {
       BOOST_LOG(info) << "Rejecting RTSP ANNOUNCE for cancelled launch "
@@ -1276,6 +1336,7 @@ namespace rtsp_stream {
       return;
     }
 
+    config.gcmap = session.gcmap;
     auto stream_session = stream::session::alloc(config, session);
     server->insert(stream_session);
     if (stream::session::start(*stream_session, sock.remote_endpoint().address().to_string())) {
@@ -1386,3 +1447,4 @@ namespace rtsp_stream {
                      << "---End MessageBuffer---"sv << std::endl;
   }
 }  // namespace rtsp_stream
+

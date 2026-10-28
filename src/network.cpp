@@ -4,10 +4,14 @@
  */
 // standard includes
 #include <algorithm>
+#include <boost/asio.hpp>
+#include <cerrno>
 #include <cstring>
 #include <sstream>
 
-#include <boost/asio.hpp>
+#ifndef _WIN32
+  #include <fcntl.h>
+#endif
 
 // local includes
 #include "config.h"
@@ -156,13 +160,27 @@ namespace net {
     }
   }
 
-  host_t host_create(af_e af, ENetAddress &addr, std::uint16_t port) {
+  host_t host_create(af_e af, ENetAddress &addr, std::uint16_t port, boost::system::error_code *error_out) {
+    if (error_out) {
+      error_out->clear();
+    }
+    auto fail = [&](boost::system::error_code ec) {
+      if (error_out) {
+        *error_out = ec;
+      }
+      BOOST_LOG(error) << "Couldn't initialize ENet control host on ["sv
+                       << net::af_to_any_address_string(af) << ':' << port << "]: "
+                       << ec.message() << " (" << ec.category().name() << ':' << ec.value() << ')';
+    };
     static std::once_flag enet_init_flag;
+    static int enet_init_result;
     std::call_once(enet_init_flag, []() {
-      enet_initialize();
+      enet_init_result = enet_initialize();
     });
-
-    const auto any_addr = net::af_to_any_address_string(af);
+    if (enet_init_result != 0) {
+      fail(boost::system::errc::make_error_code(boost::system::errc::io_error));
+      return host_t {};
+    }
 
     // Build the wildcard address instead of resolving it. enet resolves names
     // through getaddrinfo with AI_ADDRCONFIG, which refuses to return "::" on a
@@ -190,20 +208,60 @@ namespace net {
     }
 
     // Maximum of 128 clients, which should be enough for anyone
+    errno = 0;
+#ifdef _WIN32
+    WSASetLastError(0);
+#endif
     auto host = host_t {enet_host_create(af == IPV4 ? AF_INET : AF_INET6, &addr, 128, 0, 0, 0)};
     if (!host) {
-      // enet returns null when it cannot create or bind the socket - the port
-      // being taken is the ordinary case. Callers handle a null host; reaching
-      // for its socket first turned that into a segfault at session start.
-      BOOST_LOG(error) << "Couldn't create an ENet host on ["sv << any_addr << ':' << port
-                       << "]; the port is most likely already in use."sv;
+      // Snapshot before logging can change the OS error. ENet can also fail
+      // allocating memory, so a null host alone does not prove EADDRINUSE.
+      const int allocation_error = errno;
+#ifdef _WIN32
+      const int socket_error = WSAGetLastError();
+#else
+      const int socket_error = allocation_error;
+#endif
+      if (socket_error) {
+        fail({socket_error, boost::system::system_category()});
+      } else if (allocation_error) {
+        fail({allocation_error, boost::system::generic_category()});
+      } else {
+        fail(boost::system::errc::make_error_code(boost::system::errc::io_error));
+      }
       return host;
+    }
+
+    // The bundled ENet creates sockets without close-on-exec. A helper
+    // launched during streaming must not keep our control port alive after
+    // the last session releases its ENet host.
+    boost::system::error_code ec;
+    if (!prevent_socket_inheritance(host->socket, ec)) {
+      fail(ec);
+      return host_t {};
     }
 
     // Enable opportunistic QoS tagging (automatically disables if the network appears to drop tagged packets)
     enet_socket_set_option(host->socket, ENET_SOCKOPT_QOS, 1);
 
     return host;
+  }
+
+  bool prevent_socket_inheritance(boost::asio::ip::udp::socket::native_handle_type socket, boost::system::error_code &error) {
+    error.clear();
+#ifdef _WIN32
+    if (!SetHandleInformation(reinterpret_cast<HANDLE>(socket), HANDLE_FLAG_INHERIT, 0)) {
+      error = {static_cast<int>(GetLastError()), boost::system::system_category()};
+      return false;
+    }
+#else
+    const int flags = fcntl(socket, F_GETFD);
+    if (flags == -1 || fcntl(socket, F_SETFD, flags | FD_CLOEXEC) == -1) {
+      error = {errno, boost::system::system_category()};
+      return false;
+    }
+#endif
+    return true;
   }
 
   bool udp_port_available(af_e af, std::uint16_t port) {

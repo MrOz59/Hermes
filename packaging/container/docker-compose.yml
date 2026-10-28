@@ -58,7 +58,10 @@ services:
     # Trade-off: /dev/hidraw* is intentionally NOT granted — its char major is
     # allocated dynamically, so it can't be whitelisted here. Basic controllers
     # (buttons / sticks / gyro / touchpad / basic rumble via uinput+uhid+evdev)
-    # still work; the hidraw-backed extras (DualSense adaptive triggers / LED /
+    # still work. Keep linux_gamepad_backend=auto: Xbox uses uinput so ordinary
+    # rumble does not depend on hidraw. Explicit native Xbox emulation loses
+    # rumble here unless device access is provisioned separately and narrowly.
+    # The hidraw-backed extras (DualSense adaptive triggers / LED /
     # HD rumble, Switch Pro) are given up in exchange for a much smaller surface.
     #
     # We deliberately do NOT bind-mount the host's /run/udev: the entrypoint runs

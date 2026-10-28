@@ -48,12 +48,14 @@ compositor rather than per distribution.
 
 ### KDE Plasma / KWin — verified
 
-The development target. Output activation goes through `kscreen-doctor`, and
-this is the only compositor where **exclusive mode**
-(`isolated_virtual_display_option`) is fully supported: it disables the physical
+The development target. Output activation goes through `kscreen-doctor`.
+**Exclusive mode** (`isolated_virtual_display_option`) disables the physical
 outputs for the duration of the session, restores them when it ends, and
 persists the previous layout so a crashed session can be recovered at next
-startup.
+startup; GNOME has the same since 0.6.0 (see below). KDE is also the only
+compositor with the `detached` layout added after 0.6.0, which enables and
+positions only the virtual output and issues no layout changes for the physical
+ones.
 
 **Touch and pen are bound to the streamed output.** KWin binds a touchscreen or
 a tablet to a single output, and without a binding it guesses: the built-in
@@ -120,8 +122,8 @@ the video path:
   for scanout. `ACQUIRE_FRAME` incorrectly re-exported the imported GEM wrapper
   instead of returning its original DMA-BUF. The wrapper has no shmem file for
   the consumer to pin, so the attach failed with `-EINVAL`, surfaced by EGL as
-  `EGL_BAD_ALLOC`. Hermes-KMS 0.3.2 returns the original DMA-BUF and carries a
-  regression test for this imported-scanout path.
+  `EGL_BAD_ALLOC`. Since 0.3.2 Hermes-KMS returns the original DMA-BUF and
+  carries a regression test for this imported-scanout path.
 
 Hermes now waits for Mutter to probe the connector and pushes the requested mode
 through `ApplyMonitorsConfig`. Because that call is all-or-nothing, every config
@@ -347,7 +349,7 @@ fails. All four were re-checked against 0.4.0 and all four are still absent:
 | --- | --- |
 | `CTM` | Hyprland's colour management commits a matrix on *every* state commit, even the identity one, so `failed to commit ctm: no ctm prop support` repeats per commit rather than per modeset |
 | `GAMMA_LUT` / `DEGAMMA_LUT` | `Couldn't get the gamma_size prop`; no gamma control, so `hyprsunset` cannot work on the virtual output |
-| `VRR_CAPABLE`, `HDR_OUTPUT_METADATA`, `Colorspace`, syncobj | reported unsupported at probe — no VRR, HDR or explicit sync |
+| `VRR_CAPABLE`, `HDR_OUTPUT_METADATA`, `Colorspace`, syncobj | reported unsupported at probe — no VRR, HDR or explicit sync. Driver 0.4.0 adds `HDR_OUTPUT_METADATA` and `Colorspace` when loaded with `hdr_enable=1`; that has not been tried under Hyprland |
 | `IN_FORMATS` | the primary plane advertises no modifier blob, so only implicit linear is available |
 
 The synthetic EDID is rejected as well: aquamarine parses it with
@@ -378,7 +380,10 @@ Hermes-KMS ships a VM test that runs real Weston DRM compositors on its cards,
 so the *driver* is known to work as a DRM device under Weston. Weston does not
 implement `wlr-output-management`, so Hermes has no way to activate the virtual
 output there — it would have to be configured by other means. Weston is used as
-a driver test harness, not as a supported streaming session.
+a driver test harness, not as a supported streaming session. The one exception
+is the experimental independent sessions, where Hermes starts Weston itself on a
+private card and sets the mode through `weston.ini` instead of activating an
+output in someone else's session.
 
 ## Distributions
 
@@ -413,8 +418,12 @@ headless sway session with audio and XWayland.
 | NVIDIA | NVENC | CPU copy | Contributed, see below |
 | any | software | either | Fallback |
 
-The zero-copy path is validated with `XRGB8888`, linear. NV12/P010 and HDR are
-not validated.
+The zero-copy path is validated with `XRGB8888`, linear. HDR10 capture
+(`XRGB2101010` and its three sibling layouts, encoded as P010) shipped in 0.6.0
+for the Hermes-KMS backend and is **under validation**: functional HDR on KDE
+has been user-reported on a TV, and colorimetry, latency and sustained sessions
+have not been measured — see [Hermes-KMS HDR10](hermes_kms_hdr.md) and the
+[HDR performance investigation](hdr-performance.md). EVDI has no HDR path.
 
 ### AMD zero-copy status
 
@@ -434,23 +443,41 @@ has been retired.
 DMA-BUFs reads the wrong pages beyond the first ones, so NVENC sessions capture
 through a CPU copy of the scanout buffer and feed the regular RAM-to-CUDA upload
 path, at the cost of one `memcpy` per frame. The copy waits on the framebuffer's
-exported write fence and brackets the read with `DMA_BUF_IOCTL_SYNC`. VAAPI is
-unaffected and keeps the validated zero-copy import.
+exported write fence and brackets the read with `DMA_BUF_IOCTL_SYNC`. Since
+0.6.0 the mapping is kept across frames and the copy runs in 2 MiB blocks
+(1.5 ms at 1440p, 3 ms at 4K, measured on a Ryzen 7 5700X), uploads come from
+page-locked memory, and one CUDA kernel writes NV12 or, for 10-bit and HDR10
+scanout, P010. VAAPI is unaffected and keeps the validated zero-copy import.
+A zero-copy NVIDIA path is being explored in
+[#66](https://github.com/MrOz59/Hermes/pull/66); it is not on `main`.
 
 ## Virtual display backends
 
-### Hermes-KMS (preferred)
+`virtual_display_backend` selects one. EVDI is the default; Hermes-KMS is
+opt-in and labeled experimental for now, and is expected to become the default
+once it leaves that status.
+
+### Hermes-KMS (experimental, opt-in)
 
 A purpose-built DRM/KMS driver. The compositor owns the card and scans out the
-desktop; Hermes opens its **render node** and pulls each frame as a DMA-BUF. No
-DRM master and no KMS access are needed, so it coexists with the compositor.
+desktop; Hermes opens its **render node** read-only and pulls each frame as a
+DMA-BUF. No DRM master and no KMS access are needed, so it coexists with the
+compositor.
 
-Requires the module loaded with `initial_enabled=0` and its card left on the
-active seat.
+Requires driver v0.4.0 or newer (Hermes refuses anything below UAPI 11), loaded
+with `initial_enabled=0` and its card left on the active seat. Hermes 0.6.0
+needs the `v0.4.0` tag specifically: driver `main` grants only read access to
+the render node, which 0.6.0 opens read-write — see the pairing table in the
+[README](../README.md#installing-the-hermes-kms-driver).
 
-### EVDI (alternative)
+Zero-copy capture on AMD/Intel, HDR10, multi-output, independent sessions,
+streaming before login and the driver's capture counters in diagnostics exist
+only on this backend.
 
-Capture goes through a CPU-side buffer filled by `libevdi`.
+### EVDI (default)
+
+The stable default. Capture goes through a CPU-side buffer filled by `libevdi`,
+and there is no HDR path.
 
 EVDI exposes **no render node** (confirmed 2026-08-16: an EVDI-only system has
 `card0`/`card1` and zero `renderD*` nodes). On a normal desktop this is
@@ -522,10 +549,17 @@ installed no compositor adopts the virtual output — KWin, Hyprland or any othe
 — which is usually reported as "the virtual display never appears at all". The
 rule is for isolated testing only; remove it for streaming.
 
-**Portrait modes above 2160 px tall are rejected.** The driver caps geometry at
-`HERMES_KMS_MAX_WIDTH` 3840 by `HERMES_KMS_MAX_HEIGHT` 2160, so a client asking
-for a portrait mode such as 1440x2560 fails validation with `-EINVAL`. This
-affects tablets and phones streaming in portrait orientation.
+**Mode limits come from module parameters.** Drivers up to 0.3.2 had a
+compiled-in 3840x2160 ceiling, which rejected portrait modes such as 1440x2560
+with `-EINVAL`. Since 0.4.0 the envelope is `min_width`, `min_height`,
+`max_width`, `max_height` and `max_refresh_hz`, with a default maximum of
+7680x4320, and a refused mode names the envelope the driver would have accepted.
+Raise a limit with the matching module option if a client needs more.
+
+**Hermes 0.6.0 cannot use driver `main`.** Driver `main` restricts the render
+node to read access, so Chromium/Electron's `O_RDWR` GPU probe skips it; 0.6.0
+still opens it read-write and gets `EACCES`. Pair 0.6.0 with the `v0.4.0` tag,
+or move to a nightly, which opens the node read-only.
 
 **Exclusive mode is implemented for KDE, GNOME and wlroots.** See
 [GNOME / Mutter](#gnome--mutter--video-and-input-verified). On Hyprland the question

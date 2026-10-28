@@ -202,6 +202,15 @@ TEST_F(HestiaCapabilitiesTest, AdvertisesOnlyBackendsAClientCanBeServedBy) {
   }
 }
 
+TEST_F(HestiaCapabilitiesTest, ReportsTheInstalledHermesVersion) {
+  // Clients show this as "Hermes <version>". It used to be a fixed
+  // "0.1.0-hermes" that never moved with releases, so every host claimed the
+  // same, wrong version. It must be the version the web UI and log report.
+  const auto version = confighttp::hestia_capabilities_json()["server_version"];
+  ASSERT_TRUE(version.is_string());
+  EXPECT_EQ(version.get<std::string>(), std::string {PROJECT_VERSION});
+}
+
 TEST(HestiaCapabilitiesSchema, IsValidatedByEveryKeywordItUses) {
   // Guards the guard: if the schema starts using a keyword the validator does
   // not implement, the document above would pass on a check that silently

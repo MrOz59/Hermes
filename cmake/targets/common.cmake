@@ -29,6 +29,11 @@ elseif(UNIX)
 endif()
 
 target_link_libraries(sunshine ${SUNSHINE_EXTERNAL_LIBRARIES} ${EXTRA_LIBS})
+if(PYROWAVE_FOUND AND SUNSHINE_BUNDLE_PYROWAVE AND UNIX AND NOT APPLE)
+    include(${CMAKE_MODULE_PATH}/targets/pyrowave-runtime.cmake)
+    sunshine_bundle_pyrowave_runtime(sunshine)
+endif()
+
 target_compile_definitions(sunshine PUBLIC ${SUNSHINE_DEFINITIONS})
 set_target_properties(sunshine PROPERTIES CXX_STANDARD 23
         VERSION ${PROJECT_VERSION}

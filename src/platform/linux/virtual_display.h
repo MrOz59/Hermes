@@ -717,7 +717,7 @@ namespace VDISPLAY {
    *
    * GNOME binds a touchscreen or tablet to a monitor through a key whose path
    * it derives from the device's vendor and product. These must be the ids
-   * inputtino gives Hermes' virtual devices, or the binding addresses a device
+   * libvirtualhid gives Hermes' virtual devices, or the binding addresses a device
    * that does not exist - which fails silently, since nothing errors and touch
    * input simply goes on being placed by guesswork.
    * `platf::VIRTUAL_INPUT_VENDOR_ID` is checked against these at compile time.
@@ -747,7 +747,7 @@ namespace VDISPLAY {
    *        touch and pen devices, as `<schema>:<path>`.
    *
    * Mutter derives the path from the device's vendor and product ids, so these
-   * only reach Hermes' devices while they match the ids inputtino is given.
+   * only reach Hermes' devices while they match the ids libvirtualhid is given.
    */
   void mutterInputDeviceSettingsTargets(std::string &touch, std::string &pen);
 
@@ -779,7 +779,7 @@ namespace VDISPLAY {
    * KWin keeps a device's settings, the output it is bound to among them, in a
    * kcminputrc group named after the device's vendor, product and name. The
    * display code has to address that group, so these are named here and
-   * inputtino is given the same constants.
+   * libvirtualhid is given the same constants.
    */
   constexpr const char *VIRTUAL_TOUCH_DEVICE_NAME = "Touch passthrough";
   constexpr const char *VIRTUAL_PEN_DEVICE_NAME = "Pen passthrough";

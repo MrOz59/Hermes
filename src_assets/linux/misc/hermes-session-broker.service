@@ -14,8 +14,10 @@ RestartSec=1s
 UMask=0077
 
 # This service creates user accounts, so it is confined harder than its
-# privilege suggests rather than softer. It reaches exactly three trees: the
-# account databases, the session homes it owns, and its own runtime lock.
+# privilege suggests rather than softer. Account/lease data reaches only the
+# account databases, its session homes, and its runtime lock. Device ACLs are
+# changed by fd only after verifying the exact virtual input identity in sysfs;
+# /dev is an API filesystem and remains accessible under ProtectSystem=strict.
 #
 # None of this reaches the sessions it starts. Those are transient units that
 # PID 1 starts on request, so they are confined by their own settings and not

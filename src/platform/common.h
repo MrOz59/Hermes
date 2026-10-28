@@ -75,6 +75,11 @@ namespace platf {
   // Limited by bits in activeGamepadMask
   constexpr auto MAX_GAMEPADS = 16;
 
+  /// The microphone source of the session that plays into sink.
+  inline std::string session_mic_source(std::string_view sink) {
+    return "source" + std::string {sink.substr(sink.find('-'))};
+  }
+
   constexpr std::uint32_t DPAD_UP = 0x0001;
   constexpr std::uint32_t DPAD_DOWN = 0x0002;
   constexpr std::uint32_t DPAD_LEFT = 0x0004;
@@ -513,6 +518,16 @@ namespace platf {
       return nullptr;
     }
 
+    /**
+     * @brief Make a device that converts captured frames into PyroWave's GPU planes.
+     *
+     * Only captures that hand frames over as GPU buffers can feed PyroWave
+     * without a copy through system memory, so the default is none.
+     */
+    virtual std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() {
+      return nullptr;
+    }
+
     virtual bool is_hdr() {
       return false;
     }
@@ -552,6 +567,15 @@ namespace platf {
     virtual capture_e sample(std::vector<float> &frame_buffer) = 0;
 
     virtual ~mic_t() = default;
+  };
+
+  /// Feeds a client's microphone into a session mic.
+  class mic_writer_t {
+  public:
+    /// Never blocks: samples that do not fit are dropped.
+    virtual void write(const std::int16_t *samples, int count) = 0;
+
+    virtual ~mic_writer_t() = default;
   };
 
   class audio_control_t {
@@ -642,6 +666,15 @@ namespace platf {
    * @return The display_t instance based on hwdevice_type.
    */
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
+
+#ifdef __linux__
+  /**
+   * @brief A display with no screen behind it, for validating encoders.
+   * @details It captures nothing; validation encodes only the synthetic frames
+   * it fills in, so no monitor or virtual output is needed or touched.
+   */
+  std::shared_ptr<display_t> encoder_probe_display(mem_type_e hwdevice_type, const video::config_t &config);
+#endif
 
   // A list of names of displays accepted as display_name with the mem_type_e
   std::vector<std::string> display_names(mem_type_e hwdevice_type);
@@ -1026,3 +1059,4 @@ namespace platf {
   appliance_readiness();
 
 }  // namespace platf
+

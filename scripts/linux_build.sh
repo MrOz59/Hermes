@@ -227,6 +227,7 @@ function add_debian_based_deps() {
     "git"
     "graphviz"
     "libcap-dev"  # KMS
+    "libacl1-dev"  # Per-device session input ACLs
     "libcurl4-openssl-dev"
     "libdrm-dev"  # KMS
     "libevdev-dev"
@@ -289,6 +290,7 @@ function add_fedora_deps() {
     "graphviz"
     "libappstream-glib"
     "libcap-devel"
+    "libacl-devel"
     "libcurl-devel"
     "libdrm-devel"
     "libevdev-devel"

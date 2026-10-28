@@ -174,15 +174,17 @@ namespace input {
     input_t(
       safe::mail_raw_t::event_t<input::touch_port_t> touch_port_event,
       platf::feedback_queue_t feedback_queue,
-      const std::string &session_tag
+      const std::string &session_tag,
+      std::shared_ptr<platf::input_t> injected_platform = {},
+      std::unique_ptr<platf::client_input_t> injected_client = {}
     ):
         platform_input {
-          session_tag.empty() ?
+          injected_platform ? std::move(injected_platform) : session_tag.empty() ?
             shared_platform_input :
             std::make_shared<platf::input_t>(platf::input(session_tag))
         },
         shortcutFlags {},
-        client_context {platf::allocate_client_input_context(*platform_input)},
+        client_context {injected_client ? std::move(injected_client) : platf::allocate_client_input_context(*platform_input)},
         touch_port_event {std::move(touch_port_event)},
         feedback_queue {std::move(feedback_queue)},
         mouse_left_button_timeout {},
@@ -198,7 +200,8 @@ namespace input {
     std::shared_ptr<platf::input_t> platform_input;
     task_pool_util::TaskPool::task_id_t key_press_repeat_id {};
     std::unordered_map<key_press_id_t, bool> key_press {};
-    std::array<std::uint8_t, 5> mouse_press {};
+    // Protocol mouse buttons are one-based, including BUTTON_X2 == 5.
+    std::array<std::uint8_t, 6> mouse_press {};
 
     // Keep track of alt+ctrl+shift key combo
     int shortcutFlags;
@@ -218,6 +221,9 @@ namespace input {
 
     int32_t accumulated_vscroll_delta;
     int32_t accumulated_hscroll_delta;
+
+    // Moves of the client's connect-time wiggle still to drop (isolated only).
+    int wake_wiggle_left = 0;
   };
 
   /**
@@ -471,8 +477,22 @@ namespace input {
       return;
     }
 
+    const auto dx = util::endian::big(packet->deltaX);
+    const auto dy = util::endian::big(packet->deltaY);
+
+    // moonlight-common-c wiggles the mouse (+1,+1 then -1,-1) right after
+    // connecting to wake the display. In gamescope that shows the cursor.
+    if (input->wake_wiggle_left) {
+      const int step = input->wake_wiggle_left == 2 ? 1 : -1;
+      if (dx == step && dy == step) {
+        --input->wake_wiggle_left;
+        return;
+      }
+      input->wake_wiggle_left = 0;
+    }
+
     input->mouse_left_button_timeout = DISABLE_LEFT_BUTTON_DELAY;
-    platf::move_mouse(*input->platform_input, util::endian::big(packet->deltaX), util::endian::big(packet->deltaY));
+    platf::move_mouse(*input->platform_input, dx, dy);
   }
 
   /**
@@ -1726,9 +1746,28 @@ namespace input {
           // already released
           continue;
         }
-        platf::keyboard_update(*input->platform_input, vk_from_kpid(kp.first) & 0x00FF, true, flags_from_kpid(kp.first));
+        platf::keyboard_update(*input->platform_input, map_keycode(vk_from_kpid(kp.first) & 0x00FF), true, flags_from_kpid(kp.first));
         input->key_press[kp.first] = false;
       }
+
+      for (auto &gamepad : input->gamepads) {
+        if (gamepad.back_timeout_id) {
+          task_pool.cancel(gamepad.back_timeout_id);
+          gamepad.back_timeout_id = nullptr;
+        }
+        if (gamepad.id >= 0) {
+          platf::gamepad_update(*input->platform_input, gamepad.id, {});
+          platf::gamepad_touch(*input->platform_input, {{gamepad.id, 0}, LI_TOUCH_EVENT_CANCEL_ALL});
+        }
+        gamepad.gamepad_state = {};
+        gamepad.back_button_state = button_state_e::NONE;
+      }
+      const auto &port = input->touch_port.device_port;
+      platf::touch_update(input->client_context.get(), port, {.eventType = LI_TOUCH_EVENT_CANCEL_ALL});
+      platf::pen_update(input->client_context.get(), port, {.eventType = LI_TOUCH_EVENT_CANCEL_ALL});
+      input->shortcutFlags = 0;
+      input->key_press_repeat_id = nullptr;
+      input->mouse_left_button_timeout = nullptr;
     });
   }
 
@@ -1746,8 +1785,11 @@ namespace input {
   }
 
   bool probe_gamepads() {
-    auto input = static_cast<platf::input_t *>(shared_platform_input->get());
-    const auto gamepads = platf::supported_gamepads(input);
+    if (!shared_platform_input) {
+      return true;
+    }
+    // supported_gamepads expects the owning handle, not its backend payload.
+    const auto gamepads = platf::supported_gamepads(shared_platform_input.get());
     for (auto &gamepad : gamepads) {
       if (gamepad.is_enabled && gamepad.name != "auto") {
         return false;
@@ -1756,9 +1798,42 @@ namespace input {
     return true;
   }
 
+  /**
+   * @brief Plug in the gamepads the client reported at launch.
+   *
+   * Clients announce a gamepad only with its first input, so until then the
+   * session sees none. A fixed gamepad type needs nothing from that
+   * announcement; with "auto" the type comes from it, so wait for it.
+   */
+  void attach_launch_gamepads(std::shared_ptr<input_t> &input, int mask) {
+    if (!config::input.controller || config::input.gamepad == "auto"sv) {
+      return;
+    }
+
+    for (int nr = 0; nr < (int) input->gamepads.size(); ++nr) {
+      auto &gamepad = input->gamepads[nr];
+      if (!(mask & (1 << nr)) || gamepad.id >= 0) {
+        continue;
+      }
+
+      auto id = alloc_id(gamepadMask);
+      if (id < 0) {
+        return;
+      }
+
+      if (platf::alloc_gamepad(*input->platform_input, {id, (uint8_t) nr}, {}, input->feedback_queue)) {
+        free_id(gamepadMask, id);
+        return;
+      }
+
+      gamepad.id = id;
+    }
+  }
+
   std::shared_ptr<input_t> alloc(
     safe::mail_t mail,
-    const std::string &session_tag
+    const std::string &session_tag,
+    int launch_gamepads
   ) {
     auto input = std::make_shared<input_t>(
       mail->event<input::touch_port_t>(mail::touch_port),
@@ -1766,13 +1841,44 @@ namespace input {
       session_tag
     );
 
-    // Workaround to ensure new frames will be captured when a client connects
-    task_pool.pushDelayed([input]() {
-      platf::move_mouse(*input->platform_input, 1, 1);
-      platf::move_mouse(*input->platform_input, -1, -1);
-    },
-                          100ms);
+    if (launch_gamepads) {
+      task_pool.push([input, launch_gamepads]() mutable {
+        attach_launch_gamepads(input, launch_gamepads);
+      });
+    }
+
+    // Workaround to ensure new frames will be captured when a client connects.
+    //
+    // Not for an isolated session. Its capture reads the framebuffer the
+    // session's Hermes-KMS card holds and repeats the last image when nothing
+    // changes, so there is nothing to wake. And the nudge is real input on the
+    // session's own seat, which Gamescope answers by showing its cursor in the
+    // middle of Steam's gamepad UI before the client has moved anything (#57).
+    // The client's own connect-time wiggle is dropped for the same reason.
+    if (!session_tag.empty()) {
+      input->wake_wiggle_left = config::input.isolated_ignore_mouse_wiggle ? 2 : 0;
+    } else {
+      task_pool.pushDelayed([input]() {
+        platf::move_mouse(*input->platform_input, 1, 1);
+        platf::move_mouse(*input->platform_input, -1, -1);
+      },
+                            100ms);
+    }
 
     return input;
   }
+
+#ifdef SUNSHINE_TESTS
+  std::shared_ptr<input_t> alloc_for_testing(
+    safe::mail_t mail,
+    std::shared_ptr<platf::input_t> platform,
+    std::unique_ptr<platf::client_input_t> client
+  ) {
+    return std::make_shared<input_t>(
+      mail->event<input::touch_port_t>(mail::touch_port),
+      mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback),
+      std::string {}, std::move(platform), std::move(client)
+    );
+  }
+#endif
 }  // namespace input

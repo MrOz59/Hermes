@@ -1,8 +1,10 @@
 # HDR performance investigation
 
-The September 2026 development build has user-reported working KDE HDR on a TV,
+The HDR10 capture that shipped in 0.6.0 (on the Hermes-KMS backend, which is
+opt-in and labeled experimental) has user-reported working KDE HDR on a TV,
 working exclusive output switching on TV/mobile, and successful HDR/SDR toggles
-across the tested application paths. This is functional feedback, not latency,
+across the tested application paths, from the September 2026 development builds
+that became that release. This is functional feedback, not latency,
 colorimetric or cross-device certification. Isolated GBM presentation remains a
 separate unverified path.
 
@@ -69,8 +71,9 @@ cached, as it would be right after the compositor wrote it.
 
 ## Conclusion
 
-Functional HDR is working in the reported tests; performance remains an open
-release gate. The evidence establishes higher host processing cost and frequent
+Functional HDR is working in the reported tests; performance remains open, and
+the follow-up reports are tracked in
+[#56](https://github.com/MrOz59/Hermes/issues/56). The evidence establishes higher host processing cost and frequent
 client recovery, not an HDR-specific packet corruption defect or a proven single
 root cause. Do not suppress recovery requests or change stream pacing speculatively:
 that could hide lost reference frames or increase latency. Further attribution

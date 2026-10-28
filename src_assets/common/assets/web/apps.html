@@ -417,6 +417,50 @@
           </select>
           <div class="form-text">{{ $t('apps.session_type_desc') }}</div>
         </div>
+        <!-- gamescope flags for isolated application sessions -->
+        <div class="mb-3" v-if="platform === 'linux' && editForm['session-type'] !== 'desktop'">
+          <label for="gamescopeSteamMode" class="form-label">{{ $t('apps.gamescope_steam_mode') }}</label>
+          <select id="gamescopeSteamMode" class="form-select" v-model="editForm['gamescope-steam-mode']">
+            <option value="auto">{{ $t('apps.gamescope_steam_mode_auto') }}</option>
+            <option value="on">{{ $t('apps.gamescope_steam_mode_on') }}</option>
+            <option value="off">{{ $t('apps.gamescope_steam_mode_off') }}</option>
+          </select>
+          <div class="form-text">{{ $t('apps.gamescope_steam_mode_desc') }}</div>
+        </div>
+        <div class="mb-3" v-if="platform === 'linux' && editForm['session-type'] !== 'desktop'">
+          <label for="gamescopeArgs" class="form-label">{{ $t('apps.gamescope_args') }}</label>
+          <input type="text" class="form-control monospace" id="gamescopeArgs" v-model="editForm['gamescope-args']"
+                 placeholder="--expose-wayland --force-windows-fullscreen" />
+          <div class="form-text">{{ $t('apps.gamescope_args_desc') }}</div>
+        </div>
+        <!-- how long an isolated session has to show its first frame -->
+        <div class="mb-3" v-if="platform === 'linux'">
+          <label for="firstFrameTimeout" class="form-label">{{ $t('apps.session_first_frame_timeout') }}</label>
+          <input type="number" class="form-control monospace" id="firstFrameTimeout" aria-describedby="firstFrameTimeoutHelp"
+                 v-model="editForm['first-frame-timeout']" min="0" max="600" placeholder="0" />
+          <div id="firstFrameTimeoutHelp" class="form-text">{{ $t('apps.session_first_frame_timeout_desc') }}</div>
+        </div>
+        <!-- what isolated sessions see of the host's /dev -->
+        <div class="mb-3" v-if="platform === 'linux'">
+          <label for="stopDesktopSteam" class="form-label">{{ $t('apps.stop_desktop_steam') }}</label>
+          <select id="stopDesktopSteam" class="form-select" v-model="editForm['stop-desktop-steam']">
+            <option value="auto">{{ $t('apps.stop_desktop_steam_auto') }}</option>
+            <option value="on">{{ $t('apps.isolate_on_plain') }}</option>
+            <option value="off">{{ $t('apps.isolate_off') }}</option>
+          </select>
+          <div class="form-text">{{ $t('apps.stop_desktop_steam_desc') }}</div>
+        </div>
+        <template v-for="field in ['isolate-devices', 'isolate-sound']" :key="field">
+          <div class="mb-3" v-if="platform === 'linux'">
+            <label :for="field" class="form-label">{{ $t('apps.' + field.replace('-', '_')) }}</label>
+            <select :id="field" class="form-select" v-model="editForm[field]">
+              <option value="auto">{{ $t('apps.isolate_auto') }}</option>
+              <option value="on">{{ $t('apps.isolate_on') }}</option>
+              <option value="off">{{ $t('apps.isolate_off') }}</option>
+            </select>
+            <div class="form-text">{{ $t('apps.' + field.replace('-', '_') + '_desc') }}</div>
+          </div>
+        </template>
         <!-- use app identity -->
         <Checkbox class="mb-3"
                   id="useAppIdentity"
@@ -581,6 +625,12 @@
     "virtual-display-layout": "auto",
     "unlock-host-session": false,
     "session-type": "auto",
+    "gamescope-steam-mode": "auto",
+    "gamescope-args": "",
+    "first-frame-timeout": 0,
+    "isolate-devices": "auto",
+    "isolate-sound": "auto",
+    "stop-desktop-steam": "auto",
     "terminate-on-pause": false,
     "gamepad": ""
   }
@@ -951,6 +1001,7 @@
         }
         this.editForm["exit-timeout"] = parseInt(this.editForm["exit-timeout"]) || 5
         this.editForm["scale-factor"] = parseInt(this.editForm["scale-factor"]) || 100
+        this.editForm["first-frame-timeout"] = Math.min(600, Math.max(0, parseInt(this.editForm["first-frame-timeout"]) || 0))
         this.editForm["image-path"] = this.editForm["image-path"].toString().trim().replace(/"/g, '');
         delete this.editForm.id;
         delete this.editForm.launching;

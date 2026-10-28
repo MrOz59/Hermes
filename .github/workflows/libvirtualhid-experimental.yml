@@ -1,0 +1,365 @@
+name: libvirtualhid Linux input
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main, release/october-integration]
+  push:
+    branches:
+      - experimental/libvirtualhid-input
+      - experimental/isolated-session-improvements
+      - release/october-integration
+      - main
+
+permissions:
+  contents: read
+  actions: read
+
+# Only the newest integration commit needs a full compiler and adapter run.
+concurrency:
+  group: hermes-libvirtualhid-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  artifacts:
+    name: Check whether compiled test inputs changed
+    runs-on: ubuntu-24.04
+    outputs:
+      run_id: ${{ steps.reuse.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .github/workflows/libvirtualhid-experimental.yml
+            scripts/tests/test_input_artifact_reuse.mjs
+      - name: Test artifact provenance and compiler recipe invalidation
+        run: node scripts/tests/test_input_artifact_reuse.mjs
+      - uses: actions/github-script@v7
+        id: reuse
+        with:
+          script: |
+            core.setOutput('run_id', '');
+            if (context.eventName === 'workflow_dispatch') return;
+            if (!context.ref.startsWith('refs/heads/')) return;
+            const {owner, repo} = context.repo;
+            const workflowPath = '.github/workflows/libvirtualhid-experimental.yml';
+            const readWorkflow = async ref => {
+              const response = await github.rest.repos.getContent({owner, repo, path: workflowPath, ref});
+              if (response.data.type !== 'file' || response.data.encoding !== 'base64') return null;
+              return Buffer.from(response.data.content, 'base64').toString('utf8');
+            };
+            const compilerRecipe = text => {
+              if (text === null) return null;
+              const lines = text.replace(/\r\n/g, '\n').split('\n');
+              let inJobs = false;
+              const starts = lines.flatMap((line, index) => {
+                if (/^[^\s#]/.test(line)) inJobs = line === 'jobs:';
+                return inJobs && line === '  linux:' ? [index] : [];
+              });
+              if (starts.length !== 1) return null;
+              const start = starts[0];
+              let end = start + 1;
+              while (end < lines.length && !/^  [\w-]+:\s*$/.test(lines[end]) &&
+                     !/^[^\s#]/.test(lines[end])) ++end;
+              const compiler = lines.slice(start, end).filter(line =>
+                line !== '    needs: artifacts' && line !== "    if: needs.artifacts.outputs.run_id == ''").join('\n');
+              // Unrecognized cross-job/template inputs require a fresh build.
+              if (compiler.includes('$' + '{{') || compiler.includes('needs.')) return null;
+              let ignored = false;
+              inJobs = false;
+              const recipe = lines.filter(line => {
+                if (/^[^\s#]/.test(line)) {
+                  inJobs = line === 'jobs:';
+                  ignored = false;
+                }
+                const job = /^  ([\w-]+):\s*$/.exec(line);
+                if (inJobs && job) ignored = ['artifacts', 'broker', 'kernel'].includes(job[1]);
+                return !ignored;
+              }).join('\n');
+              // Aliases could pull changed values from an ignored runtime job.
+              if (/(^|[\s:])[&*][\w-]+/.test(recipe)) return null;
+              return recipe;
+            };
+            const currentRecipe = compilerRecipe(await readWorkflow(context.sha));
+            if (currentRecipe === null) return;
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner, repo, workflow_id: 'libvirtualhid-experimental.yml',
+              branch: context.ref.slice('refs/heads/'.length),
+              status: 'completed', per_page: 8
+            });
+            for (const run of runs.data.workflow_runs) {
+              const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+                owner, repo, run_id: run.id
+              });
+              if (!artifacts.data.artifacts.some(a =>
+                a.name === 'libvirtualhid-linux-input-tests' && !a.expired)) continue;
+              const comparison = await github.rest.repos.compareCommits({
+                owner, repo, base: run.head_sha, head: context.sha
+              });
+              // Only this runtime harness and these migration notes may differ.
+              // Source, dependency, CMake or compiled test changes rebuild.
+              const runtimeOnly = new Set([
+                '.github/workflows/libvirtualhid-experimental.yml',
+                'scripts/session-broker-test.sh',
+                'scripts/session-broker-concurrency-test.py',
+                'scripts/tests/test_input_artifact_reuse.mjs',
+                'docs/libvirtualhid-experimental.md',
+                'docs/libvirtualhid-merge-handoff.md'
+              ]);
+              if (!['ahead', 'identical'].includes(comparison.data.status) ||
+                  comparison.data.merge_base_commit.sha !== run.head_sha ||
+                  !comparison.data.files ||
+                  !comparison.data.files.every(f =>
+                    runtimeOnly.has(f.filename) &&
+                    ['modified', 'added'].includes(f.status))) continue;
+              // The workflow also contains build flags, dependency installation
+              // and the compiler image. Those must match, even for a YAML-only edit.
+              if (compilerRecipe(await readWorkflow(run.head_sha)) !== currentRecipe) continue;
+              core.info(`Reusing passing build/tests from run ${run.id}, commit ${run.head_sha}`);
+              core.setOutput('run_id', String(run.id));
+              return;
+            }
+
+  broker:
+    name: Session accounts and automatic input ACLs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install broker dependencies and virtual input module
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-13 libacl1-dev acl libsdl2-dev pkg-config libboost-log-dev libgtest-dev
+          extra_modules="linux-modules-extra-$(uname -r)"
+          if apt-cache show "$extra_modules" >/dev/null 2>&1; then
+            sudo apt-get install -y --no-install-recommends "$extra_modules"
+          fi
+          sudo modprobe uinput
+          sudo modprobe uhid
+          test -c /dev/uinput
+          test -c /dev/uhid
+      - name: Compile the privileged broker independently of the streaming host
+        run: |
+          mkdir -p build
+          g++-13 -std=c++20 -O2 -Wall -Wextra -Werror \
+            tools/hermes-session-broker.cpp tools/session-broker-input.cpp \
+            -lacl -o build/hermes-session-broker
+      - name: Compile and test broker RPCs, worker bounds and ACLs independently
+        env:
+          HERMES_TEST_REQUIRE_UNIX_SOCKETS: "1"
+        run: |
+          g++-13 -std=c++23 -O0 -Wall -Wextra -Werror \
+            -DBOOST_LOG_DYN_LINK -DHERMES_TEST_SESSION_INPUT=1 -I . \
+            tests/consumers/linux_session_broker_test_logging.cpp \
+            src/platform/linux/session_broker.cpp src/platform/linux/session_broker_transport.cpp \
+            tools/session-broker-input.cpp \
+            tests/unit/platform/test_session_broker_client.cpp \
+            tests/unit/platform/test_session_broker_workers.cpp \
+            tests/unit/platform/test_session_broker_lock.cpp \
+            tests/unit/platform/test_session_input_access.cpp \
+            -lgtest_main -lgtest -lboost_log -lboost_thread -lboost_filesystem \
+            -lboost_regex -lboost_chrono -lboost_atomic -lacl -pthread \
+            -o build/hermes-session-broker-tests
+          build/hermes-session-broker-tests --gtest_color=yes
+      - name: Test real accounts, hotplug, restart and per-seat revocation
+        run: |
+          python3 scripts/session-broker-concurrency-test.py "$PWD/build/hermes-session-broker"
+          sudo udevadm verify src_assets/linux/misc/99-hermes-session-input.rules
+          sudo scripts/session-broker-test.sh "$PWD/build/hermes-session-broker"
+      - name: Broker journal
+        if: always()
+        run: sudo journalctl -u hermes-session-broker --no-pager -n 120
+
+  linux:
+    needs: artifacts
+    if: needs.artifacts.outputs.run_id == ''
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    timeout-minutes: 55
+    name: Linux input (libvirtualhid)
+    steps:
+      - name: Install Linux build dependencies
+        run: |
+          # A transient mirror download must not discard a full compiler run.
+          # Refresh/upgrade and install in one transaction, with a bounded retry.
+          for attempt in 1 2 3; do
+            if pacman -Syu --noconfirm --needed \
+              base-devel git cmake ninja boost openssl opus ffmpeg \
+              libdrm wayland libx11 libxrandr libxfixes libxcb \
+              libxi libxtst libxss libxcursor libxkbcommon wayland-protocols \
+              libva libvdpau libcap curl libevdev libinput sdl2 systemd \
+              miniupnpc libpulse qt6-base qt6-svg npm nodejs \
+              icu numactl acl util-linux pipewire pipewire-pulse wireplumber; then
+              break
+            fi
+            if [[ "$attempt" == 3 ]]; then
+              exit 1
+            fi
+            echo "::warning::Arch mirror download failed; refreshing and retrying ($attempt/3)"
+            sleep 5
+          done
+
+      - name: Checkout Hermes
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Allow checkout path
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Configure Hermes
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSUNSHINE_ENABLE_WAYLAND=ON \
+            -DSUNSHINE_ENABLE_X11=ON \
+            -DSUNSHINE_ENABLE_DRM=ON \
+            -DSUNSHINE_ENABLE_CUDA=OFF \
+            -DBUILD_TESTS=ON
+
+      - name: Compile Hermes and input tests
+        id: compile
+        run: cmake --build build --target sunshine test_sunshine hermes-session-broker -j2
+
+      - name: Test Hermes input translation and per-client feedback
+        working-directory: build/tests
+        env:
+          HERMES_TEST_REQUIRE_UNIX_SOCKETS: "1"
+        run: ./test_sunshine --gtest_color=yes --gtest_filter='ProcessGroupTest.*:ServiceLifecycleTest.*:VirtualHidInputTest.*:SessionBrokerLockTest.*:SessionBrokerWorkersTest.*:SessionBrokerClientTest.*:SessionBrokerPolicyTest.*:SessionInputAccessTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*:GamescopeSession.*:ClientMicRouterTest.*:IsolatedRuntimeConcurrencyTest.*'
+
+      - name: Test concurrent private audio servers and resumed capture
+        if: "!cancelled() && steps.compile.outcome == 'success'"
+        timeout-minutes: 3
+        env:
+          HERMES_TEST_REQUIRE_PRIVATE_AUDIO: "1"
+        run: ./build/tests/test_sunshine --gtest_color=yes --gtest_filter='SessionAudioLiveTest.*'
+
+      - name: Configure pinned libvirtualhid tests
+        run: |
+          cmake -S build/_deps/hermes_libvirtualhid-src \
+            -B cmake-build-libvirtualhid-tests -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=ON \
+            -DBUILD_DOCS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DLIBVIRTUALHID_BUILD_TOOLS=OFF \
+            -DLIBVIRTUALHID_INSTALL=OFF \
+            -DLIBVIRTUALHID_ENABLE_PACKAGING=OFF
+
+      - name: Compile libvirtualhid tests
+        run: cmake --build cmake-build-libvirtualhid-tests --target test_libvirtualhid -j2
+
+      - name: Test state adapters and isolated-session identity
+        run: |
+          cmake-build-libvirtualhid-tests/tests/test_libvirtualhid \
+            --gtest_color=yes \
+            --gtest_filter='-LinuxConsumerTest.*:LinuxRuntimeTest.*'
+
+      # Kernel prerequisites are exercised in the dedicated job below, not
+      # asserted in this container without /dev/uinput or /dev/uhid.
+      - name: Upload kernel-test binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: libvirtualhid-linux-input-tests
+          path: |
+            build/tests/test_sunshine
+            build/tests/hermes-hid-consumer
+            cmake-build-libvirtualhid-tests/tests/test_libvirtualhid
+          if-no-files-found: error
+          retention-days: 3
+
+  kernel:
+    name: Kernel devices and unprivileged input access
+    needs: [artifacts, linux]
+    if: ${{ always() && (needs.linux.result == 'success' || (needs.linux.result == 'skipped' && needs.artifacts.outputs.run_id != '')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libvirtualhid-linux-input-tests
+          run-id: ${{ needs.artifacts.outputs.run_id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Load the disposable runner's virtual input modules
+        run: |
+          sudo apt-get update
+          extra_modules="linux-modules-extra-$(uname -r)"
+          if apt-cache show "$extra_modules" >/dev/null 2>&1; then
+            sudo apt-get install -y --no-install-recommends "$extra_modules"
+          fi
+          for module in uinput uhid; do
+            sudo modprobe "$module" || {
+              echo "::error::Required virtual input module $module is unavailable on $(uname -r)"
+              exit 1
+            }
+            test -c "/dev/$module" || {
+              echo "::error::Required character device /dev/$module was not created"
+              exit 1
+            }
+          done
+          for module in hid_playstation hid_nintendo hid_sony; do
+            sudo modprobe "$module" || echo "::notice::Optional HID driver $module is unavailable"
+          done
+      - name: Provide the Nintendo driver required for native evdev button validation
+        run: |
+          if ! sudo modprobe hid_nintendo; then
+            # Azure kernels omit this driver. Build it against the running
+            # kernel's exact headers instead of suppressing the profile test.
+            sudo apt-get install -y --no-install-recommends build-essential "linux-headers-$(uname -r)"
+            driver_root="$RUNNER_TEMP/hermes-hid-nintendo"
+            mkdir -p "$driver_root"
+            kernel_series=$(uname -r | cut -d. -f1,2)
+            for source in hid-nintendo.c hid-ids.h; do
+              curl --fail --location --retry 3 \
+                "https://raw.githubusercontent.com/torvalds/linux/v${kernel_series}/drivers/hid/$source" \
+                -o "$driver_root/$source"
+            done
+            printf 'obj-m += hid-nintendo.o\n' > "$driver_root/Makefile"
+            make -C "/lib/modules/$(uname -r)/build" M="$driver_root" modules -j2
+            sudo install -Dm644 "$driver_root/hid-nintendo.ko" \
+              "/lib/modules/$(uname -r)/updates/hermes-ci/hid-nintendo.ko"
+            sudo depmod -a
+            sudo modprobe hid_nintendo
+          fi
+          test -d /sys/module/hid_nintendo
+      - name: Give the container exclusive udev ownership of the disposable guest devices
+        run: |
+          # Both daemons would otherwise chmod/chgrp the same /dev nodes with
+          # different distro GIDs, racing ACLs and the packaged-rule assertions.
+          sudo systemctl stop systemd-udevd.service systemd-udevd-control.socket systemd-udevd-kernel.socket
+          ! systemctl is-active --quiet systemd-udevd.service
+      - name: Test real kernel devices, per-seat routing and non-root rumble
+        run: |
+          docker run --rm --privileged \
+            -v /dev:/dev \
+            -v "$GITHUB_WORKSPACE:/__w/Hermes/Hermes" \
+            -v /lib/modules:/lib/modules:ro \
+            -w /__w/Hermes/Hermes \
+            -e GCOV_PREFIX=/tmp/hermes-test-coverage \
+            archlinux:latest bash -euo pipefail -c '
+              pacman -Syu --noconfirm
+              pacman -S --noconfirm --needed base-devel ffmpeg openssl opus libdrm \
+                wayland libx11 libxrandr libxfixes libxcb libxi libxtst libxss \
+                libxcursor libxkbcommon libva libvdpau libcap \
+                curl libevdev libinput sdl2 systemd miniupnpc libpulse qt6-base \
+                qt6-svg icu numactl acl util-linux kmod
+              chmod +x build/tests/test_sunshine build/tests/hermes-hid-consumer \
+                cmake-build-libvirtualhid-tests/tests/test_libvirtualhid
+              for binary in build/tests/test_sunshine build/tests/hermes-hid-consumer \
+                cmake-build-libvirtualhid-tests/tests/test_libvirtualhid; do
+                hermes_dependencies=$(ldd "$binary")
+                if grep -q "not found" <<< "$hermes_dependencies"; then
+                  echo "Missing runtime dependencies for $binary:"
+                  echo "$hermes_dependencies"
+                  exit 1
+                fi
+              done
+              /usr/lib/systemd/systemd-udevd --daemon
+              scripts/vm-isolated-input-test.sh "$PWD/build/tests/test_sunshine"
+              cmake-build-libvirtualhid-tests/tests/test_libvirtualhid \
+                --gtest_color=yes \
+                --gtest_filter="LinuxRuntimeTest.*:LinuxConsumerTest.InputEventPreference*"
+            '

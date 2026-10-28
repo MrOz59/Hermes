@@ -423,6 +423,15 @@ const validateFallbackMode = (event) => {
               default="true"
     ></Checkbox>
 
+    <!-- Client microphone into independent sessions -->
+    <Checkbox v-if="platform === 'linux'"
+              class="mb-3"
+              id="stream_mic"
+              locale-prefix="config"
+              v-model="config.stream_mic"
+              default="false"
+    ></Checkbox>
+
     <AdapterNameSelector
         :platform="platform"
         :config="config"

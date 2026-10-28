@@ -1,0 +1,27 @@
+name: Package secure loader
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  loader:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['fedora:43', 'fedora:44', 'ubuntu:24.04', 'ubuntu:26.04']
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Install fixture dependencies
+        run: |
+          if command -v dnf >/dev/null; then
+            dnf install -y git gcc cmake binutils libcap util-linux shadow-utils
+          else
+            apt-get update
+            apt-get install -y git gcc cmake binutils libcap2-bin util-linux passwd
+          fi
+      - uses: actions/checkout@v4
+      - name: Test the production install rule with capabilities
+        run: bash scripts/tests/pyrowave-runtime-loader.sh

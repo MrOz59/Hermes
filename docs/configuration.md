@@ -473,7 +473,10 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            The type of gamepad to emulate on the host.
+            The type of gamepad to emulate on the host. On Linux, auto uses the client-reported
+            controller type (PlayStation to DualSense, Nintendo to Switch Pro, Xbox to Xbox Series).
+            Unknown types can select DualSense from motion/touchpad capabilities; otherwise Xbox
+            Series is used. A manual selection overrides client detection.
         </td>
     </tr>
     <tr>
@@ -489,14 +492,18 @@ editing the `conf` file in a text editor. Use the examples as reference.
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="6">Choices</td>
+        <td rowspan="7">Choices</td>
+        <td>generic</td>
+        <td>Generic HID gamepad
+            @note{This option applies to Linux only.}</td>
+    </tr>
+    <tr>
         <td>ds4</td>
-        <td>DualShock 4 controller (PS4)
-            @note{This option applies to Windows only.}</td>
+        <td>DualShock 4 controller (PS4)</td>
     </tr>
     <tr>
         <td>ds5</td>
-        <td>DualShock 5 controller (PS5)
+        <td>DualSense controller (PS5)
             @note{This option applies to Linux only.}</td>
     </tr>
     <tr>
@@ -506,14 +513,36 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
     <tr>
         <td>x360</td>
-        <td>Xbox 360 controller
-            @note{This option applies to Windows only.}</td>
+        <td>Xbox 360 controller</td>
     </tr>
     <tr>
         <td>xone</td>
         <td>Xbox One controller
             @note{This option applies to Linux only.}</td>
     </tr>
+    <tr>
+        <td>xseries</td>
+        <td>Xbox Series controller
+            @note{This option applies to Linux only.}</td>
+    </tr>
+</table>
+
+### linux_gamepad_backend
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">Linux controller creation policy. Auto preserves ordinary evdev rumble
+            without hidraw access for Xbox controllers and uses native HID for PlayStation/Switch.
+            Native exposes advanced capabilities, but consuming games need access to the generated
+            hidraw device. Uinput restricts automatic selection to Xbox Series; manually selected
+            PlayStation/Switch profiles require auto or native. This option does not change other platforms.</td>
+    </tr>
+    <tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr>
+    <tr><td>Example</td><td colspan="2">@code{} linux_gamepad_backend = auto @endcode</td></tr>
+    <tr><td rowspan="3">Choices</td><td>auto</td><td>Input events for Xbox; native HID for PlayStation/Switch</td></tr>
+    <tr><td>native</td><td>Prefer native HID and advanced features</td></tr>
+    <tr><td>uinput</td><td>Input-event controllers only, without hidraw requirements</td></tr>
 </table>
 
 ### ds4_back_as_touchpad_click
@@ -522,9 +551,10 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Allow Select/Back inputs to also trigger DS4 touchpad click. Useful for clients looking to
+            Allow Select/Back inputs to also trigger a PlayStation touchpad click. Useful for clients looking to
             emulate touchpad click on Xinput devices.
-            @hint{Only applies when gamepad is set to ds4 manually. Unused in other gamepad modes.}
+            @hint{On Linux this applies to DS4, DS5 and automatically selected PlayStation profiles.
+            On Windows it applies when ds4 is selected manually.}
         </td>
     </tr>
     <tr>
@@ -548,7 +578,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Description</td>
         <td colspan="2">
             If a client reports that a connected gamepad has motion sensor support, emulate it on the
-            host as a DS4 controller.
+            host as a PlayStation-style controller (DualSense on Linux, DS4 on Windows).
             <br>
             <br>
             When disabled, motion sensors will not be taken into account during gamepad type selection.
@@ -576,7 +606,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Description</td>
         <td colspan="2">
             If a client reports that a connected gamepad has a touchpad, emulate it on the host
-            as a DS4 controller.
+            as a PlayStation-style controller (DualSense on Linux, DS4 on Windows).
             <br>
             <br>
             When disabled, touchpad presence will not be taken into account during gamepad type selection.
@@ -597,14 +627,16 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
-### ds5_inputtino_randomize_mac
+### virtualhid_randomize_mac
 
 <table>
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Randomize the MAC-Address for the generated virtual controller.
-            @hint{Only applies on linux for gamepads created as PS5-style controllers}
+            Randomize the MAC address for virtual DualShock 4 and DualSense controllers on Linux.
+            When disabled, deterministic identities remain scoped to the isolated session.
+            Older ds5_virtualhid_randomize_mac and ds5_inputtino_randomize_mac keys are accepted;
+            an explicitly supplied virtualhid_randomize_mac value takes precedence.
         </td>
     </tr>
     <tr>
@@ -616,10 +648,13 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            ds5_inputtino_randomize_mac = enabled
+            virtualhid_randomize_mac = enabled
             @endcode</td>
     </tr>
 </table>
+
+The former `ds5_inputtino_randomize_mac` key is accepted as a compatibility
+alias; new configurations should use the key above.
 
 ### back_button_timeout
 
@@ -845,6 +880,31 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### isolated_ignore_mouse_wiggle
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Moonlight-based clients move the mouse by one pixel and back right after connecting to wake the host
+            display. In an isolated gamescope session that is real motion and shows the cursor until the app hides it.
+            When enabled, Hermes drops that +1,+1 / -1,-1 move if it is the first mouse input of an isolated session.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            isolated_ignore_mouse_wiggle = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### enable_input_only_mode
 
 <table>
@@ -1048,6 +1108,33 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example</td>
         <td colspan="2">@code{}
             stream_audio = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### stream_mic
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Offer clients microphone passthrough (Apollo's protocol; Moonlight forks such as Artemis
+            builds that support it). The microphone reaches an independent client session only, as
+            the only source of that session's private audio server; it never reaches the host's
+            desktop. Experimental.
+            @note{Applies to Linux independent client sessions (hermes_kms_isolated_sessions).}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            stream_mic = enabled
             @endcode</td>
     </tr>
 </table>
@@ -1300,6 +1387,12 @@ editing the `conf` file in a text editor. Use the examples as reference.
             <code>evdi</code> (stable default), <code>hermes_kms</code> (zero-copy, experimental), or
             <code>none</code>.
             <br><br>
+            Several features exist only with <code>hermes_kms</code>: zero-copy capture on AMD/Intel,
+            HDR10 on a virtual display, <code>hermes_kms_multi_output</code>,
+            <code>hermes_kms_isolated_sessions</code>, streaming before login, and the driver's
+            capture counters in diagnostics. It needs Hermes-KMS v0.4.0 or newer; Hermes does not fall
+            back to EVDI when it is selected but unavailable.
+            <br><br>
             <code>none</code> is for a host that has no virtual-display device and does not want one,
             because the output it streams already exists - a headless compositor session is the usual
             case. It also stops Hermes reporting readiness problems for a driver that host never uses.
@@ -1423,9 +1516,12 @@ editing the `conf` file in a text editor. Use the examples as reference.
             to prevent.
 
             Requires a Hermes-KMS driver speaking UAPI 11 or newer and its
-            session-seat udev rule, <code>gamescope</code>, the chosen session
-            compositor, and one packaged
-            <code>hermes-kms-seatd@N.service</code> private broker per device.
+            session-seat udev rule, a <code>gamescope</code> that can scan out
+            on another device than it renders with (<code>--prefer-drm</code>
+            or <code>--drm-device</code>, as in Hermes' own Gamescope build),
+            the chosen session compositor, and one packaged
+            <code>hermes-kms-seatd@N.service</code> private broker per device,
+            which <code>hermes-kms-setup</code> configures for the Hermes user.
             The Hermes user must be a member of the <code>seat</code> group.
             Hermes maps device N to
             <code>/run/hermes-kms-seatd/N/seatd.sock</code>.
@@ -1460,11 +1556,18 @@ editing the `conf` file in a text editor. Use the examples as reference.
             virtual_display_backend = hermes_kms
             hermes_kms_isolated_sessions = true
             @endcode
-            Load the driver with:
+            Install the driver's broker (<code>hermes-kms-seatd-git</code>, or
+            <code>sudo make INSTALL_BROKER=1 dkms-install</code> from a clone)
+            and configure the session pool as the user Hermes runs as:
             @code{}
-            initial_enabled=0 devices=2 outputs=1
-            sudo systemctl enable --now hermes-kms-seatd@1.service hermes-kms-seatd@2.service
+            sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto
             @endcode
+            That configures one seat0 host card plus private session cards
+            (four by default, <code>--session-devices N</code> for up to eight)
+            and starts their brokers, asking for one reboot when a different
+            module topology is already loaded. Joining the <code>seat</code> group and
+            enabling <code>hermes-kms-seatd@N.service</code> by hand is no
+            longer needed; the helper removes that older enablement.
             A driver with UAPI 12 or newer can create cards at runtime instead,
             so the pool no longer has to be sized in advance. That is what the
             packaged card broker is for: with it enabled, an exhausted pool is
@@ -1568,9 +1671,9 @@ editing the `conf` file in a text editor. Use the examples as reference.
             @note{The <code>labwc</code> profile sets the mode the client asked
             for with <code>wlr-randr</code>, which is a separate package. It is
             best-effort: without it the session still starts, but keeps whatever
-            mode wlroots preferred, which on a Hermes-KMS card up to 0.5.0 is
-            the larger of the two modes the driver marks preferred rather than
-            the one that was asked for.}
+            mode wlroots preferred. Hermes-KMS 0.4.0 and later mark only the
+            requested mode preferred, so that is normally the right one; drivers
+            up to 0.3.2 marked two and the larger won.}
         </td>
     </tr>
     <tr>
@@ -2681,6 +2784,43 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example</td>
         <td colspan="2">@code{}
             ignore_encoder_probe_failure = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### pyrowave
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Advertise the experimental PyroWave Vulkan codec to compatible Hestia clients. The codec is intra-only,
+            currently supports SDR YUV 4:2:0, and is intended for high-bandwidth LAN streaming. This option is only
+            effective when Hermes was built with the optional @code{pyrowave-shared} dependency and a compatible
+            Vulkan device is available.
+            <br><br>
+            On Linux the captured image is converted to YCbCr with OpenGL and the encoder reads the result through
+            Vulkan. On a host that encodes with VAAPI (AMD and Intel) the capture's GPU buffers are used in place,
+            without a copy through system memory. On a host that encodes with NVENC, Hermes-KMS virtual displays are
+            captured with a CPU copy and uploaded to the GPU for the conversion. If the GPU cannot share buffers
+            between OpenGL and Vulkan, a capture into system memory is converted on the CPU instead, which costs
+            several milliseconds per frame and more than a 4K frame at 60 fps allows.
+            <br><br>
+            A frame larger than the stream's forward error correction can protect (about 1.2 MB with the default
+            @code{fec_percentage}) is sent without it, so bitrates above roughly 550 Mbps at 60 fps are more
+            sensitive to packet loss.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            pyrowave = enabled
             @endcode</td>
     </tr>
 </table>
@@ -3813,3 +3953,4 @@ editing the `conf` file in a text editor. Use the examples as reference.
   <summary></summary>
   [TOC]
 </details>
+

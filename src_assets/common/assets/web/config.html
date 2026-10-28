@@ -175,10 +175,11 @@
             options: {
               "controller": "enabled",
               "gamepad": "auto",
+              "linux_gamepad_backend": "auto",
               "ds4_back_as_touchpad_click": "enabled",
               "motion_as_ds4": "enabled",
               "touchpad_as_ds4": "enabled",
-              "ds5_inputtino_randomize_mac": "enabled",
+              "virtualhid_randomize_mac": "enabled",
               "back_button_timeout": -1,
               "keyboard": "enabled",
               "key_repeat_delay": 500,
@@ -188,6 +189,7 @@
               "mouse": "enabled",
               "high_resolution_scrolling": "enabled",
               "native_pen_touch": "enabled",
+              "isolated_ignore_mouse_wiggle": "enabled",
               "enable_input_only_mode": "disabled",
               "forward_rumble": "enabled",
               "keybindings": "[0x10,0xA0,0x11,0xA2,0x12,0xA4]",  // todo: add this to UI
@@ -200,6 +202,7 @@
               "audio_sink": "",
               "virtual_sink": "",
               "stream_audio": "enabled",
+              "stream_mic": "disabled",
               "install_steam_audio_drivers": "enabled",
               "keep_sink_default": "enabled",
               "auto_capture_sink": "enabled",
@@ -272,6 +275,7 @@
               "envvar_compatibility_mode": "disabled",
               "legacy_ordering": "disabled",
               "ignore_encoder_probe_failure": "disabled",
+              "pyrowave": "disabled",
               "hevc_mode": 0,
               "av1_mode": 0,
               "capture": "",
@@ -588,3 +592,4 @@
 
   initApp(app);
 </script>
+

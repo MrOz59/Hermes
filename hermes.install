@@ -1,5 +1,5 @@
 do_setcap() {
-    setcap cap_sys_admin+p /usr/bin/hermes
+    setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p /usr/bin/hermes
 }
 
 do_udev_reload() {

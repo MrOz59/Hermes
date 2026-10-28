@@ -49,7 +49,12 @@ namespace net {
 
   net_e from_address(const std::string_view &view);
 
-  host_t host_create(af_e af, ENetAddress &addr, std::uint16_t port);
+  // Optional error output describes initialization/socket failures without
+  // assuming that every ENet failure is a port conflict. Cleared on success.
+  host_t host_create(af_e af, ENetAddress &addr, std::uint16_t port, boost::system::error_code *error = nullptr);
+
+  // Apply to every streaming socket, including the Asio video/audio sockets.
+  bool prevent_socket_inheritance(boost::asio::ip::udp::socket::native_handle_type socket, boost::system::error_code &error);
 
   /**
    * @brief Whether a UDP port can still be bound on this host.

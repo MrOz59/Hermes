@@ -103,10 +103,28 @@ namespace proc {
     // shared: legacy marker; rejected while isolation is enabled.
     // application/desktop: force the corresponding isolated profile.
     std::string session_type;
+    // Isolated sessions only: how long the compositor has to put its first
+    // frame on the session's card. Zero picks the profile's default.
+    std::chrono::seconds first_frame_timeout {0};
     // auto: extend the virtual display beside the physical outputs and follow
     // the global exclusive option. extend/detached/mirror/exclusive: force that
     // layout for this app's session, overriding the global option.
     std::string virtual_display_layout;
+    // Isolated application sessions only. auto: on when the command's program
+    // is steam. on: gamescope's Steam mode (-e) with games on their own
+    // Xwayland. off: plain gamescope with one Xwayland.
+    std::string gamescope_steam_mode;
+    // Isolated application sessions only. Replaces the default optional
+    // gamescope flags when not empty; Hermes still sets backend, card and mode.
+    std::string gamescope_args;
+    // Isolated sessions only, auto/on/off. A private /dev without the host's
+    // input, USB, camera and sound devices; and no /dev/snd. auto: when Hermes
+    // can (capabilities), on: refuse to start without it.
+    std::string isolate_devices;
+    std::string isolate_sound;
+    // Isolated sessions only, auto/on/off. Shut down a Steam client running
+    // outside Hermes before the session starts; auto: when cmd runs steam.
+    std::string stop_desktop_steam;
     int  scale_factor;
     std::chrono::seconds exit_timeout;
   };
@@ -218,6 +236,12 @@ namespace proc {
      *        shares the host's.
      */
     std::string isolated_audio_sink(uint32_t launch_session_id);
+
+    /** The audio server an isolated session's sink lives in, or empty for the host's. */
+    std::string isolated_audio_server(uint32_t launch_session_id);
+
+    /** The source playing the client's microphone to an isolated session, or empty. */
+    std::string isolated_mic_source(uint32_t launch_session_id);
 
     /** Reattach launch metadata to a still-running client runtime. */
     bool prepare_isolated_resume(

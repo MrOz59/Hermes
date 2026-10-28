@@ -158,6 +158,29 @@ If the input is still not working, you may need to add your user to the `input` 
 sudo usermod -aG input $USER
 ```
 
+### Hermes-KMS virtual display
+Hermes-KMS is opt-in (`virtual_display_backend = hermes_kms`) and labeled experimental; EVDI is the default. The
+driver has to match the Hermes build — see the pairing table in the
+[README](../README.md#installing-the-hermes-kms-driver).
+
+* **`UAPI <n> is too old; need 11`** — the loaded driver predates v0.4.0. Install v0.4.0 or newer and reboot if
+  `make dkms-install` says an older module is still loaded.
+* **Hermes 0.6.0 cannot open the Hermes-KMS device after a driver update** — driver `main` grants only read access
+  to the render node, and 0.6.0 opens it read-write, so the open fails with `EACCES`. Install the driver's `v0.4.0`
+  tag, or move Hermes to a nightly.
+* **Chrome, Discord or other Electron apps freeze while Hermes-KMS is loaded** — they picked the capture-only render
+  node as their GPU ([#63](https://github.com/MrOz59/Hermes/issues/63)). Driver `main` with a Hermes nightly fixes it
+  by keeping that node read-only. If you installed the temporary `99-hermes-kms-uaccess.rules` workaround from the
+  driver's issue #6, remove it.
+* **The virtual display never appears** — the driver's development `99-hermes-kms-ignore-seat.rules` hides the card
+  from every compositor; remove it for streaming.
+* **The desktop extends onto a black output at boot** — an `initial_enabled=1` in `/etc/modprobe.d/hermes-kms.conf`,
+  left by an older package or written by hand, overrides the packaged default. Set it to `0`;
+  `cat /sys/module/hermes_kms/parameters/initial_enabled` shows what is loaded.
+* **An HDR request streams SDR** — the log says why: the output does not offer HDR (load the driver with
+  `hdr_enable=1 color_depth=10`), or the driver does not report frame colour (it needs UAPI 14, i.e. v0.4.0 or newer).
+  See [Hermes-KMS HDR10](hermes_kms_hdr.md).
+
 ### KMS Streaming fails
 If screencasting fails with KMS, you may need to run the following to force unprivileged screencasting.
 

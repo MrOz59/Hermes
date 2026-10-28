@@ -93,6 +93,15 @@
     "per_client_app_identity_desc": "Separa a identidade do aplicativo por cliente. Útil quando você quer usar esse aplicativo com configurações de monitores virtuais diferentes para cada cliente",
     "run_as_desc": "Isso pode ser necessário para alguns aplicativos que exigem permissões de administrador para serem executados corretamente.",
     "save_failed": "Falha ao salvar o aplicativo: ",
+    "gamescope_args": "Flags do Gamescope",
+    "gamescope_args_desc": "Somente para sessões de aplicativo independentes. Substitui as flags padrão mostradas no exemplo; deixe vazio para mantê-las. O Hermes sempre define o backend, o card, a resolução e a taxa de atualização. Flags definidas aqui sobrepõem o --xwayland-count do modo Steam.",
+    "gamescope_steam_mode": "Modo Steam do Gamescope",
+    "gamescope_steam_mode_auto": "Automático (ligado quando o comando executa o steam)",
+    "gamescope_steam_mode_desc": "Somente para sessões de aplicativo independentes. O modo Steam (-e, jogos em um segundo Xwayland) deixa o Steam escolher o aplicativo visível e mostrar seu overlay. Janelas sem um app ID do Steam não recebem foco nesse modo, então deixe desligado para programas que não sejam do Steam.",
+    "gamescope_steam_mode_off": "Desligado",
+    "gamescope_steam_mode_on": "Ligado",
+    "session_first_frame_timeout": "Prazo do primeiro quadro (segundos)",
+    "session_first_frame_timeout_desc": "Somente para sessões independentes por cliente. Quanto tempo a sessão tem para mostrar o primeiro quadro antes de a inicialização falhar. 0 usa o padrão: 30 segundos para uma sessão de aplicativo, 5 para uma sessão de desktop. Aumente para aplicativos que demoram a desenhar, como a interface de controle do Steam.",
     "session_type": "Perfil de sessão experimental",
     "session_type_desc": "Usado somente quando as sessões independentes por cliente estão ativadas. Automático inicia uma sessão Gamescope apenas com o aplicativo quando existe um comando, ou um desktop Weston quando não existe.",
     "session_type_auto": "Automático (recomendado)",
@@ -339,6 +348,8 @@
     "hevc_mode_2": "O Hermes anunciará o suporte ao perfil principal HEVC",
     "hevc_mode_3": "O Hermes anunciará o suporte aos perfis HEVC Main e Main10 (HDR)",
     "hevc_mode_desc": "Permite que o cliente solicite transmissões de vídeo HEVC Main ou HEVC Main10. A codificação do HEVC consome mais CPU, portanto, ativar essa opção pode reduzir o desempenho ao usar a codificação de software.",
+    "pyrowave": "PyroWave (Experimental)",
+    "pyrowave_desc": "Anuncia o codec Vulkan PyroWave opcional para clientes Hestia. Requer uma compilação com pyrowave-shared e é destinado a streaming em LAN de alta largura de banda.",
     "hide_tray_controls": "Esconder controles no ícone de bandeja",
     "hide_tray_controls_desc": "Não exibir \"Forçar fechamento\", \"Reiniciar\" e \"Sair\" do menu do ícone de bandeja.",
     "high_resolution_scrolling": "Suporte à rolagem de alta resolução",
@@ -634,3 +645,4 @@
     "login_success": "Essa página vai recarregar automaticamente em breve."
   }
 }
+

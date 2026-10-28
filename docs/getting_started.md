@@ -116,12 +116,21 @@ session; only the kernel module has to exist on the host. See
 
 A virtual display needs a kernel module, installed separately from Hermes:
 
-- **Hermes-KMS** (default, zero-copy) — <https://github.com/MrOz59/Hermes-KMS>,
-  installed through DKMS. The overview covers the install and the
-  `initial_enabled=0` module option it needs.
-- **EVDI** — the supported alternative, selected automatically when Hermes-KMS
-  is unavailable. On Arch it lives in the AUR (`paru -S evdi`), not the official
-  repositories, so no package depends on it.
+- **EVDI** — the default `virtual_display_backend` and the stable backend. On
+  Arch it lives in the AUR (`paru -S evdi`), not the official repositories, so
+  no package depends on it.
+- **Hermes-KMS** (zero-copy, opt-in with `virtual_display_backend = hermes_kms`,
+  labeled experimental for now) — <https://github.com/MrOz59/Hermes-KMS>,
+  installed through DKMS. Hermes 0.6.0 needs the driver's `v0.4.0` tag; a
+  nightly works with `v0.4.0` or `main`.
+  [The overview](../README.md#installing-the-hermes-kms-driver) covers the
+  install and the `initial_enabled=0` module option it needs. Hermes does not
+  fall back to EVDI on its own when Hermes-KMS is selected but unavailable.
+
+Several features exist only on Hermes-KMS: zero-copy capture on AMD/Intel,
+HDR10 on a virtual display, multi-output, independent sessions and streaming
+before login — see
+[What needs Hermes-KMS](../README.md#what-needs-hermes-kms).
 
 The Audio/Video settings tab shows a live diagnostic and a step-by-step install
 guide when either driver is missing.
@@ -146,7 +155,7 @@ needed for a binary you built yourself, or after the capability was removed.
 
 ##### Enable
 ```bash
-sudo setcap cap_sys_admin+p $(readlink -f $(which hermes))
+sudo setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p $(readlink -f $(which hermes))
 ```
 
 #### X11 Capture
@@ -245,8 +254,11 @@ something on it is missing. What can be left is outside Hermes:
    greeter, so the per-session grant to `/dev/uinput` does not reach Hermes:
    `sudo usermod -aG input $USER`, then reboot.
 3. **The virtual display without a session.** Hermes-KMS is the only virtual
-   display this has been run with; `sudo hermes-kms-setup configure --user
-   auto` gives your user its device regardless of who is logged in.
+   display this has been run with, so set `virtual_display_backend =
+   hermes_kms`. `sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user
+   auto` gives your user its device regardless of who is logged in; the helper
+   comes with the driver's optional broker (`hermes-kms-seatd-git`, or
+   `sudo make INSTALL_BROKER=1 dkms-install` from a clone).
 
 `hermes --prelogin disable` goes back to starting Hermes with the graphical
 session, and turns lingering off again if `enable` was what turned it on. A
@@ -460,7 +472,13 @@ All shortcuts start with `Ctrl+Alt+Shift`, just like Moonlight.
 * If inputs (mouse, keyboard, gamepads...) aren't working after connecting, add the user running hermes to the `input` group.
 
 ### HDR Support
-Streaming HDR content is officially supported on Windows hosts and experimentally supported for Linux hosts.
+Streaming HDR content is experimental on Linux hosts. The Windows notes below are inherited from upstream Sunshine;
+Hermes does not publish or exercise a Windows build.
+
+On a Hermes-KMS virtual display, HDR10 capture targets AMD through VAAPI (Intel shares the path but is untested) and
+NVIDIA through NVENC, by way of the CPU copy that backend always uses there. It needs `virtual_display_backend = hermes_kms`, Hermes-KMS
+v0.4.0 or newer loaded with `hdr_enable=1 color_depth=10`, HDR enabled for the virtual output in KDE, and HDR enabled
+in the client; EVDI has no HDR path. See [Hermes-KMS HDR10](hermes_kms_hdr.md).
 
 * General HDR support information and requirements:
 

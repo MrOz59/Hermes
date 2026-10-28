@@ -358,14 +358,72 @@ When `hermes_kms_isolated_sessions` is enabled, each application can select a
   where the session runs as the Hermes user, or as a unit bound to the
   session's where the session broker gave it a user of its own.
 
+An `application` session runs
+`gamescope --backend=drm -W -H -w -h -r <client mode> <scanout option> <card> <steam mode> <flags> -O <connector> -- <cmd>`,
+where the scanout option is whichever of `--prefer-drm` or `--drm-device` the
+installed Gamescope lists in its `--help` (see
+[experimental-isolated-gamescope.md](experimental-isolated-gamescope.md)).
+Three fields tune it:
+
+- `gamescope-steam-mode`: `auto` (default) turns Steam mode on when the
+  command's program is `steam`; `on`/`off` force it. Steam mode passes
+  `-e --xwayland-count 2`: Steam then picks the visible app and draws its
+  overlay, and games run on their own Xwayland so the overlay cannot take
+  their X focus (Wine games minimize when it does). Windows without a Steam
+  app ID cannot take focus in Steam mode. Off passes `--xwayland-count 1`.
+- `gamescope-args`: replaces the default
+  `--expose-wayland --force-windows-fullscreen`; empty keeps it. These flags
+  come after the Steam mode ones, so e.g. `--xwayland-count 1` overrides it.
+  Like `cmd` here, the line is split on whitespace; quotes are not interpreted.
+- `first-frame-timeout` (seconds, `0` by default): how long the session has to
+  show its first frame before the launch fails. `0` means 30 seconds for the
+  `application` profile and 5 for `desktop`.
+
+Both profiles take two fields for what the session sees of the host's `/dev`
+(sessions running as the Hermes user; values `auto` (default), `on`, `off`):
+
+- `isolate-devices`: the session runs in its own mount namespace with a
+  private `/dev`: basic nodes, the GPUs (`/dev/dri`), `pts`, `shm`, `uinput`,
+  `fuse`, `ntsync`, and in `/dev/input` (and `hidraw`) only the session
+  client's devices and the Valve virtual pads Steam Input makes inside the
+  session, added as they appear. The host's controllers, keyboards, USB
+  devices and cameras are absent, and the client's devices and the session's
+  Valve virtual devices are closed to the desktop (they get the session's
+  seat, and no ACL). A uinput device does not record who made it, so a Valve
+  device counts as the session's only while no process outside it, Hermes
+  aside, holds `/dev/uinput`. Hermes needs
+  `cap_sys_admin,cap_mknod,cap_sys_chroot+p`; `auto` runs without isolation
+  (with a warning) when they are missing, `on` refuses to start.
+- `isolate-sound`: no `/dev/snd`, so applications only reach sound through
+  the session's own audio server.
+
+`stop-desktop-steam` (`auto`, `on`, `off`; `auto` when `cmd` runs `steam`):
+Steam runs once per user and hands a second launch to the running client. If
+the pid in `~/.steam/steam.pid` is a live Steam outside Hermes' sessions,
+Hermes sends it SIGTERM (it logs off and saves its settings, usually in a few
+seconds) before starting the session, and kills it and its children if it is
+still running after 30 seconds.
+
 The `desktop` profile is currently a reference Weston desktop, not a complete
 Plasma session. To use the shared host session, disable
 `hermes_kms_isolated_sessions`; mixing shared and isolated app profiles in one
 server is intentionally rejected by this prototype. These values have no
-effect while independent client sessions are disabled. Before launching, start
-one packaged `hermes-kms-seatd@N.service` for every configured Hermes-KMS
-device; Hermes assigns the corresponding private broker socket to the
-compositor automatically.
+effect while independent client sessions are disabled. Before launching,
+configure the driver's private-seat broker for the Hermes user with
+`sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto`, which starts
+one broker per session card; Hermes assigns the corresponding private broker
+socket to the compositor automatically.
+
+```json
+{
+  "name": "Steam Big Picture",
+  "cmd": "steam -gamepadui",
+  "session-type": "application",
+  "gamescope-steam-mode": "auto",
+  "isolate-devices": "on",
+  "first-frame-timeout": 45
+}
+```
 
 #### Linux (Flatpak)
 

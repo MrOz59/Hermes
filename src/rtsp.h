@@ -47,6 +47,7 @@ namespace rtsp_stream {
 
     bool input_only;
     bool host_audio;
+    bool enable_mic {};  ///< The client set up a microphone stream.
     int width;
     int height;
     int fps;

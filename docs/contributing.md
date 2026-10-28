@@ -167,6 +167,33 @@ Cases that need hardware the machine does not have skip themselves. The Wayland 
 > [!TIP]
 > See the googletest [FAQ](https://google.github.io/googletest/faq.html) for more information on how to use Google Test.
 
+#### Network lifecycle tests without a GPU
+
+A focused target compiles the production `src/network.cpp` and runs the socket
+and shared-resource tests without the capture/encoder dependencies or a display
+server. It covers failed startup cleanup, repeated reconnects, OS error reporting,
+and executed helpers retaining control, video, or audio sockets. Linux clipboard
+tests also exercise the actual helper pipe code with deliberately inheritable
+sockets, full-size/empty content, failed commands, and broken pipes. The target supplements the full suite;
+it does not exercise RTSP negotiation, capture, or actual client sessions.
+
+On Ubuntu, install `cmake`, `ninja-build`, `libboost-log-dev`,
+`libboost-system-dev`, and `nlohmann-json3-dev`, then run:
+
+```bash
+git submodule update --init third-party/googletest third-party/moonlight-common-c
+git -C third-party/moonlight-common-c submodule update --init enet
+cmake -S tests/network_lifecycle -B build-network -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug -DHERMES_TEST_SANITIZERS=ON
+cmake --build build-network --parallel 2
+ctest --test-dir build-network --output-on-failure
+```
+
+The `Network lifecycle regressions` workflow runs this target with AddressSanitizer,
+UndefinedBehaviorSanitizer, and leak detection. In environments that block
+LeakSanitizer's process inspection, `ASAN_OPTIONS=detect_leaks=0` allows the other
+sanitizers to run; leak detection must still run on an unrestricted CI runner.
+
 #### Web UI tests
 The Web UI is tested with [Vitest](https://vitest.dev), on its own config: `vite.config.js` is driven by the CMake
 environment and builds the pages through ejs, neither of which a unit test needs.

@@ -31,13 +31,23 @@ cannot supply the new HDR contract, so with one an HDR request streams SDR.
 
 ## Setup and compatibility
 
-For Gamescope launch modes, colour flow and the optional isolated-session
-dependency patch, see [Gamescope HDR](gamescope_hdr.md).
+HDR10 needs the Hermes-KMS backend (`virtual_display_backend = hermes_kms`),
+which is opt-in and labeled experimental; EVDI, the default, has no HDR path.
+Use Hermes-KMS v0.4.0 or newer (UAPI 14) loaded with `hdr_enable=1
+color_depth=10`; both are load-time options, so put them in a file of their own
+and reboot:
 
-Use the matching driver with `hdr_enable=1 color_depth=10`. Preserve
-`initial_enabled=0` and the normal manual/on-demand output lifecycle. Enable HDR
-for the virtual output in KDE and enable HDR in the client. This change does not
-alter module autoload or desktop settings automatically.
+```sh
+printf '%s\n' 'options hermes_kms hdr_enable=1 color_depth=10' | sudo tee /etc/modprobe.d/hermes-kms-hdr.conf
+```
+
+Preserve `initial_enabled=0` and the normal manual/on-demand output lifecycle.
+Enable HDR for the virtual output in KDE and enable HDR in the client. Hermes
+does not alter module autoload or desktop settings automatically.
+
+HDR for Gamescope inside an isolated session, with an optional Gamescope patch,
+was proposed in [#46](https://github.com/MrOz59/Hermes/pull/46) and is not part
+of `main`.
 
 The initial target is KDE/KWin with AMD VAAPI or NVIDIA NVENC and Moonlight/Hestia.
 HDR requires the actual GPU/driver encoder to support HEVC Main10 or AV1 ten-bit,

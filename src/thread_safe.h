@@ -440,10 +440,17 @@ namespace safe {
       std::lock_guard lg {_lock};
 
       if (!_count) {
-        new (_object_buf.data()) element_type;
-        if (_construct(*reinterpret_cast<element_type *>(_object_buf.data()))) {
+        auto *object = new (_object_buf.data()) element_type;
+        // The callback can acquire sockets before returning an error (or
+        // throwing). No reference owns the object yet, so release its RAII
+        // members here instead of overwriting a live object on the next ref().
+        auto rollback = util::fail_guard([object]() {
+          object->~element_type();
+        });
+        if (_construct(*object)) {
           return ptr_t {nullptr};
         }
+        rollback.disable();
       }
 
       ++_count;
@@ -455,9 +462,9 @@ namespace safe {
     construct_f _construct;
     destruct_f _destruct;
 
-    std::array<std::uint8_t, sizeof(element_type)> _object_buf;
+    alignas(element_type) std::array<std::uint8_t, sizeof(element_type)> _object_buf;
 
-    std::uint32_t _count;
+    std::uint32_t _count {0};
     std::mutex _lock;
   };
 

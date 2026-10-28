@@ -8,10 +8,18 @@ high-leverage work where the infrastructure already exists.
 Legend: `[x]` works · `[~]` works with a caveat named beside it · `[ ]` not started.
 
 **Where the work lives.** Everything described in this file is committed to
-`main`. Foundation, Tier 1 and Tier 2 have shipped in a release (v0.5.1 and
-earlier). Everything from "Isolation and multi-user" through "Game Mode" is
-newer: it sits under [Unreleased] in the changelog and has not shipped. Read
-every `[x]` in those sections as "written and tested", not as "released".
+`main` and has shipped: Foundation, Tier 1 and Tier 2 in v0.5.1 and earlier,
+everything from "Isolation and multi-user" through "Game Mode" in v0.6.0,
+alongside Hermes-KMS v0.4.0. Work merged since then sits under [Unreleased] in
+the changelog. The priorities themselves are being re-evaluated in
+[#57](https://github.com/MrOz59/Hermes/issues/57); this file records what
+exists, not the order of what comes next.
+
+**Backend status.** EVDI is the default virtual-display backend and Hermes-KMS
+is opt-in and labeled experimental, although much of what follows — HDR10,
+multi-output, independent sessions, pre-login streaming, the capture metrics —
+exists only on Hermes-KMS. It is expected to become the default once it leaves
+experimental status.
 
 **What "tested" means here.** Anything touching seats, accounts, polkit or DRM
 master is verified in a virtme-ng guest, not on a desktop — the note beside each
@@ -131,16 +139,23 @@ polish - they are the reasons it cannot be recommended yet.
       through configfs, so an exhausted pool is answered rather than refused.
 - [x] A refused mode names the envelope the driver would have accepted instead of
       leaving `EINVAL` to be guessed at.
-- [~] The driver still marks two modes preferred — its synthetic EDID timing and
-      the mode the client asked for — so a compositor left to choose picks the
-      larger. Every profile works around it by naming the mode. The fix exists
-      on the driver's `main` (advertise one preferred mode), but no release
-      carries it, so the workaround stays until one does.
-- [ ] Driver release state is behind the host: the last release is still v0.3.2.
-      Driver `main` is at 0.4.0 with UAPI v13, the one-preferred-mode fix and
-      configfs card creation, but none of it is released and installed modules
-      are test builds. Everything the host can now use depends on a driver users
-      cannot yet install.
+- [x] UAPI v14: `ACQUIRE_FRAME2` returns each frame's colour state with the
+      framebuffer, which is what HDR10 capture is built on.
+- [x] One preferred mode. Drivers up to 0.3.2 marked two — their synthetic EDID
+      timing and the mode the client asked for — so a compositor left to choose
+      picked the larger; v0.4.0 advertises only the requested one. The session
+      profiles still name the mode, which is now redundant with every driver
+      Hermes accepts (the floor is UAPI 11, i.e. v0.4.0).
+- [x] Driver release caught up with the host: Hermes-KMS v0.4.0 (UAPI 14, the
+      one-preferred-mode fix, configfs card creation, HDR advertisement) shipped
+      with Hermes 0.6.0.
+- [~] Driver `main` is ahead again: it grants the render node read-only access,
+      so Chromium/Electron no longer pick it as a GPU. Hermes after 0.6.0 opens
+      it read-only to match; 0.6.0 itself opens it read-write and is refused.
+      The next driver release has to ship with, or after, the Hermes release
+      that carries the read-only open.
+- [ ] Make Hermes-KMS the default backend. It is opt-in and labeled
+      experimental today; the features that need it are listed in the README.
 
 ## Capture coverage per compositor
 
@@ -201,9 +216,10 @@ session is capturable at all.
 - **How much longer to build on upstream.** New work lands better as owned
   modules than as edits to upstream Sunshine files, and the priorities above do
   not say where that line is. It is the most structural decision outstanding.
-- **The release gap.** Everything in this file is on `main`, but the work from
-  "Isolation and multi-user" onward has not shipped: it sits under [Unreleased]
-  in the changelog, and the driver surface it uses — UAPI v13, the
-  one-preferred-mode fix, configfs card creation — is unreleased at driver
-  0.4.0. Deciding what the next release contains, with the driver release
-  preceding the host one, is the prerequisite for this roadmap meaning anything.
+- **Keeping host and driver releases paired.** 0.6.0 and Hermes-KMS v0.4.0
+  closed the gap that left the host depending on a driver nobody could install.
+  It reopens whenever driver `main` changes a contract the released host relies
+  on, as the read-only render node now does. Hermes checks the UAPI floor but
+  not a change like that one, so until the version check proposed in #57
+  exists, the README's pairing table is the only thing standing between a user
+  and an `EACCES`.

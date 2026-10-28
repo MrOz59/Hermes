@@ -103,6 +103,12 @@ namespace proc {
 
   VDISPLAY::DRIVER_STATUS vDisplayDriverStatus = VDISPLAY::DRIVER_STATUS::UNKNOWN;
 
+  static void finish_undo_command(
+    boost::process::v1::child &child,
+    boost::process::v1::group &group,
+    std::chrono::seconds exit_timeout
+  );
+
 #ifndef _WIN32
   namespace {
     VDISPLAY::virtual_display_layout_e linux_virtual_display_layout(const std::string &layout) {
@@ -967,6 +973,7 @@ namespace proc {
                              find_working_directory(cmd.undo_cmd, stopping_env) :
                              boost::filesystem::path {runtime->app.working_dir};
         BOOST_LOG(info) << "[IsolatedSession] Executing Undo Cmd: [" << cmd.undo_cmd << ']';
+        boost::process::v1::group undo_group;
         auto child = platf::run_command(
           cmd.elevated,
           true,
@@ -975,10 +982,10 @@ namespace proc {
           stopping_env,
           runtime->pipe.get(),
           ec,
-          nullptr
+          &undo_group
         );
         if (!ec) {
-          child.wait();
+          finish_undo_command(child, undo_group, runtime->app.exit_timeout);
         } else {
           BOOST_LOG(warning) << "[IsolatedSession] Undo command failed to start: " << ec.message();
         }
@@ -1127,6 +1134,38 @@ namespace proc {
     if (proc.valid()) {
       proc.detach();
     }
+  }
+
+  static void finish_undo_command(
+    boost::process::v1::child &child,
+    boost::process::v1::group &group,
+    std::chrono::seconds exit_timeout
+  ) {
+#ifdef __linux__
+    std::error_code ec;
+    const bool finished = platf::process_group::wait_for_exit([&]() {
+      return child.running(ec);
+    }, std::max(10s, exit_timeout));
+    if (!finished) {
+      BOOST_LOG(warning) << "Undo command exceeded its cleanup deadline; terminating its process group.";
+      terminate_process_group(child, group, 0s);
+      return;
+    }
+    if (ec) {
+      BOOST_LOG(warning) << "Unable to read undo command status: " << ec.message();
+    } else if (child.exit_code() != 0) {
+      BOOST_LOG(warning) << "Undo command exited with code [" << child.exit_code() << ']';
+    }
+    group.detach();
+    child.detach();
+#else
+    (void) exit_timeout;
+    child.wait();
+    if (child.exit_code() != 0) {
+      BOOST_LOG(warning) << "Undo command exited with code [" << child.exit_code() << ']';
+    }
+    group.detach();
+#endif
   }
 
   boost::filesystem::path find_working_directory(const std::string &cmd, const boost::process::v1::environment &env) {
@@ -3273,18 +3312,15 @@ namespace proc {
                                               find_working_directory(cmd.undo_cmd, _env) :
                                               boost::filesystem::path(_app.working_dir);
       BOOST_LOG(info) << "Executing Undo Cmd: ["sv << cmd.undo_cmd << ']';
-      auto child = platf::run_command(cmd.elevated, true, cmd.undo_cmd, working_dir, _env, _pipe.get(), ec, nullptr);
+      boost::process::v1::group undo_group;
+      auto child = platf::run_command(cmd.elevated, true, cmd.undo_cmd, working_dir, _env, _pipe.get(), ec, &undo_group);
 
       if (ec) {
-        BOOST_LOG(warning) << "System: "sv << ec.message();
+        BOOST_LOG(warning) << "Undo command could not start: "sv << ec.message();
+        continue;
       }
 
-      child.wait();
-      auto ret = child.exit_code();
-
-      if (ret != 0) {
-        BOOST_LOG(warning) << "Return code ["sv << ret << ']';
-      }
+      finish_undo_command(child, undo_group, _app.exit_timeout);
     }
 
     _pipe.reset();

@@ -4,14 +4,31 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <limits>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 
 namespace platf::process_group {
+  /** Poll a child or a whole group without blocking waitpid beyond its deadline. */
+  template<class Running>
+  bool wait_for_exit(Running running, std::chrono::steady_clock::duration timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (running()) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
+        return false;
+      }
+      std::this_thread::sleep_until(std::min(deadline, now + std::chrono::milliseconds {10}));
+    }
+    return true;
+  }
+
   inline bool valid(std::uintptr_t handle) {
     // Never allow PID 0, -1, or our own group to become a broadcast kill.
     return handle > 1 && handle <= static_cast<std::uintptr_t>(std::numeric_limits<pid_t>::max()) &&

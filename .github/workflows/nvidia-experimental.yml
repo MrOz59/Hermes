@@ -52,9 +52,9 @@ jobs:
             ca-certificates git git-lfs build-essential cmake ninja-build \
             libssl-dev libboost-all-dev libpulse-dev libopus-dev \
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-            libdrm-dev libgbm-dev libwayland-dev libx11-dev libxrandr-dev \
+            libdrm-dev libgbm-dev libvulkan-dev libwayland-dev libx11-dev libxrandr-dev \
             libxfixes-dev libxcb1-dev libxcb-shm0-dev libxcb-xfixes0-dev \
-            libva-dev libvdpau-dev libcap-dev libcurl4-openssl-dev \
+            libva-dev libvdpau-dev libcap-dev libacl1-dev libcurl4-openssl-dev \
             libevdev-dev libudev-dev libsystemd-dev systemd-dev \
             libminiupnpc-dev libicu-dev libnuma-dev libqt6svg6-dev qt6-base-dev
       - uses: actions/checkout@v4
@@ -63,6 +63,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # Match the October release: test the CUDA changes with PyroWave linked,
+      # rather than silently disabling the codec when the SDK is absent.
+      - name: Build pinned PyroWave SDK
+        run: bash scripts/build-pyrowave-sdk.sh
       - name: Configure the CUDA-enabled host
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -71,6 +75,8 @@ jobs:
             -DSUNSHINE_ASSETS_DIR=share/hermes \
             -DSUNSHINE_ENABLE_WAYLAND=ON -DSUNSHINE_ENABLE_X11=ON \
             -DSUNSHINE_ENABLE_DRM=ON -DSUNSHINE_ENABLE_CUDA=ON \
-            -DCUDA_FAIL_ON_MISSING=ON
+            -DCUDA_FAIL_ON_MISSING=ON \
+            -DSUNSHINE_REQUIRE_PYROWAVE=ON \
+            -DSUNSHINE_BUNDLE_PYROWAVE=ON
       - name: Compile the host, including CUDA upload and conversion
         run: cmake --build build -j2

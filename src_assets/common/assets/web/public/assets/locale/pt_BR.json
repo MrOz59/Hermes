@@ -568,6 +568,7 @@
     "display_mode_override_desc": "Hermes vai ignorar o modo de monitor solicitado pelo cliente e usar esse valor para configurar os monitores (virtuais). Deixe em branco para correspondência automática. Formato: [Largura]x[Altura]x[FPS]",
     "display_mode_override_error": "Substituição de modo inválido. Formato: [Largura]x[Altura]x[FPS]",
     "pair_failure": "Falha no pareamento: Verifique se o PIN foi digitado corretamente",
+    "pair_pending": "PIN enviado. O cliente ainda precisa confirmar o pareamento. Verifique no cliente se a conexão foi concluída ou se o PIN estava incorreto.",
     "pair_success": "Sucesso! Por favor, verifique o Moonlight para continuar",
     "pair_success_check_perm": "Pareamento bem-sucedido! Por favor conceda manualmente abaixo as permissões necessárias para o cliente.",
     "pin_pairing": "Pareamento por PIN",

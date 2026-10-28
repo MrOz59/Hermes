@@ -490,20 +490,26 @@
           .then((response) => response.json())
           .then((response) => {
             if (response.status === true) {
+              // The PIN endpoint only acknowledges delivery to the waiting
+              // handshake. It cannot validate the client's cryptographic
+              // challenge yet, so a wrong PIN can also return status=true.
               document.querySelector(
                 "#status"
-              ).innerHTML = `<div class="alert alert-success" role="alert">${this.i18n.t('pin.pair_success')}</div>`;
+              ).innerHTML = `<div class="alert alert-info" role="status">${this.i18n.t('pin.pair_pending')}</div>`;
               document.querySelector("#pin-input").value = "";
               document.querySelector("#name-input").value = "";
 
               setTimeout(() => this.refreshClients(), 1000);
-
-              alert(this.i18n.t('pin.pair_success_check_perm'));
             } else {
               document.querySelector(
                 "#status"
               ).innerHTML = `<div class="alert alert-danger" role="alert">${this.i18n.t('pin.pair_failure')}</div>`;
             }
+          })
+          .catch(() => {
+            document.querySelector(
+              "#status"
+            ).innerHTML = `<div class="alert alert-danger" role="alert">${this.i18n.t('pin.pair_failure')}</div>`;
           });
       },
       requestOTP() {

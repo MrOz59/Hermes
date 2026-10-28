@@ -696,6 +696,7 @@
         "enable_legacy_ordering": "Enable legacy ordering",
         "enable_legacy_ordering_desc": "Enable app ordering for legacy clients. Disable if this client can't handle UTF8 correctly. Needs to enable \"App ordering for legacy clients\" in the Advanced settings.",
         "pair_failure": "Pairing Failed: Check if the PIN is typed correctly",
+        "pair_pending": "PIN submitted. The client must still confirm pairing. Check the client for a successful connection or an incorrect-PIN message.",
         "pair_success": "Success! Please check Moonlight to continue",
         "pair_success_check_perm": "Pair success! Please grant necessary permissions to the client manually below.",
         "pin_pairing": "PIN Pairing",

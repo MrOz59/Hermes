@@ -239,6 +239,7 @@ TEST_P(HostCreateTest, VideoAndAudioPortsAreReleasedWhileAnExecutedHelperLives) 
     retry.bind(ip::udp::endpoint(protocol, port), error);
     EXPECT_FALSE(static_cast<bool>(error)) << "port " << port << ": " << error.message();
   }
+  EXPECT_TRUE(helper.running()) << "executed helper exited during the port checks";
 }
 
 TEST_P(HostCreateTest, AnExecutedHelperDoesNotKeepTheControlPortAlive) {
@@ -259,6 +260,7 @@ TEST_P(HostCreateTest, AnExecutedHelperDoesNotKeepTheControlPortAlive) {
   boost::system::error_code error;
   auto retry = net::host_create(GetParam(), address, port, &error);
   EXPECT_TRUE(static_cast<bool>(retry)) << error.message();
+  EXPECT_TRUE(helper.running()) << "executed helper exited during the control port check";
 }
 
 TEST_P(HostCreateTest, ExecutedHelperWithAnInheritedControlSocketStillHoldsThePort) {

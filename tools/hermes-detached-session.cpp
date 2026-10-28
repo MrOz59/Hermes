@@ -397,6 +397,12 @@ int main(int argc, char **argv) {
     // sleep from a desktop nobody is sitting at. The host's stays in charge.
     fs::create_directories(root / "xdg/autostart");
     write_private(root / "xdg/autostart/powerdevil.desktop", "[Desktop Entry]\nHidden=true\n");
+    // This desktop is another login of the same user. Restoring the saved
+    // session would reopen the host's apps in it, where a single-instance app
+    // then keeps every later launch on the host, and saving its own at logout
+    // would replace the session the host restores next. A system value marked
+    // immutable outranks the user's ksmserverrc, which stays untouched.
+    write_private(root / "xdg/ksmserverrc", "[General]\nloginMode[$i]=emptySession\n");
     auto config_dirs = env("XDG_CONFIG_DIRS");
     if (config_dirs.empty()) {
       config_dirs = "/etc/xdg";

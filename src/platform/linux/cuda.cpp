@@ -28,6 +28,7 @@ extern "C" {
 #include "cuda_upload_lifetime.h"
 #include "dmabuf_import_cache.h"
 #include "graphics.h"
+#include "nvidia_driver_version.h"
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/utility.h"
@@ -570,6 +571,11 @@ namespace cuda {
       } else {
         BOOST_LOG(info) << "GL->CUDA DMA-BUF import cache disabled (HERMES_CUDA_EGL_IMPORT_CACHE=0)"sv;
       }
+      // NVIDIA's DMA-BUF import, mapping and teardown behaviour has changed
+      // between releases (the 2026-09-30 security bulletin fixed bugs on those
+      // paths), so name the driver next to the importer's other settings.
+      BOOST_LOG(info) << "GL->CUDA importer: NVIDIA kernel module "sv
+                      << platf::nvidia::describe(platf::nvidia::loaded_driver_version());
 
       width = in_width;
       height = in_height;

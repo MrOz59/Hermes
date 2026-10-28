@@ -23,6 +23,7 @@
 // local includes
 #include "src/uuid.h"
 #include "hermes_kms_color.h"
+#include "monitor_restore.h"
 
 namespace VDISPLAY {
 
@@ -850,17 +851,6 @@ namespace VDISPLAY {
     int y {0};  ///< Logical y.
   };
 
-  /** @brief One output as `kscreen-doctor -j` reports it. */
-  struct kscreen_output_t {
-    std::string name;  ///< Connector name, e.g. "HDMI-A-1".
-    bool connected {false};  ///< The connector exists in this session.
-    bool enabled {false};  ///< KWin is composing on it.
-    int priority {0};  ///< KScreen priority; 1 marks the primary output.
-    int x {0};  ///< Logical x.
-    int y {0};  ///< Logical y.
-    int width {0};  ///< Logical width.
-    int height {0};  ///< Logical height.
-  };
 
   /**
    * @brief Decide where the virtual output goes, in KScreen's logical space.

@@ -1,0 +1,33 @@
+name: Linux monitor restoration regressions
+
+on:
+  pull_request:
+    paths:
+      - 'src/platform/linux/virtual_display.*'
+      - 'src/platform/linux/monitor_restore.h'
+      - 'src/platform/linux/bounded_command.h'
+      - 'src/platform/linux/process_group.h'
+      - 'src/process.cpp'
+      - 'tests/display_restore/**'
+      - '.github/workflows/monitor-restore.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        standard: [c++17, c++23]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile production restoration and subprocess helpers with sanitizers
+        run: |
+          g++ -std=${{ matrix.standard }} -Wall -Wextra -Werror -pedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -g -I. \
+            tests/display_restore/monitor_restore.cc -o /tmp/hermes-monitor-restore
+      - name: Verify partial recovery, retries, headless layouts and real helper timeouts
+        run: /tmp/hermes-monitor-restore

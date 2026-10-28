@@ -7,7 +7,7 @@ on:
     tags:
       - 'v*'
   pull_request:
-    branches: [master, main]
+    branches: [master, main, release/october-integration]
   workflow_dispatch:
 
 concurrency:

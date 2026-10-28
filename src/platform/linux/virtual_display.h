@@ -1151,8 +1151,21 @@ namespace VDISPLAY {
     int sync_file_fd {-1};
     uint64_t sequence {0};
     long long acquire_ns {0};  ///< Time spent in the ACQUIRE_FRAME ioctl only.
+    /// PRIME-imported from another device rather than a Hermes-KMS dumb
+    /// buffer. Only meaningful when the driver reports frame origin (uapi >= 15).
+    bool imported {false};
+    /// Module that exported an imported frame; not necessarily NUL-terminated.
+    char exporter[16] {};
 
     void close();  ///< Close all owned fds (dma_buf_fd[] and sync_file_fd).
+  };
+
+  /** Layout and origin of the framebuffer latched for scanout, without an export. */
+  struct HermesKmsScanout {
+    uint64_t modifier {0};
+    bool origin_known {false};  ///< The driver reports origin (uapi >= 15).
+    bool imported {false};  ///< PRIME-imported rather than a Hermes-KMS dumb buffer.
+    char exporter[16] {};  ///< Exporting module; not necessarily NUL-terminated.
   };
 
   /** Result of waiting for either independently captured plane to advance. */
@@ -1232,11 +1245,14 @@ namespace VDISPLAY {
   /** Whether the driver behind a capture descriptor reports frame colour (UAPI 14). */
   bool hermesKmsReportsFrameColor(int render_fd);
 
+  /** Whether the driver reports scanout origin (UAPI 15, HERMES_KMS_CAP_FRAME_ORIGIN). */
+  bool hermesKmsReportsFrameOrigin(int render_fd);
+
   /**
-   * Format modifier of the framebuffer currently latched for scanout, without
-   * exporting it. Fails with EAGAIN while no frame is valid.
+   * Modifier and origin of the framebuffer currently latched for scanout,
+   * without exporting it. Fails with EAGAIN while no frame is valid.
    */
-  bool hermesKmsScanoutModifier(int render_fd, uint64_t &modifier);
+  bool hermesKmsScanoutLayout(int render_fd, HermesKmsScanout &out);
 
   bool hermesKmsAcquireFrame(int render_fd, uint64_t after_sequence,
                              uint32_t timeout_ms, HermesKmsFrame &out, bool capture_color = false);

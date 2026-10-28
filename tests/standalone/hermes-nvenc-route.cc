@@ -55,6 +55,42 @@ int main() {
   static_assert(!must_switch(dmabuf_mode_e::off, false, route_e::cpu_copy, block_linear));
   static_assert(!must_switch(dmabuf_mode_e::automatic, true, route_e::cpu_copy, block_linear));
 
-  std::puts("Hermes-KMS NVENC route: modes, GPU-origin layouts and switching PASS");
+  // UAPI 15 origin: the exporter name sits in a fixed char array that need not
+  // be NUL-terminated when the name fills it.
+  constexpr char full[16] = {'n', 'v', 'i', 'd', 'i', 'a', '_', 'd', 'r', 'm', '_', 'x', 'x', 'x', 'x', 'x'};
+  static_assert(exporter_name(full, sizeof(full)).size() == 16);
+  static_assert(exporter_name("nvidia_drm\0\0\0\0\0", 16) == "nvidia_drm");
+  static_assert(exporter_name("", 16).empty());
+  static_assert(nvidia_exporter("nvidia_drm") && nvidia_exporter("nvidia"));
+  static_assert(!nvidia_exporter("amdgpu") && !nvidia_exporter("nvidi") && !nvidia_exporter(""));
+
+  constexpr scanout_t nvidia_linear {linear, origin_e::imported, "nvidia_drm"};
+  constexpr scanout_t amd_linear {linear, origin_e::imported, "amdgpu"};
+  constexpr scanout_t unnamed_linear {linear, origin_e::imported, ""};
+  constexpr scanout_t dumb_linear {linear, origin_e::dumb, ""};
+  constexpr scanout_t legacy_linear {linear};
+  constexpr scanout_t nvidia_tiled {block_linear, origin_e::imported, "nvidia_drm"};
+
+  // A linear scanout NVIDIA exported is GPU-origin: auto imports it now.
+  static_assert(nvidia_gpu_origin(nvidia_linear));
+  static_assert(route_for(dmabuf_mode_e::automatic, false, nvidia_linear) == route_e::dmabuf_import);
+  // Another vendor's buffer (hybrid laptop, iGPU compositing) is not NVIDIA's
+  // own import, and an unnamed exporter proves nothing: both keep the copy.
+  static_assert(route_for(dmabuf_mode_e::automatic, false, amd_linear) == route_e::cpu_copy);
+  static_assert(route_for(dmabuf_mode_e::automatic, false, unnamed_linear) == route_e::cpu_copy);
+  // Dumb buffers and pre-UAPI-15 drivers keep the old rule.
+  static_assert(route_for(dmabuf_mode_e::automatic, false, dumb_linear) == route_e::cpu_copy);
+  static_assert(route_for(dmabuf_mode_e::automatic, false, legacy_linear) == route_e::cpu_copy);
+  static_assert(route_for(dmabuf_mode_e::automatic, false, nvidia_tiled) == route_e::dmabuf_import);
+  // Off and FORCE_CPU_COPY are unaffected by origin.
+  static_assert(route_for(dmabuf_mode_e::off, false, nvidia_linear) == route_e::cpu_copy);
+  static_assert(route_for(dmabuf_mode_e::automatic, true, nvidia_linear) == route_e::cpu_copy);
+  // Origin changes rebuild capture just like layout changes, e.g. KWin falling
+  // back from LinearDmabuf to a dumb buffer on the same linear modifier.
+  static_assert(must_switch(dmabuf_mode_e::automatic, false, route_e::dmabuf_import, dumb_linear));
+  static_assert(must_switch(dmabuf_mode_e::automatic, false, route_e::cpu_copy, nvidia_linear));
+  static_assert(!must_switch(dmabuf_mode_e::automatic, false, route_e::dmabuf_import, nvidia_linear));
+
+  std::puts("Hermes-KMS NVENC route: modes, GPU-origin layouts, scanout origin and switching PASS");
   return 0;
 }

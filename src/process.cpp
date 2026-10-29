@@ -1764,17 +1764,20 @@ namespace proc {
       // and which the host's server never sees. Its mic is silent until a
       // client's microphone streams into it, so nothing records the host's.
       const auto mic_source = platf::session_mic_source(audio_sink);
-      // Not for the user's own Plasma desktop: it shares the user's PipeWire,
-      // where KWin also publishes the screencast, so its sink is made there.
-      if (!own_plasma_desktop) {
-        runtime->audio_server = platf::session_audio::start(runtime->runtime_dir, audio_sink, audio_channels, mic_source);
-      }
+      runtime->audio_server = platf::session_audio::start(runtime->runtime_dir, audio_sink, audio_channels, mic_source);
       if (runtime->audio_server) {
         runtime->audio_sink = audio_sink;
         // Clients that negotiate a microphone are heard through this source.
         if (config::audio.stream_mic) {
           runtime->mic_source = mic_source;
         }
+      } else if (own_plasma_desktop) {
+        // A sink on the host's server would only steer PulseAudio clients:
+        // native PipeWire ones would still play on the host's own outputs.
+        launch_session->launch_error_message = "Could not start the detached desktop's own audio server.";
+        BOOST_LOG(error) << "[IsolatedSession] Could not start a private audio server for "
+                         << runtime->runtime_id << "; refusing to share the host's audio devices.";
+        return 503;
       } else if (audio::create_session_sink(audio_sink, audio_channels)) {
         runtime->audio_sink = audio_sink;
         BOOST_LOG(info) << "[IsolatedSession] Session " << runtime->runtime_id << " plays into "
@@ -1840,7 +1843,6 @@ namespace proc {
       const auto systemd_run = find_program("systemd-run");
       const auto dbus_run_session = find_program("dbus-run-session");
       const auto session_tool = find_detached_session_tool();
-      const auto host_runtime = host_runtime_dir();
       std::error_code self_ec;
       const auto self = std::filesystem::canonical("/proc/self/exe", self_ec);
       std::vector<std::string> missing;
@@ -1862,8 +1864,8 @@ namespace proc {
         }
         return plasma_failed("cannot start: " + list + " not found");
       }
-      if (host_runtime.empty() || self_ec) {
-        return plasma_failed("cannot start: Hermes has no user runtime directory");
+      if (self_ec) {
+        return plasma_failed("cannot start: Hermes cannot resolve its own executable");
       }
       // Startup leaves the encoders unprobed when nothing is on screen, and a
       // probe can fail; capture needs a chosen encoder either way. Validate one
@@ -1884,9 +1886,10 @@ namespace proc {
       const int height = static_cast<int>(launch_session->height ? launch_session->height : 1080);
       runtime->user_unit = true;
       runtime->unit = detached_unit_name(runtime->runtime_id);
-      // KWin's screencast node lives in the user's PipeWire, the one the host
-      // desktop uses too; the stream is addressed by its object serial.
-      runtime->kwin_pipewire_socket = host_runtime + "/pipewire-0";
+      // The desktop's own PipeWire carries both its sound and KWin's
+      // screencast. It knows no hardware, so nothing played in the desktop
+      // can reach the host's outputs, whatever output an app asks for.
+      runtime->kwin_pipewire_socket = runtime->audio_server->pipewire_remote();
       // Runtime ids restart with Hermes, so an earlier instance may have left
       // a unit of this name behind, and its status files with it.
       stop_user_unit(runtime->unit);
@@ -1911,12 +1914,9 @@ namespace proc {
         "KDE_SESSION_UID KDE_SESSION_VERSION KDE_APPLICATIONS_AS_SCOPE",
         "--setenv=XDG_RUNTIME_DIR=" + runtime->runtime_dir,
         "--setenv=XDG_SESSION_TYPE=wayland",
-        "--setenv=PULSE_SERVER=unix:" + host_runtime + "/pulse/native",
+        "--setenv=PULSE_SERVER=" + runtime->audio_server->pulse_server(),
         "--setenv=PIPEWIRE_REMOTE=" + runtime->kwin_pipewire_socket,
       };
-      if (!runtime->audio_sink.empty()) {
-        command.push_back("--setenv=PULSE_SINK=" + runtime->audio_sink);
-      }
       if (const auto owner = own_service_unit(); !owner.empty()) {
         // Stopping Hermes stops every desktop it started. PartOf= would also
         // restart one alongside Hermes, bringing up a desktop nobody asked for.

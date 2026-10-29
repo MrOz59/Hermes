@@ -397,6 +397,13 @@ int main(int argc, char **argv) {
     // sleep from a desktop nobody is sitting at. The host's stays in charge.
     fs::create_directories(root / "xdg/autostart");
     write_private(root / "xdg/autostart/powerdevil.desktop", "[Desktop Entry]\nHidden=true\n");
+    // This desktop has no login session, so polkit maps its requests to the
+    // user's display session, where this desktop's own agent registers when
+    // no other agent has. Every prompt dismissed there then counts as a failed
+    // password in pam_faillock, and a few lock the user's account. Without the
+    // agent, polkit refuses such a request at once and nothing is counted; one
+    // it allows without asking is unaffected.
+    write_private(root / "xdg/autostart/polkit-kde-authentication-agent-1.desktop", "[Desktop Entry]\nHidden=true\n");
     // This desktop is another login of the same user. Restoring the saved
     // session would reopen the host's apps in it, where a single-instance app
     // then keeps every later launch on the host, and saving its own at logout

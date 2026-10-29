@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Session supervisor for a private, same-user stock Plasma desktop.
 // The broker owns the unit/mount namespace. This program never edits KDE config.
+#include "../src/platform/linux/wayland_peer.h"
+
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -12,6 +14,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <thread>
@@ -365,6 +368,9 @@ namespace {
 }  // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 3 && std::string_view(argv[1]) == "--connect-wayland") {
+    return platf::kwin::serve_wayland_peer(argv[2]);
+  }
   const bool child = env("HERMES_DETACHED_STAGE") == "session";
   try {
     // No umask of our own: KWin and every program in the desktop inherit it,
@@ -393,6 +399,11 @@ int main(int argc, char **argv) {
     fs::create_directories(root / "data/applications");
     fs::create_directories(root / "cache");
     write_private(root / "data/applications/org.hermes.DetachedTransport.desktop", "[Desktop Entry]\nType=Application\nName=Hermes Detached Transport\nExec=" + desktop_exec(executable.string()) + "\nX-KDE-Wayland-Interfaces=org_kde_kwin_fake_input,zkde_screencast_unstable_v1\n");
+    // A packaged Hermes retains capabilities needed by ordinary KMS capture.
+    // KWin cannot read that process's /proc/<pid>/exe. Its private connection
+    // is therefore opened by this capability-free helper and passed back.
+    const auto connector = fs::canonical("/proc/self/exe");
+    write_private(root / "data/applications/org.hermes.DetachedPeer.desktop", "[Desktop Entry]\nType=Application\nName=Hermes Detached Connection\nExec=" + desktop_exec(connector.string()) + "\nX-KDE-Wayland-Interfaces=org_kde_kwin_fake_input,zkde_screencast_unstable_v1\n");
     // A second PowerDevil would manage the physical monitors and the machine's
     // sleep from a desktop nobody is sitting at. The host's stays in charge.
     fs::create_directories(root / "xdg/autostart");

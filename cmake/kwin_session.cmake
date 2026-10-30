@@ -62,7 +62,7 @@ function(hermes_add_kwin_transport)
 
     add_executable(hermes-detached-session
         "${CMAKE_SOURCE_DIR}/tools/hermes-detached-session.cpp")
-    target_link_libraries(hermes-detached-session PRIVATE Threads::Threads)
+    target_link_libraries(hermes-detached-session PRIVATE Threads::Threads nlohmann_json::nlohmann_json)
     set_target_properties(hermes-detached-session PROPERTIES
         CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 

@@ -1751,7 +1751,7 @@ namespace nvhttp {
     if (isolated_resume && !proc::proc.prepare_isolated_resume(launch_session)) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 503);
-      tree.put("root.<xmlattr>.status_message", "No isolated session is available to resume");
+      tree.put("root.<xmlattr>.status_message", launch_session->launch_error_message.empty() ? "No isolated session is available to resume" : launch_session->launch_error_message);
       return;
     }
 

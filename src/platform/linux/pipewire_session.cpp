@@ -212,7 +212,26 @@ namespace platf::kwin {
     // KWin uses variable-rate capture; negotiate the rate ceiling separately.
     format.framerate = {0, 1};
     format.max_framerate = {framerate, 1};
-    const spa_pod *params[] {spa_format_video_raw_build(&builder, SPA_PARAM_EnumFormat, &format)};
+    // Negotiate a ceiling rather than requiring an exact compositor rate.
+    // CVT rounding can yield 119.930 Hz for a nominal 120 FPS request.
+    const spa_fraction minimum_rate {0, 1};
+    const spa_pod *params[] {static_cast<const spa_pod *>(spa_pod_builder_add_object(
+      &builder,
+      SPA_TYPE_OBJECT_Format,
+      SPA_PARAM_EnumFormat,
+      SPA_FORMAT_mediaType,
+      SPA_POD_Id(SPA_MEDIA_TYPE_video),
+      SPA_FORMAT_mediaSubtype,
+      SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+      SPA_FORMAT_VIDEO_format,
+      SPA_POD_Id(format.format),
+      SPA_FORMAT_VIDEO_size,
+      SPA_POD_Rectangle(&format.size),
+      SPA_FORMAT_VIDEO_framerate,
+      SPA_POD_Fraction(&format.framerate),
+      SPA_FORMAT_VIDEO_maxFramerate,
+      SPA_POD_CHOICE_RANGE_Fraction(&format.max_framerate, &minimum_rate, &format.max_framerate)
+    ))};
     const auto flags = static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_DONT_RECONNECT | PW_STREAM_FLAG_INACTIVE);
     if (pw_stream_connect(state->stream, PW_DIRECTION_INPUT, PW_ID_ANY, flags, params, 1) < 0) {
       error = "Could not connect private capture node";

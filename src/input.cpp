@@ -121,6 +121,14 @@ namespace input {
     free_id(gamepadMask, id);
   }
 
+  // The stream ended, but the client did not remove the gamepad.
+  void release_gamepad(platf::input_t &platf_input, int id) {
+    platf::gamepad_update(platf_input, id, platf::gamepad_state_t {});
+    platf::release_gamepad(platf_input, id);
+
+    free_id(gamepadMask, id);
+  }
+
   struct gamepad_t {
     explicit gamepad_t(std::shared_ptr<platf::input_t> platform_input):
         gamepad_state {},
@@ -144,7 +152,7 @@ namespace input {
     ~gamepad_t() {
       if (id >= 0) {
         task_pool.push([id = this->id, platform_input = this->platform_input]() {
-          free_gamepad(*platform_input, id);
+          release_gamepad(*platform_input, id);
         });
       }
     }

@@ -57,6 +57,8 @@ namespace platf {
 
   struct joypad_state {
     std::unique_ptr<lvh::GamepadStateAdapter> adapter;
+    std::uint8_t client_index = 0;  ///< The client's controller number.
+    int type = 0;  ///< The profile it was made with.
     std::array<std::optional<std::uint32_t>, 2> touch_pointer_ids {};
     std::uint8_t next_touch_id = 0;
     std::mutex mutex;
@@ -73,7 +75,7 @@ namespace platf {
 
     std::string session_tag;
     std::shared_ptr<kwin::connection_t> kwin;
-    std::unique_ptr<lvh::Runtime> runtime;
+    std::shared_ptr<lvh::Runtime> runtime;
     std::unique_ptr<lvh::Mouse> mouse;
     std::unique_ptr<lvh::Keyboard> keyboard;
     std::vector<std::shared_ptr<joypad_state>> gamepads;

@@ -194,6 +194,14 @@ namespace platf {
     gamepad::free(static_cast<input_raw_t *>(input.get()), index);
   }
 
+  void release_gamepad(input_t &input, int index) {
+    gamepad::release(static_cast<input_raw_t *>(input.get()), index);
+  }
+
+  void forget_kept_gamepads(const std::string &session_tag) {
+    gamepad::forget(session_tag);
+  }
+
   void gamepad_update(input_t &input, int index, const gamepad_state_t &state) {
     gamepad::update(static_cast<input_raw_t *>(input.get()), index, state);
   }

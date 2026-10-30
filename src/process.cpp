@@ -1281,6 +1281,10 @@ namespace proc {
       } else if (!runtime->audio_sink.empty()) {
         audio::remove_session_sink(runtime->audio_sink);
       }
+      if (runtime->user_unit && !runtime->seat_id.empty()) {
+        // The desktop's gamepads, kept between its streams, go with it.
+        platf::forget_kept_gamepads(runtime->seat_id);
+      }
       runtime->device_mirror.reset();
       runtime->namespace_pid = 0;
       if (!runtime->isolated_seat_flag.empty()) {

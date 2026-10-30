@@ -925,6 +925,17 @@ namespace platf {
    */
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue);
   void free_gamepad(input_t &input, int nr);
+  /**
+   * @brief Release a gamepad because its stream ended, not because the client
+   * removed it. A detached desktop keeps it for the next stream to the same
+   * desktop, so the desktop's programs never see the controller leave.
+   */
+  void release_gamepad(input_t &input, int nr);
+  /**
+   * @brief Remove the gamepads a session tag kept between streams.
+   * @param session_tag The tag of a session that has stopped.
+   */
+  void forget_kept_gamepads(const std::string &session_tag);
 
   /**
    * @brief Get the supported platform capabilities to advertise to the client.

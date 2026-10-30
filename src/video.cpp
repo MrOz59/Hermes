@@ -3348,7 +3348,18 @@ namespace video {
       return -1;
     }
     const auto &encoder = *chosen_encoder;
-    const auto name = stream.display_name.empty() ? display_device::map_output_name(config::video.output_name) : stream.display_name;
+    // The display the stream's capture will open, chosen the same way: the
+    // session's own, else the one this launch set up, else the configured
+    // output among those present.
+    auto name = stream.display_name.empty() ? proc::proc.display_name : stream.display_name;
+    if (name.empty()) {
+      std::vector<std::string> display_names;
+      int display_p = -1;
+      refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+      if (display_p >= 0 && display_p < static_cast<int>(display_names.size())) {
+        name = display_names[display_p];
+      }
+    }
     // Name what is captured as the user knows it: the output, and how.
     const auto label = (name.empty() ? "the primary display"s : "display ["s + name + ']') +
                        (config::video.capture.empty() ? ""s : " via "s + config::video.capture);

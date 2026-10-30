@@ -417,15 +417,14 @@ namespace video {
    * encoder's device and encodes it, with the encoder already chosen. Done
    * before a client is told the stream is ready, so a broken step is named
    * then rather than shown as a black stream.
-   * @param display_name The display the stream will capture; empty for the
-   * process-wide one.
-   * @param framerate The client's requested frame rate.
+   * @param stream The stream's capture settings: its display_name (empty for
+   * the process-wide display) and frame rate. Size and codec are the check's.
    * @param failure Set to the failed step and its reason.
    * @return 0 when a frame went all the way through, or when the display
    * produced no new frame in time (logged; a static screen may not); -1 when
    * a step failed.
    */
-  int check_capture_path(const std::string &display_name, int framerate, std::string &failure);
+  int check_capture_path(const config_t &stream, std::string &failure);
 
 #ifdef __linux__
   /**

@@ -1589,8 +1589,11 @@ namespace nvhttp {
     // One real frame through capture, conversion and encoding, before the
     // client is told the stream is ready, while no stream holds the encoder.
     if (!is_input_only && rtsp_stream::session_count() == 0) {
+      video::config_t stream {};
+      stream.display_name = launch_session->display_name;
+      stream.framerate = launch_session->fps / 1000;
       std::string failure;
-      if (video::check_capture_path(launch_session->display_name, launch_session->fps / 1000, failure)) {
+      if (video::check_capture_path(stream, failure)) {
         BOOST_LOG(error) << "Capture readiness: " << failure;
         tree.put("root.<xmlattr>.status_code", 503);
         tree.put("root.<xmlattr>.status_message", failure + ".");

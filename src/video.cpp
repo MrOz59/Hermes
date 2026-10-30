@@ -3337,18 +3337,31 @@ namespace video {
     return true;
   }
 
-  int check_capture_path(const std::string &display_name, int framerate, std::string &failure) {
+  int check_capture_path(const config_t &stream, std::string &failure) {
     using namespace std::literals;
     if (!chosen_encoder) {
       failure = "No working video encoder was found";
       return -1;
     }
     const auto &encoder = *chosen_encoder;
-    const auto name = display_name.empty() ? display_device::map_output_name(config::video.output_name) : display_name;
+    const auto name = stream.display_name.empty() ? display_device::map_output_name(config::video.output_name) : stream.display_name;
     const auto label = name.empty() ? "the default display"s : "display ["s + name + ']';
 
-    config_t config {1920, 1080, framerate > 0 ? framerate : 60, 1000, 1, 0, 1, 0, 0, 0};
-    config.display_name = display_name;
+    // The stream's display, as an H.264 SDR stream: every encoder has it.
+    config_t config = stream;
+    config.width = 1920;
+    config.height = 1080;
+    config.framerate = stream.framerate > 0 ? stream.framerate : 60;
+    config.bitrate = 1000;
+    config.slicesPerFrame = 1;
+    config.numRefFrames = 0;
+    config.encoderCscMode = 1;
+    config.videoFormat = 0;
+    config.dynamicRange = 0;
+    config.chromaSamplingType = 0;
+    config.enableIntraRefresh = 0;
+    config.input_only = false;
+    config.encoder_probe = false;
     auto disp = platf::display(encoder.platform_formats->dev_type, name, config);
     if (!disp) {
       failure = "Capture could not open " + label;

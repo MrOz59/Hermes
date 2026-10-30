@@ -426,6 +426,28 @@ namespace video {
    */
   int check_capture_path(const config_t &stream, std::string &failure);
 
+  /**
+   * @brief What the last capture-path check found, for a client to show.
+   */
+  struct capture_readiness_t {
+    bool checked {false};  ///< Whether a check has run since Hermes started.
+    bool ok {false};  ///< Whether a frame went all the way through, or the display was only idle.
+    bool frame_seen {false};  ///< Whether a real frame was captured and encoded.
+    std::string capture;  ///< What was captured, and how.
+    int width {0};
+    int height {0};
+    int framerate {0};
+    std::string encoder;  ///< The encoder, such as vaapi or nvenc.
+    std::string gpu;  ///< The GPU it encodes on, where the platform can say.
+    std::string failure;  ///< The failed step and its reason, when not ok.
+    std::int64_t checked_at {0};  ///< Unix time of the check, in seconds.
+  };
+
+  /**
+   * @brief The result of the last check_capture_path().
+   */
+  capture_readiness_t last_capture_readiness();
+
 #ifdef __linux__
   /**
    * @brief Probe encoders without opening any screen.

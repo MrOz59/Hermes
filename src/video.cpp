@@ -3341,7 +3341,7 @@ namespace video {
     return true;
   }
 
-  int check_capture_path(const config_t &stream, std::string &failure) {
+  static int check_capture_path_impl(const config_t &stream, std::string &failure, capture_readiness_t &result) {
     using namespace std::literals;
     if (!chosen_encoder) {
       failure = "No working video encoder was found";
@@ -3363,6 +3363,7 @@ namespace video {
     // Name what is captured as the user knows it: the output, and how.
     const auto label = (name.empty() ? "the primary display"s : "display ["s + name + ']') +
                        (config::video.capture.empty() ? ""s : " via "s + config::video.capture);
+    result.capture = label;
 
     // The stream's display, as an H.264 SDR stream: every encoder has it.
     config_t config = stream;
@@ -3386,6 +3387,13 @@ namespace video {
     }
     config.width = disp->width;
     config.height = disp->height;
+    result.width = disp->width;
+    result.height = disp->height;
+    result.framerate = config.framerate;
+    result.encoder = encoder.name;
+#ifdef __linux__
+    result.gpu = platf::encode_gpu_description(encoder.platform_formats->dev_type == platf::mem_type_e::cuda);
+#endif
 
     // One real frame. Capture backends call back on every poll, with
     // frame_captured false when nothing changed, so a deadline here ends it.
@@ -3455,14 +3463,32 @@ namespace video {
     }
     packets->pop();
 
-    std::string gpu;
-#ifdef __linux__
-    gpu = platf::encode_gpu_description(encoder.platform_formats->dev_type == platf::mem_type_e::cuda);
-#endif
+    const auto &gpu = result.gpu;
+    result.frame_seen = true;
     BOOST_LOG(info) << "Capture readiness: " << label << " (" << disp->width << 'x' << disp->height << " at "
                     << config.framerate << " fps) captured, converted and encoded by " << encoder.name
                     << (gpu.empty() ? ""s : " on "s + gpu);
     return 0;
+  }
+
+  static std::mutex capture_readiness_mutex;
+  static capture_readiness_t capture_readiness;
+
+  int check_capture_path(const config_t &stream, std::string &failure) {
+    capture_readiness_t result;
+    const int status = check_capture_path_impl(stream, failure, result);
+    result.checked = true;
+    result.ok = status == 0;
+    result.failure = status ? failure : std::string {};
+    result.checked_at = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    std::lock_guard lock {capture_readiness_mutex};
+    capture_readiness = std::move(result);
+    return status;
+  }
+
+  capture_readiness_t last_capture_readiness() {
+    std::lock_guard lock {capture_readiness_mutex};
+    return capture_readiness;
   }
 
 #ifdef __linux__

@@ -1049,7 +1049,7 @@ namespace proc {
     }
 
     std::string detached_unit_name(const std::string &runtime_id) {
-      return "hermes-detached-" + runtime_id + ".service";
+      return "hermes-detached-" + runtime_id + ".scope";
     }
 
     /**
@@ -1163,6 +1163,15 @@ namespace proc {
         if (!runtime->unit.empty()) {
           stop_user_unit(runtime->unit);
           runtime->unit.clear();
+        }
+        // The unit's first process is this one's child: reap it.
+        if (runtime->process.valid()) {
+          std::error_code wait_ec;
+          if (runtime->process.running(wait_ec)) {
+            runtime->process.terminate(wait_ec);
+          }
+          runtime->process.wait(wait_ec);
+          runtime->process = boost::process::v1::child {};
         }
       } else if (!runtime->unit.empty()) {
         // Stopping the unit takes the whole session with it: systemd kills the
@@ -1304,7 +1313,7 @@ namespace proc {
     // process, so a Hermes that crashed or was killed leaves them running with
     // nothing to stream them. None of them can belong to this instance yet.
     if (const auto systemctl = find_program("systemctl"); !systemctl.empty()) {
-      run_program({systemctl, "--user", "--quiet", "stop", "hermes-detached-*.service"}, 30s);
+      run_program({systemctl, "--user", "--quiet", "stop", "hermes-detached-*.scope", "hermes-detached-*.service"}, 30s);
     }
 #endif
     return std::make_unique<deinit_t>();
@@ -1901,32 +1910,41 @@ namespace proc {
         std::filesystem::remove(std::filesystem::path {runtime->runtime_dir} / stale, remove_ec);
       }
 
+      // Hermes starts the desktop itself, in a mount namespace with a private
+      // /dev where it can (isolate-devices, as for isolated Gamescope
+      // sessions): host input devices and sound cards are hidden, and the
+      // desktop gets only what Hermes gives it. systemd-run --scope then puts
+      // it in a transient unit of the user's manager and execs in place, so
+      // the namespace stays and the desktop keeps a cgroup of its own. It
+      // reaches that manager over the host's bus; env then sets the desktop's
+      // own environment for everything below it.
       std::vector<std::string> command {
         systemd_run,
         "--user",
+        "--scope",
         "--quiet",
         "--collect",
         "--unit=" + runtime->unit,
-        "--description=Hermes detached desktop for " + runtime->client_name,
         "--property=TimeoutStopSec=15",
-        // The user manager carries the host desktop's session variables once
-        // Plasma has imported them; none of them may leak into this one.
-        "--property=UnsetEnvironment=DISPLAY WAYLAND_DISPLAY WAYLAND_SOCKET XAUTHORITY "
-        "DBUS_SESSION_BUS_ADDRESS SESSION_MANAGER XDG_SESSION_ID XDG_SEAT XDG_VTNR "
-        "XDG_SESSION_DESKTOP XDG_CURRENT_DESKTOP DESKTOP_SESSION KDE_FULL_SESSION "
-        "KDE_SESSION_UID KDE_SESSION_VERSION KDE_APPLICATIONS_AS_SCOPE",
-        "--setenv=XDG_RUNTIME_DIR=" + runtime->runtime_dir,
-        "--setenv=XDG_SESSION_TYPE=wayland",
-        "--setenv=PULSE_SERVER=" + runtime->audio_server->pulse_server(),
-        "--setenv=PIPEWIRE_REMOTE=" + runtime->kwin_pipewire_socket,
       };
       if (const auto owner = own_service_unit(); !owner.empty()) {
         // Stopping Hermes stops every desktop it started. PartOf= would also
         // restart one alongside Hermes, bringing up a desktop nobody asked for.
         command.push_back("--property=StopPropagatedFrom=" + owner);
       }
+      command.insert(command.end(), {"--", "env"});
+      // The user manager carries the host desktop's session variables once
+      // Plasma has imported them; none of them may leak into this one. Nor
+      // may what Hermes sets on itself: AMD_DEBUG for its own encoder, and
+      // the tray's QT_QPA_PLATFORM=minimal when it found no display.
+      for (const auto *name : {"DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "SESSION_MANAGER", "XDG_SESSION_ID", "XDG_SEAT", "XDG_VTNR", "XDG_SESSION_DESKTOP", "XDG_CURRENT_DESKTOP", "DESKTOP_SESSION", "KDE_FULL_SESSION", "KDE_SESSION_UID", "KDE_SESSION_VERSION", "KDE_APPLICATIONS_AS_SCOPE", "AMD_DEBUG", "QT_QPA_PLATFORM"}) {
+        command.push_back("--unset="s + name);
+      }
       command.insert(command.end(), {
-                                      "--",
+                                      "XDG_RUNTIME_DIR=" + runtime->runtime_dir,
+                                      "XDG_SESSION_TYPE=wayland",
+                                      "PULSE_SERVER=" + runtime->audio_server->pulse_server(),
+                                      "PIPEWIRE_REMOTE=" + runtime->kwin_pipewire_socket,
                                       dbus_run_session,
                                       "--",
                                       session_tool,
@@ -1936,11 +1954,52 @@ namespace proc {
                                       self.string(),
                                       std::to_string(launch_session->fps ? launch_session->fps : 60000),
                                     });
+      // run_command takes one command line; refuse what would not survive it.
+      std::string command_line;
+      for (const auto &argument : command) {
+        if (argument.empty() || argument.find_first_of(" \t\n\"'\\") != std::string::npos) {
+          return plasma_failed("cannot start: an argument contains whitespace or quotes (" + argument + ")");
+        }
+        command_line += (command_line.empty() ? "" : " ") + argument;
+      }
+
+      const auto devices = platf::session_devices::available() ?
+                             platf::session_devices::options_t {true, true} :
+                             platf::session_devices::options_t {};
+      std::unique_ptr<platf::session_devices::plan_t> plan;
+      if (devices.devices) {
+        const auto staging = std::filesystem::path {runtime->runtime_dir} / "dev";
+        std::error_code staging_ec;
+        std::filesystem::create_directories(staging, staging_ec);
+        plan = platf::session_devices::plan_t::isolate(staging.string(), devices);
+      } else {
+        BOOST_LOG(warning) << "[IsolatedSession] Hermes lacks CAP_SYS_ADMIN and CAP_MKNOD; detached desktop "
+                           << runtime->runtime_id << " sees the host's devices.";
+      }
 
       BOOST_LOG(info) << "[IsolatedSession] Starting detached desktop " << runtime->runtime_id
                       << " (" << width << 'x' << height << ") in user unit " << runtime->unit;
-      if (const int status = run_program(command, 30s); status != 0) {
-        return plasma_failed("could not be started: systemd-run exited with " + std::to_string(status));
+      {
+        std::lock_guard<std::mutex> lock(runtime->process_mutex);
+        std::error_code launch_ec;
+        boost::filesystem::path working_dir {runtime->runtime_dir};
+        runtime->process = platf::session_devices::run_command(
+          plan.get(),
+          command_line,
+          working_dir,
+          boost::this_process::environment(),
+          nullptr,
+          launch_ec,
+          nullptr
+        );
+        if (launch_ec) {
+          return plasma_failed("could not be started: " + launch_ec.message());
+        }
+        if (plan) {
+          runtime->namespace_pid = runtime->process.id();
+          BOOST_LOG(info) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
+                          << " has a private /dev: host input and sound devices hidden.";
+        }
       }
 
       const auto root = std::filesystem::path {runtime->runtime_dir};

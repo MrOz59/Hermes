@@ -1114,6 +1114,61 @@ namespace proc {
     }
 
     /**
+     * @brief Have a detached desktop start one command.
+     *
+     * Its session supervisor starts it, so it gets the desktop's environment,
+     * private /dev and unit, which Hermes could only copy, and stops with the
+     * desktop. The request is a file in the desktop's runtime directory: the
+     * working directory and the arguments, each ended by a NUL.
+     */
+    bool start_in_detached_desktop(const isolated_runtime_t &runtime, const ctx_t &app, const std::string &command, const std::string &name) {
+      const auto arguments = boost::program_options::split_unix(command);
+      if (arguments.empty()) {
+        return false;
+      }
+      std::string request = app.working_dir;
+      request += '\0';
+      for (const auto &argument : arguments) {
+        request += argument;
+        request += '\0';
+      }
+
+      const auto directory = std::filesystem::path {runtime.runtime_dir} / "launch";
+      const auto path = directory / name;
+      std::error_code ec;
+      std::filesystem::create_directories(directory, ec);
+      std::filesystem::remove(std::filesystem::path {path} += ".error", ec);
+      {
+        std::ofstream stream {std::filesystem::path {path} += ".tmp", std::ios::binary | std::ios::trunc};
+        stream << request;
+        if (!stream.flush()) {
+          BOOST_LOG(error) << "[IsolatedSession] Could not ask detached desktop " << runtime.runtime_id << " to start [" << command << ']';
+          return false;
+        }
+      }
+      std::filesystem::rename(std::filesystem::path {path} += ".tmp", path, ec);
+      if (ec) {
+        BOOST_LOG(error) << "[IsolatedSession] Could not ask detached desktop " << runtime.runtime_id << " to start [" << command << "]: " << ec.message();
+        return false;
+      }
+
+      BOOST_LOG(info) << "[IsolatedSession] Starting [" << command << "] in detached desktop " << runtime.runtime_id;
+      const auto deadline = std::chrono::steady_clock::now() + 5s;
+      while (std::filesystem::exists(path, ec) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(50ms);
+      }
+      if (std::filesystem::exists(path, ec)) {
+        BOOST_LOG(warning) << "[IsolatedSession] Detached desktop " << runtime.runtime_id << " has not picked up [" << command << "] yet.";
+        return false;
+      }
+      if (const auto reason = read_small_file(std::filesystem::path {path} += ".error"); !reason.empty()) {
+        BOOST_LOG(error) << "[IsolatedSession] Detached desktop " << runtime.runtime_id << " could not start [" << command << "]: " << reason;
+        return false;
+      }
+      return true;
+    }
+
+    /**
      * Alive means Plasma reported itself up and the compositor still answers
      * on its socket: a socket nobody is listening on means the unit is gone.
      */
@@ -1821,12 +1876,6 @@ namespace proc {
     // reach it. Hermes captures it and drives its input over two explicit
     // sockets, and never falls back to the host desktop.
     if (runtime->profile == "desktop" && config::video.hermes_kms_session_compositor == "plasma") {
-      if (!app.cmd.empty() || !app.detached.empty()) {
-        launch_session->launch_error_message = "A detached desktop does not launch app commands yet.";
-        BOOST_LOG(error) << "[IsolatedSession] " << app.name
-                         << " has a command; a detached desktop does not launch app commands yet.";
-        return 400;
-      }
       if (!app.prep_cmds.empty()) {
         // They exist to rearrange the host's displays for a stream, which is
         // exactly what a detached desktop must leave alone.
@@ -2007,6 +2056,15 @@ namespace proc {
         // Hermes gives the desktop its own copies of their nodes instead.
         // Without it, gamepads are refused rather than shown to the host.
         const auto tag = "hermes-detached-" + runtime->runtime_id;
+        // For 60-hermes.rules, as for isolated Gamescope sessions: the
+        // desktop's mount namespace and Hermes' pid, so that the Steam Input
+        // pads a Steam in this desktop makes are kept off the host too.
+        runtime->isolated_seat_flag = (std::filesystem::path {host_runtime_dir()} / "hermes" / "isolated" / tag).string();
+        std::error_code flag_ec;
+        std::filesystem::create_directories(std::filesystem::path {runtime->isolated_seat_flag}.parent_path(), flag_ec);
+        std::ofstream {runtime->isolated_seat_flag}
+          << std::filesystem::read_symlink("/proc/" + std::to_string(runtime->namespace_pid) + "/ns/mnt", flag_ec).string()
+          << ' ' << ::getpid() << '\n';
         runtime->device_mirror = platf::session_devices::mirror(runtime->namespace_pid, tag);
         if (runtime->device_mirror) {
           runtime->seat_id = tag;
@@ -2057,6 +2115,16 @@ namespace proc {
       runtime->kwin_wayland_socket = detached_wayland_socket(runtime->runtime_dir);
       BOOST_LOG(info) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
                       << " is up on " << runtime->kwin_wayland_socket;
+
+      // The app's command and detached commands run inside the desktop, as
+      // if started from its menu. A command that does not start leaves the
+      // desktop up, as it would at the machine.
+      if (!app.cmd.empty()) {
+        start_in_detached_desktop(*runtime, app, app.cmd, "0-app");
+      }
+      for (size_t index = 0; index < app.detached.size(); ++index) {
+        start_in_detached_desktop(*runtime, app, app.detached[index], "1-detached-" + std::to_string(index));
+      }
 
       launch_session->isolated_session = true;
       launch_session->isolated_runtime_owner_id = runtime->launch_session_id;

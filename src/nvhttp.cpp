@@ -1586,6 +1586,19 @@ namespace nvhttp {
     }
 #endif
 
+    // One real frame through capture, conversion and encoding, before the
+    // client is told the stream is ready, while no stream holds the encoder.
+    if (!is_input_only && rtsp_stream::session_count() == 0) {
+      std::string failure;
+      if (video::check_capture_path(launch_session->display_name, launch_session->fps / 1000, failure)) {
+        BOOST_LOG(error) << "Capture readiness: " << failure;
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", failure + ".");
+        tree.put("root.gamesession", 0);
+        return;
+      }
+    }
+
     if (!rtsp_stream::launch_session_raise(launch_session)) {
       tree.put("root.<xmlattr>.status_code", 503);
       tree.put("root.<xmlattr>.status_message", "Another client is still completing its RTSP handshake. Please retry.");

@@ -3337,6 +3337,99 @@ namespace video {
     return true;
   }
 
+  int check_capture_path(const std::string &display_name, int framerate, std::string &failure) {
+    using namespace std::literals;
+    if (!chosen_encoder) {
+      failure = "No working video encoder was found";
+      return -1;
+    }
+    const auto &encoder = *chosen_encoder;
+    const auto name = display_name.empty() ? display_device::map_output_name(config::video.output_name) : display_name;
+    const auto label = name.empty() ? "the default display"s : "display ["s + name + ']';
+
+    config_t config {1920, 1080, framerate > 0 ? framerate : 60, 1000, 1, 0, 1, 0, 0, 0};
+    config.display_name = display_name;
+    auto disp = platf::display(encoder.platform_formats->dev_type, name, config);
+    if (!disp) {
+      failure = "Capture could not open " + label;
+      return -1;
+    }
+    config.width = disp->width;
+    config.height = disp->height;
+
+    // One real frame. Capture backends call back on every poll, with
+    // frame_captured false when nothing changed, so a deadline here ends it.
+    std::shared_ptr<platf::img_t> frame;
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    bool timed_out = false;
+    std::vector<std::shared_ptr<platf::img_t>> pool;
+    bool cursor = false;
+    const auto status = disp->capture(
+      [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) {
+        if (frame_captured && img) {
+          frame = std::move(img);
+          return false;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+          timed_out = true;
+          return false;
+        }
+        return true;
+      },
+      [&](std::shared_ptr<platf::img_t> &img_out) {
+        for (auto &img : pool) {
+          if (img.use_count() == 1) {
+            img_out = img;
+            return true;
+          }
+        }
+        if (pool.size() >= 3) {
+          return false;
+        }
+        img_out = pool.emplace_back(disp->alloc_img());
+        return static_cast<bool>(img_out);
+      },
+      &cursor
+    );
+    if (!frame) {
+      if (timed_out || status == platf::capture_e::timeout) {
+        // A display that is up but has nothing new to show is not broken.
+        BOOST_LOG(warning) << "Capture readiness: " << label << " produced no new frame within 5 seconds; continuing"sv;
+        return 0;
+      }
+      failure = "Capture failed on " + label;
+      return -1;
+    }
+
+    auto encode_device = make_encode_device(*disp, encoder, config);
+    if (!encode_device) {
+      failure = "The " + std::string {encoder.name} + " encoder cannot take frames from " + label;
+      return -1;
+    }
+    auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
+    if (!session) {
+      failure = "The " + std::string {encoder.name} + " encoder could not start for " + label;
+      return -1;
+    }
+    if (session->convert(*frame)) {
+      failure = "A frame from " + label + " could not be imported or converted on the " + std::string {encoder.name} + " encoder's GPU";
+      return -1;
+    }
+    session->request_idr_frame();
+    auto packets = mail::man->queue<packet_t>(mail::video_packets);
+    for (int attempt = 0; !packets->peek(); ++attempt) {
+      if (attempt == 10 || encode(1, *session, packets, nullptr, {})) {
+        failure = "The " + std::string {encoder.name} + " encoder failed on a frame from " + label;
+        return -1;
+      }
+    }
+    packets->pop();
+
+    BOOST_LOG(info) << "Capture readiness: " << label << " (" << disp->width << 'x' << disp->height
+                    << ") captured, converted and encoded by " << encoder.name;
+    return 0;
+  }
+
 #ifdef __linux__
   int probe_encoders_without_display() {
     probe_without_display = true;

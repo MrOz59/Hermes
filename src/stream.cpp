@@ -2102,15 +2102,23 @@ namespace stream {
       ref->message_queue_queue->raise(type, session_id, nullptr);
     });
 
-    auto start_time = std::chrono::steady_clock::now();
-    auto current_time = start_time;
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    const auto poll_interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(100ms);
 
-    while (current_time - start_time < config::stream.ping_timeout) {
-      auto delta_time = current_time - start_time;
-
-      auto msg_opt = messages->pop(config::stream.ping_timeout - delta_time);
-      if (!msg_opt) {
+    while (session->state.load(std::memory_order_acquire) == session::state_e::RUNNING) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
         break;
+      }
+
+      // A stopped session must not spend its teardown budget waiting for a
+      // client that never completed the handshake.
+      auto msg_opt = messages->pop(std::min(deadline - now, poll_interval));
+      if (session->state.load(std::memory_order_acquire) != session::state_e::RUNNING) {
+        return -1;
+      }
+      if (!msg_opt) {
+        continue;
       }
 
       TUPLE_2D_REF(recv_peer, msg, *msg_opt);
@@ -2122,7 +2130,6 @@ namespace stream {
         BOOST_LOG(debug) << "Received ping [v1] from "sv << recv_peer.address() << ':' << recv_peer.port() << " ["sv << util::hex_vec(msg) << ']';
       } else {
         BOOST_LOG(debug) << "Received non-ping from "sv << recv_peer.address() << ':' << recv_peer.port() << " ["sv << util::hex_vec(msg) << ']';
-        current_time = std::chrono::steady_clock::now();
         continue;
       }
 
@@ -2131,7 +2138,9 @@ namespace stream {
       return 0;
     }
 
-    BOOST_LOG(error) << "Initial Ping Timeout"sv;
+    if (session->state.load(std::memory_order_acquire) == session::state_e::RUNNING) {
+      BOOST_LOG(error) << "Initial Ping Timeout"sv;
+    }
     return -1;
   }
 
@@ -2470,12 +2479,6 @@ namespace stream {
         session.audio.mic = audio::open_client_mic(session.config.mic_source);
       }
 
-      // Insert this session into the session list
-      {
-        auto lg = session.broadcast_ref->control_server._sessions.lock();
-        session.broadcast_ref->control_server._sessions->push_back(&session);
-      }
-
       auto addr = boost::asio::ip::make_address(addr_string);
       session.video.peer.address(addr);
       session.video.peer.port(0);
@@ -2484,11 +2487,19 @@ namespace stream {
       session.audio.peer.port(0);
 
       session.pingTimeout = std::chrono::steady_clock::now() + config::stream.ping_timeout;
+      session.state.store(state_e::STARTING, std::memory_order_relaxed);
+
+      // Publish only after the control deadline and peer addresses are initialized.
+      // The control thread may inspect the session as soon as this lock is released.
+      {
+        auto lg = session.broadcast_ref->control_server._sessions.lock();
+        session.broadcast_ref->control_server._sessions->push_back(&session);
+      }
 
       session.audioThread = std::thread {audioThread, &session};
       session.videoThread = std::thread {videoThread, &session};
 
-      session.state.store(state_e::RUNNING, std::memory_order_relaxed);
+      session.state.store(state_e::RUNNING, std::memory_order_release);
 
       // Platform-wide callbacks track every stream, while the legacy process
       // lifecycle belongs only to streams attached to the shared host session.

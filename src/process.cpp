@@ -4545,6 +4545,53 @@ namespace proc {
     fileTree["version"] = this_version;
   }
 
+  /**
+   * v5: the Detached Desktop and Detached Steam entries, added once to an
+   * existing list as they are to a new one: each after the host entry it is
+   * the detached counterpart of, or at the end. An entry the user deleted
+   * stays deleted, since this runs once.
+   */
+  void migration_v5(nlohmann::json& fileTree) {
+    static const int this_version = 5;
+#ifdef __linux__
+    if (!fileTree.contains("apps") || !fileTree["apps"].is_array()) {
+      fileTree["apps"] = nlohmann::json::array();
+    }
+    auto &apps = fileTree["apps"];
+    const auto add = [&](const char *uuid, const char *after, nlohmann::json entry) {
+      for (const auto &app : apps) {
+        if (app.is_object() && app.value("uuid", "") == uuid) {
+          return;
+        }
+      }
+      entry["uuid"] = uuid;
+      auto position = apps.end();
+      for (auto it = apps.begin(); it != apps.end(); ++it) {
+        if (it->is_object() && it->value("name", "") == after) {
+          position = std::next(it);
+          break;
+        }
+      }
+      BOOST_LOG(info) << "Adding app '" << entry.value("name", "") << "'.";
+      apps.insert(position, std::move(entry));
+    };
+    add(DETACHED_DESKTOP_UUID, "Desktop", {
+      {"name", "Detached Desktop"},
+      {"image-path", "detached-desktop.png"},
+      {"session-type", "desktop"},
+      {"allow-client-commands", false},
+    });
+    add(DETACHED_STEAM_UUID, "Steam Big Picture", {
+      {"name", "Detached Steam"},
+      {"image-path", "detached-steam.png"},
+      {"session-type", "desktop"},
+      {"cmd", "steam steam://open/bigpicture"},
+      {"allow-client-commands", false},
+    });
+#endif
+    fileTree["version"] = this_version;
+  }
+
   void migrate(nlohmann::json& fileTree, const std::string& fileName) {
     int file_version = 0;
     if (fileTree.contains("version")) {
@@ -4558,6 +4605,10 @@ namespace proc {
     }
     if (file_version < 3) {
       migration_v3(fileTree);
+      changed = true;
+    }
+    if (file_version < 5) {
+      migration_v5(fileTree);
       changed = true;
     }
     if (changed) {
@@ -4606,6 +4657,12 @@ namespace proc {
           proc::ctx_t ctx;
           ctx.idx = std::to_string(i);
           ctx.uuid = app_node.at("uuid");
+          // Hermes' own detached entries exist only with independent sessions,
+          // which are what makes a desktop detached.
+          if ((ctx.uuid == DETACHED_DESKTOP_UUID || ctx.uuid == DETACHED_STEAM_UUID) &&
+              (!config::video.hermes_kms_isolated_sessions || config::video.virtual_display_backend != "hermes_kms")) {
+            continue;
+          }
 
           // Build the list of preparation commands.
           std::vector<proc::cmd_t> prep_cmds;

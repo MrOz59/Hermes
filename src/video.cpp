@@ -43,6 +43,10 @@ extern "C" {
   #endif
 #endif
 
+#ifdef __linux__
+  #include "platform/linux/misc.h"
+#endif
+
 #ifdef _WIN32
   #include "platform/windows/virtual_display.h"
 extern "C" {
@@ -3345,7 +3349,9 @@ namespace video {
     }
     const auto &encoder = *chosen_encoder;
     const auto name = stream.display_name.empty() ? display_device::map_output_name(config::video.output_name) : stream.display_name;
-    const auto label = name.empty() ? "the default display"s : "display ["s + name + ']';
+    // Name what is captured as the user knows it: the output, and how.
+    const auto label = (name.empty() ? "the primary display"s : "display ["s + name + ']') +
+                       (config::video.capture.empty() ? ""s : " via "s + config::video.capture);
 
     // The stream's display, as an H.264 SDR stream: every encoder has it.
     config_t config = stream;
@@ -3438,8 +3444,13 @@ namespace video {
     }
     packets->pop();
 
-    BOOST_LOG(info) << "Capture readiness: " << label << " (" << disp->width << 'x' << disp->height
-                    << ") captured, converted and encoded by " << encoder.name;
+    std::string gpu;
+#ifdef __linux__
+    gpu = platf::encode_gpu_description(encoder.platform_formats->dev_type == platf::mem_type_e::cuda);
+#endif
+    BOOST_LOG(info) << "Capture readiness: " << label << " (" << disp->width << 'x' << disp->height << " at "
+                    << config.framerate << " fps) captured, converted and encoded by " << encoder.name
+                    << (gpu.empty() ? ""s : " on "s + gpu);
     return 0;
   }
 

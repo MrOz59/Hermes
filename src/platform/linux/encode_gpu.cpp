@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <mutex>
@@ -170,5 +171,32 @@ namespace platf {
       }
     }
     return best.fd;
+  }
+
+  std::string encode_gpu_description(bool nvenc) {
+    const int fd = open_encode_render_node(nvenc);
+    if (fd < 0) {
+      return {};
+    }
+    auto close_fd = util::fail_guard([fd]() {
+      ::close(fd);
+    });
+    struct stat st {};
+    if (::fstat(fd, &st) || !S_ISCHR(st.st_mode)) {
+      return {};
+    }
+    const auto sysfs = std::format("/sys/dev/char/{}:{}/device/", major(st.st_rdev), minor(st.st_rdev));
+    const auto read_id = [&](const char *file) {
+      std::string value;
+      std::ifstream {sysfs + file} >> value;
+      return value.starts_with("0x") ? value.substr(2) : value;
+    };
+    const auto vendor = read_id("vendor");
+    const auto device = read_id("device");
+    const auto vendor_name = vendor == "1002" ? "AMD"s : vendor == "10de" ? "NVIDIA"s : vendor == "8086" ? "Intel"s : "PCI"s;
+    std::string node;
+    std::error_code ec;
+    node = std::filesystem::read_symlink(std::format("/proc/self/fd/{}", fd), ec).string();
+    return std::format("{} ({}, {} {}:{})", node, driver_name(fd), vendor_name, vendor, device);
   }
 }  // namespace platf

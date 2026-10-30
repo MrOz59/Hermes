@@ -36,6 +36,15 @@ namespace platf {
    * @return An owned file descriptor, or -1.
    */
   int open_encode_render_node(bool nvenc = false);
+
+  /**
+   * @brief Describe the GPU a stream encodes on, for logs and diagnostics:
+   * its render node, driver, vendor and PCI id.
+   * @param nvenc Whether the stream encodes with NVENC rather than VAAPI.
+   * @return For example "/dev/dri/renderD128 (amdgpu, AMD 1002:7550)", or an
+   * empty string when no GPU qualifies.
+   */
+  std::string encode_gpu_description(bool nvenc = false);
 }  // namespace platf
 
 namespace dyn {

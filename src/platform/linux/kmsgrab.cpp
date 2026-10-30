@@ -30,6 +30,7 @@
 #include "cuda.h"
 #include "dmabuf_mapping.h"
 #include "graphics.h"
+#include "hermes_nvenc_route.h"
 #include "pyrowave.h"
 #include "src/config.h"
 #include "src/logging.h"
@@ -161,6 +162,96 @@ namespace platf {
                        << " capture failed; reinitializing: "sv
                        << strerror(acquire_errno);
       return capture_e::reinit;
+    }
+
+    /**
+     * How NVENC sessions read a Hermes-KMS scanout, from the environment.
+     * Read once per display selection and handed to the display it builds, so
+     * the running capture and the next selection always agree.
+     */
+    struct hermes_nvenc_settings_t {
+      hermes_nvenc::dmabuf_mode_e mode {hermes_nvenc::dmabuf_mode_e::off};
+      bool forced_cpu_copy {false};
+    };
+
+    inline hermes_nvenc_settings_t hermes_nvenc_settings() {
+      hermes_nvenc_settings_t settings;
+      const char *force_cpu_copy = std::getenv("HERMES_KMS_FORCE_CPU_COPY");
+      settings.forced_cpu_copy = force_cpu_copy && !std::strcmp(force_cpu_copy, "1");
+
+      const char *experimental_dmabuf = std::getenv("HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF");
+      const auto parsed = hermes_nvenc::parse_dmabuf_mode(experimental_dmabuf);
+      if (!parsed.valid) {
+        BOOST_LOG(warning) << "Ignoring HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF="sv << experimental_dmabuf
+                           << "; expected 0, 1 or auto. Using the CPU copy."sv;
+      }
+      settings.mode = parsed.mode;
+      return settings;
+    }
+
+    /**
+     * What the router sees in a scanout. origin_known comes from the driver's
+     * capabilities (UAPI 15); exporter views the caller's fixed-size array.
+     */
+    inline hermes_nvenc::scanout_t hermes_nvenc_scanout(std::uint64_t modifier, bool origin_known, bool imported, const char (&exporter)[16]) {
+      if (!origin_known) {
+        return {modifier};
+      }
+      return {
+        modifier,
+        imported ? hermes_nvenc::origin_e::imported : hermes_nvenc::origin_e::dumb,
+        hermes_nvenc::exporter_name(exporter, sizeof(exporter)),
+      };
+    }
+
+    /// "modifier 0x... (imported from nvidia_drm)" for the routing logs.
+    inline std::string describe_hermes_scanout(const hermes_nvenc::scanout_t &scanout) {
+      std::string text = "modifier 0x";
+      text += util::hex(scanout.modifier).to_string_view();
+      switch (scanout.origin) {
+        case hermes_nvenc::origin_e::imported:
+          text += " (imported from ";
+          text += scanout.exporter.empty() ? std::string_view {"an unnamed exporter"} : scanout.exporter;
+          text += ')';
+          break;
+        case hermes_nvenc::origin_e::dumb:
+          text += " (Hermes-KMS dumb buffer)";
+          break;
+        case hermes_nvenc::origin_e::unknown:
+        default:
+          text += " (origin not reported; Hermes-KMS predates UAPI 15)";
+          break;
+      }
+      return text;
+    }
+
+    inline void log_hermes_nvenc_route_switch(hermes_nvenc::route_e to, const hermes_nvenc::scanout_t &scanout) {
+      if (to == hermes_nvenc::route_e::dmabuf_import) {
+        BOOST_LOG(info) << "Hermes-KMS NVENC auto route: scanout "sv << describe_hermes_scanout(scanout)
+                        << " was allocated by the NVIDIA GPU; rebuilding capture on the DMA-BUF import."sv;
+      } else {
+        BOOST_LOG(info) << "Hermes-KMS NVENC auto route: scanout "sv << describe_hermes_scanout(scanout)
+                        << " does not prove an NVIDIA GPU-origin buffer; rebuilding capture on the CPU copy."sv;
+      }
+    }
+
+    /**
+     * Layout and origin of the scanout behind display_name, waiting up to a
+     * second for the compositor to latch one, without exporting the buffer.
+     */
+    inline bool probe_hermes_scanout(const std::string &display_name, VDISPLAY::HermesKmsScanout &scanout) {
+      const int fd = VDISPLAY::hermesKmsOpenCapture(display_name);
+      if (fd < 0) {
+        return false;
+      }
+      int width = 0;
+      int height = 0;
+      const bool probed = VDISPLAY::hermesKmsCaptureSize(fd, width, height, 1000) &&
+                          VDISPLAY::hermesKmsScanoutLayout(fd, scanout);
+      const int probe_errno = errno;
+      ::close(fd);
+      errno = probe_errno;
+      return probed;
     }
 
     inline int hermes_dma_buf_sync(int fd, std::uint64_t flags) {
@@ -2270,6 +2361,7 @@ namespace platf {
           BOOST_LOG(error) << "Hermes-KMS: cannot acquire initial colour state: " << strerror(errno);
           return -1;
         }
+        origin_known = VDISPLAY::hermesKmsReportsFrameOrigin(hermes_fd);
         if (source_color.pq() && !config.dynamicRange && !config.encoder_probe) {
           BOOST_LOG(error) << "Hermes-KMS output is HDR but the client requested SDR. Disable HDR on this KDE output or enable HDR in the client.";
           return -1;
@@ -2334,11 +2426,12 @@ namespace platf {
           // the Hermes DMA-BUFs through EGL on the NVIDIA GPU and encodes with
           // NVENC. The Hermes render node stays capture-only.
           //
-          // NOTE: NVENC sessions for Hermes-KMS displays currently capture
-          // through a CPU copy, because NVIDIA's EGL import of these
-          // system-memory DMA-BUFs reads wrong pages past the first ones.
-          // This branch is the intended zero-copy path once that import is
-          // reliable and is kept buildable on purpose.
+          // NOTE: NVENC sessions for Hermes-KMS displays capture through a
+          // CPU copy by default, because NVIDIA's EGL import of the driver's
+          // system-memory dumb buffers reads wrong pages past the first
+          // ones. This path runs only when HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF
+          // asks for it: always (=1), or for GPU-origin NVIDIA-tiled scanouts
+          // (=auto). The consumer caches one import per scanout buffer.
           return cuda::make_avcodec_gl_encode_device(width, height, img_offset_x, img_offset_y);
         }
 #endif
@@ -2398,6 +2491,20 @@ namespace platf {
 
           frame.close();
           return platf::capture_e::reinit;
+        }
+
+        // Automatic NVENC routing imports only scanouts an NVIDIA GPU must
+        // have allocated. A compositor that went back to a linear dumb buffer
+        // (for instance after leaving direct scanout, or KWin dropping from
+        // LinearDmabuf to DumbBuffer) is handing over system memory again,
+        // which is the import NVIDIA has corrupted.
+        if (mem_type == mem_type_e::cuda) {
+          const auto scanout = hermes_nvenc_scanout(frame.modifier, origin_known, frame.imported, frame.exporter);
+          if (hermes_nvenc::must_switch(nvenc_route.mode, nvenc_route.forced_cpu_copy, hermes_nvenc::route_e::dmabuf_import, scanout)) {
+            log_hermes_nvenc_route_switch(hermes_nvenc::route_e::cpu_copy, scanout);
+            frame.close();
+            return platf::capture_e::reinit;
+          }
         }
 
         bool valid_layout = frame.fourcc != 0;
@@ -2529,6 +2636,11 @@ namespace platf {
       uint64_t last_sequence {0};
       uint64_t last_cursor_sequence {0};
       std::optional<bool> last_cursor_requested;
+      /// NVENC routing this display was selected under (kms_display()).
+      hermes_nvenc_settings_t nvenc_route;
+      /// The driver reports each frame's origin (UAPI 15), so routing can
+      /// tell a linear GPU-origin scanout from a dumb buffer.
+      bool origin_known {false};
     };
 
     // Hermes-KMS capture through a CPU copy of the scanout DMA-BUF.
@@ -2584,6 +2696,7 @@ namespace platf {
           BOOST_LOG(error) << "Hermes-KMS: cannot acquire initial colour state: " << strerror(errno);
           return -1;
         }
+        origin_known = VDISPLAY::hermesKmsReportsFrameOrigin(hermes_fd);
         if (source_color.pq() && !config.dynamicRange && !config.encoder_probe) {
           BOOST_LOG(error) << "Hermes-KMS output is HDR but the client requested SDR. Disable HDR on this KDE output or enable HDR in the client.";
           return -1;
@@ -2744,6 +2857,34 @@ namespace platf {
           }
           frame.close();
           return platf::capture_e::reinit;
+        }
+
+        // An NVIDIA tiled scanout is GPU memory in a layout this path would
+        // have to detile; mapping it would read tiles as rows. It appears
+        // when Hermes-KMS advertises NVIDIA modifiers (scanout_modifiers=)
+        // and the compositor renders straight into the virtual output.
+        if (mem_type == mem_type_e::cuda) {
+          const auto scanout = hermes_nvenc_scanout(frame.modifier, origin_known, frame.imported, frame.exporter);
+          if (hermes_nvenc::must_switch(nvenc_route.mode, nvenc_route.forced_cpu_copy, hermes_nvenc::route_e::cpu_copy, scanout)) {
+            log_hermes_nvenc_route_switch(hermes_nvenc::route_e::dmabuf_import, scanout);
+            frame.close();
+            return platf::capture_e::reinit;
+          }
+        }
+        if (mem_type == mem_type_e::cuda && hermes_nvenc::gpu_tiled(frame.modifier)) {
+          if (!warned_gpu_tiled) {
+            warned_gpu_tiled = true;
+            BOOST_LOG(error) << "Hermes-KMS CPU capture: the scanout is an NVIDIA tiled GPU buffer (modifier 0x"sv
+                             << util::hex(frame.modifier).to_string_view()
+                             << ") that the CPU copy cannot read. "sv
+                             << (nvenc_route.forced_cpu_copy ?
+                                   "Unset HERMES_KMS_FORCE_CPU_COPY and set HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto "sv :
+                                   "Set HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto "sv)
+                             << "to import such frames on the GPU, or remove NVIDIA modifiers from the Hermes-KMS "
+                                "scanout_modifiers= parameter so the compositor scans out linear buffers."sv;
+          }
+          frame.close();
+          return platf::capture_e::error;
         }
 
         const auto frame_height = static_cast<std::size_t>(frame.height);
@@ -2931,6 +3072,11 @@ namespace platf {
       /// CPU mappings of the scanout buffers the compositor rotates through.
       platf::dmabuf::mapping_cache_t mappings;
       bool warned_pageable {false};
+      bool warned_gpu_tiled {false};
+      /// NVENC routing this display was selected under (kms_display()).
+      hermes_nvenc_settings_t nvenc_route;
+      /// The driver reports each frame's origin (UAPI 15).
+      bool origin_known {false};
     };
 
   }  // namespace kms
@@ -2961,13 +3107,44 @@ namespace platf {
       // HERMES_KMS_FORCE_CPU_COPY=1 sends VAAPI sessions down the CPU copy as
       // well, so the path NVIDIA users depend on can be exercised and
       // measured on hardware that does not need it.
-      const char *force_cpu_copy = std::getenv("HERMES_KMS_FORCE_CPU_COPY");
-      const bool forced_cpu_copy = force_cpu_copy && !std::strcmp(force_cpu_copy, "1");
-      if (forced_cpu_copy && hwdevice_type != mem_type_e::cuda) {
+      //
+      // HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=1 imports every NVENC frame on
+      // the GPU; =auto imports only scanouts in an NVIDIA tiled layout, which
+      // are GPU-origin by construction and unreadable for the CPU copy, and
+      // copies everything else. See hermes_nvenc_route.h.
+      const auto nvenc_route = kms::hermes_nvenc_settings();
+      if (nvenc_route.forced_cpu_copy && hwdevice_type != mem_type_e::cuda) {
         BOOST_LOG(warning) << "HERMES_KMS_FORCE_CPU_COPY=1: using the CPU-copy capture path instead of zero-copy."sv;
       }
-      if (hwdevice_type == mem_type_e::cuda || forced_cpu_copy) {
+
+      auto route = hermes_nvenc::route_e::dmabuf_import;
+      if (hwdevice_type == mem_type_e::cuda) {
+        VDISPLAY::HermesKmsScanout probed {};
+        probed.modifier = DRM_FORMAT_MOD_LINEAR;
+        // Encoder probes only encode dummy images, so they keep the default
+        // path instead of waiting for a scanout to inspect.
+        const bool inspect_scanout = nvenc_route.mode == hermes_nvenc::dmabuf_mode_e::automatic &&
+                                     !nvenc_route.forced_cpu_copy && !config.encoder_probe;
+        if (inspect_scanout && !kms::probe_hermes_scanout(display_name, probed)) {
+          // The selected path reports its own, more specific, failure.
+          BOOST_LOG(warning) << "Hermes-KMS NVENC auto route: could not read the scanout layout ("sv
+                             << strerror(errno) << "); starting on the CPU copy."sv;
+          probed = {};
+          probed.modifier = DRM_FORMAT_MOD_LINEAR;
+        }
+        const auto scanout = kms::hermes_nvenc_scanout(probed.modifier, probed.origin_known, probed.imported, probed.exporter);
+        route = hermes_nvenc::route_for(nvenc_route.mode, nvenc_route.forced_cpu_copy, scanout);
+        if (inspect_scanout) {
+          BOOST_LOG(info) << "Hermes-KMS NVENC auto route: scanout "sv << kms::describe_hermes_scanout(scanout)
+                          << " -> "sv << (route == hermes_nvenc::route_e::dmabuf_import ? "DMA-BUF import"sv : "CPU copy"sv);
+        }
+      } else if (nvenc_route.forced_cpu_copy) {
+        route = hermes_nvenc::route_e::cpu_copy;
+      }
+
+      if (route == hermes_nvenc::route_e::cpu_copy) {
         auto disp = std::make_shared<kms::display_hermes_ram_t>(hwdevice_type);
+        disp->nvenc_route = nvenc_route;
         if (!disp->init(display_name, config)) {
           return disp;
         }
@@ -2975,7 +3152,16 @@ namespace platf {
         return nullptr;
       }
 
+      if (hwdevice_type == mem_type_e::cuda) {
+        BOOST_LOG(warning) << "EXPERIMENTAL: Hermes-KMS NVENC DMA-BUF import enabled ("sv
+                           << (nvenc_route.mode == hermes_nvenc::dmabuf_mode_e::automatic ? "auto, GPU-origin scanout"sv : "always"sv)
+                           << "). NVIDIA imports are not validated on real hardware yet; run the Hermes-KMS "sv
+                           << "full-frame and import-cache checkers first. CUDA currently uses device 0. "sv
+                           << "Unset HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF to restore CPU-copy capture."sv;
+      }
+
       auto disp = std::make_shared<kms::display_hermes_vram_t>(hwdevice_type);
+      disp->nvenc_route = nvenc_route;
       if (!disp->init(display_name, config)) {
         return disp;
       }

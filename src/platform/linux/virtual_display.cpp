@@ -846,6 +846,10 @@ namespace VDISPLAY {
     // SESSION_ACCESS takes ROTATE_TOKEN and REVOKE_BINDINGS, GET_STATUS reports
     // bound_fd_count, and GET_METRICS reports the binding counters.
     constexpr uint64_t cap_session_lifecycle = 1ULL << 17;
+    // GET_STATUS and ACQUIRE_FRAME say whether the scanout is a PRIME-imported
+    // buffer and name its exporter, so a linear GPU-origin scanout can be told
+    // from a dumb buffer (uapi >= 15).
+    constexpr uint64_t cap_frame_origin = 1ULL << 19;
     constexpr uint64_t cap_zero_copy_target = 1ULL << 33;
     constexpr uint64_t cap_sync_file = 1ULL << 35;
 
@@ -929,7 +933,11 @@ namespace VDISPLAY {
       uint32_t damage_y1;
       uint32_t damage_x2;
       uint32_t damage_y2;
-      alignas(8) uint64_t reserved[6];
+      // Implicit padding before uapi 15; the driver ignores it on input.
+      uint32_t reserved_alignment;
+      // Module that exported an imported frame (uapi >= 15). Output only.
+      char exporter[exporter_name_len];
+      alignas(8) uint64_t reserved[4];
     };
 
     struct acquire_frame2_t {
@@ -937,6 +945,10 @@ namespace VDISPLAY {
       color_t color;
     };
     static_assert(sizeof(acquire_frame_t) == 176);
+    static_assert(offsetof(acquire_frame_t, exporter) == 128);
+    static_assert(sizeof(acquire_frame_t::exporter) == sizeof(HermesKmsFrame::exporter));
+    static_assert(sizeof(status_t::framebuffer_exporter) == sizeof(HermesKmsScanout::exporter));
+    static_assert(offsetof(acquire_frame_t, reserved) == 144);
     static_assert(sizeof(acquire_frame2_t) == 224);
     static_assert(offsetof(acquire_frame2_t, color) == 176);
 
@@ -1065,6 +1077,7 @@ namespace VDISPLAY {
     constexpr uint64_t frame_dmabuf_valid = 1ULL << 2;
     constexpr uint64_t frame_sync_file_valid = 1ULL << 3;
     constexpr uint64_t frame_request_sync_file = 1ULL << 5;
+    constexpr uint64_t frame_imported = 1ULL << 7;
     constexpr uint64_t wait_frame_ready = 1ULL << 0;
     constexpr uint64_t wait_update_frame_ready = 1ULL << 0;
     constexpr uint64_t wait_update_cursor_ready = 1ULL << 1;
@@ -1106,6 +1119,8 @@ namespace VDISPLAY {
     static_assert(sizeof(status_t) == 208);
     static_assert(offsetof(status_t, framebuffer_modifier) == 136);
     static_assert(offsetof(status_t, bound_fd_count) == 160);
+    static_assert(offsetof(status_t, framebuffer_exporter) == 168);
+    static_assert(offsetof(status_t, reserved) == 184);
     static_assert(sizeof(metrics_t) == 312);
     static_assert(offsetof(metrics_t, bind_count) == 200);
     static_assert(offsetof(metrics_t, cross_session_buffer_export_count) == 232);
@@ -8358,6 +8373,35 @@ namespace VDISPLAY {
     return true;
   }
 
+  bool hermesKmsReportsFrameOrigin(int render_fd) {
+    hermes_kms::caps_t caps {};
+    return ::ioctl(render_fd, hermes_kms::ioctl_get_caps, &caps) == 0 &&
+           (caps.flags & hermes_kms::cap_frame_origin);
+  }
+
+  bool hermesKmsScanoutLayout(int render_fd, HermesKmsScanout &out) {
+    out = {};
+    if (render_fd < 0) {
+      errno = EBADF;
+      return false;
+    }
+    hermes_kms::status_t status {};
+    if (::ioctl(render_fd, hermes_kms::ioctl_get_status, &status) != 0) {
+      return false;
+    }
+    if (!(status.flags & hermes_kms::status_frame_valid) || !status.framebuffer_id) {
+      errno = EAGAIN;
+      return false;
+    }
+    out.modifier = status.framebuffer_modifier;
+    out.origin_known = hermesKmsReportsFrameOrigin(render_fd);
+    if (out.origin_known) {
+      out.imported = (status.flags & hermes_kms::status_framebuffer_imported) != 0;
+      std::memcpy(out.exporter, status.framebuffer_exporter, sizeof(out.exporter));
+    }
+    return true;
+  }
+
   bool hermesKmsReportsFrameColor(int render_fd) {
     hermes_kms::caps_t caps {};
     return ::ioctl(render_fd, hermes_kms::ioctl_get_caps, &caps) == 0 &&
@@ -8459,6 +8503,8 @@ namespace VDISPLAY {
     out.height = static_cast<int>(frame.height);
     out.fourcc = frame.format;
     out.modifier = frame.modifier;
+    out.imported = (frame.flags & hermes_kms::frame_imported) != 0;
+    std::memcpy(out.exporter, frame.exporter, sizeof(out.exporter));
     out.plane_count = frame.plane_count;
     out.sequence = frame.sequence;
     out.sync_file_fd = frame.sync_file_fd;

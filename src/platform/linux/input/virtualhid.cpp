@@ -181,9 +181,10 @@ namespace platf {
   }
 
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
-    if (kwin_input::active(static_cast<input_raw_t *>(input.get()))) {
-      // A uinput gamepad would belong to every desktop of the user, not this one.
-      BOOST_LOG(warning) << "Private KWin gamepad routing is not implemented; refusing a host input device";
+    if (auto *raw = static_cast<input_raw_t *>(input.get()); kwin_input::active(raw) && raw->session_tag.empty()) {
+      // Without a private /dev of its own, a gamepad would belong to every
+      // desktop of the user, not this one.
+      BOOST_LOG(warning) << "The detached desktop has no private /dev; refusing a gamepad the host would also see";
       return -1;
     }
     return gamepad::alloc(static_cast<input_raw_t *>(input.get()), id, metadata, feedback_queue);

@@ -2001,6 +2001,20 @@ namespace proc {
                           << " has a private /dev: host input and sound devices hidden.";
         }
       }
+      if (runtime->namespace_pid) {
+        // The client's gamepads carry this tag. udev keeps devices so tagged
+        // off every seat and closed to the user's processes (60-hermes.rules);
+        // Hermes gives the desktop its own copies of their nodes instead.
+        // Without it, gamepads are refused rather than shown to the host.
+        const auto tag = "hermes-detached-" + runtime->runtime_id;
+        runtime->device_mirror = platf::session_devices::mirror(runtime->namespace_pid, tag);
+        if (runtime->device_mirror) {
+          runtime->seat_id = tag;
+        } else {
+          BOOST_LOG(warning) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
+                             << " gets no gamepads: its private /dev cannot be given devices.";
+        }
+      }
 
       const auto root = std::filesystem::path {runtime->runtime_dir};
       const auto deadline = std::chrono::steady_clock::now() + 60s;
@@ -2048,7 +2062,7 @@ namespace proc {
       launch_session->isolated_runtime_owner_id = runtime->launch_session_id;
       launch_session->isolated_session_profile = runtime->profile;
       launch_session->isolated_runtime_id = runtime->runtime_id;
-      launch_session->isolated_seat_id.clear();
+      launch_session->isolated_seat_id = runtime->seat_id;
       launch_session->wayland_display = runtime->kwin_wayland_socket;
       launch_session->kwin_wayland_socket = runtime->kwin_wayland_socket;
       launch_session->kwin_pipewire_socket = runtime->kwin_pipewire_socket;

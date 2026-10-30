@@ -127,17 +127,23 @@ namespace platf {
 
   }  // namespace
 
-  input_raw_t::input_raw_t(std::shared_ptr<kwin::connection_t> private_kwin):
+  input_raw_t::input_raw_t(std::shared_ptr<kwin::connection_t> private_kwin, std::string input_session_tag):
+      session_tag(std::move(input_session_tag)),
       kwin(std::move(private_kwin)),
-      gamepads(MAX_GAMEPADS) {}
+      runtime(session_tag.empty() ? nullptr : virtualhid::create_runtime()),
+      gamepads(MAX_GAMEPADS) {
+    if (!session_tag.empty() && !runtime) {
+      BOOST_LOG(error) << "[libvirtualhid] Failed to create the detached desktop's gamepad runtime";
+    }
+  }
 
-  input_t input_private_kwin(const std::string &wayland_socket) {
+  input_t input_private_kwin(const std::string &wayland_socket, const std::string &session_tag) {
     std::string error;
     std::shared_ptr<kwin::connection_t> connection = kwin::connection_t::open({wayland_socket, {}, {}}, false, true, error);
     if (!connection) {
       throw std::runtime_error("Private KWin input: " + error);
     }
-    return {new input_raw_t(std::move(connection))};
+    return {new input_raw_t(std::move(connection), session_tag)};
   }
 }  // namespace platf
 

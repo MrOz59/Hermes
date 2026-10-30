@@ -64,8 +64,11 @@ namespace platf {
 
   struct input_raw_t {
     explicit input_raw_t(std::string session_tag = {}, std::unique_ptr<lvh::Runtime> runtime = {});
-    /** Input for a private KWin desktop, which creates no virtual devices. */
-    explicit input_raw_t(std::shared_ptr<kwin::connection_t> private_kwin);
+    /**
+     * Input for a private KWin desktop: no virtual keyboard or mouse, and
+     * gamepads only with a session tag, as devices of that session alone.
+     */
+    input_raw_t(std::shared_ptr<kwin::connection_t> private_kwin, std::string session_tag);
     ~input_raw_t() = default;
 
     std::string session_tag;

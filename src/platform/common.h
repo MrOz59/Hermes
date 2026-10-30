@@ -832,7 +832,12 @@ namespace platf {
    */
   input_t input(const std::string &session_tag = {});
 #ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
-  input_t input_private_kwin(const std::string &wayland_socket);
+  /**
+   * Input for a private KWin desktop. Keyboard, mouse and touch go through
+   * KWin; gamepads are virtual devices tagged session_tag, and only exist when
+   * the tag is not empty (the desktop has a private /dev that receives them).
+   */
+  input_t input_private_kwin(const std::string &wayland_socket, const std::string &session_tag = {});
 #endif
   /**
    * @brief Get the current mouse position on screen

@@ -1659,6 +1659,8 @@ namespace nvhttp {
     if (!is_input_only && rtsp_stream::session_count() == 0) {
       video::config_t stream {};
       stream.display_name = launch_session->display_name;
+      stream.kwin_wayland_socket = launch_session->kwin_wayland_socket;
+      stream.kwin_pipewire_socket = launch_session->kwin_pipewire_socket;
       stream.framerate = launch_session->fps / 1000;
       std::string failure;
       if (video::check_capture_path(stream, failure)) {

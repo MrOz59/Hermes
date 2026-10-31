@@ -239,16 +239,27 @@ namespace platf {
         std::ifstream {sysfs + file} >> value;
         return value.starts_with("0x") ? value.substr(2) : value;
       };
-      const auto vendor = read_id("vendor");
-      const auto device = read_id("device");
       std::error_code ec;
       const auto node = std::filesystem::read_symlink(std::format("/proc/self/fd/{}", fd), ec).string();
+      const auto driver = driver_name(fd);
+      if (driver == "hermes-kms"sv) {
+        // A virtual device: no PCI id, but the driver's own version.
+        version_t version {drmGetVersion(fd)};
+        return version ? std::format("{} (hermes-kms {}.{}.{})", node, version->version_major, version->version_minor, version->version_patchlevel) :
+                         std::format("{} (hermes-kms)", node);
+      }
+      const auto vendor = read_id("vendor");
+      const auto device = read_id("device");
       auto name = gpu_marketing_name(sysfs, vendor, device, read_id("revision"));
       if (name.empty()) {
         const auto vendor_name = vendor == "1002" ? "AMD"s : vendor == "10de" ? "NVIDIA"s : vendor == "8086" ? "Intel"s : "PCI"s;
         name = std::format("{} {}:{}", vendor_name, vendor, device);
       }
-      return std::format("{} ({}, {})", node, driver_name(fd), name);
+      // A GPU in the CPU has a small carve-out of memory, a card gigabytes.
+      if (const auto memory = video_memory(fd); memory > 0 && memory < 1024ull * 1024 * 1024) {
+        name += ", integrated";
+      }
+      return std::format("{} ({}, {})", node, driver, name);
     }
   }  // namespace
 
@@ -281,7 +292,7 @@ namespace platf {
       }
       auto description = describe_render_node(fd);
       if (driver_name(fd) == "hermes-kms"sv) {
-        description += " - Hermes-KMS capture node, not used for encoding";
+        description += " - capture node, not used for encoding";
       }
       ::close(fd);
       descriptions.push_back(std::move(description));

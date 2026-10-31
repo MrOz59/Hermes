@@ -2056,7 +2056,9 @@ namespace confighttp {
 
     // Live per-frame pipeline metrics (only meaningful while streaming).
     const auto pm = video::get_pipeline_metrics();
-    if (pm.valid) {
+    // The last stream's figures stay published after it ends; they describe
+    // nothing running now.
+    if (pm.valid && sessions > 0) {
       runtime["pipeline"] = {
         {"fps", pm.fps},
         {"bitrate_kbps", pm.bitrate_kbps},
@@ -2308,13 +2310,6 @@ namespace confighttp {
       return text;
     }
 
-    std::string first_line(const std::filesystem::path &path) {
-      std::ifstream stream {path};
-      std::string line;
-      std::getline(stream, line);
-      return line;
-    }
-
     std::vector<std::string> tail_lines(const std::filesystem::path &path, std::size_t count) {
       std::ifstream stream {path};
       std::deque<std::string> lines;
@@ -2376,11 +2371,18 @@ namespace confighttp {
     const auto session_env = platf::detect_session_environment();
     out << "Session: " << session_env.describe() << '\n';
 #ifdef __linux__
-    const auto kms_version = first_line("/sys/module/hermes_kms/version");
-    out << "Hermes-KMS: " << (kms_version.empty() ? std::filesystem::exists("/sys/module/hermes_kms") ? "loaded" : "not loaded" : kms_version) << '\n';
+    const auto gpus = platf::render_node_descriptions();
+    std::string kms = std::filesystem::exists("/sys/module/hermes_kms") ? "loaded" : "not loaded";
+    for (const auto &gpu : gpus) {
+      if (const auto at = gpu.find("(hermes-kms "); at != std::string::npos) {
+        kms = "loaded, version " + gpu.substr(at + 12, gpu.find(')', at) - at - 12);
+        break;
+      }
+    }
+    out << "Hermes-KMS: " << kms << '\n';
     out << "Virtual display backend: " << config::video.virtual_display_backend << '\n';
     out << "GPUs:\n";
-    for (const auto &gpu : platf::render_node_descriptions()) {
+    for (const auto &gpu : gpus) {
       out << "  " << gpu << '\n';
     }
     const auto encoding = platf::encode_gpu_description();
@@ -2420,6 +2422,11 @@ namespace confighttp {
       out << "time      streams  size        fps     Mbps    encode ms  capture->encode ms  dropped\n";
       for (const auto &sample : samples) {
         const auto &p = sample.pipeline;
+        if (!sample.sessions) {
+          // The pipeline's last figures stay published once a stream ends.
+          out << local_time(sample.at, "%H:%M:%S") << "        0  -\n";
+          continue;
+        }
         out << std::format("{}  {:>7}  {:>11}  {:>6.1f}  {:>6.1f}  {:>9.2f}  {:>18.2f}  {:>7}\n",
                            local_time(sample.at, "%H:%M:%S"), sample.sessions,
                            p.valid ? std::format("{}x{}", p.width, p.height) : "-"s,

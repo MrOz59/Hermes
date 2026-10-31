@@ -360,8 +360,77 @@ namespace {
     configure_output(root, width, height, refresh);
   }
 
+  // Commands Hermes asks this desktop to run: launch/<name>, written whole by
+  // rename, holding the working directory and then the arguments, each ended
+  // by a NUL. They start here so they get the desktop's own environment,
+  // mount namespace and unit, exactly as one started from its menu. A request
+  // that cannot start leaves launch/<name>.error with the reason.
+  void start_requested(const fs::path &root, std::vector<pid_t> &launched) {
+    std::error_code ec;
+    std::vector<fs::path> requests;
+    for (const auto &entry : fs::directory_iterator {root / "launch", ec}) {
+      const auto name = entry.path().filename().string();
+      if (entry.is_regular_file(ec) && name.find('.') == std::string::npos) {
+        requests.push_back(entry.path());
+      }
+    }
+    std::sort(requests.begin(), requests.end());
+    for (const auto &request : requests) {
+      std::ifstream stream {request, std::ios::binary};
+      std::vector<std::string> fields;
+      for (std::string field; std::getline(stream, field, '\0');) {
+        fields.push_back(field);
+      }
+      try {
+        if (fields.size() < 2 || fields[1].empty()) {
+          throw std::runtime_error("Empty command");
+        }
+        const auto directory = fields.front();
+        std::vector<std::string> args {fields.begin() + 1, fields.end()};
+        if (args.front().find('/') == std::string::npos) {
+          args.front() = which(args.front());
+        }
+        if (::access(args.front().c_str(), X_OK)) {
+          throw std::runtime_error(args.front() + " is not executable");
+        }
+        std::vector<char *> words;
+        for (auto &arg : args) {
+          words.push_back(arg.data());
+        }
+        words.push_back(nullptr);
+        const pid_t pid = ::fork();
+        if (pid < 0) {
+          throw std::runtime_error("Could not fork");
+        }
+        if (pid == 0) {
+          ::setsid();
+          if (!directory.empty() && ::chdir(directory.c_str())) {
+            ::_exit(126);
+          }
+          ::execv(words[0], words.data());
+          ::_exit(127);
+        }
+        launched.push_back(pid);
+        report(root, "started " + args.front() + " (pid " + std::to_string(pid) + ")");
+      } catch (const std::exception &error) {
+        try {
+          write_private(fs::path {request} += ".error", std::string {error.what()} + "\n");
+        } catch (...) {}
+      }
+      // Last, so Hermes finds any error once the request is gone.
+      fs::remove(request, ec);
+    }
+    // Reap only these: a wait for any child would take the status of a
+    // program run() is still waiting for.
+    std::erase_if(launched, [](pid_t pid) {
+      int status = 0;
+      return ::waitpid(pid, &status, WNOHANG) != 0;
+    });
+  }
+
   void supervise(const fs::path &root) {
     pid_t plasma = -1;
+    std::vector<pid_t> launched;
     try {
       report(root, "waiting for the KWin wrapper");
       const auto deadline = std::chrono::steady_clock::now() + 8s;
@@ -437,6 +506,9 @@ namespace {
               throw std::runtime_error("Private Plasma startup timed out (" + waiting + ")");
             }
           }
+        }
+        if (ready) {
+          start_requested(root, launched);
         }
         std::this_thread::sleep_for(100ms);
       }

@@ -3,6 +3,7 @@
  * @brief Keyboard, mouse and touch for a private KWin desktop, through its fake-input protocol.
  */
 #include "kwin_input.h"
+#include "virtualhid_gamepad.h"
 
 #include "src/logging.h"
 #include "src/platform/linux/kwin_session.h"
@@ -130,7 +131,7 @@ namespace platf {
   input_raw_t::input_raw_t(std::shared_ptr<kwin::connection_t> private_kwin, std::string input_session_tag):
       session_tag(std::move(input_session_tag)),
       kwin(std::move(private_kwin)),
-      runtime(session_tag.empty() ? nullptr : virtualhid::create_runtime()),
+      runtime(session_tag.empty() ? nullptr : gamepad::runtime_for(session_tag)),
       gamepads(MAX_GAMEPADS) {
     if (!session_tag.empty() && !runtime) {
       BOOST_LOG(error) << "[libvirtualhid] Failed to create the detached desktop's gamepad runtime";

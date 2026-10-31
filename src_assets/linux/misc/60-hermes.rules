@@ -36,12 +36,12 @@ SUBSYSTEMS=="input", ATTRS{name}=="Sunshine X-Box One (virtual) pad", GROUP="inp
 SUBSYSTEMS=="input", ATTRS{name}=="Sunshine gamepad (virtual) motion sensors", GROUP="input", MODE="0660", TAG+="uaccess"
 SUBSYSTEMS=="input", ATTRS{name}=="Sunshine Nintendo (virtual) pad", GROUP="input", MODE="0660", TAG+="uaccess"
 
-# Steam Input pads (uinput, Valve, no phys) made inside a session with a private
-# /dev join its seat, so the desktop gets no ACL for them; Hermes copies them
+# Steam Input pads (uinput, Valve, no phys) made inside a session or detached
+# desktop with a private /dev join its seat, so the desktop gets no ACL for them; Hermes copies them
 # into the session. The session is the one whose mount namespace (in Hermes'
 # seat flag) alone holds /dev/uinput, Hermes aside; a uinput device records
 # no creator.
-SUBSYSTEM=="input", KERNEL=="event*|js*", DEVPATH=="/devices/virtual/input/*", ATTRS{id/vendor}=="28de", ATTRS{phys}=="", IMPORT{program}="/bin/sh -c 'uid=$$(cat /etc/hermes-kms/session-user) || exit 0; holders=$$(find /proc/[0-9]*/fd -lname /dev/uinput 2>/dev/null | cut -d/ -f3 | sort -u); for flag in /run/user/$$uid/hermes/isolated/hermes-kms-*; do [ -f $$flag ] || continue; read ns hermes < $$flag; found=0; for pid in $$holders; do [ $$pid = $$hermes ] && continue; [ x$$(readlink /proc/$$pid/ns/mnt) = x$$ns ] || { found=0; break; }; found=1; done; [ $$found = 1 ] && echo ID_SEAT=$${flag##*/} && exit 0; done; exit 0'"
+SUBSYSTEM=="input", KERNEL=="event*|js*", DEVPATH=="/devices/virtual/input/*", ATTRS{id/vendor}=="28de", ATTRS{phys}=="", IMPORT{program}="/bin/sh -c 'uid=$$(cat /etc/hermes-kms/session-user) || exit 0; holders=$$(find /proc/[0-9]*/fd -lname /dev/uinput 2>/dev/null | cut -d/ -f3 | sort -u); for flag in /run/user/$$uid/hermes/isolated/hermes-kms-* /run/user/$$uid/hermes/isolated/hermes-detached-*; do [ -f $$flag ] || continue; read ns hermes < $$flag; found=0; for pid in $$holders; do [ $$pid = $$hermes ] && continue; [ x$$(readlink /proc/$$pid/ns/mnt) = x$$ns ] || { found=0; break; }; found=1; done; [ $$found = 1 ] && echo ID_SEAT=$${flag##*/} && exit 0; done; exit 0'"
 SUBSYSTEM=="input", ENV{ID_SEAT}=="hermes-kms-*", TAG+="seat", GROUP:="input", MODE:="0660", TAG+="uaccess"
 # Detached desktops run as the same user as the host desktop, so no group, mode
 # or ACL could give one of them a device that the user's host applications
@@ -52,3 +52,5 @@ SUBSYSTEM=="hid", ENV{HID_PHYS}=="hermes-detached-*", ENV{HERMES_DETACHED_INPUT}
 SUBSYSTEM=="input", ATTR{phys}=="hermes-detached-*", ENV{HERMES_DETACHED_INPUT}="1", ENV{ID_SEAT}="$attr{phys}"
 SUBSYSTEM=="input|hidraw", IMPORT{parent}="HERMES_DETACHED_INPUT"
 SUBSYSTEM=="input|hidraw", ENV{HERMES_DETACHED_INPUT}=="1", TAG+="seat", OWNER:="root", GROUP:="root", MODE:="0600"
+# The Steam Input pads a Steam in a detached desktop makes, likewise.
+SUBSYSTEM=="input", ENV{ID_SEAT}=="hermes-detached-*", TAG+="seat", OWNER:="root", GROUP:="root", MODE:="0600"

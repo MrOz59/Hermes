@@ -612,6 +612,17 @@ namespace rtsp_stream {
       return _session_slots->size();
     }
 
+    int shared_session_count() {
+      auto lg = _session_slots.lock();
+      int count = 0;
+      for (const auto &slot : *_session_slots) {
+        if (slot && !stream::session::isolated(*slot)) {
+          ++count;
+        }
+      }
+      return count;
+    }
+
     safe::event_t<std::shared_ptr<launch_session_t>> launch_event;
 
     /**
@@ -723,6 +734,20 @@ namespace rtsp_stream {
       return false;
     }
 
+    void terminate_shared_sessions() {
+      auto lg = _session_slots.lock();
+      for (auto it = _session_slots->begin(); it != _session_slots->end();) {
+        const auto &slot = *it;
+        if (!slot || stream::session::isolated(*slot)) {
+          ++it;
+          continue;
+        }
+        stream::session::stop(*slot, stream::session::termination_reason_e::SERVER_STOPPED);
+        stream::session::join(*slot);
+        it = _session_slots->erase(it);
+      }
+    }
+
   private:
     std::unordered_map<std::string_view, cmd_func_t> _map_cmd_cb;
 
@@ -756,6 +781,11 @@ namespace rtsp_stream {
     return server.session_count();
   }
 
+  int shared_session_count() {
+    server.clear(false);
+    return server.shared_session_count();
+  }
+
   std::string_view last_termination_reason() {
     return stream::session::termination_reason_str(stream::session::last_termination_reason());
   }
@@ -764,12 +794,24 @@ namespace rtsp_stream {
     return server.find_session(uuid);
   }
 
+  std::optional<bool> session_is_isolated(const std::string_view &uuid) {
+    const auto session = server.find_session(uuid);
+    if (!session) {
+      return std::nullopt;
+    }
+    return stream::session::isolated(*session);
+  }
+
   std::list<std::string> get_all_session_uuids() {
     return server.get_all_session_uuids();
   }
 
   bool terminate_session(const std::string_view &uuid) {
     return server.terminate_session(uuid);
+  }
+
+  void terminate_shared_sessions() {
+    server.terminate_shared_sessions();
   }
 
   void terminate_sessions() {
@@ -1337,6 +1379,17 @@ namespace rtsp_stream {
     }
 
     config.gcmap = session.gcmap;
+    // A desktop on a helper account plays into that account's own audio
+    // server, so it never has a sink here; only a same-user desktop must.
+    const auto runtime_owner = session.isolated_runtime_owner_id ? session.isolated_runtime_owner_id : session.id;
+    if (session.isolated_session && session.isolated_session_profile == "desktop" &&
+        config.audio.session_sink.empty() && !proc::proc.isolated_session_has_account(runtime_owner)) {
+      BOOST_LOG(error) << "[IsolatedSession] The detached desktop has no private audio sink; "
+                          "refusing to capture host audio.";
+      respond(sock, session, &option, 503, "Service Unavailable", req->sequenceNumber, {});
+      return;
+    }
+
     auto stream_session = stream::session::alloc(config, session);
     server->insert(stream_session);
     if (stream::session::start(*stream_session, sock.remote_endpoint().address().to_string())) {

@@ -14,11 +14,16 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace platf {
+  namespace kwin {
+    class connection_t;
+  }
+
   constexpr std::uint16_t VIRTUAL_INPUT_VENDOR_ID = 0xBEEF;
   constexpr std::uint16_t VIRTUAL_INPUT_PRODUCT_ID = 0xDEAD;
 
@@ -59,9 +64,12 @@ namespace platf {
 
   struct input_raw_t {
     explicit input_raw_t(std::string session_tag = {}, std::unique_ptr<lvh::Runtime> runtime = {});
+    /** Input for a private KWin desktop, which creates no virtual devices. */
+    explicit input_raw_t(std::shared_ptr<kwin::connection_t> private_kwin);
     ~input_raw_t() = default;
 
     std::string session_tag;
+    std::shared_ptr<kwin::connection_t> kwin;
     std::unique_ptr<lvh::Runtime> runtime;
     std::unique_ptr<lvh::Mouse> mouse;
     std::unique_ptr<lvh::Keyboard> keyboard;
@@ -72,9 +80,12 @@ namespace platf {
   struct client_input_raw_t: public client_input_t {
     explicit client_input_raw_t(input_t &input, std::unique_ptr<lvh::Runtime> runtime = {}):
         global(static_cast<input_raw_t *>(input.get())),
-        virtualhid_devices(std::make_unique<virtualhid::client_devices_t>(global->session_tag, std::move(runtime))) {}
+        virtualhid_devices(global->kwin ? nullptr : std::make_unique<virtualhid::client_devices_t>(global->session_tag, std::move(runtime))) {}
 
     input_raw_t *global;
     std::unique_ptr<virtualhid::client_devices_t> virtualhid_devices;
+    // Fingers this client has put down on a private KWin desktop, which tells
+    // a down from a motion: the protocol has separate requests for each.
+    std::set<std::uint32_t> kwin_touches;
   };
 }  // namespace platf

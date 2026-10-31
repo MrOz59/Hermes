@@ -344,19 +344,32 @@ third-party tool, you can use *QRes* as an example.
 > recommended**. They will change in ways that are not backwards compatible, so
 > an app configuration built on the fields below is likely to need rebuilding.
 
-When `hermes_kms_isolated_sessions` is enabled, each application can select a
-`session-type` in the Web UI or `apps.json`:
+When `hermes_kms_isolated_sessions` is enabled, it acts as a server capability
+rather than switching the entire server into an isolated mode. Each application
+can select a `session-type` in the Web UI or `apps.json`:
 
-- `auto` (default): use `application` when `cmd` is present, otherwise
-  `desktop`;
-- `application`: start only the configured application inside a DRM Gamescope
-  session, without a desktop panel;
-- `desktop`: start a desktop session with the session compositor chosen by
-  `hermes_kms_session_compositor`; when `cmd` is set, Hermes launches it after
-  the desktop socket and scanout are ready, and ties it to the session so that
-  ending the session ends it too - as a member of the session's process group
-  where the session runs as the Hermes user, or as a unit bound to the
-  session's where the session broker gave it a user of its own.
+- `auto` (default): stay on the shared host session unless the launch
+  explicitly requests a virtual display and `virtual-display-layout = detached`;
+  a Detached entry with no `cmd` becomes an independent desktop, while one with
+  a `cmd` becomes an independent application session;
+- `application`: always start only the configured application inside an
+  independent DRM Gamescope session, without a desktop panel;
+- `desktop`: always start an independent desktop with the session compositor
+  chosen by `hermes_kms_session_compositor`, by default the user's own Plasma
+  desktop, detached. With a compositor profile such as `weston`, when `cmd` is
+  set, Hermes launches it after the desktop socket and scanout are ready, and
+  ties it to the session so that ending the session ends it too - as a member
+  of the session's process group where the session runs as the Hermes user, or
+  as a unit bound to the session's where the session broker gave it a user of
+  its own;
+- `shared` (available in `apps.json`): always use the existing host
+  desktop/session.
+
+Mirror, Extend, Exclusive, ordinary Host Desktop launches, and launches without
+an explicit virtual-display request remain shared-host routes. Shared-host and
+independent sessions may run at the same time; enabling the capability does not
+disable host multi-output management or Remote Input. These values have no
+effect while independent client sessions are disabled.
 
 An `application` session runs
 `gamescope --backend=drm -W -H -w -h -r <client mode> <scanout option> <card> <steam mode> <flags> -O <connector> -- <cmd>`,
@@ -404,11 +417,15 @@ Hermes sends it SIGTERM (it logs off and saves its settings, usually in a few
 seconds) before starting the session, and kills it and its children if it is
 still running after 30 seconds.
 
-The `desktop` profile is currently a reference Weston desktop, not a complete
-Plasma session. To use the shared host session, disable
-`hermes_kms_isolated_sessions`; mixing shared and isolated app profiles in one
-server is intentionally rejected by this prototype. These values have no
-effect while independent client sessions are disabled. Before launching,
+With `hermes_kms_session_compositor = plasma`, the default, the independent
+`desktop` profile is the user's own Plasma desktop, detached: it runs as the
+same user with the same home, files and settings, on a virtual KWin output that
+no physical monitor or local keyboard and mouse can reach. It needs no
+Hermes-KMS card or seatd, and it does not run `cmd`, `detached` or prep
+commands.
+
+With a compositor profile such as `weston` instead, the `desktop` profile is a
+reference Weston desktop, not a complete Plasma session. Before such a launch,
 configure the driver's private-seat broker for the Hermes user with
 `sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto`, which starts
 one broker per session card; Hermes assigns the corresponding private broker

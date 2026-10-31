@@ -141,6 +141,15 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
+      - name: Verify monitor restoration and bounded cleanup
+        run: |
+          for standard in c++17 c++23; do
+            g++ -std="$standard" -Wall -Wextra -Werror -pedantic -pthread \
+              -fsanitize=address,undefined -fno-omit-frame-pointer -g -I. \
+              tests/display_restore/monitor_restore.cc -o "/tmp/hermes-monitor-restore-$standard"
+            "/tmp/hermes-monitor-restore-$standard"
+          done
+
       - name: Build pinned PyroWave SDK
         run: bash scripts/build-pyrowave-sdk.sh
 
@@ -445,6 +454,12 @@ jobs:
               if [ "$rc_number" -ge 3 ]; then
                 test "$(vercmp "$BUILD_VERSION" '0.6.0+20261026.rc2.f8ae5a5')" -gt 0
               fi
+              if [ "$rc_number" -ge 5 ]; then
+                test "$(vercmp "$BUILD_VERSION" '0.6.0+20261027.rc4.809c6eb')" -gt 0
+              fi
+              if [ "$rc_number" -ge 6 ]; then
+                test "$(vercmp "$BUILD_VERSION" '0.6.0+20261028.rc5.a134bc5')" -gt 0
+              fi
               ;;
           esac
 
@@ -607,6 +622,12 @@ jobs:
               rc_number="${BRANCH##*-rc}"
               if [ "$rc_number" -ge 3 ]; then
                 dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+20261026.rc2.f8ae5a5'
+              fi
+              if [ "$rc_number" -ge 5 ]; then
+                dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+20261027.rc4.809c6eb'
+              fi
+              if [ "$rc_number" -ge 6 ]; then
+                dpkg --compare-versions "$BUILD_VERSION" gt '0.6.0+20261028.rc5.a134bc5'
               fi
               ;;
           esac
@@ -862,6 +883,12 @@ jobs:
               rc_number="${BRANCH##*-rc}"
               if [ "$rc_number" -ge 3 ]; then
                 test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+20261026.rc2.f8ae5a5'))}")" -gt 0
+              fi
+              if [ "$rc_number" -ge 5 ]; then
+                test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+20261027.rc4.809c6eb'))}")" -gt 0
+              fi
+              if [ "$rc_number" -ge 6 ]; then
+                test "$(rpm --eval "%{lua: print(rpm.vercmp('${BUILD_VERSION}', '0.6.0+20261028.rc5.a134bc5'))}")" -gt 0
               fi
               ;;
           esac

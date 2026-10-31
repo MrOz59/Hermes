@@ -284,6 +284,13 @@ namespace platf::session_devices {
         return read_line(sysfs().parent_path() / "phys");
       }
 
+      // The event and joystick nodes of a gamepad Hermes made through uhid, which
+      // a kernel HID driver (hid-nintendo, hid-playstation) runs; its hidraw node
+      // is not one. Hermes' keyboard, mice, touch and pen are uinput devices.
+      bool hid_gamepad_input() const {
+        return subsystem == "input" && devpath.starts_with("/devices/virtual/misc/uhid/");
+      }
+
       // Steam Input's pads: uinput devices with Valve's vendor id.
       bool valve_virtual_pad() const {
         return subsystem == "input" && devpath.starts_with("/devices/virtual/input/") &&
@@ -342,15 +349,21 @@ namespace platf::session_devices {
 
     class mirror_impl_t: public mirror_t {
     public:
-      mirror_impl_t(int dev_fd, ino_t ns, std::string seat):
+      mirror_impl_t(int dev_fd, ino_t ns, std::string seat, bool hide_hid_gamepads):
           dev_fd {dev_fd},
           ns {ns},
-          seat {std::move(seat)} {
+          seat {std::move(seat)},
+          hide_hid_gamepads {hide_hid_gamepads} {
       }
 
       ~mirror_impl_t() override;
 
       bool owns(const device_t &device) const {
+        // Steam does not grab a HID gamepad's event node, so a game reading it
+        // would get every press twice: raw, and through Steam Input.
+        if (hide_hid_gamepads && device.hid_gamepad_input()) {
+          return false;
+        }
         return device.phys() == seat || (device.valve_virtual_pad() && only_session_holds_uinput(ns));
       }
 
@@ -372,6 +385,7 @@ namespace platf::session_devices {
       int dev_fd;
       ino_t ns;
       std::string seat;
+      bool hide_hid_gamepads;
       std::set<std::string> nodes;
     };
 
@@ -470,7 +484,7 @@ namespace platf::session_devices {
     }
   }  // namespace
 
-  std::unique_ptr<mirror_t> mirror(pid_t pid, const std::string &seat) {
+  std::unique_ptr<mirror_t> mirror(pid_t pid, const std::string &seat, bool hide_hid_gamepads) {
     static std::once_flag started;
     std::call_once(started, [] {
       std::thread {monitor}.detach();
@@ -487,7 +501,7 @@ namespace platf::session_devices {
       return nullptr;
     }
 
-    auto mirror = std::make_unique<mirror_impl_t>(dev_fd, st.st_ino, seat);
+    auto mirror = std::make_unique<mirror_impl_t>(dev_fd, st.st_ino, seat, hide_hid_gamepads);
     std::lock_guard lock {mirrors_mutex};
     sync(*mirror);
     mirrors.push_back(mirror.get());

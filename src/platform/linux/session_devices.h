@@ -68,7 +68,8 @@ namespace platf::session_devices {
    *
    * Hermes creates copies of the nodes of seat's devices and of Valve virtual
    * pads made by the session's processes, from kernel uevents, so they are
-   * there before udev announces them.
+   * there before udev announces them. With hide_hid_gamepads, a HID gamepad
+   * gets only its hidraw node: Steam reads it there, games see Steam's pad.
    */
   class mirror_t {
   public:
@@ -76,5 +77,5 @@ namespace platf::session_devices {
   };
 
   /// Mirror into the /dev of pid's mount namespace; nullptr on failure.
-  std::unique_ptr<mirror_t> mirror(pid_t pid, const std::string &seat);
+  std::unique_ptr<mirror_t> mirror(pid_t pid, const std::string &seat, bool hide_hid_gamepads = false);
 }  // namespace platf::session_devices

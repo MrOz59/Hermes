@@ -905,6 +905,33 @@ alias; new configurations should use the key above.
     </tr>
 </table>
 
+### isolated_hide_hid_gamepads
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Switch Pro, DualShock 4 and DualSense emulation are HID devices that a kernel driver (`hid-nintendo`,
+            `hid-playstation`) turns into a gamepad. Steam reads them through hidraw and does not grab that gamepad, so a
+            game that reads it too gets every press twice: raw, and through Steam Input. When enabled, an isolated
+            session (Gamescope or detached desktop) gets only their hidraw nodes, and games see Steam Input's controller
+            alone. A game run without Steam Input then has no controller.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            isolated_hide_hid_gamepads = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### enable_input_only_mode
 
 <table>

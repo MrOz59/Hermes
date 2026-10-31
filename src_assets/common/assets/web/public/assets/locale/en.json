@@ -436,6 +436,8 @@
         "ignore_encoder_probe_failure_desc": "Allow streaming to continue even if probing for encoders fails. This may result in streaming failure if no encoder is available.",
         "isolated_ignore_mouse_wiggle": "Ignore the client's connect-time mouse wiggle in isolated sessions",
         "isolated_ignore_mouse_wiggle_desc": "Moonlight-based clients move the mouse by one pixel and back right after connecting. In an isolated gamescope session that shows the cursor until the app hides it. When enabled, Hermes drops that move if it is the session's first mouse input.",
+        "isolated_hide_hid_gamepads": "Show games in isolated sessions only Steam Input's controller",
+        "isolated_hide_hid_gamepads_desc": "Switch Pro, DualShock 4 and DualSense emulation are HID devices that a kernel driver turns into a gamepad. Steam reads them through hidraw and does not grab that gamepad, so a game reading it as well gets every press twice: raw and through Steam Input. When enabled, an isolated session gets only their hidraw nodes, and games see Steam Input's controller alone. A game run without Steam Input then has no controller.",
         "pyrowave": "PyroWave (Experimental)",
         "pyrowave_desc": "Advertise the optional Vulkan PyroWave codec to Hestia clients. Requires a build with pyrowave-shared and is intended for high-bandwidth LAN streaming.",
         "install_steam_audio_drivers": "Install Steam Audio Drivers",

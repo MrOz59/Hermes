@@ -203,6 +203,15 @@ const config = ref(props.config)
               default="true"
     ></Checkbox>
 
+    <!-- Let isolated sessions see HID gamepads only through Steam Input -->
+    <Checkbox v-if="config.controller === 'enabled'"
+              class="mb-3"
+              id="isolated_hide_hid_gamepads"
+              locale-prefix="config"
+              v-model="config.isolated_hide_hid_gamepads"
+              default="false"
+    ></Checkbox>
+
     <!-- Enable Input Only Mode -->
     <hr>
     <Checkbox class="mb-3"

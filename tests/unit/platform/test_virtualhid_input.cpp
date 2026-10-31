@@ -189,6 +189,31 @@ namespace {
     }
   }
 
+  TEST_F(VirtualHidInputTest, HidPadsKeepTheirClientControllerMacAcrossSeats) {
+    platf::input_raw_t one {"hermes-kms-1", fake_runtime()};
+    platf::input_raw_t two {"hermes-kms-12", fake_runtime()};
+    const auto mac = [&](platf::input_raw_t &raw, const char *client, std::uint8_t number) {
+      EXPECT_EQ(platf::gamepad::alloc(&raw, {0, number}, {.client_id = client}, feedback), 0);
+      auto id = raw.gamepads[0]->adapter->gamepad()->metadata().stable_id;
+      platf::gamepad::free(&raw, 0);
+      return id;
+    };
+    for (const auto *gamepad : {"switch", "ds5", "ds4"}) {
+      config::input.gamepad = gamepad;
+      config::input.virtualhid_stable_mac = true;
+      const auto first = mac(one, "318C46A0-D6BA-4F09-D896-E0503D0C4EFE", 0);
+      EXPECT_TRUE(first.starts_with("02:")) << first;
+      EXPECT_EQ(first.size(), 17U);
+      EXPECT_EQ(mac(two, "318C46A0-D6BA-4F09-D896-E0503D0C4EFE", 0), first) << gamepad;
+      EXPECT_NE(mac(one, "318C46A0-D6BA-4F09-D896-E0503D0C4EFE", 1), first) << gamepad;
+      EXPECT_NE(mac(one, "A0468C31-BAD6-094F-D996-E0503D0C4EFE", 0), first) << gamepad;
+
+      // Off, the address is the seat's again.
+      config::input.virtualhid_stable_mac = false;
+      EXPECT_NE(mac(one, "318C46A0-D6BA-4F09-D896-E0503D0C4EFE", 0), mac(two, "318C46A0-D6BA-4F09-D896-E0503D0C4EFE", 0)) << gamepad;
+    }
+  }
+
   TEST_F(VirtualHidInputTest, AutoSelectionUsesUnknownCapabilitiesButManualSelectionWins) {
     platf::input_raw_t raw {"hermes-kms-12", fake_runtime()};
     const auto select = [&](const char *name, std::uint8_t client, std::uint16_t capabilities) {

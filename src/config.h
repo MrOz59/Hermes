@@ -225,6 +225,7 @@ namespace config {
     bool native_pen_touch;
     bool isolated_ignore_mouse_wiggle;
     bool isolated_hide_hid_gamepads;
+    bool virtualhid_stable_mac;
 
     bool enable_input_only_mode;
     bool forward_rumble;

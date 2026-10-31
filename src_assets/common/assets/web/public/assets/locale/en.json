@@ -610,6 +610,8 @@
         "default_scale_factor_desc": "Host-side default resolution scale factor in percent applied to virtual-display sessions. 100 = unchanged. Range 20-200.",
         "virtualhid_randomize_mac": "Randomize PlayStation controller MAC",
         "virtualhid_randomize_mac_desc": "Randomize the MAC address of emulated DualShock 4 and DualSense controllers. Deterministic addresses remain scoped to the isolated session when disabled. Enabled by default.",
+        "virtualhid_stable_mac": "Keep each client controller's MAC",
+        "virtualhid_stable_mac_desc": "Give an emulated Switch Pro, DualShock 4 or DualSense controller a MAC derived from the client and its controller number, the same in every session. Steam keeps per-controller layouts by that address, so they stay applied. Takes precedence over randomizing the PlayStation MAC. Enabled by default.",
         "keybindings": "Key Bindings",
         "keybindings_desc": "Remap input key codes, given as a map of source to target key codes. Edit in the config file directly.",
         "vaapi_quality": "VAAPI Quality",

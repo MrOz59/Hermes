@@ -120,6 +120,26 @@ namespace platf::gamepad {
       return controller_type::xbox_series;
     }
 
+    // The same client's controller number gets the same MAC in every session
+    // and seat, so Steam, which keeps per-controller layouts by serial (the
+    // MAC on Switch and PlayStation pads), and games recognize it. 0x02: a
+    // locally administered unicast address.
+    std::string client_mac(const std::string &client_id, std::uint8_t controller_number) {
+      std::uint64_t hash = 14695981039346656037ULL;
+      for (const auto character : client_id + '/' + std::to_string(controller_number)) {
+        hash ^= static_cast<std::uint8_t>(character);
+        hash *= 1099511628211ULL;
+      }
+      return std::format(
+        "02:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        (hash >> 32U) & 0xFFU,
+        (hash >> 24U) & 0xFFU,
+        (hash >> 16U) & 0xFFU,
+        (hash >> 8U) & 0xFFU,
+        hash & 0xFFU
+      );
+    }
+
     std::string playstation_stable_id(int global_index, std::string_view session_tag) {
       if (config::input.virtualhid_randomize_mac) {
         // A libvirtualhid Runtime numbers devices locally. Leaving stable_id
@@ -213,7 +233,12 @@ namespace platf::gamepad {
       options.metadata.has_rgb_led = (metadata.capabilities & LI_CCAP_RGB_LED) != 0;
       options.metadata.has_battery = (metadata.capabilities & LI_CCAP_BATTERY_STATE) != 0;
 
-      if (type == controller_type::dualsense || type == controller_type::dualshock4) {
+      const bool hid_pad = type == controller_type::dualsense || type == controller_type::dualshock4 || type == controller_type::switch_pro;
+      if (hid_pad && config::input.virtualhid_stable_mac && !metadata.client_id.empty()) {
+        options.metadata.stable_id = client_mac(metadata.client_id, id.clientRelativeIndex);
+        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " MAC " << options.metadata.stable_id << " (client controller "
+                        << int {id.clientRelativeIndex} << ')';
+      } else if (type == controller_type::dualsense || type == controller_type::dualshock4) {
         options.metadata.stable_id = playstation_stable_id(id.globalIndex, session_tag);
       } else {
         options.metadata.stable_id = session_tag.empty() ? std::format("gamepad-{}", id.globalIndex) : std::format("{}-gamepad-{}", session_tag, id.globalIndex);

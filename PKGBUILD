@@ -17,6 +17,7 @@ depends=(
   'libcap'
   'libdrm'
   'libevdev'
+  'libpipewire'
   'libpulse'
   'libva'
   'libx11'
@@ -41,6 +42,7 @@ makedepends=(
   'git-lfs'
   'nodejs'
   'npm'
+  'plasma-wayland-protocols'
   'vulkan-headers'
 )
 

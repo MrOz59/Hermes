@@ -39,9 +39,10 @@ namespace platf {
 
   /**
    * @brief Describe the GPU a stream encodes on, for logs and diagnostics:
-   * its render node, driver, vendor and PCI id.
+   * its render node, driver and the name it is sold under, or its PCI id.
    * @param nvenc Whether the stream encodes with NVENC rather than VAAPI.
-   * @return For example "/dev/dri/renderD128 (amdgpu, AMD 1002:7550)", or an
+   * @return For example "/dev/dri/renderD128 (amdgpu, AMD Radeon RX 9070 XT)",
+   * or "(amdgpu, AMD 1002:7550)" where the name is unknown, or an
    * empty string when no GPU qualifies.
    */
   std::string encode_gpu_description(bool nvenc = false);

@@ -421,6 +421,9 @@ int main(int argc, char **argv) {
     // would replace the session the host restores next. A system value marked
     // immutable outranks the user's ksmserverrc, which stays untouched.
     write_private(root / "xdg/ksmserverrc", "[General]\nloginMode[$i]=emptySession\n");
+    // Leave Bluetooth management to the host. KDED 6 still reads kded5rc.
+    // BlueDevil does not load on demand; prevent its duplicate OBEX retries.
+    write_private(root / "xdg/kded5rc", "[Module-bluedevil]\nautoload[$i]=false\n");
     auto config_dirs = env("XDG_CONFIG_DIRS");
     if (config_dirs.empty()) {
       config_dirs = "/etc/xdg";

@@ -184,6 +184,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Disable BlueDevil autoload only in private Detached desktops to prevent
+  repeated OBEX startup attempts, leaving host Bluetooth configuration unchanged.
 - Detached's private KWin connections are opened by the unprivileged session
   helper, so KWin can identify and authorize them when the packaged Hermes
   retains file capabilities for ordinary KMS capture and session isolation.

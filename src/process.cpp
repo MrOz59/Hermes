@@ -9,6 +9,7 @@
 #endif
 // standard includes
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -4592,6 +4593,37 @@ namespace proc {
     fileTree["version"] = this_version;
   }
 
+  /**
+   * v6: covers that tell Hermes' default apps apart. Desktop and Low Res
+   * Desktop, or Steam Big Picture and the Gamescope Steam Session, looked the
+   * same in a client's app list. Only an entry still exactly as Hermes
+   * shipped it - its name and the cover it came with - gets the new cover.
+   */
+  void migration_v6(nlohmann::json& fileTree) {
+    static const int this_version = 6;
+#ifdef __linux__
+    if (fileTree.contains("apps") && fileTree["apps"].is_array()) {
+      static const std::array<std::array<const char *, 3>, 3> covers {{
+        {"Low Res Desktop", "desktop.png", "desktop-low-res.png"},
+        {"Steam Big Picture", "steam.png", "steam-big-picture.png"},
+        {"Gamescope Steam Session", "steam.png", "steam-gamescope.png"},
+      }};
+      for (auto &app : fileTree["apps"]) {
+        if (!app.is_object()) {
+          continue;
+        }
+        for (const auto &[name, old_cover, cover] : covers) {
+          if (app.value("name", "") == name && app.value("image-path", "") == old_cover) {
+            app["image-path"] = cover;
+            BOOST_LOG(info) << "Giving app '" << name << "' the cover " << cover << '.';
+          }
+        }
+      }
+    }
+#endif
+    fileTree["version"] = this_version;
+  }
+
   void migrate(nlohmann::json& fileTree, const std::string& fileName) {
     int file_version = 0;
     if (fileTree.contains("version")) {
@@ -4609,6 +4641,10 @@ namespace proc {
     }
     if (file_version < 5) {
       migration_v5(fileTree);
+      changed = true;
+    }
+    if (file_version < 6) {
+      migration_v6(fileTree);
       changed = true;
     }
     if (changed) {

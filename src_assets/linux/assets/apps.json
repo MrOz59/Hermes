@@ -10,7 +10,7 @@
     },
     {
       "name": "Low Res Desktop",
-      "image-path": "desktop.png",
+      "image-path": "desktop-low-res.png",
       "allow-client-commands": false,
       "prep-cmd": [
         {
@@ -30,11 +30,11 @@
       "detached": [
         "setsid steam steam://open/bigpicture"
       ],
-      "image-path": "steam.png"
+      "image-path": "steam-big-picture.png"
     },
     {
       "name": "Gamescope Steam Session",
-      "image-path": "steam.png",
+      "image-path": "steam-gamescope.png",
       "virtual-display": true,
       "virtual-display-layout": "mirror",
       "auto-detach": false,

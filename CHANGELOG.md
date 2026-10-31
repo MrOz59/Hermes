@@ -184,6 +184,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Apply and verify requested Detached resolution and refresh rate at startup and resume, keeping KWin output settings private.
 - Disable BlueDevil autoload only in private Detached desktops to prevent
   repeated OBEX startup attempts, leaving host Bluetooth configuration unchanged.
 - Detached's private KWin connections are opened by the unprivileged session

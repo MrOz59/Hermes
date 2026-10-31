@@ -1157,6 +1157,8 @@ namespace proc {
       BOOST_LOG(info) << "[IsolatedSession] Stopping " << runtime->runtime_id
                       << " for client " << runtime->client_name;
       if (runtime->user_unit) {
+        // Mode changes finish before this generation's compositor is stopped.
+        std::lock_guard<std::mutex> lock(runtime->process_mutex);
         // Stopping the unit takes everything the desktop started with it.
         if (!runtime->unit.empty()) {
           stop_user_unit(runtime->unit);
@@ -1849,6 +1851,7 @@ namespace proc {
       for (const auto &[name, path] : std::initializer_list<std::pair<const char *, std::string>> {
              {"kwin_wayland_wrapper", find_program("kwin_wayland_wrapper")},
              {"startplasma-wayland", find_program("startplasma-wayland")},
+             {"kscreen-doctor", find_program("kscreen-doctor")},
              {"systemd-run", systemd_run},
              {"dbus-run-session", dbus_run_session},
              {"hermes-detached-session", session_tool},
@@ -1931,6 +1934,7 @@ namespace proc {
                                       std::to_string(width),
                                       std::to_string(height),
                                       self.string(),
+                                      std::to_string(launch_session->fps ? launch_session->fps : 60000),
                                     });
 
       BOOST_LOG(info) << "[IsolatedSession] Starting detached desktop " << runtime->runtime_id
@@ -3006,6 +3010,21 @@ namespace proc {
         }
       }
       return false;
+    }
+    if (runtime->user_unit) {
+      std::lock_guard<std::mutex> mode_lock(runtime->process_mutex);
+      if (runtime->stopping.load()) {
+        return false;
+      }
+      const auto helper = find_detached_session_tool();
+      const int width = static_cast<int>(launch_session->width ? launch_session->width : 1920);
+      const int height = static_cast<int>(launch_session->height ? launch_session->height : 1080);
+      const int refresh = launch_session->fps ? launch_session->fps : 60000;
+      if (helper.empty() || run_program({helper, "--configure-output", runtime->runtime_dir, std::to_string(width), std::to_string(height), std::to_string(refresh)}, 8s) != 0) {
+        launch_session->launch_error_message = "Could not apply the requested Detached display mode; see the Hermes log";
+        BOOST_LOG(error) << "[IsolatedSession] " << launch_session->launch_error_message;
+        return false;
+      }
     }
     std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
     const auto it = isolated_runtimes.find(runtime->launch_session_id);

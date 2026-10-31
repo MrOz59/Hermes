@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Session supervisor for a private, same-user stock Plasma desktop.
-// The broker owns the unit/mount namespace. This program never edits KDE config.
+// The broker owns the unit/mount namespace. KWin writes only private settings.
+#include "../src/platform/linux/detached_mode.h"
 #include "../src/platform/linux/wayland_peer.h"
 
 #include <algorithm>
@@ -83,7 +84,7 @@ namespace {
     ::unsetenv(saved_as);
   }
 
-  pid_t spawn(std::vector<std::string> args, int output = -1) {
+  pid_t spawn(std::vector<std::string> args, int output = -1, bool wayland_only = false) {
     std::vector<char *> words;
     for (auto &arg : args) {
       words.push_back(arg.data());
@@ -95,6 +96,16 @@ namespace {
     }
     if (pid == 0) {
       ::setpgid(0, 0);
+      if (wayland_only) {
+        // Only the mode tool needs this override. Keep KWin's Xwayland
+        // DISPLAY intact in the supervisor and the applications it starts.
+        ::unsetenv("DISPLAY");
+        ::unsetenv("WAYLAND_SOCKET");
+        ::unsetenv("KSCREEN_BACKEND");
+        if (::setenv("QT_QPA_PLATFORM", "wayland", 1)) {
+          ::_exit(126);
+        }
+      }
       if (output >= 0) {
         // Only the reader is nonblocking; child programs expect blocking stdout.
         const int flags = ::fcntl(output, F_GETFL);
@@ -136,14 +147,14 @@ namespace {
     }
   }
 
-  std::string run(const std::vector<std::string> &args, std::chrono::seconds timeout) {
+  std::string run(const std::vector<std::string> &args, std::chrono::milliseconds timeout, bool wayland_only = false) {
     int descriptors[2];
     if (::pipe2(descriptors, O_CLOEXEC | O_NONBLOCK)) {
       throw std::runtime_error("Could not create child pipe");
     }
     pid_t pid;
     try {
-      pid = spawn(args, descriptors[1]);
+      pid = spawn(args, descriptors[1], wayland_only);
     } catch (...) {
       ::close(descriptors[0]);
       ::close(descriptors[1]);
@@ -288,6 +299,67 @@ namespace {
     return n;
   }
 
+  int refresh_rate(const std::string &text) {
+    if (text.empty() || text.size() > 7 || !std::all_of(text.begin(), text.end(), [](char c) {
+          return c >= '0' && c <= '9';
+        })) {
+      throw std::runtime_error("Invalid private output refresh rate");
+    }
+    const int value = std::stoi(text);
+    platf::kwin::detached::validate({1920, 1080, value});
+    return value;
+  }
+
+  void configure_output(const fs::path &root, int width, int height, int refresh) {
+    // Set only by the bootstrap that gives KWin private writable settings.
+    // Refuse an old generation rather than modifying its shared output store.
+    if (!fs::is_regular_file(root / "kwin-config/kwinoutputconfig.json")) {
+      throw std::runtime_error("This desktop predates private output configuration; start a fresh Detached desktop");
+    }
+    const auto doctor = which("kscreen-doctor");
+    const auto deadline = std::chrono::steady_clock::now() + 1500ms;
+    const auto actual = platf::kwin::detached::configure({width, height, refresh}, [&](const std::string &argument) {
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+      if (stopping || remaining <= 0ms) {
+        throw std::runtime_error("Private output mode application timed out or was cancelled");
+      }
+      return run({doctor, argument}, remaining, true);
+    });
+    std::cout << "Detached output verified: " << actual.width << 'x' << actual.height
+              << '@' << actual.refresh_mhz << " mHz" << std::endl;
+  }
+
+  void configure_existing(const fs::path &root, int width, int height, int refresh) {
+    set("XDG_RUNTIME_DIR", root.string());
+    runtime_dir();
+    if (root.parent_path() != fs::path {"/run/user"} / std::to_string(::getuid()) / "hermes/sessions") {
+      throw std::runtime_error("Not a private Hermes session directory");
+    }
+    std::ifstream ready(root / "ready");
+    std::string line, socket, bus;
+    while (std::getline(ready, line)) {
+      if (line.starts_with("WAYLAND_DISPLAY=")) {
+        socket = line.substr(16);
+      }
+      if (line.starts_with("DBUS_SESSION_BUS_ADDRESS=")) {
+        bus = line.substr(25);
+      }
+    }
+    if (socket.empty() || socket.find('/') != std::string::npos || !fs::is_socket(root / socket) || bus.empty()) {
+      throw std::runtime_error("Private desktop is not ready for a mode change");
+    }
+    ::unsetenv("DISPLAY");
+    ::unsetenv("WAYLAND_SOCKET");
+    ::unsetenv("KSCREEN_BACKEND");
+    set("QT_QPA_PLATFORM", "wayland");
+    set("WAYLAND_DISPLAY", socket);
+    set("DBUS_SESSION_BUS_ADDRESS", bus);
+    if (owns("org.freedesktop.systemd1")) {
+      throw std::runtime_error("Refusing to configure an output on the shared user bus");
+    }
+    configure_output(root, width, height, refresh);
+  }
+
   void supervise(const fs::path &root) {
     pid_t plasma = -1;
     try {
@@ -318,6 +390,16 @@ namespace {
       // starts read the user's real data and cache directories.
       restore("XDG_DATA_DIRS", "HERMES_DETACHED_DATA_DIRS");
       restore("XDG_CACHE_HOME", "HERMES_DETACHED_CACHE_HOME");
+      restore("XDG_CONFIG_HOME", "HERMES_DETACHED_CONFIG_HOME");
+      restore("XDG_CONFIG_DIRS", "HERMES_DETACHED_CONFIG_DIRS");
+      const int width = dimension(env("HERMES_DETACHED_WIDTH").c_str());
+      const int height = dimension(env("HERMES_DETACHED_HEIGHT").c_str());
+      const int refresh = refresh_rate(env("HERMES_DETACHED_REFRESH_MHZ"));
+      report(root, "applying the requested private output mode");
+      configure_output(root, width, height, refresh);
+      ::unsetenv("HERMES_DETACHED_WIDTH");
+      ::unsetenv("HERMES_DETACHED_HEIGHT");
+      ::unsetenv("HERMES_DETACHED_REFRESH_MHZ");
       report(root, "starting Plasma on " + socket);
       plasma = spawn({which("startplasma-wayland")});
       const auto ready_deadline = std::chrono::steady_clock::now() + 35s;
@@ -338,6 +420,8 @@ namespace {
           const bool session = owns("org.kde.ksmserver");
           const bool splash = owns("org.kde.KSplash");
           if (shell && session && !splash) {
+            // Plasma startup must not silently replace the negotiated mode.
+            configure_output(root, width, height, refresh);
             write_private(root / "ready.tmp", "WAYLAND_DISPLAY=" + socket + "\nDBUS_SESSION_BUS_ADDRESS=" + private_bus + "\n");
             fs::rename(root / "ready.tmp", root / "ready");
             report(root, "ready on " + socket);
@@ -371,6 +455,15 @@ int main(int argc, char **argv) {
   if (argc == 3 && std::string_view(argv[1]) == "--connect-wayland") {
     return platf::kwin::serve_wayland_peer(argv[2]);
   }
+  if (argc == 6 && std::string_view(argv[1]) == "--configure-output") {
+    try {
+      configure_existing(fs::path {argv[2]}, dimension(argv[3]), dimension(argv[4]), refresh_rate(argv[5]));
+      return 0;
+    } catch (const std::exception &error) {
+      std::cerr << "Detached mode change failed: " << error.what() << std::endl;
+      return 1;
+    }
+  }
   const bool child = env("HERMES_DETACHED_STAGE") == "session";
   try {
     // No umask of our own: KWin and every program in the desktop inherit it,
@@ -384,11 +477,16 @@ int main(int argc, char **argv) {
       supervise(root);
       return 0;
     }
-    if (argc != 5 || std::string(argv[1]) != "--bootstrap") {
-      throw std::runtime_error("Usage: hermes-detached-session --bootstrap WIDTH HEIGHT HERMES_EXECUTABLE");
+    if ((argc != 5 && argc != 6) || std::string(argv[1]) != "--bootstrap") {
+      throw std::runtime_error("Usage: hermes-detached-session --bootstrap WIDTH HEIGHT HERMES_EXECUTABLE [REFRESH_MHZ]");
     }
     const auto width = std::to_string(dimension(argv[2]));
     const auto height = std::to_string(dimension(argv[3]));
+    const auto refresh = std::to_string(argc == 6 ? refresh_rate(argv[5]) : 60000);
+    which("kscreen-doctor");
+    set("HERMES_DETACHED_WIDTH", width);
+    set("HERMES_DETACHED_HEIGHT", height);
+    set("HERMES_DETACHED_REFRESH_MHZ", refresh);
     const auto executable = fs::canonical(argv[4]);
     if (!executable.is_absolute() || ::access(executable.c_str(), X_OK)) {
       throw std::runtime_error("Hermes executable is unavailable");
@@ -439,6 +537,22 @@ int main(int argc, char **argv) {
     set("XDG_DATA_DIRS", (root / "data").string() + ":" + data_dirs);
     report(root, "building KWin's service cache");
     run({which("kbuildsycoca6"), "--noincremental"}, 10s);
+    // KWin persists output changes below XDG_CONFIG_HOME. Keep those writes
+    // private while retaining the user's other settings as read-only defaults.
+    // The session child restores both variables before starting Plasma/apps.
+    remember("XDG_CONFIG_HOME", "HERMES_DETACHED_CONFIG_HOME");
+    remember("XDG_CONFIG_DIRS", "HERMES_DETACHED_CONFIG_DIRS");
+    auto config_home = env("XDG_CONFIG_HOME");
+    if (config_home.empty()) {
+      config_home = (fs::path {env("HOME")} / ".config").string();
+    }
+    if (!fs::path {config_home}.is_absolute() || config_home.find(':') != std::string::npos) {
+      throw std::runtime_error("Unsupported host configuration path");
+    }
+    fs::create_directories(root / "kwin-config");
+    write_private(root / "kwin-config/kwinoutputconfig.json", "[]\n");
+    set("XDG_CONFIG_HOME", (root / "kwin-config").string());
+    set("XDG_CONFIG_DIRS", (root / "xdg").string() + ":" + config_home + ":" + config_dirs);
     set("HERMES_DETACHED_STAGE", "session");
     const auto self = fs::canonical("/proc/self/exe").string();
     std::vector<std::string> args {which("kwin_wayland_wrapper"), "--virtual", "--width", width, "--height", height, "--output-count", "1", "--xwayland", "--no-lockscreen", "--exit-with-session", self};

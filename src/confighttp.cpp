@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <atomic>
 #include <deque>
+#include <limits>
+#include <optional>
 #include <mutex>
 #ifndef _WIN32
   #include <sys/utsname.h>
@@ -2263,11 +2265,212 @@ namespace confighttp {
    * the state before, during and after a problem. An hour of it is kept.
    */
   namespace report_timeline {
+    /// The machine around the stream. A value nobody may read here stays negative.
+    struct system_t {
+      double cpu_percent = -1;
+      double cpu_celsius = -1;
+      double cpu_watts = -1;
+      double gpu_percent = -1;
+      double gpu_celsius = -1;
+      double gpu_watts = -1;
+      double vram_used_mib = -1;
+      double ram_available_mib = -1;
+      long long net_errors = -1;  ///< Dropped or errored packets on the network cards since the last sample.
+      long long udp_dropped = -1;  ///< UDP packets the kernel dropped for full buffers since the last sample.
+    };
+
     struct sample_t {
       std::chrono::system_clock::time_point at;
       int sessions;
       video::pipeline_metrics_t pipeline;
+      system_t system;
     };
+
+#ifdef __linux__
+    namespace fs = std::filesystem;
+
+    std::optional<long long> read_number(const fs::path &path) {
+      std::ifstream stream {path};
+      long long value;
+      if (stream >> value) {
+        return value;
+      }
+      return std::nullopt;
+    }
+
+    std::string read_word(const fs::path &path) {
+      std::ifstream stream {path};
+      std::string value;
+      stream >> value;
+      return value;
+    }
+
+    // The hwmon directory a driver registered under a name, such as k10temp.
+    std::optional<fs::path> hwmon(std::initializer_list<std::string_view> names, const fs::path &root = "/sys/class/hwmon") {
+      std::error_code ec;
+      for (const auto &entry : fs::directory_iterator {root, ec}) {
+        const auto name = read_word(entry.path() / "name");
+        if (std::ranges::find(names, name) != names.end()) {
+          return entry.path();
+        }
+      }
+      return std::nullopt;
+    }
+
+    // A temperature in °C: the input labelled `label` if there is one, else temp1.
+    double temperature(const fs::path &dir, std::string_view label) {
+      std::error_code ec;
+      for (const auto &entry : fs::directory_iterator {dir, ec}) {
+        const auto file = entry.path().filename().string();
+        if (file.starts_with("temp") && file.ends_with("_label") && read_word(entry.path()) == label) {
+          const auto input = dir / (file.substr(0, file.size() - 6) + "_input");
+          if (const auto value = read_number(input)) {
+            return *value / 1000.0;
+          }
+        }
+      }
+      const auto value = read_number(dir / "temp1_input");
+      return value ? *value / 1000.0 : -1;
+    }
+
+    struct previous_t {
+      long long cpu_busy = -1, cpu_total = -1;
+      long long cpu_energy_uj = -1;
+      std::chrono::steady_clock::time_point cpu_energy_at;
+      long long net_errors = -1, udp_dropped = -1;
+    } previous;
+
+    std::string encode_card;  ///< The encoding GPU's sysfs device directory.
+
+    system_t read_system() {
+      system_t s;
+
+      // CPU usage, from the change in /proc/stat since the last sample.
+      {
+        std::ifstream stat {"/proc/stat"};
+        std::string cpu;
+        long long user, nice, system, idle, iowait, irq, softirq, steal;
+        if (stat >> cpu >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal) {
+          const long long busy = user + nice + system + irq + softirq + steal;
+          const long long total = busy + idle + iowait;
+          if (previous.cpu_total >= 0 && total > previous.cpu_total) {
+            s.cpu_percent = 100.0 * (busy - previous.cpu_busy) / (total - previous.cpu_total);
+          }
+          previous.cpu_busy = busy;
+          previous.cpu_total = total;
+        }
+      }
+      if (const auto cpu = hwmon({"k10temp", "zenpower", "coretemp"})) {
+        s.cpu_celsius = temperature(*cpu, read_word(*cpu / "name") == "coretemp" ? "Package id 0" : "Tctl");
+      }
+      // Package energy. Recent kernels let only root read it.
+      if (const auto energy = read_number("/sys/class/powercap/intel-rapl:0/energy_uj")) {
+        const auto now = std::chrono::steady_clock::now();
+        if (previous.cpu_energy_uj >= 0 && *energy >= previous.cpu_energy_uj) {
+          const double seconds = std::chrono::duration<double>(now - previous.cpu_energy_at).count();
+          if (seconds > 0) {
+            s.cpu_watts = (*energy - previous.cpu_energy_uj) / 1e6 / seconds;
+          }
+        }
+        previous.cpu_energy_uj = *energy;
+        previous.cpu_energy_at = now;
+      }
+
+      // The encoding GPU, where its driver reports on it (amdgpu does).
+      if (encode_card.empty()) {
+        const auto description = platf::encode_gpu_description();
+        if (const auto space = description.find(' '); description.starts_with("/dev/dri/")) {
+          encode_card = "/sys/class/drm/" + fs::path {description.substr(0, space)}.filename().string() + "/device";
+        }
+      }
+      if (!encode_card.empty()) {
+        const fs::path card {encode_card};
+        if (const auto busy = read_number(card / "gpu_busy_percent")) {
+          s.gpu_percent = static_cast<double>(*busy);
+        }
+        if (const auto vram = read_number(card / "mem_info_vram_used")) {
+          s.vram_used_mib = *vram / 1048576.0;
+        }
+        if (const auto gpu = hwmon({"amdgpu"}, card / "hwmon")) {
+          s.gpu_celsius = temperature(*gpu, "junction");
+          if (const auto power = read_number(*gpu / "power1_average").or_else([&]() {
+                return read_number(*gpu / "power1_input");
+              })) {
+            s.gpu_watts = *power / 1e6;
+          }
+        }
+      }
+
+      // Memory still available to programs.
+      {
+        std::ifstream meminfo {"/proc/meminfo"};
+        for (std::string key; meminfo >> key;) {
+          long long kib;
+          meminfo >> kib;
+          if (key == "MemAvailable:") {
+            s.ram_available_mib = kib / 1024.0;
+            break;
+          }
+          meminfo.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        }
+      }
+
+      // Network cards: errors and drops, both directions, all but loopback.
+      {
+        std::ifstream dev {"/proc/net/dev"};
+        std::string line;
+        long long errors = 0;
+        bool any = false;
+        for (int n = 0; std::getline(dev, line); ++n) {
+          const auto colon = line.find(':');
+          if (n < 2 || colon == std::string::npos || boost::algorithm::trim_copy(line.substr(0, colon)) == "lo") {
+            continue;
+          }
+          std::istringstream fields {line.substr(colon + 1)};
+          std::array<long long, 16> v {};
+          for (auto &field : v) {
+            fields >> field;
+          }
+          errors += v[2] + v[3] + v[10] + v[11];
+          any = true;
+        }
+        if (any) {
+          if (previous.net_errors >= 0) {
+            s.net_errors = errors - previous.net_errors;
+          }
+          previous.net_errors = errors;
+        }
+      }
+      // UDP: datagrams dropped because a receive or send buffer was full.
+      {
+        std::ifstream snmp {"/proc/net/snmp"};
+        std::string header, values;
+        while (std::getline(snmp, header) && std::getline(snmp, values)) {
+          if (!header.starts_with("Udp:")) {
+            continue;
+          }
+          std::istringstream names {header}, numbers {values};
+          std::string name, number;
+          long long dropped = 0;
+          while (names >> name && numbers >> number) {
+            if (name == "RcvbufErrors" || name == "SndbufErrors") {
+              dropped += std::stoll(number);
+            }
+          }
+          if (previous.udp_dropped >= 0) {
+            s.udp_dropped = dropped - previous.udp_dropped;
+          }
+          previous.udp_dropped = dropped;
+          break;
+        }
+      }
+      return s;
+    }
+#else
+    system_t read_system() {
+      return {};
+    }
+#endif
 
     std::mutex mutex;
     std::deque<sample_t> samples;
@@ -2276,6 +2479,9 @@ namespace confighttp {
     void record() {
       using namespace std::literals;
       static auto last_streaming = std::chrono::steady_clock::time_point {};
+      // Read every time, so the changes it reports span five seconds even
+      // for the first sample of a stream.
+      auto system = read_system();
       const int sessions = rtsp_stream::session_count();
       const auto now = std::chrono::steady_clock::now();
       if (sessions > 0) {
@@ -2283,8 +2489,9 @@ namespace confighttp {
       } else if (last_streaming == std::chrono::steady_clock::time_point {} || now - last_streaming > 60s) {
         return;
       }
+      sample_t sample {std::chrono::system_clock::now(), sessions, video::get_pipeline_metrics(), system};
       std::lock_guard lock {mutex};
-      samples.push_back({std::chrono::system_clock::now(), sessions, video::get_pipeline_metrics()});
+      samples.push_back(std::move(sample));
       if (samples.size() > max_samples) {
         samples.pop_front();
       }
@@ -2419,21 +2626,48 @@ namespace confighttp {
     if (samples.empty()) {
       out << "No stream since Hermes started.\n";
     } else {
-      out << "time      streams  size        fps     Mbps    encode ms  capture->encode ms  dropped\n";
+      const auto value = [](double v, const char *format) -> std::string {
+        return v < 0 ? "-"s : std::vformat(format, std::make_format_args(v));
+      };
+      const auto count = [](long long v) -> std::string {
+        return v < 0 ? "-"s : std::to_string(v);
+      };
+      out << "time      streams  size        fps    Mbps   enc ms  cap->enc  dropped | CPU %  CPU °C  CPU W | GPU %  GPU °C  GPU W  VRAM MiB | RAM free MiB | net errors  UDP dropped\n";
       for (const auto &sample : samples) {
         const auto &p = sample.pipeline;
-        if (!sample.sessions) {
-          // The pipeline's last figures stay published once a stream ends.
-          out << local_time(sample.at, "%H:%M:%S") << "        0  -\n";
-          continue;
-        }
-        out << std::format("{}  {:>7}  {:>11}  {:>6.1f}  {:>6.1f}  {:>9.2f}  {:>18.2f}  {:>7}\n",
+        const auto &m = sample.system;
+        // The pipeline's last figures stay published once a stream ends.
+        const bool streaming = sample.sessions > 0 && p.valid;
+        out << std::format("{}  {:>7}  {:>10}  {:>5}  {:>6}  {:>7}  {:>8}  {:>7} | {:>5}  {:>6}  {:>5} | {:>5}  {:>6}  {:>5}  {:>8} | {:>12} | {:>10}  {:>11}\n",
                            local_time(sample.at, "%H:%M:%S"), sample.sessions,
-                           p.valid ? std::format("{}x{}", p.width, p.height) : "-"s,
-                           p.fps, p.bitrate_kbps / 1000.0, p.encode_ms, p.capture_to_encode_ms, p.frames_dropped);
+                           streaming ? std::format("{}x{}", p.width, p.height) : "-"s,
+                           streaming ? std::format("{:.1f}", p.fps) : "-"s,
+                           streaming ? std::format("{:.1f}", p.bitrate_kbps / 1000.0) : "-"s,
+                           streaming ? std::format("{:.2f}", p.encode_ms) : "-"s,
+                           streaming ? std::format("{:.2f}", p.capture_to_encode_ms) : "-"s,
+                           streaming ? std::to_string(p.frames_dropped) : "-"s,
+                           value(m.cpu_percent, "{:.0f}"), value(m.cpu_celsius, "{:.0f}"), value(m.cpu_watts, "{:.0f}"),
+                           value(m.gpu_percent, "{:.0f}"), value(m.gpu_celsius, "{:.0f}"), value(m.gpu_watts, "{:.0f}"),
+                           value(m.vram_used_mib, "{:.0f}"), value(m.ram_available_mib, "{:.0f}"),
+                           count(m.net_errors), count(m.udp_dropped));
       }
+      out << "CPU W needs root on recent kernels; \"-\" means it could not be read. GPU figures are for the encoding GPU.\n";
     }
 
+#ifdef __linux__
+    // Drivers and hardware: what the kernel warned about lately, where the
+    // user may read it (journal access).
+    out << "\n== Kernel warnings and errors (last 2 hours) ==\n";
+    if (FILE *kernel = ::popen("journalctl -k -p warning --since -2h -q --no-pager -n 200 2>&1", "r")) {
+      std::string text;
+      char buffer[4096];
+      while (const auto n = std::fread(buffer, 1, sizeof(buffer), kernel)) {
+        text.append(buffer, n);
+      }
+      ::pclose(kernel);
+      out << (text.empty() ? "None.\n"s : text);
+    }
+#endif
     out << "\n== Runtime state ==\n" << hestia_runtime_status_json().dump(2) << '\n';
     out << "\n== Streaming preflight ==\n" << hestia_preflight_json().dump(2) << '\n';
     out << "\n== Settings (secrets removed) ==\n" << redacted_settings();

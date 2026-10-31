@@ -414,6 +414,8 @@ jobs:
             systemd \
             miniupnpc \
             libpulse \
+            libpipewire \
+            plasma-wayland-protocols \
             qt6-base \
             qt6-svg \
             npm \
@@ -487,6 +489,19 @@ jobs:
             COMMIT='${COMMIT}'; \
             makepkg -sf --noconfirm"
 
+      # The detached desktop needs the private KWin transport, which CMake
+      # leaves out without PipeWire and plasma-wayland-protocols (screencast
+      # v6). Arch tracks Plasma closely, so its package must have it.
+      - name: Check the detached desktop transport
+        run: |
+          pkg="$(ls hermes-streaming-[0-9]*.pkg.tar.zst | head -n1)"
+          if bsdtar -tf "$pkg" | grep -qx 'usr/bin/hermes-detached-session'; then
+            echo "::notice title=Detached desktop (Arch)::KWin transport built; hermes-detached-session is packaged"
+          else
+            echo "::error title=Detached desktop (Arch)::hermes-detached-session is missing; the KWin transport was not built"
+            exit 1
+          fi
+
       - name: Upload Arch Package
         uses: actions/upload-artifact@v4
         with:
@@ -555,6 +570,8 @@ jobs:
             libgbm-dev \
             libvulkan-dev \
             libwayland-dev \
+            libpipewire-0.3-dev \
+            plasma-wayland-protocols \
             libx11-dev \
             libxrandr-dev \
             libxfixes-dev \
@@ -746,6 +763,16 @@ jobs:
           apt-get install -y ./hermes_*_ubuntu${{ matrix.ubuntu }}_amd64.deb
           bash scripts/tests/package-loader-smoke.sh "/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/hermes"
 
+      # Older Plasma protocol packages lack screencast v6; CMake then leaves
+      # the detached desktop out. Say which way this package went.
+      - name: Report the detached desktop transport
+        run: |
+          if dpkg-deb -c hermes_*_ubuntu${{ matrix.ubuntu }}_amd64.deb | grep -q '/usr/bin/hermes-detached-session$'; then
+            echo "::notice title=Detached desktop (Ubuntu ${{ matrix.ubuntu }})::KWin transport built; hermes-detached-session is packaged"
+          else
+            echo "::warning title=Detached desktop (Ubuntu ${{ matrix.ubuntu }})::KWin transport not built (plasma-wayland-protocols lacks screencast v6); Detached Desktop is unavailable in this package"
+          fi
+
       - name: Upload DEB Package
         uses: actions/upload-artifact@v4
         with:
@@ -803,6 +830,8 @@ jobs:
             vulkan-headers \
             vulkan-loader-devel \
             wayland-devel \
+            pipewire-devel \
+            plasma-wayland-protocols-devel \
             libX11-devel \
             libXrandr-devel \
             libXfixes-devel \
@@ -947,6 +976,16 @@ jobs:
           dnf install -y util-linux
           dnf install -y ./hermes-*.rpm
           bash scripts/tests/package-loader-smoke.sh "$(rpm --eval '%{_libdir}')/hermes"
+
+      # Older Plasma protocol packages lack screencast v6; CMake then leaves
+      # the detached desktop out. Say which way this package went.
+      - name: Report the detached desktop transport
+        run: |
+          if rpm -qlp hermes-*.rpm | grep -qx '/usr/bin/hermes-detached-session'; then
+            echo "::notice title=Detached desktop (Fedora ${{ matrix.fedora }})::KWin transport built; hermes-detached-session is packaged"
+          else
+            echo "::warning title=Detached desktop (Fedora ${{ matrix.fedora }})::KWin transport not built (plasma-wayland-protocols lacks screencast v6); Detached Desktop is unavailable in this package"
+          fi
 
       - name: Upload RPM
         uses: actions/upload-artifact@v4

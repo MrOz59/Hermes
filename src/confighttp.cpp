@@ -2216,6 +2216,36 @@ namespace confighttp {
 #endif
   }
 
+  /**
+   * What the stream about to start, or running, goes through: the capture,
+   * its size and rate, the encoder and its GPU, as the last capture-path
+   * check found them. A client shows it so its user knows the stream is
+   * served the way they expect. readiness is null before any check.
+   */
+  void get_hestia_stream_info(resp_https_t response, req_https_t request) {
+    if (!authenticate_hestia_client(response, request, crypto::PERM::view, "stream info")) {
+      return;
+    }
+
+    const auto readiness = video::last_capture_readiness();
+    nlohmann::json body {{"ok", true}, {"readiness", nullptr}};
+    if (readiness.checked) {
+      body["readiness"] = {
+        {"ok", readiness.ok},
+        {"frame_seen", readiness.frame_seen},
+        {"capture", readiness.capture},
+        {"width", readiness.width},
+        {"height", readiness.height},
+        {"fps", readiness.framerate},
+        {"encoder", readiness.encoder},
+        {"gpu", readiness.gpu},
+        {"failure", readiness.failure},
+        {"checked_at", readiness.checked_at},
+      };
+    }
+    send_response(response, body);
+  }
+
   void set_hestia_clipboard(resp_https_t response, req_https_t request) {
     if (!authenticate_hestia_client(response, request, crypto::PERM::clipboard_set, "clipboard write")) {
       return;
@@ -3290,6 +3320,7 @@ fi')CLIP";
     server.resource["^/api/hestia/v1/display/recover$"]["POST"] = recover_hestia_display;
     server.resource["^/api/hestia/v1/client/permissions$"]["GET"] = get_hestia_client_permissions;
     server.resource["^/api/hestia/v1/diagnostics$"]["GET"] = get_hestia_diagnostics;
+    server.resource["^/api/hestia/v1/stream/info$"]["GET"] = get_hestia_stream_info;
     server.resource["^/api/hestia/v1/clipboard$"]["GET"] = get_hestia_clipboard;
     server.resource["^/api/hestia/v1/clipboard$"]["POST"] = set_hestia_clipboard;
     server.resource["^/api/hestia/v1/commands$"]["GET"] = get_hestia_commands;

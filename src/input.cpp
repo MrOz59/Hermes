@@ -167,7 +167,7 @@ namespace input {
   static std::shared_ptr<platf::input_t> platform_input_for(const std::string &tag, const std::string &socket) {
     if (!socket.empty()) {
 #ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
-      return std::make_shared<platf::input_t>(platf::input_private_kwin(socket));
+      return std::make_shared<platf::input_t>(platf::input_private_kwin(socket, tag));
 #else
       throw std::runtime_error("Private KWin input support was not built");
 #endif

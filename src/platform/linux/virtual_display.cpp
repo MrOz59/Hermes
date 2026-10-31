@@ -1251,12 +1251,7 @@ namespace VDISPLAY {
     }
 
     static bool multi_output_requested() {
-      return config::video.hermes_kms_multi_output &&
-             !config::video.hermes_kms_isolated_sessions;
-    }
-
-    static bool isolated_sessions_requested() {
-      return config::video.hermes_kms_isolated_sessions;
+      return config::video.hermes_kms_multi_output;
     }
 
     static uint32_t required_uapi_version() {
@@ -1271,7 +1266,7 @@ namespace VDISPLAY {
     static bool has_required_caps(
       uint64_t flags,
       bool require_multi_output = multi_output_requested(),
-      bool require_multi_device = isolated_sessions_requested()
+      bool require_multi_device = false
     ) {
       constexpr uint64_t required = cap_virtual_output | cap_output_control | cap_frame_acquire |
                                     cap_dmabuf_export | cap_output_identity | cap_session_owner |
@@ -6763,7 +6758,8 @@ namespace VDISPLAY {
     uint32_t fps,
     const uuid_util::uuid_t &guid,
     std::optional<uid_t> session_owner_uid,
-    virtual_display_layout_e layout
+    virtual_display_layout_e layout,
+    bool isolated_session
   ) {
     std::lock_guard<std::mutex> lifecycle_lock(vdisplay_lifecycle_mutex);
     if (!kscreen::retry_pending_restores()) {
@@ -6881,7 +6877,7 @@ namespace VDISPLAY {
       // has to use: releasing it to claim a fresh one would be the very unplug
       // it was kept to avoid. It is already owned and lit, so only the mode and
       // a capability for the new consumers are needed.
-      if (parked_display && !config::video.hermes_kms_isolated_sessions) {
+      if (parked_display && !isolated_session) {
         uint64_t parked_session = parked_display->session_id;
         bool mode_set = false;
         // The driver rate-limits output changes; like a fresh claim, a refusal
@@ -6928,7 +6924,7 @@ namespace VDISPLAY {
 
       if (adopted) {
         // Nothing to claim.
-      } else if (config::video.hermes_kms_isolated_sessions) {
+      } else if (isolated_session) {
         claimed = hermes_kms::claim_available_device_output(
           device,
           width,
@@ -7000,7 +6996,7 @@ namespace VDISPLAY {
                         << " requested=" << status.requested_width << 'x' << status.requested_height
                         << '@' << status.requested_refresh_hz
                         << " flags=0x" << std::hex << status.flags << std::dec;
-        if (!config::video.hermes_kms_isolated_sessions &&
+        if (!isolated_session &&
             !vdinfo.connector_name.empty()) {
           kscreen::activate_evdi_output(
             vdinfo.name,

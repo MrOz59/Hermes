@@ -103,6 +103,20 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   at the greeter's resolution. The steps and the limits are in
   [Getting Started](docs/getting_started.md). Run so far on KDE Plasma with
   SDDM and Hermes-KMS only.
+- Linux: an independent `desktop` session is now the user's own Plasma
+  desktop, detached (`hermes_kms_session_compositor = plasma`, the new
+  default; `weston` and `labwc` remain as opt-in fallbacks, and a Plasma
+  failure says so). It runs as
+  the same user with the same home, files and settings, in a transient unit of
+  the user's systemd manager with a private D-Bus and runtime directory, on a
+  stock KWin virtual output. It has no DRM device or libinput, so it never wakes
+  or rearranges a physical monitor and the keyboard and mouse at the machine
+  never reach it; PowerDevil does not run inside it. Hermes captures it through
+  KWin's screencast protocol over PipeWire and drives its keyboard, mouse and
+  touch through KWin's fake-input protocol, over explicit sockets with no
+  fallback to the host desktop. Frames are copied through system memory, and
+  the session is SDR only. Requires Plasma 6 and plasma-wayland-protocols 1.23
+  or newer at build time.
 
 ### Changed
 - Experimental isolated application sessions hand Gamescope the session's own
@@ -170,6 +184,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Apply and verify requested Detached resolution and refresh rate at startup and resume, keeping KWin output settings private.
+- Disable BlueDevil autoload only in private Detached desktops to prevent
+  repeated OBEX startup attempts, leaving host Bluetooth configuration unchanged.
+- Detached's private KWin connections are opened by the unprivileged session
+  helper, so KWin can identify and authorize them when the packaged Hermes
+  retains file capabilities for ordinary KMS capture and session isolation.
+  The main process keeps its capabilities and KWin's permission checks remain
+  enabled.
 - Initialize stream state before publishing it to the control thread and cancel initial audio/video ping waits promptly when a session stops, preventing premature timeouts and teardown watchdog crashes.
 - Experimental isolated Gamescope sessions now wait for the private audio
   graph's actual sink/source defaults and live session manager before starting

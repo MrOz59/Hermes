@@ -34,6 +34,10 @@ if(SUNSHINE_BUILD_CARD_BROKER)
             RENAME "card-broker.allow.example")
 endif()
 
+if(TARGET hermes-detached-session)
+    install(TARGETS hermes-detached-session DESTINATION "bin")
+endif()
+
 if(SUNSHINE_BUILD_SESSION_BROKER)
     install(TARGETS hermes-session-broker DESTINATION "bin")
     # Same reasoning as the card broker's: shipping this as a live config file

@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
+#include <mutex>
 #include <cmath>
 #include <format>
 #include <random>
@@ -303,7 +305,77 @@ namespace platf::gamepad {
       }
       return std::nullopt;
     }
+
+    // A detached desktop outlives its streams: the client drops out when it
+    // goes to the background or loses its network, and resumes the same
+    // desktop. Its gamepads stay, with the runtime they belong to, so Steam
+    // and games never see a controller leave. Only the client removing one,
+    // or the desktop stopping, ends it.
+    struct kept_t {
+      std::shared_ptr<lvh::Runtime> runtime;
+      std::map<std::uint8_t, std::shared_ptr<joypad_state>> gamepads;  ///< By client controller number.
+    };
+
+    std::mutex kept_mutex;
+    std::map<std::string, kept_t> kept;
+
+    bool keeps(const std::string &session_tag) {
+      return session_tag.starts_with("hermes-detached-");
+    }
+
+    void close(const std::shared_ptr<joypad_state> &gamepad) {
+      if (gamepad && gamepad->adapter) {
+        std::lock_guard lock {gamepad->mutex};
+        virtualhid::log_failure("gamepad close", gamepad->adapter->close());
+      }
+    }
+
+    void set_feedback(joypad_state &state, feedback_queue_t feedback_queue, std::uint8_t client_index) {
+      // The output worker must not own the adapter it calls back from. Keeping
+      // only independent feedback state also avoids joining that worker from
+      // its own callback when a controller disconnects during feedback delivery.
+      const auto feedback_state = std::make_shared<joypad_feedback_state>();
+      state.adapter->set_output_callback(
+        [feedback_state, feedback_queue, client_index = static_cast<std::uint16_t>(client_index)](
+          const lvh::GamepadOutput &output
+        ) {
+          handle_output(feedback_state, feedback_queue, client_index, output);
+        }
+      );
+      if (feedback_queue && state.adapter->support().supports_motion) {
+        feedback_queue->raise(gamepad_feedback_msg_t::make_motion_event_state(client_index, LI_MOTION_TYPE_ACCEL, 100));
+        feedback_queue->raise(gamepad_feedback_msg_t::make_motion_event_state(client_index, LI_MOTION_TYPE_GYRO, 100));
+      }
+    }
   }  // namespace
+
+  std::shared_ptr<lvh::Runtime> runtime_for(const std::string &session_tag) {
+    if (!keeps(session_tag)) {
+      return virtualhid::create_runtime();
+    }
+    std::lock_guard lock {kept_mutex};
+    auto &entry = kept[session_tag];
+    if (!entry.runtime) {
+      entry.runtime = virtualhid::create_runtime();
+    }
+    return entry.runtime;
+  }
+
+  void forget(const std::string &session_tag) {
+    kept_t entry;
+    {
+      std::lock_guard lock {kept_mutex};
+      const auto found = kept.find(session_tag);
+      if (found == kept.end()) {
+        return;
+      }
+      entry = std::move(found->second);
+      kept.erase(found);
+    }
+    for (const auto &[index, gamepad] : entry.gamepads) {
+      close(gamepad);
+    }
+  }
 
   int alloc(input_raw_t *raw, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
     if (!valid_index(raw, id.globalIndex) || !raw->runtime) {
@@ -311,6 +383,26 @@ namespace platf::gamepad {
     }
 
     const auto type = select_type(id, metadata);
+    if (keeps(raw->session_tag)) {
+      std::shared_ptr<joypad_state> state;
+      {
+        std::lock_guard lock {kept_mutex};
+        auto &gamepads = kept[raw->session_tag].gamepads;
+        if (const auto found = gamepads.find(id.clientRelativeIndex); found != gamepads.end()) {
+          state = std::move(found->second);
+          gamepads.erase(found);
+        }
+      }
+      if (state && state->type == static_cast<int>(type)) {
+        BOOST_LOG(info) << "Resuming kept gamepad " << int(id.clientRelativeIndex) << " of " << raw->session_tag;
+        set_feedback(*state, feedback_queue, id.clientRelativeIndex);
+        std::lock_guard lock {raw->gamepads_mutex};
+        raw->gamepads[id.globalIndex] = std::move(state);
+        return 0;
+      }
+      // The client now reports another kind of controller in that slot.
+      close(state);
+    }
     const auto options = creation_options(type, id, metadata, raw->session_tag);
     if (options.prefer_input_events && !supports_input_events(options.profile.gamepad_kind)) {
       BOOST_LOG(warning) << "Selected gamepad profile requires native HID; choose the native or auto backend policy";
@@ -328,23 +420,10 @@ namespace platf::gamepad {
 
     auto state = std::make_shared<joypad_state>();
     state->adapter = std::move(created.adapter);
+    state->client_index = id.clientRelativeIndex;
+    state->type = static_cast<int>(type);
     warn_unsupported_client_features(type, state->adapter->support(), id.globalIndex, metadata);
-    // The output worker must not own the adapter it calls back from. Keeping
-    // only independent feedback state also avoids joining that worker from its
-    // own callback when a controller disconnects during feedback delivery.
-    const auto feedback_state = std::make_shared<joypad_feedback_state>();
-    state->adapter->set_output_callback(
-      [feedback_state, feedback_queue, client_index = static_cast<std::uint16_t>(id.clientRelativeIndex)](
-        const lvh::GamepadOutput &output
-      ) {
-        handle_output(feedback_state, feedback_queue, client_index, output);
-      }
-    );
-
-    if (feedback_queue && state->adapter->support().supports_motion) {
-      feedback_queue->raise(gamepad_feedback_msg_t::make_motion_event_state(id.clientRelativeIndex, LI_MOTION_TYPE_ACCEL, 100));
-      feedback_queue->raise(gamepad_feedback_msg_t::make_motion_event_state(id.clientRelativeIndex, LI_MOTION_TYPE_GYRO, 100));
-    }
+    set_feedback(*state, feedback_queue, id.clientRelativeIndex);
 
     {
       std::lock_guard lock {raw->gamepads_mutex};
@@ -362,10 +441,32 @@ namespace platf::gamepad {
       std::lock_guard lock {raw->gamepads_mutex};
       gamepad = std::exchange(raw->gamepads[index], {});
     }
-    if (gamepad && gamepad->adapter) {
-      std::lock_guard lock {gamepad->mutex};
-      virtualhid::log_failure("gamepad close", gamepad->adapter->close());
+    close(gamepad);
+  }
+
+  void release(input_raw_t *raw, int index) {
+    if (!valid_index(raw, index) || !keeps(raw->session_tag)) {
+      free(raw, index);
+      return;
     }
+    std::shared_ptr<joypad_state> gamepad;
+    {
+      std::lock_guard lock {raw->gamepads_mutex};
+      gamepad = std::exchange(raw->gamepads[index], {});
+    }
+    if (!gamepad) {
+      return;
+    }
+    // Feedback for a stream that has ended goes nowhere until the next one.
+    set_feedback(*gamepad, {}, gamepad->client_index);
+    std::shared_ptr<joypad_state> replaced;
+    {
+      std::lock_guard lock {kept_mutex};
+      auto &slot = kept[raw->session_tag].gamepads[gamepad->client_index];
+      replaced = std::exchange(slot, gamepad);
+    }
+    close(replaced);
+    BOOST_LOG(info) << "Keeping gamepad " << int(gamepad->client_index) << " of " << raw->session_tag << " for the next stream";
   }
 
   void update(input_raw_t *raw, int index, const gamepad_state_t &input) {

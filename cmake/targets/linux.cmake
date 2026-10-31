@@ -1,5 +1,7 @@
 # linux specific target definitions
 
+include("${CMAKE_SOURCE_DIR}/cmake/kwin_session.cmake")
+
 # The card broker reaches the Hermes-KMS driver's configfs group, which is
 # root's, so it is a program of its own rather than anything the streaming host
 # links: a few hundred lines over one socket, with none of Hermes' dependencies

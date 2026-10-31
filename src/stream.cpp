@@ -2191,6 +2191,7 @@ namespace stream {
 
   namespace session {
     std::atomic_uint running_sessions;
+    std::atomic_uint shared_running_sessions;
 
     state_e state(session_t &session) {
       return session.state.load(std::memory_order_relaxed);
@@ -2206,6 +2207,10 @@ namespace stream {
 
     bool uuid_match(const session_t &session, const std::string_view& uuid) {
       return session.device_uuid == uuid;
+    }
+
+    bool isolated(const session_t &session) {
+      return session.isolated_session;
     }
 
     bool update_device_info(session_t& session, const std::string& name, const crypto::PERM& newPerm) {
@@ -2421,24 +2426,22 @@ namespace stream {
         exec_thread.detach();
       }
 
-      // If this is the last session, invoke the platform callbacks
-      if (--running_sessions == 0) {
+      if (!session.isolated_session && --shared_running_sessions == 0) {
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
-        if (session.isolated_session) {
-          // The session destructor tears down only this compositor/app/output.
-          // Host display state and the legacy global process are unrelated.
-          revert_display_config = false;
-        } else if (proc::proc.running()) {
+
+        if (proc::proc.running()) {
           proc::proc.pause();
         } else {
-          // We have no app running and also no clients anymore.
           revert_display_config = true;
         }
 
         if (revert_display_config) {
           display_device::revert_configuration();
         }
+      }
 
+      // Platform-wide streaming state still spans both ownership domains.
+      if (--running_sessions == 0) {
         platf::streaming_will_stop();
       }
 
@@ -2446,13 +2449,23 @@ namespace stream {
     }
 
     int start(session_t &session, const std::string &addr_string) {
-      session.input = input::alloc(
-        session.mail,
-        session.isolated_session ?
-          session.isolated_seat_id :
-          std::string {},
-        session.isolated_session ? session.config.gcmap.value_or(0) : 0
-      );
+      // Reject incomplete private routes before allocating host input.
+      const auto &monitor = session.config.monitor;
+      if (monitor.kwin_wayland_socket.empty() != monitor.kwin_pipewire_socket.empty()) {
+        BOOST_LOG(error) << "Private KWin session requires both Wayland and PipeWire endpoints";
+        return -1;
+      }
+      try {
+        session.input = input::alloc(
+          session.mail,
+          session.isolated_session ? session.isolated_seat_id : std::string {},
+          session.isolated_session ? session.config.gcmap.value_or(0) : 0,
+          monitor.kwin_wayland_socket
+        );
+      } catch (const std::exception &error) {
+        BOOST_LOG(::error) << "Could not initialize session input: " << error.what();
+        return -1;
+      }
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
@@ -2488,12 +2501,14 @@ namespace stream {
 
       session.state.store(state_e::RUNNING, std::memory_order_release);
 
-      // If this is the first session, invoke the platform callbacks
+      // Platform-wide callbacks track every stream, while the legacy process
+      // lifecycle belongs only to streams attached to the shared host session.
       if (++running_sessions == 1) {
         platf::streaming_will_start();
-        if (!session.isolated_session) {
-          proc::proc.resume();
-        }
+      }
+
+      if (!session.isolated_session && ++shared_running_sessions == 1) {
+        proc::proc.resume();
       }
 
       if (!session.do_cmds.empty()) {
@@ -2548,6 +2563,11 @@ namespace stream {
 
       session->config = config;
       session->config.monitor.display_name = launch_session.display_name;
+      session->config.monitor.kwin_wayland_socket = launch_session.kwin_wayland_socket;
+      session->config.monitor.kwin_pipewire_socket = launch_session.kwin_pipewire_socket;
+      if (!launch_session.kwin_wayland_socket.empty()) {
+        session->config.monitor.display_name = "kwin:" + launch_session.kwin_wayland_socket;
+      }
       // Preserve the session-scoped marker for process-level cleanup decisions,
       // but move responsibility for releasing the output into session_t.
       launch_session.session_virtual_display_cleanup_pending = false;

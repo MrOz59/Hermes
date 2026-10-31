@@ -9,6 +9,12 @@
 namespace platf::gamepad {
   int alloc(input_raw_t *raw, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue);
   void free(input_raw_t *raw, int index);
+  /** @brief Free a gamepad whose stream ended; a detached desktop keeps it. */
+  void release(input_raw_t *raw, int index);
+  /** @brief Close the gamepads kept for session_tag, and its runtime. */
+  void forget(const std::string &session_tag);
+  /** @brief The libvirtualhid runtime for a detached desktop's gamepads, kept with them. */
+  std::shared_ptr<lvh::Runtime> runtime_for(const std::string &session_tag);
   void update(input_raw_t *raw, int index, const gamepad_state_t &state);
   void touch(input_raw_t *raw, const gamepad_touch_t &touch);
   void motion(input_raw_t *raw, const gamepad_motion_t &motion);

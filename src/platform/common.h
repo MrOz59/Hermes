@@ -831,6 +831,14 @@ namespace platf {
    * uinput phys/uniq metadata so a compositor seat can select only its client.
    */
   input_t input(const std::string &session_tag = {});
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+  /**
+   * Input for a private KWin desktop. Keyboard, mouse and touch go through
+   * KWin; gamepads are virtual devices tagged session_tag, and only exist when
+   * the tag is not empty (the desktop has a private /dev that receives them).
+   */
+  input_t input_private_kwin(const std::string &wayland_socket, const std::string &session_tag = {});
+#endif
   /**
    * @brief Get the current mouse position on screen
    * @param input The input_t instance to use.
@@ -917,6 +925,17 @@ namespace platf {
    */
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue);
   void free_gamepad(input_t &input, int nr);
+  /**
+   * @brief Release a gamepad because its stream ended, not because the client
+   * removed it. A detached desktop keeps it for the next stream to the same
+   * desktop, so the desktop's programs never see the controller leave.
+   */
+  void release_gamepad(input_t &input, int nr);
+  /**
+   * @brief Remove the gamepads a session tag kept between streams.
+   * @param session_tag The tag of a session that has stopped.
+   */
+  void forget_kept_gamepads(const std::string &session_tag);
 
   /**
    * @brief Get the supported platform capabilities to advertise to the client.

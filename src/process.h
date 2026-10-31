@@ -42,6 +42,8 @@
 #define FALLBACK_DESKTOP_UUID "EAAC6159-089A-46A9-9E24-6436885F6610"
 #define REMOTE_INPUT_UUID "8CB5C136-DA67-4F99-B4A1-F9CD35005CF4"
 #define TERMINATE_APP_UUID "E16CBE1B-295D-4632-9A76-EC4180C857D3"
+#define DETACHED_DESKTOP_UUID "5B1C7E0A-3D52-4F8E-9A61-2E7D0C4B9F13"
+#define DETACHED_STEAM_UUID "A4E2F6C8-1B37-4D95-8C0E-7F3A9D2B6E51"
 
 namespace proc {
   using file_t = util::safe_ptr_v2<FILE, int, fclose>;
@@ -49,6 +51,18 @@ namespace proc {
   extern VDISPLAY::DRIVER_STATUS vDisplayDriverStatus;
 
   typedef config::prep_cmd_t cmd_t;
+
+  /**
+   * Where a launch belongs when independent Hermes-KMS sessions are available.
+   *
+   * This is deliberately a per-launch decision. Enabling the capability must
+   * not move ordinary host-desktop applications into a private compositor.
+   */
+  enum class session_route_e {
+    shared,
+    isolated_application,
+    isolated_desktop,
+  };
 
   /**
    * pre_cmds -- guaranteed to be executed unless any of the commands fail.
@@ -99,8 +113,8 @@ namespace proc {
     bool allow_client_commands;
     bool terminate_on_pause;
     bool unlock_host_session;
-    // auto: desktop when cmd is empty, application otherwise.
-    // shared: legacy marker; rejected while isolation is enabled.
+    // auto: Detached virtual displays isolate when the capability is enabled.
+    // shared: force the existing host session.
     // application/desktop: force the corresponding isolated profile.
     std::string session_type;
     // Isolated sessions only: how long the compositor has to put its first
@@ -128,6 +142,32 @@ namespace proc {
     int  scale_factor;
     std::chrono::seconds exit_timeout;
   };
+
+  /**
+   * Return whether policy explicitly requests a virtual display for this launch.
+   *
+   * This is intentionally narrower than the legacy execute() fallback that may
+   * create a display merely because no active display is available. Losing a
+   * monitor must not by itself change session ownership.
+   */
+  bool launch_requests_virtual_display(
+    const ctx_t &app,
+    const rtsp_stream::launch_session_t &launch_session,
+    bool headless_mode
+  );
+
+  /**
+   * Resolve a launch to the host session or an independent private session.
+   *
+   * Explicit application/desktop profiles retain their isolated semantics.
+   * In auto mode, a requested Detached virtual display selects isolation;
+   * other layouts remain on the host. session-type=shared always stays host.
+   */
+  session_route_e resolve_session_route(
+    const ctx_t &app,
+    bool isolated_sessions_enabled,
+    bool virtual_display_requested
+  );
 
   class proc_t {
   public:
@@ -166,7 +206,8 @@ namespace proc {
       std::shared_ptr<rtsp_stream::launch_session_t> launch_session,
       bool apply_scale = true,
       const ctx_t *session_app = nullptr,
-      std::optional<uid_t> session_owner_uid = std::nullopt
+      std::optional<uid_t> session_owner_uid = std::nullopt,
+    bool isolated_session = false
     );
 
     /**
@@ -186,6 +227,9 @@ namespace proc {
 
     /** Stop the isolated runtime associated with a paired client. */
     void terminate_isolated_client(const std::string &client_uuid);
+
+    /** True while this client owns or is launching an isolated runtime. */
+    bool isolated_client_present(const std::string &client_uuid);
 
     /** Stop every experimental isolated runtime. */
     void terminate_all_isolated();
@@ -242,6 +286,12 @@ namespace proc {
 
     /** The source playing the client's microphone to an isolated session, or empty. */
     std::string isolated_mic_source(uint32_t launch_session_id);
+
+    /**
+     * @brief Whether an isolated session runs under a helper account of its
+     *        own, whose audio server the host's cannot reach.
+     */
+    bool isolated_session_has_account(uint32_t launch_session_id);
 
     /** Reattach launch metadata to a still-running client runtime. */
     bool prepare_isolated_resume(

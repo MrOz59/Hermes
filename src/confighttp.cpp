@@ -16,6 +16,11 @@
 #include <numeric>
 #include <algorithm>
 #include <atomic>
+#include <deque>
+#include <mutex>
+#ifndef _WIN32
+  #include <sys/utsname.h>
+#endif
 #ifdef __linux__
   #include <cerrno>
   #include <cstring>
@@ -52,6 +57,9 @@
 #include "utility.h"
 #include "uuid.h"
 #include "video.h"
+#ifdef __linux__
+  #include "platform/linux/misc.h"
+#endif
 
 #ifdef _WIN32
   #include "platform/windows/utils.h"
@@ -2246,6 +2254,217 @@ namespace confighttp {
     send_response(response, body);
   }
 
+
+  /**
+   * The stream timeline for diagnostic reports: what the pipeline did every
+   * five seconds while streaming, and for a minute after, so a report shows
+   * the state before, during and after a problem. An hour of it is kept.
+   */
+  namespace report_timeline {
+    struct sample_t {
+      std::chrono::system_clock::time_point at;
+      int sessions;
+      video::pipeline_metrics_t pipeline;
+    };
+
+    std::mutex mutex;
+    std::deque<sample_t> samples;
+    constexpr std::size_t max_samples = 720;
+
+    void record() {
+      using namespace std::literals;
+      static auto last_streaming = std::chrono::steady_clock::time_point {};
+      const int sessions = rtsp_stream::session_count();
+      const auto now = std::chrono::steady_clock::now();
+      if (sessions > 0) {
+        last_streaming = now;
+      } else if (last_streaming == std::chrono::steady_clock::time_point {} || now - last_streaming > 60s) {
+        return;
+      }
+      std::lock_guard lock {mutex};
+      samples.push_back({std::chrono::system_clock::now(), sessions, video::get_pipeline_metrics()});
+      if (samples.size() > max_samples) {
+        samples.pop_front();
+      }
+    }
+
+    std::vector<sample_t> snapshot() {
+      std::lock_guard lock {mutex};
+      return {samples.begin(), samples.end()};
+    }
+  }  // namespace report_timeline
+
+  namespace {
+    std::string local_time(std::chrono::system_clock::time_point at, const char *format) {
+      const auto t = std::chrono::system_clock::to_time_t(at);
+      std::tm tm {};
+#ifdef _WIN32
+      localtime_s(&tm, &t);
+#else
+      localtime_r(&t, &tm);
+#endif
+      char text[64];
+      std::strftime(text, sizeof(text), format, &tm);
+      return text;
+    }
+
+    std::string first_line(const std::filesystem::path &path) {
+      std::ifstream stream {path};
+      std::string line;
+      std::getline(stream, line);
+      return line;
+    }
+
+    std::vector<std::string> tail_lines(const std::filesystem::path &path, std::size_t count) {
+      std::ifstream stream {path};
+      std::deque<std::string> lines;
+      for (std::string line; std::getline(stream, line);) {
+        lines.push_back(std::move(line));
+        if (lines.size() > count) {
+          lines.pop_front();
+        }
+      }
+      return {lines.begin(), lines.end()};
+    }
+
+    // Settings as the user wrote them, without anything secret in them.
+    std::string redacted_settings() {
+      static const std::array<std::string_view, 8> secret {"pass", "secret", "token", "key", "cert", "salt", "credential", "pin"};
+      std::ifstream stream {config::sunshine.config_file};
+      std::string output;
+      for (std::string line; std::getline(stream, line);) {
+        const auto equals = line.find('=');
+        if (equals != std::string::npos) {
+          auto key = boost::algorithm::to_lower_copy(boost::algorithm::trim_copy(line.substr(0, equals)));
+          if (std::ranges::any_of(secret, [&](std::string_view word) { return key.find(word) != std::string::npos; })) {
+            line = line.substr(0, equals + 1) + " <removed>";
+          }
+        }
+        output += line + '\n';
+      }
+      return output.empty() ? "(no settings file, or all defaults)\n" : output;
+    }
+  }  // namespace
+
+  /**
+   * One plain-text file that explains a host to someone who cannot see it:
+   * the machine and its GPUs, the last capture-path check, the warnings and
+   * errors in the log, the stream timeline, the runtime state, the settings
+   * without secrets, and the recent log. Made to attach to an issue.
+   */
+  std::string diagnostic_report() {
+    std::ostringstream out;
+    const auto now = std::chrono::system_clock::now();
+    out << "Hermes diagnostic report\n"
+        << "Generated: " << local_time(now, "%Y-%m-%d %H:%M:%S %Z") << '\n'
+        << "Hermes " << PROJECT_VERSION << " (" << PROJECT_VERSION_COMMIT << ")\n"
+        << "Review before posting publicly: the log names clients and their addresses.\n";
+
+    out << "\n== Machine ==\n";
+    std::string os = "unknown";
+    for (const auto &line : tail_lines("/etc/os-release", 100)) {
+      if (line.starts_with("PRETTY_NAME=")) {
+        os = boost::algorithm::trim_copy_if(line.substr(12), boost::algorithm::is_any_of("\""));
+      }
+    }
+    out << "OS: " << os << '\n';
+#ifndef _WIN32
+    utsname system {};
+    ::uname(&system);
+    out << "Kernel: " << system.release << ' ' << system.machine << '\n';
+#endif
+    const auto session_env = platf::detect_session_environment();
+    out << "Session: " << session_env.describe() << '\n';
+#ifdef __linux__
+    const auto kms_version = first_line("/sys/module/hermes_kms/version");
+    out << "Hermes-KMS: " << (kms_version.empty() ? std::filesystem::exists("/sys/module/hermes_kms") ? "loaded" : "not loaded" : kms_version) << '\n';
+    out << "Virtual display backend: " << config::video.virtual_display_backend << '\n';
+    out << "GPUs:\n";
+    for (const auto &gpu : platf::render_node_descriptions()) {
+      out << "  " << gpu << '\n';
+    }
+    const auto encoding = platf::encode_gpu_description();
+    out << "Encodes on: " << (encoding.empty() ? "no GPU qualifies"s : encoding) << '\n';
+#endif
+
+    out << "\n== Last capture-path check ==\n";
+    const auto readiness = video::last_capture_readiness();
+    if (!readiness.checked) {
+      out << "None since Hermes started.\n";
+    } else {
+      out << "When: " << local_time(std::chrono::system_clock::from_time_t(readiness.checked_at), "%Y-%m-%d %H:%M:%S") << '\n'
+          << "Result: " << (readiness.ok ? readiness.frame_seen ? "passed" : "passed; no new frame in time" : "FAILED: " + readiness.failure) << '\n'
+          << "Capture: " << readiness.capture << " (" << readiness.width << 'x' << readiness.height << " at " << readiness.framerate << " fps)\n"
+          << "Encoder: " << readiness.encoder << (readiness.gpu.empty() ? "" : " on " + readiness.gpu) << '\n';
+    }
+
+    const auto log = tail_lines(config::sunshine.log_file, 3000);
+    out << "\n== Problems: warnings and errors in the recent log ==\n";
+    std::size_t problems = 0;
+    for (const auto &line : log) {
+      if (line.find("]: Warning: ") != std::string::npos || line.find("]: Error: ") != std::string::npos ||
+          line.find("]: Fatal: ") != std::string::npos) {
+        out << line << '\n';
+        ++problems;
+      }
+    }
+    if (!problems) {
+      out << "None.\n";
+    }
+
+    out << "\n== Stream timeline (every 5 s while streaming, and for a minute after) ==\n";
+    const auto samples = report_timeline::snapshot();
+    if (samples.empty()) {
+      out << "No stream since Hermes started.\n";
+    } else {
+      out << "time      streams  size        fps     Mbps    encode ms  capture->encode ms  dropped\n";
+      for (const auto &sample : samples) {
+        const auto &p = sample.pipeline;
+        out << std::format("{}  {:>7}  {:>11}  {:>6.1f}  {:>6.1f}  {:>9.2f}  {:>18.2f}  {:>7}\n",
+                           local_time(sample.at, "%H:%M:%S"), sample.sessions,
+                           p.valid ? std::format("{}x{}", p.width, p.height) : "-"s,
+                           p.fps, p.bitrate_kbps / 1000.0, p.encode_ms, p.capture_to_encode_ms, p.frames_dropped);
+      }
+    }
+
+    out << "\n== Runtime state ==\n" << hestia_runtime_status_json().dump(2) << '\n';
+    out << "\n== Streaming preflight ==\n" << hestia_preflight_json().dump(2) << '\n';
+    out << "\n== Settings (secrets removed) ==\n" << redacted_settings();
+    out << "\n== Recent log ==\n";
+    for (const auto &line : log) {
+      out << line << '\n';
+    }
+    return out.str();
+  }
+
+  void send_diagnostic_report(resp_https_t response) {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "text/plain; charset=utf-8");
+    headers.emplace("Content-Disposition", "attachment; filename=\"hermes-report-" +
+                                             local_time(std::chrono::system_clock::now(), "%Y%m%d-%H%M%S") + ".txt\"");
+    headers.emplace("X-Frame-Options", "DENY");
+    response->write(SimpleWeb::StatusCode::success_ok, diagnostic_report(), headers);
+  }
+
+  /**
+   * @brief Download a diagnostic report of this host.
+   * @api_examples{/api/diagnostics/report| GET| null}
+   */
+  void getDiagnosticReport(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    send_diagnostic_report(response);
+  }
+
+  void get_hestia_diagnostic_report(resp_https_t response, req_https_t request) {
+    if (!authenticate_hestia_client(response, request, crypto::PERM::view, "diagnostic report")) {
+      return;
+    }
+    send_diagnostic_report(response);
+  }
+
   void set_hestia_clipboard(resp_https_t response, req_https_t request) {
     if (!authenticate_hestia_client(response, request, crypto::PERM::clipboard_set, "clipboard write")) {
       return;
@@ -3321,6 +3540,8 @@ fi')CLIP";
     server.resource["^/api/hestia/v1/client/permissions$"]["GET"] = get_hestia_client_permissions;
     server.resource["^/api/hestia/v1/diagnostics$"]["GET"] = get_hestia_diagnostics;
     server.resource["^/api/hestia/v1/stream/info$"]["GET"] = get_hestia_stream_info;
+    server.resource["^/api/hestia/v1/diagnostics/report$"]["GET"] = get_hestia_diagnostic_report;
+    server.resource["^/api/diagnostics/report$"]["GET"] = getDiagnosticReport;
     server.resource["^/api/hestia/v1/clipboard$"]["GET"] = get_hestia_clipboard;
     server.resource["^/api/hestia/v1/clipboard$"]["POST"] = set_hestia_clipboard;
     server.resource["^/api/hestia/v1/commands$"]["GET"] = get_hestia_commands;
@@ -3372,6 +3593,22 @@ fi')CLIP";
       }
     };
     std::thread tcp { accept_and_run, &server };
+
+    // The diagnostic report's stream timeline.
+    std::atomic_bool stop_timeline {false};
+    std::thread timeline {[&stop_timeline]() {
+      using namespace std::literals;
+      while (!stop_timeline) {
+        for (int tick = 0; tick < 50 && !stop_timeline; ++tick) {
+          std::this_thread::sleep_for(100ms);
+        }
+        report_timeline::record();
+      }
+    }};
+    auto stop_timeline_guard = util::fail_guard([&]() {
+      stop_timeline = true;
+      timeline.join();
+    });
 
     // Wait for any event
     shutdown_event->view();

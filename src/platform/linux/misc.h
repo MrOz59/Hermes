@@ -46,6 +46,12 @@ namespace platf {
    * empty string when no GPU qualifies.
    */
   std::string encode_gpu_description(bool nvenc = false);
+
+  /**
+   * @brief Describe every GPU render node, as encode_gpu_description() does,
+   * the capture-only Hermes-KMS node included and marked as such.
+   */
+  std::vector<std::string> render_node_descriptions();
 }  // namespace platf
 
 namespace dyn {

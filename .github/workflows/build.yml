@@ -119,6 +119,7 @@ jobs:
             libevdev \
             systemd \
             miniupnpc \
+            libpipewire \
             libpulse \
             qt6-base \
             qt6-svg \

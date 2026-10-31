@@ -42,6 +42,7 @@ apt-get install -y --no-install-recommends \
   libminiupnpc-dev \
   libnuma-dev \
   libopus-dev \
+  libpipewire-0.3-dev \
   libpulse-dev \
   libqt6svg6-dev \
   libssl-dev \

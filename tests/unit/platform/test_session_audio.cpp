@@ -152,15 +152,13 @@ namespace {
     EXPECT_EQ(query(*server, "info").at("default_sink_name"), "sink-session-resume");
   }
 
-  TEST_F(SessionAudioLiveTest, TeardownRemovesTheMicrophoneFifoAndAllowsRestart) {
+  TEST_F(SessionAudioLiveTest, TeardownRemovesTheMicrophoneAndAllowsRestart) {
     const auto path = directory("restart");
-    const auto fifo = audio::session_mic_fifo("source-session-restart");
     auto server = audio::start(path.string(), "sink-session-restart", 2, "source-session-restart");
     ASSERT_TRUE(server);
-    EXPECT_TRUE(fs::is_fifo(fifo));
     EXPECT_TRUE(audio::open_mic("source-session-restart"));
     server.reset();
-    EXPECT_FALSE(fs::exists(fifo));
+    EXPECT_FALSE(audio::open_mic("source-session-restart"));
     server = audio::start(path.string(), "sink-session-restart", 2, "source-session-restart");
     ASSERT_TRUE(server);
     EXPECT_EQ(query(*server, "info").at("default_source_name"), "source-session-restart");
@@ -177,7 +175,7 @@ namespace {
     const auto session_path = directory("failed-manager");
     auto server = audio::start(session_path.string(), "sink-session-failed", 2, "source-session-failed");
     EXPECT_FALSE(server);
-    EXPECT_FALSE(fs::exists(audio::session_mic_fifo("source-session-failed")));
+    EXPECT_FALSE(audio::open_mic("source-session-failed"));
   }
 }  // namespace
 #endif

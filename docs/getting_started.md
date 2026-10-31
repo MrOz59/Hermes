@@ -155,7 +155,7 @@ needed for a binary you built yourself, or after the capability was removed.
 
 ##### Enable
 ```bash
-sudo setcap cap_sys_admin+p $(readlink -f $(which hermes))
+sudo setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p $(readlink -f $(which hermes))
 ```
 
 #### X11 Capture

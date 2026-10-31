@@ -34,6 +34,10 @@ if(SUNSHINE_BUILD_CARD_BROKER)
             RENAME "card-broker.allow.example")
 endif()
 
+if(TARGET hermes-detached-session)
+    install(TARGETS hermes-detached-session DESTINATION "bin")
+endif()
+
 if(SUNSHINE_BUILD_SESSION_BROKER)
     install(TARGETS hermes-session-broker DESTINATION "bin")
     # Same reasoning as the card broker's: shipping this as a live config file
@@ -57,6 +61,8 @@ install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/session-compositors/
 
 if(${SUNSHINE_BUILD_APPIMAGE} OR ${SUNSHINE_BUILD_FLATPAK})
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.rules"
+            "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/74-hermes-session-acl.rules"
+            "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/99-hermes-session-input.rules"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/udev/rules.d")
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.conf"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/modules-load.d")
@@ -82,6 +88,8 @@ else()
 
     if(UDEV_FOUND)
         install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.rules"
+                "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/74-hermes-session-acl.rules"
+                "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/99-hermes-session-input.rules"
                 DESTINATION "${UDEV_RULES_INSTALL_DIR}")
     endif()
     # polkit has no pkg-config variable for its rules directory; unlike the
@@ -122,7 +130,7 @@ set(CPACK_RPM_POST_INSTALL_SCRIPT_FILE "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc
 
 # Apply setcap for RPM
 # https://github.com/coreos/rpm-ostree/discussions/5036#discussioncomment-10291071
-set(CPACK_RPM_USER_FILELIST "%caps(cap_sys_admin+p) ${SUNSHINE_EXECUTABLE_PATH}")
+set(CPACK_RPM_USER_FILELIST "%caps(cap_sys_admin,cap_mknod,cap_sys_chroot+p) ${SUNSHINE_EXECUTABLE_PATH}")
 
 # Dependencies
 set(CPACK_DEB_COMPONENT_INSTALL ON)
@@ -134,6 +142,7 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "\
             ${CPACK_DEB_PLATFORM_PACKAGE_DEPENDS} \
             debianutils, \
             libcap2, \
+            libcap2-bin, \
             libcurl4, \
             libdrm2, \
             libgbm1, \
@@ -198,6 +207,11 @@ endif()
 
 # This should automatically figure out dependencies, doesn't work with the current config
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+
+if(SUNSHINE_BUILD_SESSION_BROKER)
+    string(APPEND CPACK_DEBIAN_PACKAGE_DEPENDS ", libacl1")
+    string(APPEND CPACK_RPM_PACKAGE_REQUIRES ", libacl")
+endif()
 
 # application icon
 # Installed as hermes.svg rather than apollo.svg so the package does not claim a

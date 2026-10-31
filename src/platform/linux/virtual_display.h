@@ -23,6 +23,7 @@
 // local includes
 #include "src/uuid.h"
 #include "hermes_kms_color.h"
+#include "monitor_restore.h"
 
 namespace VDISPLAY {
 
@@ -264,7 +265,8 @@ namespace VDISPLAY {
     uint32_t fps,
     const uuid_util::uuid_t &guid,
     std::optional<uid_t> session_owner_uid = std::nullopt,
-    virtual_display_layout_e layout = virtual_display_layout_e::extend
+    virtual_display_layout_e layout = virtual_display_layout_e::extend,
+    bool isolated_session = false
   );
 
   /**
@@ -717,7 +719,7 @@ namespace VDISPLAY {
    *
    * GNOME binds a touchscreen or tablet to a monitor through a key whose path
    * it derives from the device's vendor and product. These must be the ids
-   * inputtino gives Hermes' virtual devices, or the binding addresses a device
+   * libvirtualhid gives Hermes' virtual devices, or the binding addresses a device
    * that does not exist - which fails silently, since nothing errors and touch
    * input simply goes on being placed by guesswork.
    * `platf::VIRTUAL_INPUT_VENDOR_ID` is checked against these at compile time.
@@ -747,7 +749,7 @@ namespace VDISPLAY {
    *        touch and pen devices, as `<schema>:<path>`.
    *
    * Mutter derives the path from the device's vendor and product ids, so these
-   * only reach Hermes' devices while they match the ids inputtino is given.
+   * only reach Hermes' devices while they match the ids libvirtualhid is given.
    */
   void mutterInputDeviceSettingsTargets(std::string &touch, std::string &pen);
 
@@ -779,7 +781,7 @@ namespace VDISPLAY {
    * KWin keeps a device's settings, the output it is bound to among them, in a
    * kcminputrc group named after the device's vendor, product and name. The
    * display code has to address that group, so these are named here and
-   * inputtino is given the same constants.
+   * libvirtualhid is given the same constants.
    */
   constexpr const char *VIRTUAL_TOUCH_DEVICE_NAME = "Touch passthrough";
   constexpr const char *VIRTUAL_PEN_DEVICE_NAME = "Pen passthrough";
@@ -850,17 +852,6 @@ namespace VDISPLAY {
     int y {0};  ///< Logical y.
   };
 
-  /** @brief One output as `kscreen-doctor -j` reports it. */
-  struct kscreen_output_t {
-    std::string name;  ///< Connector name, e.g. "HDMI-A-1".
-    bool connected {false};  ///< The connector exists in this session.
-    bool enabled {false};  ///< KWin is composing on it.
-    int priority {0};  ///< KScreen priority; 1 marks the primary output.
-    int x {0};  ///< Logical x.
-    int y {0};  ///< Logical y.
-    int width {0};  ///< Logical width.
-    int height {0};  ///< Logical height.
-  };
 
   /**
    * @brief Decide where the virtual output goes, in KScreen's logical space.

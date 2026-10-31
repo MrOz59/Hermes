@@ -76,6 +76,10 @@
  * actions, including powering the host off and mounting its disks.
  */
 
+#include "session-broker-input.h"
+#include "session-broker-lock.h"
+#include "session-broker-workers.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -84,28 +88,27 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <sys/wait.h>
-#include <unordered_map>
-#include <vector>
-
-#include <fcntl.h>
 #include <grp.h>
+#include <optional>
 #include <poll.h>
 #include <pwd.h>
 #include <signal.h>
+#include <string>
+#include <string_view>
 #include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
 
 namespace {
   namespace fs = std::filesystem;
+  namespace input_access = hermes::session_broker::input_access;
 
   constexpr const char *default_allow_file = "/etc/hermes/session-broker.allow";
   constexpr const char *default_state_file = "/var/lib/hermes/session-users.map";
@@ -123,47 +126,9 @@ namespace {
 
   constexpr int SD_LISTEN_FDS_START = 3;
 
-  // How long one connection may take over its socket. The broker accepts
-  // serially, so a client that connects and says nothing stalls every client
-  // behind it; this deadline is what turns that stall from forever into a
-  // bounded wait. It covers reads and writes alike, and a full request has to
-  // arrive within it - the ceiling below bounds size, this bounds time.
+  // Bound each worker's socket reads and writes. Slow peers occupy a worker,
+  // never the accept loop; the worker pool also bounds their total count.
   constexpr auto socket_timeout = std::chrono::seconds(10);
-
-  // STATUS asks systemd for a unit's state, which is a fork and exec of
-  // `systemctl show`. Callers poll it - the Game Mode console every couple of
-  // seconds, the streaming host while a session is alive - so the answer is
-  // cached briefly. A state is stale after this long at worst, which no caller
-  // can distinguish from a poll that has not happened yet.
-  constexpr auto status_cache_ttl = std::chrono::seconds(2);
-
-  struct status_cache_t {
-    struct entry_t {
-      std::chrono::steady_clock::time_point expires_at;
-      std::string state;
-    };
-
-    // The broker serves one connection at a time, so no lock is needed.
-    std::unordered_map<std::string, entry_t> entries;
-
-    std::optional<std::string> find(const std::string &unit) {
-      const auto it = entries.find(unit);
-      if (it == entries.end()) {
-        return std::nullopt;
-      }
-      if (std::chrono::steady_clock::now() >= it->second.expires_at) {
-        entries.erase(it);
-        return std::nullopt;
-      }
-      return it->second.state;
-    }
-
-    void store(const std::string &unit, std::string state) {
-      entries[unit] = {std::chrono::steady_clock::now() + status_cache_ttl, std::move(state)};
-    }
-  };
-
-  status_cache_t status_cache;
 
   /**
    * @brief Wait until `fd` is ready for `events` or the deadline passes.
@@ -177,7 +142,8 @@ namespace {
   bool wait_ready(int fd, short events, std::chrono::steady_clock::time_point deadline) {
     for (;;) {
       const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-        deadline - std::chrono::steady_clock::now());
+        deadline - std::chrono::steady_clock::now()
+      );
       if (remaining.count() <= 0) {
         return false;
       }
@@ -201,6 +167,7 @@ namespace {
     std::string home_root {default_home_root};
     std::string lock_file {default_lock_file};
     int max_sessions {default_max_sessions};
+    std::string input_node;
   };
 
   std::string trim(std::string_view text) {
@@ -305,7 +272,7 @@ namespace {
   };
 
   /**
-   * The map is the broker's only memory. It is read fresh per request rather
+   * The account map is read fresh per request rather
    * than cached: the file is root-only, and re-reading means an administrator
    * editing it does not have to restart anything.
    *
@@ -524,13 +491,7 @@ namespace {
     // the others, and each home below it is the account's own 0700.
     ::chmod(options.home_root.c_str(), S_IRWXU | S_IXGRP | S_IXOTH);
 
-    if (!run({useradd,
-              "--create-home",
-              "--home-dir", home.string(),
-              "--shell", shell,
-              "--groups", session_group,
-              "--comment", "Hermes isolated session",
-              name})) {
+    if (!run({useradd, "--create-home", "--home-dir", home.string(), "--shell", shell, "--groups", session_group, "--comment", "Hermes isolated session", name})) {
       return "useradd failed";
     }
 
@@ -556,6 +517,8 @@ namespace {
            (fs::path {options.home_root} / account).string();
   }
 
+  std::optional<std::string> clear_input_lease(const options_t &options, const std::string &account);
+
   std::string handle_ensure(const options_t &options, const std::string &client_id) {
     auto mappings = read_mappings(options);
     if (!mappings) {
@@ -572,8 +535,12 @@ namespace {
       // under the name it already holds, which is also the slot it already
       // occupies, rather than leaking a second one.
       if (::getpwnam(existing->account.c_str()) == nullptr) {
-        std::fprintf(stderr, "recreating %s, which the map claims but passwd does not\n",
-                     existing->account.c_str());
+        // Do not hand an account slot (and possibly its former UID) to a new
+        // process while its previous virtual-device ACLs are still present.
+        if (const auto failure = clear_input_lease(options, existing->account); failure) {
+          return "ERR input " + *failure;
+        }
+        std::fprintf(stderr, "recreating %s, which the map claims but passwd does not\n", existing->account.c_str());
         if (const auto failure = provision(options, existing->account); failure) {
           return "ERR provision " + *failure;
         }
@@ -624,6 +591,34 @@ namespace {
   // session ahead of userdel.
   std::optional<std::string> stop_session(const options_t &options, const std::string &account);
 
+  /** @brief Revoke a stopped or removed account's input lease before forgetting it. */
+  std::optional<std::string> clear_input_lease(const options_t &options, const std::string &account) {
+    hermes::session_broker::mutation_lock lock {(options.lock_file + ".input").c_str()};
+    if (!lock) {
+      return "the input ACL lock is busy or unsafe; retaining the lease for retry";
+    }
+    const auto path = options.state_file + ".input";
+    auto leases = input_access::read_leases(path);
+    if (!leases) {
+      return "the input lease file is unsafe or damaged";
+    }
+    const auto owner = std::ranges::find_if(*leases, [&](const auto &entry) {
+      return entry.account == account;
+    });
+    if (owner == leases->end()) {
+      return std::nullopt;
+    }
+    const auto revoked = input_access::update_devices({}, *owner, false);
+    if (!revoked.ok) {
+      return revoked.error;
+    }
+    leases->erase(owner);
+    if (!input_access::write_leases(path, *leases)) {
+      return "input access was revoked but the lease could not be removed";
+    }
+    return std::nullopt;
+  }
+
   std::string handle_purge(const options_t &options, const std::string &client_id) {
     auto mappings = read_mappings(options);
     if (!mappings) {
@@ -642,13 +637,10 @@ namespace {
       return "ERR provision userdel was not found";
     }
 
-    // The session is stopped before the account is removed: userdel refuses
-    // an account with live processes, and a home deleted out from under a
-    // running compositor corrupts the files it is writing. A failure to stop
-    // is not the end - userdel then reports the truth of what is left.
+    // Stop processes and revoke input before the account can disappear or its
+    // UID can be reused. Retain both mapping and lease if cleanup fails.
     if (const auto failure = stop_session(options, existing->account); failure) {
-      std::fprintf(stderr, "could not stop %s before purging it: %s\n",
-                   existing->account.c_str(), failure->c_str());
+      return "ERR provision refusing to purge an account before stopping it and revoking input: " + *failure;
     }
 
     // The account goes first and the mapping second. The other order loses a
@@ -690,6 +682,10 @@ namespace {
     const std::vector<std::string> &environment,
     const std::string &scope
   ) {
+    std::string seat;
+    if (!input_access::seat_from_environment(environment, seat)) {
+      return "ERR request the session seat is malformed, duplicated or conflicting";
+    }
     if (arguments.empty()) {
       return "ERR request START needs at least one ARG";
     }
@@ -711,6 +707,32 @@ namespace {
     if (account == nullptr) {
       return "ERR state the mapped account no longer exists";
     }
+    const uid_t account_uid = account->pw_uid;
+    if (account_uid == 0) {
+      return "ERR state a session account must not be root";
+    }
+    const auto lease_path = options.state_file + ".input";
+    auto leases = input_access::read_leases(lease_path);
+    if (!leases) {
+      return "ERR input the input lease file is unsafe or damaged";
+    }
+    const auto existing_lease = std::ranges::find_if(*leases, [&](const auto &owner) {
+      return owner.client == client_id;
+    });
+    if (!scope.empty()) {
+      if (existing_lease != leases->end()) {
+        if (existing_lease->account != existing->account || existing_lease->uid != account_uid || (!seat.empty() && seat != existing_lease->seat)) {
+          return "ERR input the scoped app does not belong to the session's input seat";
+        }
+        seat = existing_lease->seat;
+      } else if (!seat.empty()) {
+        return "ERR input a scoped app cannot register a new input seat";
+      }
+    } else if (existing_lease != leases->end() || (!seat.empty() && std::ranges::any_of(*leases, [&](const auto &owner) {
+                 return owner.seat == seat || owner.uid == account_uid || owner.account == existing->account;
+               }))) {
+      return "ERR input the account or seat already owns an input lease; STOP it first";
+    }
 
     const auto systemd_run = locate({"/usr/bin/systemd-run", "/bin/systemd-run"});
     if (systemd_run.empty()) {
@@ -720,12 +742,19 @@ namespace {
     if (loginctl.empty()) {
       return "ERR provision loginctl was not found";
     }
-    if (!run({loginctl, "enable-linger", existing->account})) {
-      return "ERR provision lingering could not be enabled for the session account";
-    }
-
     const auto uid = std::to_string(static_cast<unsigned>(account->pw_uid));
     const auto session_unit = unit_for_account(existing->account);
+    if (scope.empty()) {
+      const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
+      std::string previous_state;
+      if (systemctl.empty() || !run_capture({systemctl, "show", "--property=ActiveState", "--value", session_unit}, previous_state)) {
+        return "ERR provision the previous session state could not be determined";
+      }
+      previous_state = trim(previous_state);
+      if (previous_state != "inactive" && previous_state != "failed") {
+        return "ERR input a previous session is still running; STOP it first";
+      }
+    }
     const auto unit = scope.empty() ?
                         session_unit :
                         session_unit.substr(0, session_unit.size() - 8) + '-' + scope + ".service";
@@ -753,19 +782,53 @@ namespace {
     for (const auto &assignment : environment) {
       argv.push_back("--setenv=" + assignment);
     }
+    if (!seat.empty()) {
+      argv.push_back("--setenv=XDG_SEAT=" + seat);
+      argv.push_back("--setenv=HERMES_SESSION_SEAT=" + seat);
+    }
     argv.push_back("--setenv=XDG_RUNTIME_DIR=/run/user/" + uid);
     // HOME, USER, LOGNAME and SHELL come from the passwd entry, because systemd
     // sets those itself for a unit with User=.
     argv.emplace_back("--");
     argv.insert(argv.end(), arguments.begin(), arguments.end());
 
+    const bool register_input = scope.empty() && !seat.empty();
+    if (register_input) {
+      input_access::result granted;
+      {
+        hermes::session_broker::mutation_lock lock {(options.lock_file + ".input").c_str()};
+        if (!lock) {
+          return "ERR busy the input ACL lock is unavailable or unsafe";
+        }
+        leases->push_back({client_id, existing->account, account_uid, seat});
+        // Persist first so a restart can revoke any ACL already granted.
+        if (!input_access::write_leases(lease_path, *leases)) {
+          return "ERR input the session's input lease could not be saved";
+        }
+        granted = input_access::update_devices({}, leases->back(), true);
+      }
+      if (!granted.ok) {
+        const auto cleanup = stop_session(options, existing->account);
+        return "ERR input " + granted.error + (cleanup ? "; cleanup pending: " + *cleanup : "");
+      }
+    }
+    if (!run({loginctl, "enable-linger", existing->account})) {
+      if (register_input) {
+        if (const auto failure = stop_session(options, existing->account); failure) {
+          std::fprintf(stderr, "input cleanup pending: %s\n", failure->c_str());
+        }
+      }
+      return "ERR provision lingering could not be enabled for the session account";
+    }
     if (!run(argv)) {
       std::fprintf(stderr, "systemd-run refused to start %s\n", unit.c_str());
+      if (register_input) {
+        if (const auto failure = stop_session(options, existing->account); failure) {
+          std::fprintf(stderr, "input cleanup pending for %s: %s\n", existing->account.c_str(), failure->c_str());
+        }
+      }
       return "ERR provision systemd-run refused to start the session";
     }
-    // The unit is coming up; a STATUS right behind this START must not be
-    // answered from a cache entry that still remembers it as gone.
-    status_cache.store(session_unit, "activating");
     return "OK " + unit;
   }
 
@@ -791,27 +854,23 @@ namespace {
 
     const auto unit = unit_for_account(existing->account);
 
-    // STATUS is polled - the Game Mode console every couple of seconds, the
-    // streaming host while a session is alive - and each answer otherwise
-    // costs a fork and exec of `systemctl show`. The state is cached briefly:
-    // nothing systemd knows changes between two polls that close together.
+    // Workers do not share a process-local status cache. Query systemd so
+    // one worker cannot report an old inactive state after another START.
     std::string state;
-    if (const auto cached = status_cache.find(unit); cached) {
-      state = *cached;
-    } else {
-      const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
-      if (systemctl.empty()) {
-        return "ERR provision systemctl was not found";
-      }
-      if (!run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state)) {
-        return "ERR provision the session unit's state could not be read";
-      }
-      state = trim(state);
-      status_cache.store(unit, state);
+    const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
+    if (systemctl.empty()) {
+      return "ERR provision systemctl was not found";
+    }
+    if (!run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state)) {
+      return "ERR provision the session unit's state could not be read";
+    }
+    state = trim(state);
+    if (state.empty()) {
+      return "ERR provision the session unit's state was empty";
     }
     // systemd answers `inactive` for a unit it has never heard of, which is
     // the right answer to this question: nothing of that name is running.
-    return "OK " + (state.empty() ? std::string {"inactive"} : state) + ' ' + unit;
+    return "OK " + state + ' ' + unit;
   }
 
   /**
@@ -843,15 +902,15 @@ namespace {
     std::vector<std::string> candidates;
     std::error_code iteration_error;
     for (fs::directory_iterator it {runtime_dir, iteration_error}, end;
-         !iteration_error && it != end; it.increment(iteration_error)) {
+         !iteration_error && it != end;
+         it.increment(iteration_error)) {
       const auto name = it->path().filename().string();
       // A status error is this entry's alone and must not end the scan: the
       // code is local to the iteration, where sharing one with the iterator
       // would abort the loop on the first unreadable entry and hide every
       // socket that came after it.
       std::error_code status_error;
-      if ((name.starts_with("gamescope-") || name.starts_with("wayland-")) &&
-          fs::is_socket(it->symlink_status(status_error))) {
+      if ((name.starts_with("gamescope-") || name.starts_with("wayland-")) && fs::is_socket(it->symlink_status(status_error))) {
         candidates.emplace_back(name);
       }
     }
@@ -871,6 +930,19 @@ namespace {
    * compositor would corrupt whatever it is writing.
    */
   std::optional<std::string> stop_session(const options_t &options, const std::string &account) {
+    const auto leases = input_access::read_leases(options.state_file + ".input");
+    if (!leases) {
+      return "the input lease file is unsafe or damaged";
+    }
+    const auto owner = std::ranges::find_if(*leases, [&](const auto &entry) {
+      return entry.account == account;
+    });
+    if (owner != leases->end()) {
+      const auto *current = ::getpwnam(account.c_str());
+      if (!current || current->pw_uid != owner->uid) {
+        return "the leased session account changed; refusing to stop a different UID";
+      }
+    }
     const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
     if (systemctl.empty()) {
       return "systemctl was not found";
@@ -882,27 +954,188 @@ namespace {
     // failure to reach it.
     const auto unit = unit_for_account(account);
     std::string state;
-    run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state);
+    if (!run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state)) {
+      return "the session unit state could not be determined";
+    }
     state = trim(state);
+    if (state.empty()) {
+      return "the session unit's state was empty; input access was not revoked";
+    }
     if (!state.empty() && state != "inactive" && state != "failed") {
       if (!run({systemctl, "stop", unit})) {
         return "the session unit could not be stopped";
       }
       state = "inactive";
     }
-    // The state the unit is now in is the state a STATUS behind this STOP
-    // must report, not whatever a cache entry from before the stop remembers.
-    status_cache.store(unit, state.empty() ? "inactive" : state);
-
     // Lingering is what START turned on to get the account a runtime directory
     // and a user manager, and it survives reboots. Left on, every client that
     // ever streamed would keep a manager and a session bus running on the host
     // forever. The account and its home are untouched - only the machinery of a
     // session that is over goes - so the next START brings it all back.
-    if (const auto loginctl = locate({"/usr/bin/loginctl", "/bin/loginctl"}); !loginctl.empty()) {
-      run({loginctl, "disable-linger", account});
+    const auto loginctl = locate({"/usr/bin/loginctl", "/bin/loginctl"});
+    if (!loginctl.empty()) {
+      const bool disabled = run({loginctl, "disable-linger", account});
+      if (owner != leases->end()) {
+        // ACL revocation cannot invalidate an already-open descriptor. Stop
+        // the user manager as well as the session and its PartOf app units.
+        if (!disabled) {
+          return "lingering could not be disabled before input revocation";
+        }
+        // Wait for both user units even when terminate-user only queues its
+        // stop jobs, or reports that no logind user is registered anymore.
+        run({loginctl, "terminate-user", account});
+        for (const auto &user_unit : {"user@" + std::to_string(owner->uid) + ".service", "user-" + std::to_string(owner->uid) + ".slice"}) {
+          std::string user_state;
+          const bool queried = run_capture({systemctl, "show", "--property=ActiveState", "--value", user_unit}, user_state);
+          user_state = trim(user_state);
+          if ((!queried && user_state != "inactive") || user_state.empty()) {
+            return "a session user unit's state could not be determined before input revocation";
+          }
+          if (user_state != "inactive" && !run({systemctl, "stop", user_unit})) {
+            return "a session user unit could not be stopped before input revocation";
+          }
+        }
+      }
+    } else if (owner != leases->end()) {
+      return "loginctl was not found; input revocation requires stopping the user manager";
     }
-    return std::nullopt;
+    return clear_input_lease(options, account);
+  }
+
+  /** @brief Reconcile hotplug and persisted leases while holding the mutation lock. */
+  std::optional<std::string> refresh_input_access(const options_t &options) {
+    const auto leases = input_access::read_leases(options.state_file + ".input");
+    const auto mappings = read_mappings(options);
+    if (!leases || !mappings) {
+      return "input leases or account mappings are unsafe or damaged";
+    }
+    const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
+    if (systemctl.empty() && !leases->empty()) {
+      return "cannot reconcile input without systemctl";
+    }
+    std::optional<std::string> first_failure;
+    const auto remember = [&](const std::string &failure) {
+      if (!first_failure) {
+        first_failure = failure;
+      }
+    };
+    for (const auto &owner : *leases) {
+      const auto *current = ::getpwnam(owner.account.c_str());
+      if (!current || current->pw_uid != owner.uid) {
+        // Never kill a different account after an administrator changes UID
+        // assignments. Remove only the recorded UID's virtual-device ACLs.
+        if (const auto failure = clear_input_lease(options, owner.account); failure) {
+          remember(*failure);
+        }
+        continue;
+      }
+      const bool mapped = std::ranges::any_of(*mappings, [&](const auto &entry) {
+        return entry.client_id == owner.client && entry.account == owner.account;
+      });
+      const auto unit = unit_for_account(owner.account);
+      std::string state;
+      if (!run_capture({systemctl, "show", "--property=ActiveState", "--value", unit}, state)) {
+        remember("cannot determine a leased session's state; its input access was not changed");
+        continue;
+      }
+      state = trim(state);
+      const bool live = state == "active" || state == "activating" || state == "reloading";
+      const bool stopped = state == "inactive" || state == "failed" || state == "deactivating";
+      if (!mapped || stopped) {
+        if (const auto failure = stop_session(options, owner.account); failure) {
+          remember(*failure);
+        }
+        continue;
+      }
+      if (!live) {
+        remember("the leased session's state is unknown; its input access was not changed");
+        continue;
+      }
+      hermes::session_broker::mutation_lock lock {(options.lock_file + ".input").c_str()};
+      if (!lock) {
+        remember("the input ACL lock is busy; retrying reconciliation later");
+        continue;
+      }
+      const auto granted = input_access::update_devices({}, owner, true);
+      if (!granted.ok) {
+        remember(granted.error);
+      }
+    }
+    return first_failure;
+  }
+
+  /**
+   * @brief Grant one udev node before the add event reaches SDL/libinput.
+   *
+   * udev invokes this local root-only mode with a kernel node name. It uses a
+   * short ACL lock rather than the account lock, so stopping an unrelated
+   * session does not delay hotplug behind systemd stop jobs.
+   */
+  bool grant_udev_node(const options_t &options) {
+    const auto &name = options.input_node;
+    const auto numbered = [&](std::string_view prefix) {
+      return name.starts_with(prefix) && name.size() > prefix.size() &&
+             std::ranges::all_of(std::string_view {name}.substr(prefix.size()), [](char ch) {
+               return ch >= '0' && ch <= '9';
+             });
+    };
+    if (::geteuid() != 0 || name.size() > 64 || (!numbered("event") && !numbered("js") && !numbered("hidraw"))) {
+      return false;
+    }
+    // Ordinary same-user/disabled-broker operation has no leases and must not
+    // wait for a lock or even require the socket's runtime directory to exist.
+    const auto initial = input_access::read_leases(options.state_file + ".input");
+    if (!initial) {
+      return false;
+    }
+    if (initial->empty()) {
+      return true;
+    }
+    std::optional<hermes::session_broker::mutation_lock> lock;
+    for (int attempt = 0; attempt < 300; ++attempt) {
+      lock.emplace((options.lock_file + ".input").c_str());
+      if (*lock) {
+        break;
+      }
+      lock.reset();
+      ::usleep(10000);
+    }
+    if (!lock) {
+      return false;
+    }
+    const auto leases = input_access::read_leases(options.state_file + ".input");
+    const auto mappings = read_mappings(options);
+    if (!leases || !mappings) {
+      return false;
+    }
+    const fs::path entry = fs::path {"/sys/class"} / (name.starts_with("hidraw") ? "hidraw" : "input") / name;
+    for (const auto &owner : *leases) {
+      if (!input_access::inspect_node({}, entry, owner.seat)) {
+        continue;
+      }
+      const bool mapped = std::ranges::any_of(*mappings, [&](const auto &mapping) {
+        return mapping.client_id == owner.client && mapping.account == owner.account;
+      });
+      const auto *current = ::getpwnam(owner.account.c_str());
+      if (!mapped || !current || current->pw_uid != owner.uid) {
+        return false;
+      }
+      const auto systemctl = locate({"/usr/bin/systemctl", "/bin/systemctl"});
+      std::string state;
+      if (systemctl.empty() || !run_capture({systemctl, "show", "--property=ActiveState", "--value", unit_for_account(owner.account)}, state)) {
+        return false;
+      }
+      state = trim(state);
+      if (state != "active" && state != "activating" && state != "reloading") {
+        return false;
+      }
+      const auto granted = input_access::update_node({}, owner, entry, true);
+      if (!granted.ok) {
+        std::fprintf(stderr, "udev input ACL: %s\n", granted.error.c_str());
+      }
+      return granted.ok;
+    }
+    return true;
   }
 
   std::string handle_stop(const options_t &options, const std::string &client_id) {
@@ -941,8 +1174,7 @@ namespace {
       return reply;
     }
 
-    if (verb != "ENSURE" && verb != "LOOKUP" && verb != "PURGE" && verb != "START" &&
-        verb != "STOP" && verb != "STATUS" && verb != "SOCKET") {
+    if (verb != "ENSURE" && verb != "LOOKUP" && verb != "PURGE" && verb != "START" && verb != "STOP" && verb != "STATUS" && verb != "SOCKET") {
       return "ERR request unknown verb";
     }
     if (!valid_client_id(argument)) {
@@ -995,8 +1227,7 @@ namespace {
             // must say which line it was. Only the name is logged - the value
             // is the caller's data, and a function body is not worth echoing.
             const auto name = assignment.substr(0, assignment.find('='));
-            std::fprintf(stderr, "dropping ENV line: %.*s is not a name systemd accepts\n",
-                         static_cast<int>(name.size()), name.data());
+            std::fprintf(stderr, "dropping ENV line: %.*s is not a name systemd accepts\n", static_cast<int>(name.size()), name.data());
             continue;
           }
           environment.emplace_back(assignment);
@@ -1104,11 +1335,13 @@ namespace {
     std::array<char, 4096> chunk {};
     while (buffer.size() < request_ceiling && !request_is_complete(buffer)) {
       if (!wait_ready(fd, POLLIN, deadline)) {
-        std::fprintf(stderr, "a connection sent no complete request within %lld seconds; dropping it\n",
-                     static_cast<long long>(socket_timeout.count()));
+        std::fprintf(stderr, "a connection sent no complete request within %lld seconds; dropping it\n", static_cast<long long>(socket_timeout.count()));
         return std::nullopt;
       }
-      const auto count = ::read(fd, chunk.data(), chunk.size());
+      const auto count = ::read(fd, chunk.data(), std::min(chunk.size(), request_ceiling - buffer.size()));
+      if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+        continue;
+      }
       if (count <= 0) {
         break;
       }
@@ -1154,6 +1387,9 @@ namespace {
         return;
       }
       const auto count = ::write(fd, line.data() + offset, line.size() - offset);
+      if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+        continue;
+      }
       if (count <= 0) {
         return;
       }
@@ -1162,19 +1398,16 @@ namespace {
   }
 
   /**
-   * @brief Whether the request allocates or frees a session account slot.
+   * @brief Whether the request changes session accounts or their lifetime.
    *
-   * These are the requests the lock file exists for, and the only ones that
-   * serialize on it. Everything else - STATUS in particular, which callers
-   * poll every couple of seconds - is served without it, so a poll never has
-   * to wait behind another client's useradd, and a launch never waits behind
-   * a poll.
+   * ENSURE/PURGE and START/STOP must not race across broker instances. Read
+   * requests, including frequently polled STATUS, do not acquire this lock.
    */
   bool request_mutates(const std::vector<std::string> &request) {
     const auto &line = request.front();
     const auto split = line.find(' ');
     const auto verb = trim(split == std::string::npos ? line : line.substr(0, split));
-    return verb == "ENSURE" || verb == "PURGE";
+    return verb == "ENSURE" || verb == "PURGE" || verb == "START" || verb == "STOP";
   }
 
   void serve(const options_t &options, int connection) {
@@ -1184,8 +1417,7 @@ namespace {
       return;
     }
     if (!allowed(options, *uid)) {
-      std::fprintf(stderr, "refused a request from uid %u; add it to %s to allow it\n",
-                   static_cast<unsigned int>(*uid), options.allow_file.c_str());
+      std::fprintf(stderr, "refused a request from uid %u; add it to %s to allow it\n", static_cast<unsigned int>(*uid), options.allow_file.c_str());
       write_reply(connection, "ERR denied this user may not manage session accounts");
       return;
     }
@@ -1200,17 +1432,24 @@ namespace {
     // arriving together could otherwise be given the same account. The lock
     // is cross-process (a socket-activated second instance is its own
     // process), which is why it is a file rather than a local variable.
-    int lock_fd = -1;
+    std::optional<hermes::session_broker::mutation_lock> lock;
     if (request_mutates(*request)) {
-      lock_fd = ::open(options.lock_file.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-      if (lock_fd >= 0) {
-        ::flock(lock_fd, LOCK_EX);
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+      for (;;) {
+        lock.emplace(options.lock_file.c_str());
+        if (*lock) {
+          break;
+        }
+        if (!lock->contended() || std::chrono::steady_clock::now() >= deadline) {
+          write_reply(connection, "ERR busy the broker mutation lock is unavailable, unsafe or timed out; no changes were made");
+          return;
+        }
+        lock.reset();
+        ::usleep(20000);
       }
     }
     const auto reply = handle_request(options, *request);
-    if (lock_fd >= 0) {
-      ::close(lock_fd);  // Releases the lock.
-    }
+    lock.reset();
 
     write_reply(connection, reply);
   }
@@ -1234,8 +1473,7 @@ namespace {
   int inherited_listen_fd() {
     const char *listen_pid = ::getenv("LISTEN_PID");
     const char *listen_fds = ::getenv("LISTEN_FDS");
-    if (listen_pid && listen_fds && std::strtol(listen_pid, nullptr, 10) == ::getpid() &&
-        std::strtol(listen_fds, nullptr, 10) >= 1) {
+    if (listen_pid && listen_fds && std::strtol(listen_pid, nullptr, 10) == ::getpid() && std::strtol(listen_fds, nullptr, 10) >= 1) {
       return SD_LISTEN_FDS_START;
     }
     return -1;
@@ -1258,6 +1496,11 @@ int main(int argc, char *argv[]) {
       options.home_root = value();
     } else if (flag == "--lock-file") {
       options.lock_file = value();
+    } else if (flag == "--input-node") {
+      options.input_node = value();
+      if (options.input_node.empty()) {
+        return 2;
+      }
     } else if (flag == "--max-sessions") {
       const auto requested = std::atoi(value().c_str());
       if (requested < 1 || requested > session_ceiling) {
@@ -1268,7 +1511,7 @@ int main(int argc, char *argv[]) {
     } else {
       std::fprintf(stderr,
                    "usage: %s [--allow-file PATH] [--state-file PATH] [--home-root PATH]\n"
-                   "          [--lock-file PATH] [--max-sessions N]\n",
+                   "          [--lock-file PATH] [--max-sessions N] [--input-node KERNEL_NAME]\n",
                    argv[0]);
       return 2;
     }
@@ -1277,24 +1520,64 @@ int main(int argc, char *argv[]) {
   // A closed peer must not take the broker down with it.
   ::signal(SIGPIPE, SIG_IGN);
 
+  if (!options.input_node.empty()) {
+    return grant_udev_node(options) ? 0 : 1;
+  }
+
   const int listener = inherited_listen_fd();
   if (listener < 0) {
     std::fprintf(stderr, "this service expects a socket-activated listener from systemd\n");
     return 1;
   }
   keep_from_children(listener);
+  // Workers must remain waitable until their owning pool reaps them.
+  ::signal(SIGCHLD, SIG_DFL);
+  const int listener_flags = ::fcntl(listener, F_GETFL, 0);
+  if (listener_flags < 0 || ::fcntl(listener, F_SETFL, listener_flags | O_NONBLOCK) != 0) {
+    std::fputs("cannot make the broker listener nonblocking\n", stderr);
+    return 1;
+  }
 
+  hermes::session_broker::worker_pool workers {64};
+  pid_t reconciliation = -1;
+  auto next_input_refresh = std::chrono::steady_clock::now();
   for (;;) {
-    const int connection = ::accept(listener, nullptr, nullptr);
+    workers.reap();
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= next_input_refresh && !workers.contains(reconciliation)) {
+      reconciliation = workers.spawn({listener}, [&]() {
+        hermes::session_broker::mutation_lock lock {options.lock_file.c_str()};
+        if (lock) {
+          if (const auto failure = refresh_input_access(options); failure) {
+            std::fprintf(stderr, "input access reconciliation: %s\n", failure->c_str());
+          }
+        }
+      });
+      next_input_refresh = now + std::chrono::seconds(2);
+    }
+    pollfd ready {listener, POLLIN, 0};
+    const int available = ::poll(&ready, 1, 500);
+    if (available <= 0) {
+      if (available < 0 && errno != EINTR) {
+        std::fprintf(stderr, "listener poll failed: %s\n", std::strerror(errno));
+        return 1;
+      }
+      continue;
+    }
+    const int connection = ::accept4(listener, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
     if (connection < 0) {
-      if (errno == EINTR) {
+      if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
         continue;
       }
       std::fprintf(stderr, "accept failed: %s\n", std::strerror(errno));
       return 1;
     }
-    keep_from_children(connection);
-    serve(options, connection);
+    if (workers.spawn({listener}, [&]() {
+          serve(options, connection);
+        }) < 0) {
+      constexpr std::string_view busy {"ERR busy the broker worker limit was reached; retry later\n"};
+      ::send(connection, busy.data(), busy.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
+    }
     ::close(connection);
   }
 }

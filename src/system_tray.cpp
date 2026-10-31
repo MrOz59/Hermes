@@ -56,6 +56,9 @@
   #include "process.h"
   #include "network.h"
   #include "src/entry_handler.h"
+  #ifdef __linux__
+    #include "platform/linux/misc.h"
+  #endif
 
 using namespace std::literals;
 
@@ -104,6 +107,10 @@ namespace system_tray {
       lifetime::exit_sunshine(ERROR_SHUTDOWN_IN_PROGRESS, true);
       return;
     }
+  #endif
+
+  #ifdef __linux__
+    platf::request_user_service_stop();
   #endif
 
     lifetime::exit_sunshine(0, true);

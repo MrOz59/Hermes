@@ -159,6 +159,9 @@ namespace nvhttp {
 
   // uniqueID, session
   std::unordered_map<std::string, pair_session_t> map_id_sess;
+  // HTTP pairing, HTTPS pairing and Web UI PIN submission run on different
+  // server threads. Helpers can remove a session while the caller holds this.
+  std::recursive_mutex pair_session_mutex;
   client_t client_root;
   std::atomic<uint32_t> session_id_counter;
 
@@ -535,8 +538,41 @@ namespace nvhttp {
   }
 
   void remove_session(const pair_session_t &sess) {
-    clear_pending_pair(sess.client.uniqueID);
-    map_id_sess.erase(sess.client.uniqueID);
+    std::lock_guard lock {pair_session_mutex};
+    // The argument can itself be owned by map_id_sess. Do not keep a reference
+    // to its identifier while destroying that map element.
+    const std::string unique_id = sess.client.uniqueID;
+    clear_pending_pair(unique_id);
+    map_id_sess.erase(unique_id);
+  }
+
+  bool cancel_pending_pairing(const std::string &unique_id) {
+    std::lock_guard lock {pair_session_mutex};
+    auto it = map_id_sess.find(unique_id);
+    if (it == map_id_sess.end()) {
+      return false;
+    }
+    const std::string id = unique_id;
+    // Release an old request parked waiting for a PIN before replacing it.
+    auto &response = it->second.async_insert_pin.response;
+    const std::string cancelled = "<root status_code=\"409\" status_message=\"Pairing cancelled\"><paired>0</paired></root>";
+    if (response.has_left() && response.left()) {
+      response.left()->close_connection_after_response = true;
+      response.left()->write(cancelled);
+    } else if (response.has_right() && response.right()) {
+      response.right()->close_connection_after_response = true;
+      response.right()->write(cancelled);
+    }
+    clear_pending_pair(id);
+    map_id_sess.erase(it);
+    return true;
+  }
+
+  pair_session_t &begin_pairing_session(pair_session_t session) {
+    std::lock_guard lock {pair_session_mutex};
+    const std::string id = session.client.uniqueID;
+    cancel_pending_pairing(id);
+    return map_id_sess.emplace(id, std::move(session)).first->second;
   }
 
   void fail_pair(pair_session_t &sess, pt::ptree &tree, const std::string status_msg) {
@@ -701,11 +737,8 @@ namespace nvhttp {
       named_cert_p->allow_client_commands = true;
       named_cert_p->always_use_virtual_display = false;
 
-      if (auto it = map_id_sess.find(client.uniqueID); it != std::end(map_id_sess)) {
-        clear_pending_pair(client.uniqueID);
-        map_id_sess.erase(it);
-      }
-
+      // Keep sess alive until the single remove_session() below. Erasing it
+      // here made that later cleanup dereference a destroyed map value.
       add_authorized_client(named_cert_p);
     } else {
       tree.put("root.paired", 0);
@@ -769,7 +802,7 @@ namespace nvhttp {
 
   template <class T>
   void pair(std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request) {
-    print_req<T>(request);
+    std::lock_guard lock {pair_session_mutex};
 
     pt::ptree tree;
 
@@ -813,10 +846,9 @@ namespace nvhttp {
         sess.client.name = std::move(deviceName);
         sess.client.cert = util::from_hex_vec(get_arg(args, "clientcert"), true);
 
-        BOOST_LOG(debug) << sess.client.cert;
-        auto ptr = map_id_sess.emplace(sess.client.uniqueID, std::move(sess)).first;
+        auto &new_session = begin_pairing_session(std::move(sess));
 
-        ptr->second.async_insert_pin.salt = std::move(get_arg(args, "salt"));
+        new_session.async_insert_pin.salt = std::move(get_arg(args, "salt"));
 
         auto it = args.find("otpauth");
         if (it != std::end(args)) {
@@ -827,15 +859,15 @@ namespace nvhttp {
             tree.put("root.<xmlattr>.status_code", 503);
             tree.put("root.<xmlattr>.status_message", "OTP auth not available.");
           } else {
-            auto hash = util::hex(crypto::hash(one_time_pin + ptr->second.async_insert_pin.salt + otp_passphrase), true);
+            auto hash = util::hex(crypto::hash(one_time_pin + new_session.async_insert_pin.salt + otp_passphrase), true);
 
             if (hash.to_string_view() == it->second) {
 
               if (!otp_device_name.empty()) {
-                ptr->second.client.name = std::move(otp_device_name);
+                new_session.client.name = std::move(otp_device_name);
               }
 
-              getservercert(ptr->second, tree, one_time_pin);
+              getservercert(new_session, tree, one_time_pin);
 
               one_time_pin.clear();
               otp_passphrase.clear();
@@ -845,7 +877,7 @@ namespace nvhttp {
           }
 
           // Always return positive, attackers will fail in the next steps.
-          getservercert(ptr->second, tree, crypto::rand(16));
+          getservercert(new_session, tree, crypto::rand(16));
           return;
         }
 
@@ -855,13 +887,13 @@ namespace nvhttp {
           std::cout << "Please insert pin: "sv;
           std::getline(std::cin, pin);
 
-          getservercert(ptr->second, tree, pin);
+          getservercert(new_session, tree, pin);
         } else {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
           system_tray::update_tray_require_pin();
 #endif
-          set_pending_pair(ptr->second.client.uniqueID, ptr->second.client.name);
-          ptr->second.async_insert_pin.response = std::move(response);
+          set_pending_pair(new_session.client.uniqueID, new_session.client.name);
+          new_session.async_insert_pin.response = std::move(response);
 
           fg.disable();
           return;
@@ -896,6 +928,27 @@ namespace nvhttp {
     }
   }
 
+  void cancel_pairing_request(std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTP>::Response> response,
+                              std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTP>::Request> request) {
+    auto args = request->parse_query_string();
+    pt::ptree tree;
+    auto id = args.find("uniqueid");
+    if (id == args.end() || id->second.empty()) {
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "Missing uniqueid parameter");
+    } else {
+      // Unauthenticated legacy /unpair cancels only the pending handshake.
+      // Revoking a trusted certificate still requires the authenticated Web UI.
+      cancel_pending_pairing(id->second);
+      tree.put("root.<xmlattr>.status_code", 200);
+      tree.put("root.paired", 0);
+    }
+    std::ostringstream data;
+    pt::write_xml(data, tree);
+    response->write(data.str());
+    response->close_connection_after_response = true;
+  }
+
   std::optional<std::string> pending_pair_client() {
     std::lock_guard lock {pending_pair_mutex};
     if (pending_pairs.empty()) {
@@ -905,6 +958,7 @@ namespace nvhttp {
   }
 
   bool pin(std::string pin, std::string name) {
+    std::lock_guard lock {pair_session_mutex};
     pt::ptree tree;
     if (map_id_sess.empty()) {
       return false;
@@ -929,22 +983,32 @@ namespace nvhttp {
       return false;
     }
 
-    auto &sess = std::begin(map_id_sess)->second;
-    // Somebody typed the four digits, so nothing is waiting for them any more -
-    // whether or not they were the right four. Only this client's flag clears;
-    // another device parked behind it is still waiting.
+    // A previous client can still be exchanging challenges. Submit the PIN
+    // only to a request actually waiting for it, not an arbitrary map entry.
+    auto pending = std::find_if(map_id_sess.begin(), map_id_sess.end(), [](const auto &entry) {
+      const auto &session = entry.second;
+      const auto &response = session.async_insert_pin.response;
+      return session.last_phase == PAIR_PHASE::NONE &&
+             ((response.has_left() && response.left()) || (response.has_right() && response.right()));
+    });
+    if (pending == map_id_sess.end()) {
+      return false;
+    }
+    auto &sess = pending->second;
     clear_pending_pair(sess.client.uniqueID);
-    getservercert(sess, tree, pin);
-
     if (!name.empty()) {
       sess.client.name = name;
     }
+    // getservercert() can reject and erase sess. Keep the waiting response
+    // independently so both the success and rejection paths can reply safely.
+    auto async_response = std::move(sess.async_insert_pin.response);
+    sess.async_insert_pin.response = std::decay_t<decltype(async_response.left())>();
+    getservercert(sess, tree, pin);
 
     // response to the request for pin
     std::ostringstream data;
     pt::write_xml(data, tree);
 
-    auto &async_response = sess.async_insert_pin.response;
     if (async_response.has_left() && async_response.left()) {
       async_response.left()->write(data.str());
     } else if (async_response.has_right() && async_response.right()) {
@@ -953,8 +1017,6 @@ namespace nvhttp {
       return false;
     }
 
-    // reset async_response
-    async_response = std::decay_t<decltype(async_response.left())>();
     // response to the current request
     return true;
   }
@@ -1066,6 +1128,9 @@ namespace nvhttp {
         codec_mode_flags |= SCM_AV1_HIGH10_444;
       }
     }
+    if (config::video.pyrowave && video::pyrowave_available()) {
+      codec_mode_flags |= video::PYROWAVE_SERVER_CODEC_MODE;
+    }
     tree.put("root.ServerCodecModeSupport", codec_mode_flags);
 
     tree.put("root.PairStatus", pair_status);
@@ -1073,8 +1138,11 @@ namespace nvhttp {
     if constexpr (std::is_same_v<SunshineHTTPS, T>) {
       auto named_cert_p = get_verified_cert(request);
       const bool isolated_sessions = experimental_isolated_sessions_enabled();
-      int current_appid = isolated_sessions ?
-                            proc::proc.running_for_client(named_cert_p->uuid) :
+      const auto isolated_appid = isolated_sessions ?
+                                    proc::proc.running_for_client(named_cert_p->uuid) :
+                                    0;
+      int current_appid = isolated_appid > 0 ?
+                            isolated_appid :
                             proc::proc.running();
       // When input only mode is enabled, the only resume method should be launching the same app again.
       if (config::input.enable_input_only_mode && current_appid != proc::input_only_app_id) {
@@ -1083,7 +1151,7 @@ namespace nvhttp {
       tree.put("root.currentgame", current_appid);
       tree.put(
         "root.currentgameuuid",
-        isolated_sessions ?
+        isolated_appid > 0 ?
           proc::proc.running_app_uuid_for_client(named_cert_p->uuid) :
           proc::proc.get_running_app_uuid()
       );
@@ -1174,8 +1242,11 @@ namespace nvhttp {
 
     auto named_cert_p = get_verified_cert(request);
     if (!!(named_cert_p->perm & PERM::_all_actions)) {
-      auto current_appid = experimental_isolated_sessions_enabled() ?
-                             proc::proc.running_for_client(named_cert_p->uuid) :
+      const auto isolated_appid = experimental_isolated_sessions_enabled() ?
+                                    proc::proc.running_for_client(named_cert_p->uuid) :
+                                    0;
+      auto current_appid = isolated_appid > 0 ?
+                             isolated_appid :
                              proc::proc.running();
       auto should_hide_inactive_apps = config::input.enable_input_only_mode && current_appid > 0 && current_appid != proc::input_only_app_id;
 
@@ -1258,25 +1329,67 @@ namespace nvhttp {
     auto appid = util::from_view(appid_str);
     auto named_cert_p = get_verified_cert(request);
     const bool isolated_sessions = experimental_isolated_sessions_enabled();
-    auto current_appid = isolated_sessions ?
-                           proc::proc.running_for_client(named_cert_p->uuid) :
-                           proc::proc.running();
-    auto current_app_uuid = isolated_sessions ?
-                              proc::proc.running_app_uuid_for_client(named_cert_p->uuid) :
-                              proc::proc.get_running_app_uuid();
-    bool is_input_only = config::input.enable_input_only_mode && (appid == proc::input_only_app_id || (appuuid_str == REMOTE_INPUT_UUID));
+
+    const auto host_current_appid = proc::proc.running();
+    const auto host_current_app_uuid = proc::proc.get_running_app_uuid();
+    const auto isolated_current_appid = isolated_sessions ?
+                                          proc::proc.running_for_client(named_cert_p->uuid) :
+                                          0;
+    const auto isolated_current_app_uuid = isolated_sessions ?
+                                             proc::proc.running_app_uuid_for_client(named_cert_p->uuid) :
+                                             std::string {};
+
+    bool is_input_only =
+      config::input.enable_input_only_mode &&
+      (appid == proc::input_only_app_id || appuuid_str == REMOTE_INPUT_UUID);
+
+    const proc::ctx_t *requested_app = nullptr;
+    if (!is_input_only && (appid > 0 || !appuuid_str.empty())) {
+      const auto &apps = proc::proc.get_apps();
+      const auto app_iter = std::find_if(
+        apps.begin(),
+        apps.end(),
+        [&appid_str, &appuuid_str](const auto &app) {
+          return app.id == appid_str || app.uuid == appuuid_str;
+        }
+      );
+      if (app_iter != apps.end()) {
+        requested_app = &*app_iter;
+      }
+    }
 
     auto perm = PERM::launch;
 
     BOOST_LOG(verbose) << "Launching app [" << appid_str << "] with UUID [" << appuuid_str << "]";
     // BOOST_LOG(verbose) << "QS: " << request->query_string;
 
-    // If we have already launched an app, we should allow clients with view permission to join the input only or current app's session.
+    // Before Hestia one-shot state is consumed, only relax launch permission
+    // when this profile cannot become isolated. Detached auto is treated
+    // conservatively because Hestia may still request its virtual display.
+    bool permission_isolated = false;
+    if (requested_app) {
+      permission_isolated =
+        proc::resolve_session_route(
+          *requested_app,
+          isolated_sessions,
+          true
+        ) != proc::session_route_e::shared;
+    }
+
+    const auto permission_current_appid =
+      permission_isolated ? isolated_current_appid : host_current_appid;
+    const auto &permission_current_app_uuid =
+      permission_isolated ? isolated_current_app_uuid : host_current_app_uuid;
+
     if (
-      !isolated_sessions
-      && current_appid > 0
+      !permission_isolated
+      && permission_current_appid > 0
       && (appuuid_str != TERMINATE_APP_UUID || appid != proc::terminate_app_id)
-      && (is_input_only || appid == current_appid || (!appuuid_str.empty() && appuuid_str == current_app_uuid))
+      && (
+        is_input_only
+        || appid == permission_current_appid
+        || (!appuuid_str.empty() && appuuid_str == permission_current_app_uuid)
+      )
     ) {
       perm = PERM::_allow_view;
     }
@@ -1303,26 +1416,22 @@ namespace nvhttp {
       return;
     }
 
-    if (isolated_sessions && is_input_only) {
-      BOOST_LOG(warning) << "[IsolatedSession] Rejecting Remote Input because it has no "
-                            "unambiguous isolated seat/runtime target.";
-      tree.put("root.resume", 0);
-      tree.put("root.<xmlattr>.status_code", 409);
-      tree.put(
-        "root.<xmlattr>.status_message",
-        "Remote Input is unavailable while independent client sessions are enabled"
-      );
-      return;
-    }
-
     if (!is_input_only) {
       // Special handling for the "terminate" app
       if (
         (config::input.enable_input_only_mode && appid == proc::terminate_app_id)
         || appuuid_str == TERMINATE_APP_UUID
       ) {
-        if (isolated_sessions) {
-          rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+        const auto stream_route =
+          rtsp_stream::session_is_isolated(named_cert_p->uuid);
+        const bool terminate_isolated =
+          stream_route.value_or(
+            isolated_sessions &&
+            proc::proc.isolated_client_present(named_cert_p->uuid)
+          );
+
+        rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+        if (terminate_isolated) {
           rtsp_stream::terminate_session(named_cert_p->uuid);
           proc::proc.terminate_isolated_client(named_cert_p->uuid);
         } else {
@@ -1336,21 +1445,6 @@ namespace nvhttp {
         return;
       }
 
-      if (
-        !isolated_sessions
-        && current_appid > 0
-        && current_appid != proc::input_only_app_id
-        && (
-          (appid > 0 && appid != current_appid)
-          || (!appuuid_str.empty() && appuuid_str != current_app_uuid)
-        )
-      ) {
-        tree.put("root.resume", 0);
-        tree.put("root.<xmlattr>.status_code", 400);
-        tree.put("root.<xmlattr>.status_message", "An app is already running on this host");
-
-        return;
-      }
     }
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
@@ -1371,6 +1465,45 @@ namespace nvhttp {
       }
     }
 
+    auto session_route = proc::session_route_e::shared;
+    if (requested_app) {
+      const bool virtual_display_requested =
+        proc::launch_requests_virtual_display(
+          *requested_app,
+          *launch_session,
+          config::video.headless_mode
+        );
+      session_route = proc::resolve_session_route(
+        *requested_app,
+        isolated_sessions,
+        virtual_display_requested
+      );
+    }
+
+    const bool isolated_launch =
+      session_route != proc::session_route_e::shared;
+
+    const auto current_appid =
+      isolated_launch ? isolated_current_appid : host_current_appid;
+    const auto &current_app_uuid =
+      isolated_launch ? isolated_current_app_uuid : host_current_app_uuid;
+
+    if (
+      !is_input_only
+      && !isolated_launch
+      && host_current_appid > 0
+      && host_current_appid != proc::input_only_app_id
+      && (
+        (appid > 0 && appid != host_current_appid)
+        || (!appuuid_str.empty() && appuuid_str != host_current_app_uuid)
+      )
+    ) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "An app is already running on this host");
+      return;
+    }
+
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
     if (!launch_session->rtsp_cipher && encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {
       BOOST_LOG(error) << "Rejecting client that cannot comply with mandatory encryption requirement"sv;
@@ -1382,7 +1515,7 @@ namespace nvhttp {
       return;
     }
 
-    bool no_active_sessions = rtsp_stream::session_count() == 0;
+    bool no_active_sessions = rtsp_stream::shared_session_count() == 0;
 
     if (is_input_only) {
       BOOST_LOG(info) << "Launching input only session..."sv;
@@ -1399,7 +1532,7 @@ namespace nvhttp {
         }
       }
     } else if (appid > 0 || !appuuid_str.empty()) {
-      if (isolated_sessions) {
+      if (isolated_launch) {
         const auto &apps = proc::proc.get_apps();
         const auto app_iter = std::find_if(
           apps.begin(),
@@ -1507,7 +1640,7 @@ namespace nvhttp {
 
 #ifdef __linux__
     if (!is_input_only &&
-        !isolated_sessions &&
+        !isolated_launch &&
         config::video.virtual_display_backend == "hermes_kms" &&
         config::video.hermes_kms_multi_output &&
         (proc::proc.virtual_display || launch_session->virtual_display || config::video.headless_mode) &&
@@ -1554,7 +1687,7 @@ namespace nvhttp {
     });
 
     auto named_cert_p = get_verified_cert(request);
-    const bool isolated_sessions = experimental_isolated_sessions_enabled();
+    const bool isolated_sessions_enabled = experimental_isolated_sessions_enabled();
     if (!(named_cert_p->perm & PERM::_allow_view)) {
       BOOST_LOG(debug) << "Permission ViewApp denied for [" << named_cert_p->name << "] (" << (uint32_t)named_cert_p->perm << ")";
 
@@ -1565,10 +1698,15 @@ namespace nvhttp {
       return;
     }
 
-    auto current_appid = isolated_sessions ?
-                           proc::proc.running_for_client(named_cert_p->uuid) :
-                           proc::proc.running();
-    if (isolated_sessions && rtsp_stream::find_session(named_cert_p->uuid)) {
+    const auto isolated_current_appid = isolated_sessions_enabled ?
+                                          proc::proc.running_for_client(named_cert_p->uuid) :
+                                          0;
+    const bool isolated_resume = isolated_current_appid > 0;
+    const auto current_appid = isolated_resume ?
+                                 isolated_current_appid :
+                                 proc::proc.running();
+
+    if (isolated_resume && rtsp_stream::find_session(named_cert_p->uuid)) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 409);
       tree.put("root.<xmlattr>.status_message", "This client already has an active stream");
@@ -1598,21 +1736,22 @@ namespace nvhttp {
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
     const bool no_active_sessions {rtsp_stream::session_count() == 0};
+    const bool no_active_shared_sessions {rtsp_stream::shared_session_count() == 0};
     if (no_active_sessions && args.find("localAudioPlayMode"s) != std::end(args)) {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }
     auto launch_session = make_launch_session(host_audio, false, args, named_cert_p);
 
-    if ((!isolated_sessions && !proc::proc.allow_client_commands) ||
+    if ((!isolated_resume && !proc::proc.allow_client_commands) ||
         !named_cert_p->allow_client_commands) {
       launch_session->client_do_cmds.clear();
       launch_session->client_undo_cmds.clear();
     }
 
-    if (isolated_sessions && !proc::proc.prepare_isolated_resume(launch_session)) {
+    if (isolated_resume && !proc::proc.prepare_isolated_resume(launch_session)) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 503);
-      tree.put("root.<xmlattr>.status_message", "No isolated session is available to resume");
+      tree.put("root.<xmlattr>.status_message", launch_session->launch_error_message.empty() ? "No isolated session is available to resume" : launch_session->launch_error_message);
       return;
     }
 
@@ -1620,7 +1759,7 @@ namespace nvhttp {
       launch_session->input_only = true;
     }
 
-    if (!isolated_sessions && no_active_sessions && !proc::proc.virtual_display) {
+    if (!isolated_resume && no_active_shared_sessions && !proc::proc.virtual_display) {
       // We want to prepare display only if there are no active sessions
       // and the current session isn't virtual display at the moment.
       // This should be done before probing encoders as it could change the active displays.
@@ -1639,7 +1778,7 @@ namespace nvhttp {
       }
     }
 #ifndef _WIN32
-    else if (!isolated_sessions && no_active_sessions && proc::proc.virtual_display && !proc::proc.display_name.empty()) {
+    else if (!isolated_resume && no_active_shared_sessions && proc::proc.virtual_display && !proc::proc.display_name.empty()) {
       // A resumed app keeps its virtual display, but every client brings its
       // own mode. Without this, the first client's geometry outlives it: A
       // streams at 1440p and disconnects, B resumes the same app at 1080p and
@@ -1702,7 +1841,7 @@ namespace nvhttp {
 
 #ifdef __linux__
     if (config::video.virtual_display_backend == "hermes_kms" &&
-        !isolated_sessions &&
+        !isolated_resume &&
         config::video.hermes_kms_multi_output &&
         (proc::proc.virtual_display || launch_session->virtual_display || config::video.headless_mode)) {
       if (const int result = proc::proc.prepare_session_virtual_display(launch_session); result != 0) {
@@ -1764,16 +1903,24 @@ namespace nvhttp {
     tree.put("root.cancel", 1);
     tree.put("root.<xmlattr>.status_code", 200);
 
-    if (experimental_isolated_sessions_enabled()) {
-      rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+    const auto stream_route =
+      rtsp_stream::session_is_isolated(named_cert_p->uuid);
+    const bool cancel_isolated =
+      stream_route.value_or(
+        experimental_isolated_sessions_enabled() &&
+        proc::proc.isolated_client_present(named_cert_p->uuid)
+      );
+
+    rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+    if (cancel_isolated) {
       rtsp_stream::terminate_session(named_cert_p->uuid);
       proc::proc.terminate_isolated_client(named_cert_p->uuid);
     } else {
-      rtsp_stream::terminate_sessions();
+      rtsp_stream::terminate_shared_sessions();
       if (proc::proc.running() > 0) {
         proc::proc.terminate();
       }
-      // Legacy display configuration belongs to the global process/session.
+      // Shared-host display state does not belong to isolated runtimes.
       display_device::revert_configuration();
     }
   }
@@ -2056,6 +2203,7 @@ namespace nvhttp {
     http_server.default_resource["GET"] = not_found<SimpleWeb::HTTP>;
     http_server.resource["^/serverinfo$"]["GET"] = serverinfo<SimpleWeb::HTTP>;
     http_server.resource["^/pair$"]["GET"] = pair<SimpleWeb::HTTP>;
+    http_server.resource["^/unpair$"]["GET"] = cancel_pairing_request;
 
     http_server.config.reuse_address = true;
     http_server.config.address = net::af_to_any_address_string(address_family);
@@ -2082,8 +2230,11 @@ namespace nvhttp {
     // Wait for any event
     shutdown_event->view();
 
-    clear_pending_pairs();
-    map_id_sess.clear();
+    {
+      std::lock_guard lock {pair_session_mutex};
+      clear_pending_pairs();
+      map_id_sess.clear();
+    }
 
     https_server.stop();
     http_server.stop();

@@ -4,6 +4,7 @@
  */
 
 // standard includes
+#include <csignal>
 #include <fstream>
 #include <future>
 #include <queue>
@@ -22,6 +23,7 @@ extern "C" {
 
 // local includes
 #include "client_link_monitor.h"
+#include "client_mic_router.h"
 #include "config.h"
 #include "crypto.h"
 #include "display_device.h"
@@ -240,6 +242,18 @@ namespace stream {
     AUDIO_FEC_HEADER fecHeader;
   };
 
+  // A client microphone packet (Apollo's mic passthrough), followed by Opus.
+  struct mic_packet_header_t {
+    std::uint8_t flags;
+    std::uint8_t packetType;
+    boost::endian::little_uint16_at sequenceNumber;
+    boost::endian::little_uint32_at timestamp;
+    boost::endian::little_uint32_at ssrc;
+  };
+
+  constexpr std::uint8_t MIC_PACKET_TYPE_OPUS = 0x61;
+  constexpr std::uint32_t MIC_PACKET_MAGIC = 0x12345678;
+
 #pragma pack(pop)
 
   constexpr std::size_t round_to_pkcs7_padded(std::size_t size) {
@@ -337,6 +351,7 @@ namespace stream {
     message_queue_queue_t message_queue_queue;
 
     std::thread recv_thread;
+    std::thread mic_thread;
     std::thread video_thread;
     std::thread audio_thread;
     std::thread control_thread;
@@ -345,6 +360,7 @@ namespace stream {
 
     udp::socket video_sock {io_context};
     udp::socket audio_sock {io_context};
+    udp::socket mic_sock {io_context};
 
     control_server_t control_server;
   };
@@ -407,6 +423,11 @@ namespace stream {
 
       audio_fec_packet_t fec_packet;
       std::unique_ptr<platf::deinit_t> qos;
+
+      /// Set before the session is listed, and only read after.
+      std::shared_ptr<audio::client_mic_t> mic;
+      bool mic_heard {};
+      udp::endpoint mic_peer;
     } audio;
 
     struct {
@@ -1391,6 +1412,68 @@ namespace stream {
     }
   }
 
+  void micRecvThread(broadcast_ctx_t &ctx) {
+#ifndef _WIN32
+    // A session mic whose source is gone fails writes with EPIPE instead.
+    sigset_t sigpipe;
+    sigemptyset(&sigpipe);
+    sigaddset(&sigpipe, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &sigpipe, nullptr);
+#endif
+
+    auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
+    std::array<char, 2048> buf;
+    udp::endpoint peer;
+
+    while (!broadcast_shutdown_event->peek()) {
+      boost::system::error_code ec;
+      const auto bytes = ctx.mic_sock.receive_from(asio::buffer(buf), peer, 0, ec);
+      if (ec == boost::asio::error::would_block || ec == boost::asio::error::try_again) {
+        std::this_thread::sleep_for(2ms);
+        continue;
+      }
+      if (ec || bytes <= sizeof(mic_packet_header_t)) {
+        continue;
+      }
+
+      const auto *header = reinterpret_cast<const mic_packet_header_t *>(buf.data());
+      if (header->packetType != MIC_PACKET_TYPE_OPUS || header->ssrc != MIC_PACKET_MAGIC) {
+        continue;
+      }
+      const std::uint16_t sequence = header->sequenceNumber;
+      const std::string_view cipher {buf.data() + sizeof(mic_packet_header_t), bytes - sizeof(mic_packet_header_t)};
+
+      std::shared_ptr<audio::client_mic_t> mic;
+      std::optional<audio::routed_mic_packet_t> decoded;
+      {
+        auto lg = ctx.control_server._sessions.lock();
+        std::vector<session_t *> sessions;
+        std::vector<audio::mic_candidate_t> candidates;
+        for (auto *session : *ctx.control_server._sessions) {
+          if (!session->audio.mic || session->audio.peer.address() != peer.address() || (session->audio.mic_peer.port() != 0 && session->audio.mic_peer != peer) || session->state.load(std::memory_order_relaxed) != session::state_e::RUNNING) {
+            continue;
+          }
+          sessions.push_back(session);
+          candidates.push_back({&session->audio.cipher, session->audio.avRiKeyId});
+        }
+        decoded = audio::route_mic_packet(candidates, sequence, cipher);
+        if (decoded) {
+          auto *session = sessions[decoded->candidate];
+          session->audio.mic_peer = peer;
+          if (!session->audio.mic_heard) {
+            session->audio.mic_heard = true;
+            BOOST_LOG(info) << "Receiving the microphone of ["sv << session->device_name << "] into ["sv << session->config.mic_source << ']';
+          }
+          mic = session->audio.mic;
+        }
+      }
+
+      if (mic) {
+        mic->write(sequence, decoded->opus.data(), decoded->opus.size());
+      }
+    }
+  }
+
   void videoBroadcastThread(udp::socket &sock) {
     auto shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     auto packets = mail::man->queue<video::packet_t>(mail::video_packets);
@@ -1915,8 +1998,31 @@ namespace stream {
       report_stream_start_failure(std::string {"Could not start streaming threads: "} + error.what());
       return -1;
     }
+    if (config::audio.stream_mic) {
+      const auto mic_port = net::map_port(MIC_STREAM_PORT);
+      ctx.mic_sock.open(protocol, ec);
+      if (!ec) {
+        net::prevent_socket_inheritance(ctx.mic_sock.native_handle(), ec);
+      }
+      if (!ec) {
+        ctx.mic_sock.bind(udp::endpoint(protocol, mic_port), ec);
+      }
+      if (!ec) {
+        ctx.mic_sock.non_blocking(true, ec);
+      }
+      if (ec) {
+        BOOST_LOG(error) << "Couldn't listen for client microphones on port ["sv << mic_port << "]: "sv << ec.message();
+        ctx.mic_sock.close(ec);
+      } else {
+        try {
+          ctx.mic_thread = std::thread {micRecvThread, std::ref(ctx)};
+        } catch (const std::system_error &error) {
+          report_stream_start_failure(std::string {"Could not start client microphone thread: "} + error.what());
+          return -1;
+        }
+      }
+    }
     rollback.disable();
-
     BOOST_LOG(debug) << "Streaming transports ready: control=" << control_port
                      << " video=" << video_port << " audio=" << audio_port;
 
@@ -1961,9 +2067,15 @@ namespace stream {
     if (ctx.control_thread.joinable()) {
       ctx.control_thread.join();
     }
+    if (ctx.mic_thread.joinable()) {
+      // Nonblocking receive observes broadcast_shutdown within 2 ms, even
+      // when a client never sent a microphone packet.
+      ctx.mic_thread.join();
+    }
+    boost::system::error_code mic_ec;
+    ctx.mic_sock.close(mic_ec);
 
-    // ENet must be released after its last user joins. Make socket cleanup
-    // explicit so this log describes released ports, not just stopped threads.
+    // ENet must be released after its last user joins.
     ctx.control_server._host.reset();
     BOOST_LOG(debug) << "All broadcasting threads ended; streaming sockets released"sv;
 
@@ -1990,15 +2102,23 @@ namespace stream {
       ref->message_queue_queue->raise(type, session_id, nullptr);
     });
 
-    auto start_time = std::chrono::steady_clock::now();
-    auto current_time = start_time;
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    const auto poll_interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(100ms);
 
-    while (current_time - start_time < config::stream.ping_timeout) {
-      auto delta_time = current_time - start_time;
-
-      auto msg_opt = messages->pop(config::stream.ping_timeout - delta_time);
-      if (!msg_opt) {
+    while (session->state.load(std::memory_order_acquire) == session::state_e::RUNNING) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
         break;
+      }
+
+      // A stopped session must not spend its teardown budget waiting for a
+      // client that never completed the handshake.
+      auto msg_opt = messages->pop(std::min(deadline - now, poll_interval));
+      if (session->state.load(std::memory_order_acquire) != session::state_e::RUNNING) {
+        return -1;
+      }
+      if (!msg_opt) {
+        continue;
       }
 
       TUPLE_2D_REF(recv_peer, msg, *msg_opt);
@@ -2010,7 +2130,6 @@ namespace stream {
         BOOST_LOG(debug) << "Received ping [v1] from "sv << recv_peer.address() << ':' << recv_peer.port() << " ["sv << util::hex_vec(msg) << ']';
       } else {
         BOOST_LOG(debug) << "Received non-ping from "sv << recv_peer.address() << ':' << recv_peer.port() << " ["sv << util::hex_vec(msg) << ']';
-        current_time = std::chrono::steady_clock::now();
         continue;
       }
 
@@ -2019,7 +2138,9 @@ namespace stream {
       return 0;
     }
 
-    BOOST_LOG(error) << "Initial Ping Timeout"sv;
+    if (session->state.load(std::memory_order_acquire) == session::state_e::RUNNING) {
+      BOOST_LOG(error) << "Initial Ping Timeout"sv;
+    }
     return -1;
   }
 
@@ -2070,6 +2191,7 @@ namespace stream {
 
   namespace session {
     std::atomic_uint running_sessions;
+    std::atomic_uint shared_running_sessions;
 
     state_e state(session_t &session) {
       return session.state.load(std::memory_order_relaxed);
@@ -2085,6 +2207,10 @@ namespace stream {
 
     bool uuid_match(const session_t &session, const std::string_view& uuid) {
       return session.device_uuid == uuid;
+    }
+
+    bool isolated(const session_t &session) {
+      return session.isolated_session;
     }
 
     bool update_device_info(session_t& session, const std::string& name, const crypto::PERM& newPerm) {
@@ -2300,24 +2426,22 @@ namespace stream {
         exec_thread.detach();
       }
 
-      // If this is the last session, invoke the platform callbacks
-      if (--running_sessions == 0) {
+      if (!session.isolated_session && --shared_running_sessions == 0) {
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
-        if (session.isolated_session) {
-          // The session destructor tears down only this compositor/app/output.
-          // Host display state and the legacy global process are unrelated.
-          revert_display_config = false;
-        } else if (proc::proc.running()) {
+
+        if (proc::proc.running()) {
           proc::proc.pause();
         } else {
-          // We have no app running and also no clients anymore.
           revert_display_config = true;
         }
 
         if (revert_display_config) {
           display_device::revert_configuration();
         }
+      }
 
+      // Platform-wide streaming state still spans both ownership domains.
+      if (--running_sessions == 0) {
         platf::streaming_will_stop();
       }
 
@@ -2325,12 +2449,23 @@ namespace stream {
     }
 
     int start(session_t &session, const std::string &addr_string) {
-      session.input = input::alloc(
-        session.mail,
-        session.isolated_session ?
-          session.isolated_seat_id :
-          std::string {}
-      );
+      // Reject incomplete private routes before allocating host input.
+      const auto &monitor = session.config.monitor;
+      if (monitor.kwin_wayland_socket.empty() != monitor.kwin_pipewire_socket.empty()) {
+        BOOST_LOG(error) << "Private KWin session requires both Wayland and PipeWire endpoints";
+        return -1;
+      }
+      try {
+        session.input = input::alloc(
+          session.mail,
+          session.isolated_session ? session.isolated_seat_id : std::string {},
+          session.isolated_session ? session.config.gcmap.value_or(0) : 0,
+          monitor.kwin_wayland_socket
+        );
+      } catch (const std::exception &error) {
+        BOOST_LOG(::error) << "Could not initialize session input: " << error.what();
+        return -1;
+      }
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
@@ -2340,10 +2475,8 @@ namespace stream {
       session.control.expected_peer_address = addr_string;
       BOOST_LOG(debug) << "Expecting incoming session connections from "sv << addr_string;
 
-      // Insert this session into the session list
-      {
-        auto lg = session.broadcast_ref->control_server._sessions.lock();
-        session.broadcast_ref->control_server._sessions->push_back(&session);
+      if (!session.config.mic_source.empty()) {
+        session.audio.mic = audio::open_client_mic(session.config.mic_source);
       }
 
       auto addr = boost::asio::ip::make_address(addr_string);
@@ -2354,18 +2487,28 @@ namespace stream {
       session.audio.peer.port(0);
 
       session.pingTimeout = std::chrono::steady_clock::now() + config::stream.ping_timeout;
+      session.state.store(state_e::STARTING, std::memory_order_relaxed);
+
+      // Publish only after the control deadline and peer addresses are initialized.
+      // The control thread may inspect the session as soon as this lock is released.
+      {
+        auto lg = session.broadcast_ref->control_server._sessions.lock();
+        session.broadcast_ref->control_server._sessions->push_back(&session);
+      }
 
       session.audioThread = std::thread {audioThread, &session};
       session.videoThread = std::thread {videoThread, &session};
 
-      session.state.store(state_e::RUNNING, std::memory_order_relaxed);
+      session.state.store(state_e::RUNNING, std::memory_order_release);
 
-      // If this is the first session, invoke the platform callbacks
+      // Platform-wide callbacks track every stream, while the legacy process
+      // lifecycle belongs only to streams attached to the shared host session.
       if (++running_sessions == 1) {
         platf::streaming_will_start();
-        if (!session.isolated_session) {
-          proc::proc.resume();
-        }
+      }
+
+      if (!session.isolated_session && ++shared_running_sessions == 1) {
+        proc::proc.resume();
       }
 
       if (!session.do_cmds.empty()) {
@@ -2420,6 +2563,11 @@ namespace stream {
 
       session->config = config;
       session->config.monitor.display_name = launch_session.display_name;
+      session->config.monitor.kwin_wayland_socket = launch_session.kwin_wayland_socket;
+      session->config.monitor.kwin_pipewire_socket = launch_session.kwin_pipewire_socket;
+      if (!launch_session.kwin_wayland_socket.empty()) {
+        session->config.monitor.display_name = "kwin:" + launch_session.kwin_wayland_socket;
+      }
       // Preserve the session-scoped marker for process-level cleanup decisions,
       // but move responsibility for releasing the output into session_t.
       launch_session.session_virtual_display_cleanup_pending = false;

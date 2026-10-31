@@ -1,0 +1,12 @@
+{
+  "name": "libacl",
+  "buildsystem": "autotools",
+  "config-opts": ["--disable-static"],
+  "sources": [
+    {
+      "type": "archive",
+      "url": "https://download.savannah.nongnu.org/releases/acl/acl-2.3.2.tar.xz",
+      "sha256": "97203a72cae99ab89a067fe2210c1cbf052bc492b479eca7d226d9830883b0bd"
+    }
+  ]
+}

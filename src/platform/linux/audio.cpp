@@ -17,6 +17,7 @@
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/platform/linux/session_audio.h"
 #include "src/thread_safe.h"
 
 namespace platf {
@@ -68,7 +69,7 @@ namespace platf {
     }
   };
 
-  std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, std::string source_name) {
+  std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, std::string source_name, const char *server = nullptr) {
     auto mic = std::make_unique<mic_attr_t>();
 
     pa_sample_spec ss {PA_SAMPLE_FLOAT32, sample_rate, (std::uint8_t) channels};
@@ -90,7 +91,7 @@ namespace platf {
     int status;
 
     mic->mic.reset(
-      pa_simple_new(nullptr, "sunshine", pa_stream_direction_t::PA_STREAM_RECORD, source_name.c_str(), "sunshine-record", &ss, &pa_map, &pa_attr, &status)
+      pa_simple_new(server, "sunshine", pa_stream_direction_t::PA_STREAM_RECORD, source_name.c_str(), "sunshine-record", &ss, &pa_map, &pa_attr, &status)
     );
 
     if (!mic->mic) {
@@ -100,6 +101,10 @@ namespace platf {
     }
 
     return mic;
+  }
+
+  std::unique_ptr<mic_t> session_audio::microphone(const std::string &pulse_server, const std::string &sink, const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size) {
+    return ::platf::microphone(mapping, channels, sample_rate, frame_size, sink + ".monitor", pulse_server.c_str());
   }
 
   namespace pa {

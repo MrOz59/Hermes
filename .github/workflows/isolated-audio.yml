@@ -1,0 +1,70 @@
+name: Private session audio
+
+on:
+  push:
+    branches: [experimental/isolated-session-improvements, release/october-integration, main]
+    paths:
+      - 'src/platform/linux/session_audio.*'
+      - 'src/platform/linux/audio.cpp'
+      - 'src/platform/common.h'
+      - 'src/config.h'
+      - 'src/utility.h'
+      - 'src/logging.h'
+      - 'src/platform/linux/clipboard_process.h'
+      - 'tests/unit/platform/test_session_audio.cpp'
+      - 'tests/consumers/linux_session_broker_test_logging.cpp'
+      - '.github/workflows/isolated-audio.yml'
+  pull_request:
+    paths:
+      - 'src/platform/linux/session_audio.*'
+      - 'src/platform/linux/audio.cpp'
+      - 'src/platform/common.h'
+      - 'src/config.h'
+      - 'src/utility.h'
+      - 'src/logging.h'
+      - 'src/platform/linux/clipboard_process.h'
+      - 'tests/unit/platform/test_session_audio.cpp'
+      - 'tests/consumers/linux_session_broker_test_logging.cpp'
+      - '.github/workflows/isolated-audio.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hermes-private-audio-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audio:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    timeout-minutes: 12
+    steps:
+      - name: Install audio test dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed base-devel git boost gtest nlohmann-json \
+            ffmpeg libpulse pipewire pipewire-pulse wireplumber
+      - uses: actions/checkout@v4
+      - name: Initialize only the platform header dependency
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git submodule update --init --depth 1 third-party/moonlight-common-c
+      - name: Compile production private-server and capture code
+        run: |
+          mkdir -p build-audio
+          g++ -std=c++23 -O0 -g -DBOOST_LOG_DYN_LINK \
+            -DHERMES_SESSION_AUDIO_STANDALONE=1 -I . -I third-party \
+            src/platform/linux/audio.cpp src/platform/linux/session_audio.cpp \
+            tests/consumers/linux_session_broker_test_logging.cpp \
+            tests/unit/platform/test_session_audio.cpp \
+            -lgtest_main -lgtest -lboost_log -lboost_thread -lboost_filesystem \
+            -lboost_regex -lboost_chrono -lboost_atomic -lpulse -lpulse-simple -pthread \
+            -o build-audio/test_session_audio
+      - name: Test real concurrent graphs, resumed capture and startup failure
+        timeout-minutes: 3
+        env:
+          HERMES_TEST_REQUIRE_PRIVATE_AUDIO: "1"
+        run: build-audio/test_session_audio --gtest_color=yes

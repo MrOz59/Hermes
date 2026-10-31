@@ -160,6 +160,18 @@ else()
     message(STATUS "libsystemd not found; GNOME display-layout changes will not be noticed mid-session")
 endif()
 
+# PyroWave converts captured frames on the GPU into planes allocated with GBM,
+# which the encoder's Vulkan device imports. Without the library the codec is
+# not offered at all (see dependencies/common.cmake).
+if(PYROWAVE_FOUND)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GBM REQUIRED gbm)
+    list(APPEND PLATFORM_LIBRARIES ${GBM_LIBRARIES})
+    list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/pyrowave.h"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/pyrowave.cpp")
+endif()
+
 # drm
 if(${SUNSHINE_ENABLE_DRM})
     find_package(LIBCAP REQUIRED)
@@ -182,7 +194,9 @@ list(APPEND PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/linux/card_broker.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/card_broker.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/session_broker.h"
-        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_broker.cpp")
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_broker.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_broker_transport.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_broker_transport.cpp")
 
 # evdev
 include(dependencies/libevdev_Sunshine)
@@ -284,20 +298,42 @@ else()
     message(STATUS "Tray icon disabled")
 endif()
 
-# These need to be set before adding the inputtino subdirectory in order for them to be picked up
+# These need to be set before adding libvirtualhid so its Linux backend can
+# reuse Hermes' system or externally-built libevdev.
 set(LIBEVDEV_CUSTOM_INCLUDE_DIR "${EVDEV_INCLUDE_DIR}")
 set(LIBEVDEV_CUSTOM_LIBRARY "${EVDEV_LIBRARY}")
 
-add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/inputtino")
-list(APPEND SUNSHINE_EXTERNAL_LIBRARIES inputtino::libinputtino)
-file(GLOB_RECURSE INPUTTINO_SOURCES
-        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/inputtino*.h
-        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/inputtino*.cpp)
-list(APPEND PLATFORM_TARGET_FILES ${INPUTTINO_SOURCES})
+# Hermes' Linux input stack is backed exclusively by our libvirtualhid fork.
+include(FetchContent)
+set(_hermes_saved_build_tests "${BUILD_TESTS}")
+set(_hermes_saved_build_docs "${BUILD_DOCS}")
+set(BUILD_TESTS OFF)
+set(BUILD_DOCS OFF)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LIBVIRTUALHID_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(LIBVIRTUALHID_INSTALL OFF CACHE BOOL "" FORCE)
+set(LIBVIRTUALHID_ENABLE_PACKAGING OFF CACHE BOOL "" FORCE)
 
-# build libevdev before the libinputtino target
+FetchContent_Declare(hermes_libvirtualhid
+        GIT_REPOSITORY https://github.com/MrOz59/libvirtualhid.git
+        GIT_TAG 14ee6c4717d32b678c2983bfa6c54019b944d421
+        GIT_SHALLOW FALSE)
+FetchContent_MakeAvailable(hermes_libvirtualhid)
+set(BUILD_TESTS "${_hermes_saved_build_tests}")
+set(BUILD_DOCS "${_hermes_saved_build_docs}")
+unset(_hermes_saved_build_tests)
+unset(_hermes_saved_build_docs)
+
+list(APPEND SUNSHINE_EXTERNAL_LIBRARIES libvirtualhid::libvirtualhid)
+file(GLOB_RECURSE LIBVIRTUALHID_INPUT_SOURCES
+        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/virtualhid*.h
+        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/virtualhid*.cpp)
+list(APPEND PLATFORM_TARGET_FILES ${LIBVIRTUALHID_INPUT_SOURCES})
+message(STATUS "Hermes Linux input backend: MrOz59/libvirtualhid")
+
+# Build an externally-fetched libevdev before libvirtualhid consumes it.
 if(EXTERNAL_PROJECT_LIBEVDEV_USED)
-    add_dependencies(libinputtino libevdev)
+    add_dependencies(libvirtualhid libevdev)
 endif()
 
 # AppImage and Flatpak
@@ -314,7 +350,13 @@ list(APPEND PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/linux/graphics.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/misc.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/misc.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/encode_gpu.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/encoder_probe_display.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/audio.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_audio.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_audio.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_devices.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/session_devices.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/prelogin.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/prelogin.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/session_attach.h"
@@ -336,3 +378,4 @@ list(APPEND PLATFORM_LIBRARIES
 include_directories(
         SYSTEM
         "${CMAKE_SOURCE_DIR}/third-party/glad/include")
+

@@ -34,6 +34,7 @@ apt-get install -y --no-install-recommends \
   git \
   graphviz \
   libcap-dev \
+  libacl1-dev \
   libcurl4-openssl-dev \
   libdrm-dev \
   libevdev-dev \

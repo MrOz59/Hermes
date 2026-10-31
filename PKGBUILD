@@ -11,6 +11,7 @@ license=('GPL-3.0-only')
 install=hermes.install
 
 depends=(
+  'acl'
   'avahi'
   'curl'
   'libcap'
@@ -30,6 +31,7 @@ depends=(
   'qt6-base'
   'qt6-svg'
   'udev'
+  'vulkan-icd-loader'
 )
 
 makedepends=(
@@ -39,6 +41,7 @@ makedepends=(
   'git-lfs'
   'nodejs'
   'npm'
+  'vulkan-headers'
 )
 
 optdepends=(
@@ -48,8 +51,11 @@ optdepends=(
   'hermes-kms: zero-copy Hermes virtual displays and independent DRM devices'
   'kscreen: KDE Plasma Wayland virtual-display activation'
   'libva-mesa-driver: AMD GPU encoding support'
+  'pipewire: private audio server per independent client session'
+  'pipewire-pulse: PulseAudio clients in independent client sessions'
   'seatd: private seat brokers for experimental independent client sessions'
   'weston: experimental independent desktop client sessions'
+  'wireplumber: links streams in the private audio server of independent client sessions'
   'wl-clipboard: Hermes text clipboard synchronization on Wayland'
   'xclip: Hermes text clipboard synchronization on X11'
 )
@@ -67,6 +73,14 @@ replaces=('hermes<0.5.0')
 # or conflicts are declared for those packages; the binaries and unit names are
 # all distinct.
 
+# PyroWave (the pyrowave-shared library) is fetched and built from source at a
+# pinned commit, so the encoder support (HAVE_PYROWAVE) is compiled in on any
+# machine. The package ships the shared library itself, so no external PyroWave
+# package is needed at runtime; the library loads Vulkan through volk, hence
+# vulkan-icd-loader above. Bump the commit together with the API version the
+# encoder code expects.
+_pyrowave_commit=d2997ac172bdc00e29c58e3f2938acb7e94580bf
+
 # Keep the separate hermes-streaming-debug package. The main binary is still
 # stripped, so nothing about the shipped package changes; what changes is that
 # the symbols exist somewhere. Without them a user's crash report is a list of
@@ -82,6 +96,19 @@ replaces=('hermes<0.5.0')
 source=()
 sha256sums=()
 
+# Check out a single commit of a repository, without its history. A checkout
+# already at that commit is reused, so rebuilding does not fetch again.
+_fetch_commit() {
+    local dir=$1 url=$2 commit=$3
+    if [[ -d "${dir}/.git" && "$(git -C "${dir}" rev-parse HEAD)" == "${commit}" ]]; then
+      return 0
+    fi
+    rm -rf "${dir}"
+    git init -q "${dir}"
+    git -C "${dir}" fetch -q --depth 1 "${url}" "${commit}"
+    git -C "${dir}" checkout -q --detach FETCH_HEAD
+}
+
 prepare() {
     cd "${startdir}"
     # A source checkout already containing the submodules needs no mutation
@@ -92,6 +119,19 @@ prepare() {
     if command -v git-lfs >/dev/null 2>&1; then
       git lfs pull
     fi
+
+    # The SDK is kept under build/, outside the Hermes sources.
+    local sdk="${startdir}/build/pyrowave-sdk"
+    _fetch_commit "${sdk}/src" https://github.com/Themaister/pyrowave.git \
+      "${_pyrowave_commit}"
+    # PyroWave pins the Granite commit it builds against in its own checkout
+    # script, and needs only these two of Granite's submodules.
+    local granite_commit
+    granite_commit="$(sed -n 's/^GRANITE_COMMIT=//p' "${sdk}/src/checkout_granite.sh")"
+    _fetch_commit "${sdk}/src/Granite" https://github.com/Themaister/Granite.git \
+      "${granite_commit}"
+    git -C "${sdk}/src/Granite" submodule update --init --depth 1 \
+      third_party/volk third_party/khronos/vulkan-headers
 }
 
 build() {
@@ -103,12 +143,26 @@ build() {
     export BUILD_VERSION="${BUILD_VERSION:-${pkgver}}"
     export COMMIT="${COMMIT:-$(git rev-parse HEAD)}"
 
-    # CUDA is required so the package ships NVIDIA NVENC hardware encoding. The
-    # build fails if the CUDA toolkit is missing (CUDA_FAIL_ON_MISSING defaults
-    # to ON) — install the `cuda` package (a makedepend) before building.
+    local sdk="${startdir}/build/pyrowave-sdk"
+    cmake -S "${sdk}/src" -B "${sdk}/build" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX="${sdk}/install" \
+      -DCMAKE_INSTALL_LIBDIR=lib
+    cmake --build "${sdk}/build"
+    cmake --install "${sdk}/build"
+    export PKG_CONFIG_PATH="${sdk}/install/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+    # CMake looks pyrowave-shared up quietly and leaves the codec out when it is
+    # missing; fail here rather than ship a package without it.
+    pkg-config --exists pyrowave-shared
+
+    # Published packages must ship NVENC, so CI fails without the CUDA toolkit;
+    # local builds use it only when installed.
     cmake -S . -B build \
+      -DCUDA_FAIL_ON_MISSING="$([[ ${BRANCH} == local ]] && echo OFF || echo ON)" \
       -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_TESTS=OFF \
+      -DSUNSHINE_REQUIRE_PYROWAVE=ON \
+      -DSUNSHINE_BUNDLE_PYROWAVE=ON \
       -DCMAKE_INSTALL_PREFIX=/usr \
       -DSUNSHINE_EXECUTABLE_PATH=/usr/bin/hermes \
       -DSUNSHINE_ASSETS_DIR=share/hermes
@@ -122,6 +176,8 @@ package() {
     rm "${pkgdir}/usr/bin/sunshine"
     mv "${pkgdir}/usr/bin/sunshine-"* "${pkgdir}/usr/bin/hermes"
 
+    # CMake installs the codec privately under /usr/lib/hermes with its RUNPATH.
+
     # The systemd unit generated by CMake is named sunshine.service; rename it
     # to hermes.service so it does not collide with an apollo/sunshine install.
     if [[ -f "${pkgdir}/usr/lib/systemd/user/sunshine.service" ]]; then
@@ -129,3 +185,4 @@ package() {
          "${pkgdir}/usr/lib/systemd/user/hermes.service"
     fi
 }
+

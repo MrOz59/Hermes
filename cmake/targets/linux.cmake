@@ -1,5 +1,7 @@
 # linux specific target definitions
 
+include("${CMAKE_SOURCE_DIR}/cmake/kwin_session.cmake")
+
 # The card broker reaches the Hermes-KMS driver's configfs group, which is
 # root's, so it is a program of its own rather than anything the streaming host
 # links: a few hundred lines over one socket, with none of Hermes' dependencies
@@ -17,7 +19,15 @@ endif()
 # a separate program on purpose: it runs as root, and the less it shares with
 # the streaming host the smaller the surface that root is reachable through.
 if(SUNSHINE_BUILD_SESSION_BROKER)
+    find_path(HERMES_ACL_INCLUDE_DIR sys/acl.h REQUIRED)
+    find_library(HERMES_ACL_LIBRARY acl REQUIRED)
+    add_library(hermes-session-input STATIC "${CMAKE_SOURCE_DIR}/tools/session-broker-input.cpp")
+    target_include_directories(hermes-session-input PUBLIC "${HERMES_ACL_INCLUDE_DIR}")
+    target_link_libraries(hermes-session-input PUBLIC "${HERMES_ACL_LIBRARY}")
+    set_target_properties(hermes-session-input PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_compile_options(hermes-session-input PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
     add_executable(hermes-session-broker "${CMAKE_SOURCE_DIR}/tools/hermes-session-broker.cpp")
+    target_link_libraries(hermes-session-broker PRIVATE hermes-session-input)
     set_target_properties(hermes-session-broker PROPERTIES
             CXX_STANDARD 20
             CXX_STANDARD_REQUIRED ON)

@@ -473,7 +473,10 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            The type of gamepad to emulate on the host.
+            The type of gamepad to emulate on the host. On Linux, auto uses the client-reported
+            controller type (PlayStation to DualSense, Nintendo to Switch Pro, Xbox to Xbox Series).
+            Unknown types can select DualSense from motion/touchpad capabilities; otherwise Xbox
+            Series is used. A manual selection overrides client detection.
         </td>
     </tr>
     <tr>
@@ -489,14 +492,18 @@ editing the `conf` file in a text editor. Use the examples as reference.
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="6">Choices</td>
+        <td rowspan="7">Choices</td>
+        <td>generic</td>
+        <td>Generic HID gamepad
+            @note{This option applies to Linux only.}</td>
+    </tr>
+    <tr>
         <td>ds4</td>
-        <td>DualShock 4 controller (PS4)
-            @note{This option applies to Windows only.}</td>
+        <td>DualShock 4 controller (PS4)</td>
     </tr>
     <tr>
         <td>ds5</td>
-        <td>DualShock 5 controller (PS5)
+        <td>DualSense controller (PS5)
             @note{This option applies to Linux only.}</td>
     </tr>
     <tr>
@@ -506,14 +513,36 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
     <tr>
         <td>x360</td>
-        <td>Xbox 360 controller
-            @note{This option applies to Windows only.}</td>
+        <td>Xbox 360 controller</td>
     </tr>
     <tr>
         <td>xone</td>
         <td>Xbox One controller
             @note{This option applies to Linux only.}</td>
     </tr>
+    <tr>
+        <td>xseries</td>
+        <td>Xbox Series controller
+            @note{This option applies to Linux only.}</td>
+    </tr>
+</table>
+
+### linux_gamepad_backend
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">Linux controller creation policy. Auto preserves ordinary evdev rumble
+            without hidraw access for Xbox controllers and uses native HID for PlayStation/Switch.
+            Native exposes advanced capabilities, but consuming games need access to the generated
+            hidraw device. Uinput restricts automatic selection to Xbox Series; manually selected
+            PlayStation/Switch profiles require auto or native. This option does not change other platforms.</td>
+    </tr>
+    <tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr>
+    <tr><td>Example</td><td colspan="2">@code{} linux_gamepad_backend = auto @endcode</td></tr>
+    <tr><td rowspan="3">Choices</td><td>auto</td><td>Input events for Xbox; native HID for PlayStation/Switch</td></tr>
+    <tr><td>native</td><td>Prefer native HID and advanced features</td></tr>
+    <tr><td>uinput</td><td>Input-event controllers only, without hidraw requirements</td></tr>
 </table>
 
 ### ds4_back_as_touchpad_click
@@ -522,9 +551,10 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Allow Select/Back inputs to also trigger DS4 touchpad click. Useful for clients looking to
+            Allow Select/Back inputs to also trigger a PlayStation touchpad click. Useful for clients looking to
             emulate touchpad click on Xinput devices.
-            @hint{Only applies when gamepad is set to ds4 manually. Unused in other gamepad modes.}
+            @hint{On Linux this applies to DS4, DS5 and automatically selected PlayStation profiles.
+            On Windows it applies when ds4 is selected manually.}
         </td>
     </tr>
     <tr>
@@ -548,7 +578,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Description</td>
         <td colspan="2">
             If a client reports that a connected gamepad has motion sensor support, emulate it on the
-            host as a DS4 controller.
+            host as a PlayStation-style controller (DualSense on Linux, DS4 on Windows).
             <br>
             <br>
             When disabled, motion sensors will not be taken into account during gamepad type selection.
@@ -576,7 +606,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Description</td>
         <td colspan="2">
             If a client reports that a connected gamepad has a touchpad, emulate it on the host
-            as a DS4 controller.
+            as a PlayStation-style controller (DualSense on Linux, DS4 on Windows).
             <br>
             <br>
             When disabled, touchpad presence will not be taken into account during gamepad type selection.
@@ -597,14 +627,16 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
-### ds5_inputtino_randomize_mac
+### virtualhid_randomize_mac
 
 <table>
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Randomize the MAC-Address for the generated virtual controller.
-            @hint{Only applies on linux for gamepads created as PS5-style controllers}
+            Randomize the MAC address for virtual DualShock 4 and DualSense controllers on Linux.
+            When disabled, deterministic identities remain scoped to the isolated session.
+            Older ds5_virtualhid_randomize_mac and ds5_inputtino_randomize_mac keys are accepted;
+            an explicitly supplied virtualhid_randomize_mac value takes precedence.
         </td>
     </tr>
     <tr>
@@ -616,10 +648,13 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            ds5_inputtino_randomize_mac = enabled
+            virtualhid_randomize_mac = enabled
             @endcode</td>
     </tr>
 </table>
+
+The former `ds5_inputtino_randomize_mac` key is accepted as a compatibility
+alias; new configurations should use the key above.
 
 ### back_button_timeout
 
@@ -845,6 +880,31 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### isolated_ignore_mouse_wiggle
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Moonlight-based clients move the mouse by one pixel and back right after connecting to wake the host
+            display. In an isolated gamescope session that is real motion and shows the cursor until the app hides it.
+            When enabled, Hermes drops that +1,+1 / -1,-1 move if it is the first mouse input of an isolated session.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            isolated_ignore_mouse_wiggle = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### enable_input_only_mode
 
 <table>
@@ -1048,6 +1108,33 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example</td>
         <td colspan="2">@code{}
             stream_audio = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### stream_mic
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Offer clients microphone passthrough (Apollo's protocol; Moonlight forks such as Artemis
+            builds that support it). The microphone reaches an independent client session only, as
+            the only source of that session's private audio server; it never reaches the host's
+            desktop. Experimental.
+            @note{Applies to Linux independent client sessions (hermes_kms_isolated_sessions).}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            stream_mic = enabled
             @endcode</td>
     </tr>
 </table>
@@ -1361,21 +1448,14 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            @warning{Not recommended right now. This prototype is being
-            re-evaluated and will change in ways that are not backwards
-            compatible - do not build a setup on it yet. What is known to be
-            broken or unfinished: a session composites in software rather than
-            on the GPU (see <code>hermes_kms_session_compositor</code>); nothing
-            bounds what a session may consume, so one client can starve the
-            host; a session that was given a Unix account of its own still hears
-            the host's audio; and Remote Input is disabled. A full Plasma
-            desktop and simultaneous real clients have not been validated.}
+            @warning{Experimental and not recommended for production yet. Independent-session support now coexists with the shared host session rather than replacing it. Resource limits, GPU compositor support, per-account audio isolation, and full Plasma-session validation remain unfinished.}
 
-            Enables the highly experimental independent-session prototype.
-            One Hermes server gives each Moonlight client a session of its own
-            rather than sharing the host's desktop.
+            Enables the experimental independent-session capability. It does not switch the entire Hermes server into an isolated mode. Eligible launches may use independent sessions while ordinary Host Desktop, Remote Input, and other shared routes continue to use the existing host compositor.
 
-            <b>What every isolated session gets.</b> Its own Hermes-KMS DRM card
+            <b>What every isolated session gets.</b> The detached Plasma
+            desktop (<code>hermes_kms_session_compositor = plasma</code>) runs
+            on a virtual KWin output instead; every
+            other isolated session gets its own Hermes-KMS DRM card
             on its own private DRM seat, its own compositor, its own Wayland
             socket, its own capture pipeline, and its own set of virtual input
             devices, tagged so that one client's keyboard and mouse cannot enter
@@ -1429,14 +1509,16 @@ editing the `conf` file in a text editor. Use the examples as reference.
             to prevent.
 
             Requires a Hermes-KMS driver speaking UAPI 11 or newer and its
-            session-seat udev rule, <code>gamescope</code>, the chosen session
-            compositor, and the driver's optional private-seat broker, which
-            runs one <code>seatd</code> per session card once
-            <code>hermes-kms-setup</code> has configured it for the Hermes user
-            (see the example below). Hermes maps device N to
+            session-seat udev rule, a <code>gamescope</code> that can scan out
+            on another device than it renders with (<code>--prefer-drm</code>
+            or <code>--drm-device</code>, as in Hermes' own Gamescope build),
+            the chosen session compositor, and one packaged
+            <code>hermes-kms-seatd@N.service</code> private broker per device,
+            which <code>hermes-kms-setup</code> configures for the Hermes user.
+            The Hermes user must be a member of the <code>seat</code> group.
+            Hermes maps device N to
             <code>/run/hermes-kms-seatd/N/seatd.sock</code>.
-            If <code>hermes_kms_multi_output</code> is also set, independent
-            sessions take precedence and the shared-desktop mode is ignored.
+            <code>hermes_kms_multi_output</code> may be enabled at the same time. Shared-host launches continue to use host compositor outputs, while independent launches allocate private session devices.
             Audio follows the same split. A session that shares the Hermes
             user gets a sink of its own, named after the session; its
             applications play into it, capture records it by name, and the
@@ -1446,12 +1528,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             its user manager, which Hermes cannot reach through a
             <code>0700</code> runtime directory, so that case still hears the
             host's audio and says so in the log.
-            @warning{Audio is not yet isolated for sessions that have a Unix
-            account of their own - those clients hear the host. A full Plasma
-            desktop and simultaneous real clients are not validated. The private seat brokers are not a
-            security boundary between mutually untrusted local users. Remote
-            Input is rejected because it has no video session from which to
-            determine a target seat. Keep this disabled outside testing.}
+            @warning{Audio is not yet isolated for sessions that have a Unix account of their own - those clients hear the host. A full Plasma desktop and simultaneous real clients are not validated. The private seat brokers are not a security boundary between mutually untrusted local users. Remote Input remains a shared-host feature. Keep independent-session support disabled outside testing.}
         </td>
     </tr>
     <tr>
@@ -1559,16 +1636,20 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Which compositor an experimental isolated session starts on its
-            private DRM seat. The name selects a profile file, looked up first
-            in <code>~/.config/hermes/session-compositors/</code> and then in
-            the profiles Hermes ships; a profile declares the command line, any
+            Which desktop an experimental independent <code>desktop</code>
+            session starts. The default, <code>plasma</code>, is the user's own
+            Plasma desktop, detached (see below). Any other name selects a
+            compositor profile file, looked up first in
+            <code>~/.config/hermes/session-compositors/</code> and then in the
+            profiles Hermes ships; a profile declares the command line, any
             environment it needs, and whether it is told its Wayland socket name
-            or names its own.
-            @note{Hermes ships <code>weston</code> and <code>labwc</code>.
-            Dropping in a profile for a third compositor needs no code change
-            and is supported by nobody but you.}
-            @note{<code>weston</code> remains the profile to use with
+            or names its own, and the compositor runs on a private Hermes-KMS
+            DRM seat.
+            @note{Hermes ships <code>weston</code> and <code>labwc</code>
+            profiles as opt-in fallbacks for machines without Plasma 6. Neither
+            is required. Dropping in a profile for a third compositor needs no
+            code change and is supported by nobody but you.}
+            @note{Of the two profiles, <code>weston</code> is the one to use with
             Hermes-KMS. It takes KMS nodes only, for both its display and its
             rendering device, and the sole KMS node backed by a real GPU belongs
             to seat0 - which a session on a private seat cannot open - so a
@@ -1578,6 +1659,22 @@ editing the `conf` file in a text editor. Use the examples as reference.
             render node, and Hermes-KMS's is capture-only with no Mesa driver
             behind it, so every swapchain fails. Use <code>labwc</code> only
             with a KMS device whose render node Mesa can drive.}
+            @note{<code>plasma</code> is not a profile file. It starts the
+            user's own Plasma desktop, detached: stock KWin on a virtual output
+            of its own, run as the same user in a transient unit of the user's
+            systemd manager, with a private D-Bus and runtime directory. It
+            shares the user's home, files and settings, so changes made in it
+            are real; it has no DRM device and no libinput, so it never wakes or
+            rearranges a physical monitor and the keyboard and mouse at the
+            machine never reach it. Hermes captures it through KWin's screencast
+            protocol and drives its input through KWin's fake-input protocol.
+            Its frames are copied through system memory rather than exported as
+            DMA-BUFs. It needs KWin and Plasma 6, plasma-wayland-protocols at
+            build time, and <code>dbus-run-session</code>. PowerDevil does not
+            run inside it, so the host's alone manages the monitors and sleep.
+            It applies to the <code>desktop</code> profile without a command.
+            If it cannot start, the error names the reason and suggests
+            <code>weston</code> as a fallback.}
             @note{The <code>labwc</code> profile sets the mode the client asked
             for with <code>wlr-randr</code>, which is a separate package. It is
             best-effort: without it the session still starts, but keeps whatever
@@ -1589,7 +1686,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            weston
+            plasma
             @endcode</td>
     </tr>
     <tr>
@@ -2694,6 +2791,43 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example</td>
         <td colspan="2">@code{}
             ignore_encoder_probe_failure = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### pyrowave
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Advertise the experimental PyroWave Vulkan codec to compatible Hestia clients. The codec is intra-only,
+            currently supports SDR YUV 4:2:0, and is intended for high-bandwidth LAN streaming. This option is only
+            effective when Hermes was built with the optional @code{pyrowave-shared} dependency and a compatible
+            Vulkan device is available.
+            <br><br>
+            On Linux the captured image is converted to YCbCr with OpenGL and the encoder reads the result through
+            Vulkan. On a host that encodes with VAAPI (AMD and Intel) the capture's GPU buffers are used in place,
+            without a copy through system memory. On a host that encodes with NVENC, Hermes-KMS virtual displays are
+            captured with a CPU copy and uploaded to the GPU for the conversion. If the GPU cannot share buffers
+            between OpenGL and Vulkan, a capture into system memory is converted on the CPU instead, which costs
+            several milliseconds per frame and more than a 4K frame at 60 fps allows.
+            <br><br>
+            A frame larger than the stream's forward error correction can protect (about 1.2 MB with the default
+            @code{fec_percentage}) is sent without it, so bitrates above roughly 550 Mbps at 60 fps are more
+            sensitive to packet loss.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            pyrowave = enabled
             @endcode</td>
     </tr>
 </table>
@@ -3826,3 +3960,4 @@ editing the `conf` file in a text editor. Use the examples as reference.
   <summary></summary>
   [TOC]
 </details>
+

@@ -12,6 +12,39 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- `scripts/install.sh` installs Hermes from its GitHub releases on Arch,
+  CachyOS, Ubuntu and Fedora and asks about each optional piece: the
+  Hermes-KMS driver (built with DKMS, with `hermes-kms-setup` run for the
+  user), experimental isolated sessions with Hermes' Gamescope build, and
+  streaming the login screen (`hermes --prelogin enable`, the `input` group
+  and SDDM's Wayland greeter). `--dry-run` shows what it would do. On
+  Ubuntu 24.04 it says that isolated sessions through Gamescope are
+  unavailable for now: Hermes' Gamescope build needs newer libwayland, libdrm
+  and libxkbcommon than 24.04 ships, and is packaged for Ubuntu 26.04, Fedora
+  43/44 and Arch/CachyOS.
+- Same-user isolated sessions that keep out of the desktop's way, from
+  d3adb5's work in [#57]:
+  - each session runs its own PipeWire and WirePlumber, with no hardware and
+    its own sink as its only device, so streams that ignore `PULSE_SINK` or
+    pick the default sink by name stay in the session; without PipeWire it
+    falls back to a sink on the host's server;
+  - a client's microphone, sent with Apollo's microphone passthrough, becomes
+    the session's only source (`stream_mic`);
+  - `isolate-devices` and `isolate-sound` (per app, `auto`/`on`/`off`) give a
+    session a private `/dev` in its own mount namespace, holding only its
+    client's devices and the Steam Input pads made inside it, and no
+    `/dev/snd`; Hermes needs `cap_sys_admin,cap_mknod,cap_sys_chroot+p`, and
+    `auto` runs without isolation when they are missing;
+  - `stop-desktop-steam` (per app; `auto` when the command runs `steam`)
+    shuts down a Steam running on the desktop first, since Steam runs once
+    per user and hands a second launch to the running client;
+  - with a fixed gamepad type, the client's gamepads are plugged in when the
+    stream starts rather than on their first input;
+  - the host's Discord IPC sockets are linked into the session's runtime
+    directory, so Rich Presence works;
+  - `74-hermes-session-acl.rules` opens a session seat's input devices,
+    hidraw included, to the session user, and Steam Input pads made inside a
+    session take its seat instead of the desktop's.
 - Linux applications can now use a `Detached (preserve physical monitors)`
   virtual-display layout. On KDE/KScreen, Hermes enables and positions only the
   virtual output and does not issue layout changes for the physical outputs,
@@ -26,6 +59,18 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   unlock only when needed. The option is off by default because it unlocks the
   entire host desktop, not only the streamed display; failure is non-fatal and
   application launch continues normally.
+- Experimental support for PyroWave, the intra-only wavelet codec Valve uses
+  for Steam Remote Play, for Hestia clients on a high-bandwidth LAN. It is
+  offered only when Hermes is built with the optional `pyrowave-shared`
+  library and `pyrowave` is enabled, and streams SDR YUV 4:2:0. On Linux the
+  captured frame is converted to YCbCr on the GPU and read by the encoder
+  through Vulkan: in place on a VAAPI (AMD, Intel) host, and after an upload
+  from the CPU copy Hermes-KMS displays use on NVIDIA. Measured on an RX 6700
+  XT, a 1080p frame takes 0.55 ms from capture to bitstream in place and
+  1.7 ms through the upload, against 7.3 ms when converted on the CPU, which
+  remains the fallback. A frame larger than forward error correction can
+  cover (about 1.2 MB, so above roughly 550 Mbps at 60 fps) is sent without
+  it.
 - Experimental: a Linux host that boots with no monitor and no autologin can
   stream its login screen ([#61]). Started before anyone has logged in, Hermes
   brings up its virtual display when a client connects, the greeter draws on
@@ -58,8 +103,72 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   at the greeter's resolution. The steps and the limits are in
   [Getting Started](docs/getting_started.md). Run so far on KDE Plasma with
   SDDM and Hermes-KMS only.
+- Linux: an independent `desktop` session is now the user's own Plasma
+  desktop, detached (`hermes_kms_session_compositor = plasma`, the new
+  default; `weston` and `labwc` remain as opt-in fallbacks, and a Plasma
+  failure says so). It runs as
+  the same user with the same home, files and settings, in a transient unit of
+  the user's systemd manager with a private D-Bus and runtime directory, on a
+  stock KWin virtual output. It has no DRM device or libinput, so it never wakes
+  or rearranges a physical monitor and the keyboard and mouse at the machine
+  never reach it; PowerDevil does not run inside it. Hermes captures it through
+  KWin's screencast protocol over PipeWire and drives its keyboard, mouse and
+  touch through KWin's fake-input protocol, over explicit sockets with no
+  fallback to the host desktop. Frames are copied through system memory, and
+  the session is SDR only. Requires Plasma 6 and plasma-wayland-protocols 1.23
+  or newer at build time.
 
 ### Changed
+- Experimental isolated application sessions hand Gamescope the session's own
+  Hermes-KMS card to scan out on ([#57]). Upstream Gamescope scans out on the
+  GPU it renders with - the host's - so Hermes now asks `gamescope --help`
+  which option the build takes (`--prefer-drm` from
+  ValveSoftware/gamescope#2220, or a downstream `--drm-device`), passes the
+  card with it and in `GAMESCOPE_PREFER_DRM`, and refuses to start a build
+  that takes neither instead of letting it open the host's display.
+  `HERMES_ISOLATED_GAMESCOPE_DRM_FLAG` forces an option (or `none`) for a
+  build whose usage text does not list it; the process-wide
+  `HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE` is no longer read, since every
+  session has a card of its own. Gamescope also starts with
+  `WLR_LIBINPUT_NO_DEVICES=1`, because the session seat has no devices until
+  the stream starts.
+- Isolated application sessions take three per-app settings ([#57], from
+  d3adb5): `gamescope-steam-mode` (`auto`, the default, turns on Gamescope's
+  Steam mode - `-e` and a second Xwayland - when the command runs `steam`;
+  `on`/`off` force it), `gamescope-args` (replaces the default
+  `--expose-wayland --force-windows-fullscreen`), and `first-frame-timeout`,
+  how long the session has to show its first frame. That default rises from
+  5 to 30 seconds for application sessions, since Steam's gamepad UI
+  regularly took longer and failed a launch that was only slow. The
+  process-wide `HERMES_ISOLATED_GAMESCOPE_STEAM_MODE` switch still forces
+  Steam mode on as an override.
+- Isolated sessions prefer Hermes' own Gamescope build
+  ([MrOz59/gamescope](https://github.com/MrOz59/gamescope), branch `hermes`),
+  installed beside the system's Gamescope in `/usr/lib/hermes-gamescope` (or
+  `/opt/hermes-gamescope` for a source build); `HERMES_GAMESCOPE` names a
+  binary outright. The session's `PATH` and `VK_ADD_IMPLICIT_LAYER_PATH` point
+  at that build's `gamescopereaper` and WSI layer.
+- An isolated stream no longer shows Gamescope's cursor when a client
+  connects ([#57], from d3adb5). Hermes no longer nudges the mouse for an
+  isolated session, and drops the +1/-1 wiggle Moonlight-based clients send
+  right after connecting when it is the session's first mouse input
+  (`isolated_ignore_mouse_wiggle`, on by default).
+- Linux gamepad backend policy is now configurable. Auto keeps Xbox controllers
+  on uinput for ordinary rumble without hidraw access; native HID remains an
+  explicit option for trigger rumble and battery. PlayStation/Switch retain
+  native HID, and input-events-only Auto emulates Xbox Series.
+- Linux controller selection now offers all seven libvirtualhid profiles.
+  Automatic Xbox/unknown-controller selection uses Xbox Series; explicit
+  `xone` remains available. PlayStation MAC policy is now named
+  `virtualhid_randomize_mac`, with both former DS5-specific keys accepted.
+- Linux virtual input now uses the pinned MrOz59/libvirtualhid fork for the
+  complete stack: keyboard, relative and absolute mouse, high-resolution
+  scrolling, Xbox One/Switch Pro/DualSense controllers and their feedback,
+  multitouch, and pen/tablet input. The Inputtino submodule and adapter were
+  removed. Private Hermes-KMS sessions keep independent runtimes and physical
+  identities; udev now propagates a UHID controller's `hermes-kms-N` identity
+  to its event, joystick and hidraw children so controllers remain on the same
+  isolated seat as that session's keyboard, mouse, touch and pen devices.
 - A session that asks for a virtual display now fails to start when that
   display cannot be set up, instead of streaming a physical monitor ([#58]).
   This holds for every way of asking for one (the application's
@@ -75,6 +184,44 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Apply and verify requested Detached resolution and refresh rate at startup and resume, keeping KWin output settings private.
+- Disable BlueDevil autoload only in private Detached desktops to prevent
+  repeated OBEX startup attempts, leaving host Bluetooth configuration unchanged.
+- Detached's private KWin connections are opened by the unprivileged session
+  helper, so KWin can identify and authorize them when the packaged Hermes
+  retains file capabilities for ordinary KMS capture and session isolation.
+  The main process keeps its capabilities and KWin's permission checks remain
+  enabled.
+- Initialize stream state before publishing it to the control thread and cancel initial audio/video ping waits promptly when a session stops, preventing premature timeouts and teardown watchdog crashes.
+- Experimental isolated Gamescope sessions now wait for the private audio
+  graph's actual sink/source defaults and live session manager before starting
+  applications, instead of treating a socket file as audio readiness. Session
+  clients explicitly select their private output/input rather than inheriting
+  desktop defaults. Partial startup is covered by cleanup before resources are
+  acquired, and stopped private audio children are reaped.
+- Isolated-session liveness queries and launch/resume checks no longer hold the
+  global runtime registry while waiting for the account broker. Per-app
+  Gamescope flags cannot replace the session-owned KMS card, backend, mode
+  or connector.
+- Client microphone packets no longer stop at the first session sharing an IP
+  address when that session's key fails to decrypt. Routing validates Opus,
+  rejects ambiguous CBC matches and binds the source endpoint after a unique
+  match. Microphone receive observes shutdown without depending on traffic,
+  and its socket receives the same inheritance protection as video/audio.
+- Resuming an isolated session took the host's audio ([#57], found by d3adb5
+  as well). The stream
+  looked the session's sink up by its own launch id rather than the one the
+  session was started with, found nothing, and took the host path, which
+  moves the host's default sink onto the stream's virtual sink. A resumed
+  stream now captures the session's sink, as the first one did.
+- The libvirtualhid integration workflow separates pure unit checks from a
+  kernel-device job, which also exercises an unprivileged SDL consumer with
+  per-device ACLs and rejects access to another seat's gamepad.
+- Linux pen/touch capability advertisement and native packet handling now
+  respect input policy and backend availability. Stream cleanup releases
+  remapped keys, the fifth mouse button, controller input and active pen/touch
+  state only on the owning context. Startup controller probing now passes
+  the owning input handle rather than casting the backend payload.
 - Linux clipboard helpers (`wl-copy`, `wl-paste`, and `xclip`) now close all
   inherited non-standard descriptors before execution. The [#71] reporter's
   socket listing identified a background `wl-copy` retaining video, control,
@@ -118,6 +265,23 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   probes on that one. A monitor that is switched off but still connected and
   driven counts as present, as does any setup where the kernel cannot see the
   monitors, such as NVIDIA without modesetting under X11.
+- Linux: starting Hermes no longer wakes the monitors. When no screen could
+  be opened for the startup encoder probe - every monitor asleep, typically -
+  Hermes created a temporary virtual output instead, which the compositor
+  treats as a monitor being plugged in and wakes every display for; the
+  power manager does not count that as activity, so the screens could stay
+  lit for the full idle timeout. Encoders are now validated on a display with
+  nothing behind it, since validation only ever encodes synthetic frames.
+- Linux: streams are encoded on the best GPU in the machine rather than the
+  first one the kernel lists. Without `adapter_name`, Hermes ranks every real
+  GPU by the video it can encode through VAAPI - AV1, then HEVC Main10, HEVC,
+  H.264 - with more video memory breaking a tie, so a dedicated card wins over
+  an integrated one; NVENC streams prefer an NVIDIA GPU. The startup encoder
+  probe, Hermes-KMS streams and system-memory capture all use the same
+  choice, which also means the codecs Hermes advertises are the
+  ones the stream's GPU can encode. Previously that was `renderD128` in some
+  paths and the first GPU in others, and render-node numbering can change
+  between boots.
 - Touch and pen now land where they are aimed on a host with more than one
   monitor. Their coordinates were measured against the whole desktop, while
   KDE and GNOME map such a device onto a single output, so every touch fell
@@ -1753,6 +1917,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [#43]: https://github.com/MrOz59/Hermes/issues/43
 [#50]: https://github.com/MrOz59/Hermes/issues/50
 [#52]: https://github.com/MrOz59/Hermes/issues/52
+[#57]: https://github.com/MrOz59/Hermes/issues/57
 [#58]: https://github.com/MrOz59/Hermes/pull/58
 [#61]: https://github.com/MrOz59/Hermes/issues/61
 [Hermes-KMS #13]: https://github.com/MrOz59/Hermes-KMS/issues/13
@@ -1862,3 +2027,4 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 [0.3.0]: https://github.com/MrOz59/Hermes/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MrOz59/Hermes/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MrOz59/Hermes/releases/tag/v0.1.0
+

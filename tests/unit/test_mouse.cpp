@@ -14,8 +14,7 @@ struct MouseHIDTest: PlatformTestSuite, testing::WithParamInterface<util::point_
     //       but I'm not sure about real work
     GTEST_SKIP() << "TODO Windows";
 #elif __linux__
-    // TODO: Inputtino waiting https://github.com/games-on-whales/inputtino/issues/6 is resolved.
-    GTEST_SKIP() << "TODO Inputtino";
+    GTEST_SKIP() << "Linux virtual input cannot query the compositor's cursor position";
 #endif
   }
 

@@ -10,14 +10,19 @@
 // standard includes
 #include <algorithm>
 #include <atomic>
+#include <csignal>
+#include <cstdio>
 #include <cctype>
+#include <cstdlib>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -25,8 +30,14 @@
 
 #ifndef _WIN32
   #include <fcntl.h>
+  #include <poll.h>
+  #include <signal.h>
+  #include <spawn.h>
+  #include <sys/wait.h>
   #include <unistd.h>
   #include <xf86drm.h>
+
+  #include "platform/linux/gamescope_session.h"
   // For the GBM allocation probe: picking the render node an isolated session
   // renders on is the same question the capture path answers, so it uses the
   // same answer rather than a second heuristic. Compiles to "yes" where Wayland
@@ -69,7 +80,10 @@
   // _SH constants for _wfsopen()
   #include <share.h>
 #else
+  #include "platform/linux/session_audio.h"
   #include "platform/linux/session_broker.h"
+  #include "platform/linux/process_group.h"
+  #include "platform/linux/session_devices.h"
   #include "platform/linux/virtual_display.h"
   #include <sys/stat.h>
   #include <unistd.h>
@@ -89,6 +103,49 @@ namespace proc {
   std::string terminate_app_id_str;
 
   VDISPLAY::DRIVER_STATUS vDisplayDriverStatus = VDISPLAY::DRIVER_STATUS::UNKNOWN;
+
+  static void finish_undo_command(
+    boost::process::v1::child &child,
+    boost::process::v1::group &group,
+    std::chrono::seconds exit_timeout
+  );
+
+  bool launch_requests_virtual_display(
+    const ctx_t &app,
+    const rtsp_stream::launch_session_t &launch_session,
+    bool headless_mode
+  ) {
+    return headless_mode ||
+           launch_session.virtual_display ||
+           app.virtual_display;
+  }
+
+  session_route_e resolve_session_route(
+    const ctx_t &app,
+    bool isolated_sessions_enabled,
+    bool virtual_display_requested
+  ) {
+    if (!isolated_sessions_enabled || app.session_type == "shared") {
+      return session_route_e::shared;
+    }
+
+    if (app.session_type == "desktop") {
+      return session_route_e::isolated_desktop;
+    }
+
+    if (app.session_type == "application") {
+      return session_route_e::isolated_application;
+    }
+
+    if (!virtual_display_requested ||
+        app.virtual_display_layout != "detached") {
+      return session_route_e::shared;
+    }
+
+    return app.cmd.empty() ?
+             session_route_e::isolated_desktop :
+             session_route_e::isolated_application;
+  }
 
 #ifndef _WIN32
   namespace {
@@ -120,7 +177,17 @@ namespace proc {
       std::string assets_dir;
       std::optional<platf::session_broker::account_t> account;
       std::string unit;
+      // A detached desktop runs as the user's own transient systemd unit, and
+      // Hermes reaches it only through these two explicit sockets.
+      bool user_unit {false};
+      std::string kwin_wayland_socket;
+      std::string kwin_pipewire_socket;
       std::string audio_sink;
+      std::string mic_source;  ///< Empty where the client's microphone is not streamed.
+      std::unique_ptr<platf::session_audio::server_t> audio_server;  ///< Where the session has its own.
+      pid_t namespace_pid {};  ///< Holds the session's mount namespace, where it has a private /dev.
+      std::unique_ptr<platf::session_devices::mirror_t> device_mirror;
+      std::string isolated_seat_flag;  ///< Tells the ACL rule to leave the seat's host nodes alone.
       std::chrono::steady_clock::time_point started_at {std::chrono::steady_clock::now()};
       std::string wayland_display;
       std::string drm_device_path;
@@ -129,6 +196,7 @@ namespace proc {
       std::string display_name;
       uuid_util::uuid_t display_guid {};
       boost::process::v1::environment env;
+      std::mutex process_mutex;  ///< Serializes child liveness probes with teardown.
       boost::process::v1::child process;
       boost::process::v1::group process_group;
       file_t pipe;
@@ -153,6 +221,111 @@ namespace proc {
         return dir;
       }
       return {};
+    }
+
+    // Discord listens on discord-ipc-N in the host's runtime directory, which a
+    // session's XDG_RUNTIME_DIR replaces; link them so Rich Presence still works.
+    void link_host_discord_ipc(const std::string &runtime_dir) {
+      const auto host_runtime = host_runtime_dir();
+      if (host_runtime.empty()) {
+        return;
+      }
+      for (int i = 0; i < 10; ++i) {
+        const auto name = "discord-ipc-" + std::to_string(i);
+        std::error_code ec;
+        std::filesystem::create_symlink(std::filesystem::path {host_runtime} / name,
+                                        std::filesystem::path {runtime_dir} / name, ec);
+      }
+    }
+
+    /**
+     * @brief The private /dev an app's session gets, or nullopt where an app
+     *        that demands it (`on`) cannot have it.
+     */
+    std::optional<platf::session_devices::options_t> session_device_options(const ctx_t &app) {
+      const platf::session_devices::options_t options {app.isolate_devices != "off", app.isolate_sound != "off"};
+      if ((!options.devices && !options.sound) || platf::session_devices::available()) {
+        return options;
+      }
+      if (app.isolate_devices == "on" || app.isolate_sound == "on") {
+        BOOST_LOG(error) << "[IsolatedSession] " << app.name << " requires device isolation, but Hermes lacks "
+                            "CAP_SYS_ADMIN and CAP_MKNOD (setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p).";
+        return std::nullopt;
+      }
+      BOOST_LOG(warning) << "[IsolatedSession] Hermes lacks CAP_SYS_ADMIN and CAP_MKNOD; "
+                         << app.name << " sees the host's devices.";
+      return platf::session_devices::options_t {};
+    }
+
+    bool runs_steam(const ctx_t &app) {
+      // The same test Steam mode's auto uses, so the two never disagree.
+      return platf::gamescope::steam_mode_for("auto", app.cmd);
+    }
+
+    std::string read_proc_line(pid_t pid, const char *file) {
+      std::ifstream stream {"/proc/" + std::to_string(pid) + "/" + file};
+      std::string line;
+      std::getline(stream, line);
+      return line;
+    }
+
+    /**
+     * @brief Shut down a Steam client running outside Hermes' sessions.
+     *
+     * Steam is one instance per user and hands a second launch to the running
+     * one. SIGTERM shuts it down cleanly (logs off, saves its config) in a few
+     * seconds even when its window is unmapped; `steam -shutdown` would start
+     * Steam's updater if no client were left by then.
+     */
+    void stop_desktop_steam() {
+      const char *home = std::getenv("HOME");
+      pid_t pid = 0;
+      std::ifstream {std::string {home ? home : ""} + "/.steam/steam.pid"} >> pid;
+      // The pid file outlives the client.
+      if (pid <= 0 || read_proc_line(pid, "comm") != "steam") {
+        return;
+      }
+      const auto own = read_proc_line(getpid(), "cgroup");
+      if (own.ends_with(".service") && read_proc_line(pid, "cgroup").starts_with(own)) {
+        return;
+      }
+
+      BOOST_LOG(info) << "[IsolatedSession] Shutting down the desktop's Steam (pid " << pid << ") first.";
+      ::kill(pid, SIGTERM);
+      const auto deadline = std::chrono::steady_clock::now() + 30s;
+      while (std::filesystem::exists("/proc/" + std::to_string(pid)) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(100ms);
+      }
+      if (!std::filesystem::exists("/proc/" + std::to_string(pid))) {
+        BOOST_LOG(info) << "[IsolatedSession] The desktop's Steam has exited.";
+        return;
+      }
+
+      // Not graceful: no log-off, unsaved config and cloud sync are lost.
+      BOOST_LOG(warning) << "[IsolatedSession] The desktop's Steam ignored SIGTERM for 30 s; killing it.";
+      std::vector<pid_t> tree {pid};
+      std::error_code ec;
+      for (bool grew = true; grew;) {
+        grew = false;
+        for (const auto &entry : std::filesystem::directory_iterator {"/proc", ec}) {
+          const auto name = entry.path().filename().string();
+          if (!std::isdigit(static_cast<unsigned char>(name[0]))) {
+            continue;
+          }
+          const pid_t child = std::stoi(name);
+          const auto stat = read_proc_line(child, "stat");
+          const auto end = stat.rfind(')');
+          pid_t parent = 0;
+          if (end != std::string::npos && std::sscanf(stat.c_str() + end + 1, " %*c %d", &parent) == 1 &&
+              std::ranges::contains(tree, parent) && !std::ranges::contains(tree, child)) {
+            tree.push_back(child);
+            grew = true;
+          }
+        }
+      }
+      for (const auto member : tree) {
+        ::kill(member, SIGKILL);
+      }
     }
 
     std::string isolated_runtime_root() {
@@ -429,6 +602,164 @@ namespace proc {
     }
 
     /**
+     * @brief What `gamescope --help` prints, or nothing if it could not be run.
+     *
+     * Gamescope writes its usage to stderr and exits 0, so both streams are
+     * captured. It runs without a shell and against a deadline: a build that
+     * hangs here must not hang a launch with it.
+     */
+    std::optional<std::string> gamescope_help_text(const std::string &binary) {
+      int pipe_fds[2];
+      if (::pipe2(pipe_fds, O_CLOEXEC) != 0) {
+        return std::nullopt;
+      }
+
+      posix_spawn_file_actions_t actions;
+      ::posix_spawn_file_actions_init(&actions);
+      ::posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+      ::posix_spawn_file_actions_adddup2(&actions, pipe_fds[1], STDOUT_FILENO);
+      ::posix_spawn_file_actions_adddup2(&actions, pipe_fds[1], STDERR_FILENO);
+      std::string help_option {"--help"};
+      std::string program {binary};
+      char *argv[] {program.data(), help_option.data(), nullptr};
+      pid_t pid = -1;
+      const int spawn_error = ::posix_spawn(&pid, program.c_str(), &actions, nullptr, argv, environ);
+      ::posix_spawn_file_actions_destroy(&actions);
+      ::close(pipe_fds[1]);
+      if (spawn_error != 0) {
+        ::close(pipe_fds[0]);
+        BOOST_LOG(warning) << "[IsolatedSession] Could not run " << binary << " --help: "
+                           << std::strerror(spawn_error);
+        return std::nullopt;
+      }
+
+      // Usage text is a few kilobytes; anything far past that is not it.
+      constexpr std::size_t output_limit = 1 << 20;
+      const auto deadline = std::chrono::steady_clock::now() + 3s;
+      std::string output;
+      bool complete = false;
+      for (;;) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - std::chrono::steady_clock::now()
+        );
+        if (remaining <= 0ms) {
+          break;
+        }
+        pollfd pending {pipe_fds[0], POLLIN, 0};
+        const int ready = ::poll(&pending, 1, static_cast<int>(remaining.count()));
+        if (ready < 0 && errno == EINTR) {
+          continue;
+        }
+        if (ready <= 0) {
+          break;
+        }
+        char buffer[4096];
+        const auto read_size = ::read(pipe_fds[0], buffer, sizeof(buffer));
+        if (read_size < 0 && errno == EINTR) {
+          continue;
+        }
+        if (read_size <= 0) {
+          complete = read_size == 0;
+          break;
+        }
+        output.append(buffer, static_cast<std::size_t>(read_size));
+        if (output.size() > output_limit) {
+          break;
+        }
+      }
+      ::close(pipe_fds[0]);
+      if (!complete) {
+        ::kill(pid, SIGKILL);
+      }
+      int status = 0;
+      while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+      }
+      if (!complete) {
+        BOOST_LOG(warning) << "[IsolatedSession] " << binary << " --help did not finish in time.";
+        return std::nullopt;
+      }
+      return output;
+    }
+
+    /**
+     * @brief The scanout option this Gamescope build accepts, if any.
+     *
+     * Asked once per binary and remembered until the file changes, so an
+     * update to Gamescope is noticed without restarting Hermes.
+     */
+    std::optional<platf::gamescope::drm_selector_e> gamescope_drm_selector(const std::string &binary) {
+      static std::mutex probe_mutex;
+      static std::string probed_binary;
+      static std::filesystem::file_time_type probed_mtime {};
+      static std::optional<platf::gamescope::drm_selector_e> probed_selector;
+
+      std::error_code mtime_ec;
+      const auto mtime = std::filesystem::last_write_time(binary, mtime_ec);
+
+      std::lock_guard<std::mutex> lock(probe_mutex);
+      if (!mtime_ec && binary == probed_binary && mtime == probed_mtime) {
+        return probed_selector;
+      }
+
+      const auto help = gamescope_help_text(binary);
+      if (!help) {
+        // Not remembered: a probe that could not run says nothing about the
+        // build, and the next launch should ask again.
+        return std::nullopt;
+      }
+      const auto selector = platf::gamescope::drm_selector_from_help(*help);
+      if (!mtime_ec) {
+        probed_binary = binary;
+        probed_mtime = mtime;
+        probed_selector = selector;
+      }
+      return selector;
+    }
+
+    /**
+     * @brief Where the Gamescope an application session runs lives.
+     *
+     * Hermes' own build (MrOz59/gamescope, branch hermes) installs into a
+     * prefix of its own instead of over the system's Gamescope, which a
+     * Steam Deck-style session or a desktop user may depend on. It is looked
+     * for there first; HERMES_GAMESCOPE names a binary outright; otherwise
+     * whichever gamescope PATH finds is used and the probe below decides
+     * whether it can do the job.
+     */
+    struct gamescope_install_t {
+      std::string binary;
+      std::string prefix;  ///< Empty for a Gamescope found on PATH.
+    };
+
+    gamescope_install_t find_gamescope() {
+      const auto prefix_of = [](const std::filesystem::path &binary) {
+        const auto dir = binary.parent_path();
+        return dir.filename() == "bin" ? dir.parent_path().string() : std::string {};
+      };
+      const auto usable = [](const std::string &path) {
+        return !path.empty() &&
+               std::ranges::none_of(path, [](unsigned char ch) { return std::isspace(ch) != 0; }) &&
+               ::access(path.c_str(), X_OK) == 0;
+      };
+
+      if (const char *forced = std::getenv("HERMES_GAMESCOPE"); forced && *forced) {
+        if (usable(forced)) {
+          return {forced, prefix_of(forced)};
+        }
+        BOOST_LOG(warning) << "[IsolatedSession] Ignoring HERMES_GAMESCOPE=" << forced
+                           << ": not an executable path without spaces.";
+      }
+      for (const auto *prefix : {"/usr/lib/hermes-gamescope", "/opt/hermes-gamescope"}) {
+        const auto binary = (std::filesystem::path {prefix} / "bin" / "gamescope").string();
+        if (usable(binary)) {
+          return {binary, prefix};
+        }
+      }
+      const auto found = boost::process::v1::search_path("gamescope").string();
+      return {usable(found) ? found : std::string {}, {}};
+    }
+
+    /**
      * @brief Start one command inside a session, wherever that session lives.
      *
      * Both halves used to be the same call, because everything ran as Hermes
@@ -465,9 +796,9 @@ namespace proc {
       auto working_dir = app.working_dir.empty() ?
                            find_working_directory(command, runtime->env) :
                            boost::filesystem::path {app.working_dir};
-      auto child = platf::run_command(
-        app.elevated,
-        true,
+      const auto join = runtime->namespace_pid ? platf::session_devices::plan_t::join(runtime->namespace_pid) : nullptr;
+      auto child = platf::session_devices::run_command(
+        join.get(),
         command,
         working_dir,
         runtime->env,
@@ -528,6 +859,29 @@ namespace proc {
       }
     }
 
+    void erase_host_graphical_session_environment(boost::process::v1::environment &env) {
+      for (const auto *name : {
+             "DBUS_SESSION_BUS_ADDRESS",
+             "DBUS_SESSION_BUS_PID",
+             "DBUS_STARTER_ADDRESS",
+             "DBUS_STARTER_BUS_TYPE",
+             "WAYLAND_DISPLAY",
+             "WAYLAND_SOCKET",
+             "_WAYLAND_DISPLAY",
+             "DISPLAY",
+             "XAUTHORITY",
+             "XDG_SESSION_ID",
+             "XDG_SESSION_DESKTOP",
+             "DESKTOP_SESSION",
+             "KDE_FULL_SESSION",
+             "KDE_SESSION_UID",
+             "KDE_SESSION_VERSION",
+             "GNOME_DESKTOP_SESSION_ID",
+           }) {
+        env.erase(name);
+      }
+    }
+
     void populate_session_environment(
       boost::process::v1::environment &env,
       const ctx_t &app,
@@ -545,15 +899,24 @@ namespace proc {
         // and setting it here would only be a chance to disagree with it.
         erase_host_session_environment(env);
       } else {
+        erase_host_graphical_session_environment(env);
         env["XDG_RUNTIME_DIR"] = runtime.runtime_dir;
-        // That is also how a PulseAudio or PipeWire client finds its server,
-        // and it has just been pointed at a directory with no server in it.
-        // Left alone, everything in the session fails to connect to audio at
-        // all - "Connection refused" - and the sink made for this session would
-        // never see a sample. Naming the host's sockets keeps the session on
-        // the audio server it was already using; what changed is only which
-        // sink it plays into.
-        if (const auto host_runtime = host_runtime_dir(); !host_runtime.empty()) {
+        // That is also how a PulseAudio or PipeWire client finds its server.
+        // The session's own lives there; named explicitly all the same, so
+        // nothing (an X11 root window property, client.conf) overrides it.
+        // Without one, the session would fail to connect to audio at all, so
+        // it is pointed at the host's server and plays into its session sink.
+        if (runtime.audio_server) {
+          env["PULSE_SERVER"] = runtime.audio_server->pulse_server();
+          env["PIPEWIRE_REMOTE"] = runtime.audio_server->pipewire_remote();
+          env["PIPEWIRE_RUNTIME_DIR"] = runtime.runtime_dir;
+          env["PULSE_SINK"] = runtime.audio_sink;
+          if (runtime.mic_source.empty()) {
+            env.erase("PULSE_SOURCE");
+          } else {
+            env["PULSE_SOURCE"] = runtime.mic_source;
+          }
+        } else if (const auto host_runtime = host_runtime_dir(); !host_runtime.empty()) {
           env["PULSE_SERVER"] = "unix:" + host_runtime + "/pulse/native";
           env["PIPEWIRE_REMOTE"] = host_runtime + "/pipewire-0";
         }
@@ -564,7 +927,7 @@ namespace proc {
       // the session would play to whichever sink the machine currently defaults
       // to, which is the host's - audible on the host's speakers and captured
       // by whichever stream moved that default.
-      if (!runtime.audio_sink.empty()) {
+      if (!runtime.audio_sink.empty() && !runtime.audio_server) {
         env["PULSE_SINK"] = runtime.audio_sink;
       }
       env["XDG_SESSION_TYPE"] = "wayland";
@@ -575,6 +938,8 @@ namespace proc {
       env["LIBSEAT_BACKEND"] = "seatd";
       env["SEATD_SOCK"] = runtime.seatd_socket;
       env["WLR_DRM_DEVICES"] = runtime.drm_device_path;
+      // The seat's input devices appear once the client streams.
+      env["WLR_LIBINPUT_NO_DEVICES"] = "1";
 
       env["SUNSHINE_APP_ID"] = app.id;
       env["SUNSHINE_APP_NAME"] = app.name;
@@ -621,17 +986,222 @@ namespace proc {
       }
     }
 
-    bool isolated_runtime_running(const std::shared_ptr<isolated_runtime_t> &runtime) {
-      if (!runtime) {
+    /**
+     * Run a program by absolute path, without a shell, and wait at most
+     * `timeout` for it. Its output goes to Hermes' own, which is the journal.
+     */
+    int run_program(const std::vector<std::string> &arguments, std::chrono::seconds timeout) {
+      if (arguments.empty() || !arguments.front().starts_with('/')) {
+        return -1;
+      }
+      std::vector<char *> argv;
+      for (const auto &argument : arguments) {
+        argv.push_back(const_cast<char *>(argument.c_str()));
+      }
+      argv.push_back(nullptr);
+      const pid_t pid = ::fork();
+      if (pid < 0) {
+        return -1;
+      }
+      if (pid == 0) {
+        ::execv(argv.front(), argv.data());
+        ::_exit(127);
+      }
+      const auto deadline = std::chrono::steady_clock::now() + timeout;
+      int status = 0;
+      for (;;) {
+        const pid_t waited = ::waitpid(pid, &status, WNOHANG);
+        if (waited == pid) {
+          return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        }
+        if (waited < 0 && errno != EINTR) {
+          return -1;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+          ::kill(pid, SIGKILL);
+          ::waitpid(pid, &status, 0);
+          BOOST_LOG(error) << "[IsolatedSession] " << arguments.front() << " timed out.";
+          return -1;
+        }
+        std::this_thread::sleep_for(20ms);
+      }
+    }
+
+    std::string find_program(const std::string &name) {
+      const auto path = boost::process::v1::search_path(name);
+      return path.empty() ? std::string {} : boost::filesystem::absolute(path).string();
+    }
+
+    /**
+     * The session tool ships beside the Hermes executable, so a build tree
+     * runs its own copy rather than whichever one is installed.
+     */
+    std::string find_detached_session_tool() {
+      std::error_code ec;
+      const auto self = std::filesystem::canonical("/proc/self/exe", ec);
+      if (!ec) {
+        const auto sibling = self.parent_path() / "hermes-detached-session";
+        if (::access(sibling.c_str(), X_OK) == 0) {
+          return sibling.string();
+        }
+      }
+      return find_program("hermes-detached-session");
+    }
+
+    std::string detached_unit_name(const std::string &runtime_id) {
+      return "hermes-detached-" + runtime_id + ".scope";
+    }
+
+    /**
+     * The unit Hermes itself runs in, so a detached desktop can stop when
+     * Hermes does. Empty when Hermes is not a service.
+     */
+    std::string own_service_unit() {
+      std::ifstream cgroup {"/proc/self/cgroup"};
+      std::string line;
+      while (std::getline(cgroup, line)) {
+        const auto slash = line.rfind('/');
+        if (slash == std::string::npos) {
+          continue;
+        }
+        const auto unit = line.substr(slash + 1);
+        if (unit.ends_with(".service") && !unit.starts_with("user@")) {
+          return unit;
+        }
+      }
+      return {};
+    }
+
+    void stop_user_unit(const std::string &unit) {
+      if (const auto systemctl = find_program("systemctl"); !systemctl.empty()) {
+        run_program({systemctl, "--user", "stop", unit}, 30s);
+      }
+    }
+
+    // Isolated launches probe encoders while another may be doing the same;
+    // one at a time, since a probe resets the chosen encoder while it runs.
+    std::mutex encoder_probe_mutex;
+
+    std::string read_small_file(const std::filesystem::path &path) {
+      std::ifstream file {path};
+      std::string text {std::istreambuf_iterator<char> {file}, {}};
+      while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
+        text.pop_back();
+      }
+      return text.size() > 512 ? text.substr(0, 512) : text;
+    }
+
+    /**
+     * The KWin wrapper names its own socket, the first free one in the
+     * session's runtime directory, and the session tool reports that name in
+     * `ready` once Plasma is up. It removes `ready` the moment Plasma exits.
+     */
+    std::string detached_wayland_socket(const std::string &runtime_dir) {
+      std::ifstream ready {std::filesystem::path {runtime_dir} / "ready"};
+      std::string line;
+      constexpr std::string_view key {"WAYLAND_DISPLAY="};
+      while (std::getline(ready, line)) {
+        if (!line.starts_with(key)) {
+          continue;
+        }
+        const auto name = line.substr(key.size());
+        if (name.empty() || name.find('/') != std::string::npos) {
+          return {};
+        }
+        return (std::filesystem::path {runtime_dir} / name).string();
+      }
+      return {};
+    }
+
+    /**
+     * @brief Have a detached desktop start one command.
+     *
+     * Its session supervisor starts it, so it gets the desktop's environment,
+     * private /dev and unit, which Hermes could only copy, and stops with the
+     * desktop. The request is a file in the desktop's runtime directory: the
+     * working directory and the arguments, each ended by a NUL.
+     */
+    bool start_in_detached_desktop(const isolated_runtime_t &runtime, const ctx_t &app, const std::string &command, const std::string &name) {
+      const auto arguments = boost::program_options::split_unix(command);
+      if (arguments.empty()) {
         return false;
+      }
+      std::string request = app.working_dir;
+      request += '\0';
+      for (const auto &argument : arguments) {
+        request += argument;
+        request += '\0';
+      }
+
+      const auto directory = std::filesystem::path {runtime.runtime_dir} / "launch";
+      const auto path = directory / name;
+      std::error_code ec;
+      std::filesystem::create_directories(directory, ec);
+      std::filesystem::remove(std::filesystem::path {path} += ".error", ec);
+      {
+        std::ofstream stream {std::filesystem::path {path} += ".tmp", std::ios::binary | std::ios::trunc};
+        stream << request;
+        if (!stream.flush()) {
+          BOOST_LOG(error) << "[IsolatedSession] Could not ask detached desktop " << runtime.runtime_id << " to start [" << command << ']';
+          return false;
+        }
+      }
+      std::filesystem::rename(std::filesystem::path {path} += ".tmp", path, ec);
+      if (ec) {
+        BOOST_LOG(error) << "[IsolatedSession] Could not ask detached desktop " << runtime.runtime_id << " to start [" << command << "]: " << ec.message();
+        return false;
+      }
+
+      BOOST_LOG(info) << "[IsolatedSession] Starting [" << command << "] in detached desktop " << runtime.runtime_id;
+      const auto deadline = std::chrono::steady_clock::now() + 5s;
+      while (std::filesystem::exists(path, ec) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(50ms);
+      }
+      if (std::filesystem::exists(path, ec)) {
+        BOOST_LOG(warning) << "[IsolatedSession] Detached desktop " << runtime.runtime_id << " has not picked up [" << command << "] yet.";
+        return false;
+      }
+      if (const auto reason = read_small_file(std::filesystem::path {path} += ".error"); !reason.empty()) {
+        BOOST_LOG(error) << "[IsolatedSession] Detached desktop " << runtime.runtime_id << " could not start [" << command << "]: " << reason;
+        return false;
+      }
+      return true;
+    }
+
+    /**
+     * Alive means Plasma reported itself up and the compositor still answers
+     * on its socket: a socket nobody is listening on means the unit is gone.
+     */
+    bool detached_desktop_alive(const isolated_runtime_t &runtime) {
+      std::error_code ec;
+      if (std::filesystem::exists(std::filesystem::path {runtime.runtime_dir} / "failure", ec)) {
+        return false;
+      }
+      // Never a blocking connect: this runs under the runtime registry lock,
+      // and a compositor that stopped accepting would hold that lock forever
+      // once its backlog filled. A full backlog still means it is there.
+      const auto socket = detached_wayland_socket(runtime.runtime_dir);
+      return !socket.empty() && VDISPLAY::displayServerReachable(socket, {}, {});
+    }
+
+    bool isolated_runtime_running(const std::shared_ptr<isolated_runtime_t> &runtime) {
+      if (!runtime || runtime->stopping.load()) {
+        return false;
+      }
+      if (runtime->user_unit) {
+        return detached_desktop_alive(*runtime);
       }
       // A session with an account of its own is a systemd unit rather than a
       // child of this process, so there is no handle here to ask and systemd is
       // the only thing that knows.
       if (!runtime->unit.empty()) {
-        return platf::session_broker::active(runtime->client_uuid);
+        // A broker restart or slow account operation is not evidence that
+        // this session exited. Tear down only after a confirmed inactive reply.
+        const bool active = platf::session_broker::query_active(runtime->client_uuid).value_or(true);
+        return active && !runtime->stopping.load();
       }
-      return runtime->process.valid() && runtime->process.running();
+      std::lock_guard<std::mutex> lock(runtime->process_mutex);
+      return !runtime->stopping.load() && runtime->process.valid() && runtime->process.running();
     }
 
     void stop_isolated_runtime(const std::shared_ptr<isolated_runtime_t> &runtime) {
@@ -641,13 +1211,31 @@ namespace proc {
 
       BOOST_LOG(info) << "[IsolatedSession] Stopping " << runtime->runtime_id
                       << " for client " << runtime->client_name;
-      if (!runtime->unit.empty()) {
+      if (runtime->user_unit) {
+        // Mode changes finish before this generation's compositor is stopped.
+        std::lock_guard<std::mutex> lock(runtime->process_mutex);
+        // Stopping the unit takes everything the desktop started with it.
+        if (!runtime->unit.empty()) {
+          stop_user_unit(runtime->unit);
+          runtime->unit.clear();
+        }
+        // The unit's first process is this one's child: reap it.
+        if (runtime->process.valid()) {
+          std::error_code wait_ec;
+          if (runtime->process.running(wait_ec)) {
+            runtime->process.terminate(wait_ec);
+          }
+          runtime->process.wait(wait_ec);
+          runtime->process = boost::process::v1::child {};
+        }
+      } else if (!runtime->unit.empty()) {
         // Stopping the unit takes the whole session with it: systemd kills the
         // cgroup, so a game that outlived its compositor goes too, which a
         // process group could only manage for children that stayed in it.
         platf::session_broker::stop(runtime->client_uuid);
-        runtime->unit.clear();
+        // Keep published identity fields immutable for registry snapshots.
       } else {
+        std::lock_guard<std::mutex> lock(runtime->process_mutex);
         terminate_process_group(
           runtime->process,
           runtime->process_group,
@@ -656,8 +1244,9 @@ namespace proc {
         runtime->process = boost::process::v1::child {};
         runtime->process_group = boost::process::v1::group {};
       }
-      runtime->env["APOLLO_APP_STATUS"] = "TERMINATING";
-      runtime->env["HERMES_APP_STATUS"] = "TERMINATING";
+      auto stopping_env = runtime->env;
+      stopping_env["APOLLO_APP_STATUS"] = "TERMINATING";
+      stopping_env["HERMES_APP_STATUS"] = "TERMINATING";
 
       for (size_t index = runtime->prep_completed; index > 0; --index) {
         const auto &cmd = runtime->app.prep_cmds[index - 1];
@@ -666,29 +1255,42 @@ namespace proc {
         }
         std::error_code ec;
         auto working_dir = runtime->app.working_dir.empty() ?
-                             find_working_directory(cmd.undo_cmd, runtime->env) :
+                             find_working_directory(cmd.undo_cmd, stopping_env) :
                              boost::filesystem::path {runtime->app.working_dir};
         BOOST_LOG(info) << "[IsolatedSession] Executing Undo Cmd: [" << cmd.undo_cmd << ']';
+        boost::process::v1::group undo_group;
         auto child = platf::run_command(
           cmd.elevated,
           true,
           cmd.undo_cmd,
           working_dir,
-          runtime->env,
+          stopping_env,
           runtime->pipe.get(),
           ec,
-          nullptr
+          &undo_group
         );
         if (!ec) {
-          child.wait();
+          finish_undo_command(child, undo_group, runtime->app.exit_timeout);
         } else {
           BOOST_LOG(warning) << "[IsolatedSession] Undo command failed to start: " << ec.message();
         }
       }
 
-      if (!runtime->audio_sink.empty()) {
+      if (runtime->audio_server) {
+        runtime->audio_server.reset();
+      } else if (!runtime->audio_sink.empty()) {
         audio::remove_session_sink(runtime->audio_sink);
-        runtime->audio_sink.clear();
+      }
+      if (runtime->user_unit && !runtime->seat_id.empty()) {
+        // The desktop's gamepads, kept between its streams, go with it.
+        platf::forget_kept_gamepads(runtime->seat_id);
+      }
+      runtime->device_mirror.reset();
+      runtime->namespace_pid = 0;
+      if (!runtime->isolated_seat_flag.empty()) {
+        std::error_code flag_ec;
+        std::filesystem::remove(runtime->isolated_seat_flag, flag_ec);
+        runtime->isolated_seat_flag.clear();
       }
 
       runtime->pipe.reset();
@@ -715,6 +1317,27 @@ namespace proc {
       return {};
     }
   }  // namespace
+
+  #ifdef SUNSHINE_TESTS
+  // Exercise the production registry/RPC lock ordering without a compositor,
+  // display card or account manager. The test owns this synthetic entry.
+  void seed_isolated_runtime_for_test(uint32_t id, const std::string &client_uuid) {
+    auto runtime = std::make_shared<isolated_runtime_t>();
+    runtime->launch_session_id = id;
+    runtime->client_uuid = client_uuid;
+    runtime->app.id = "123";
+    runtime->app.uuid = "runtime-test-app";
+    runtime->unit = "hermes-session-01.service";
+    runtime->env["HERMES_REGISTRY_TEST"] = "ready";
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    isolated_runtimes[id] = runtime;
+  }
+
+  void erase_isolated_runtime_for_test(uint32_t id) {
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    isolated_runtimes.erase(id);
+  }
+  #endif
 #endif
 
   void onVDisplayWatchdogFailed() {
@@ -744,45 +1367,102 @@ namespace proc {
   };
 
   std::unique_ptr<platf::deinit_t> init() {
+#ifndef _WIN32
+    // Detached desktops are units of the user's manager, not children of this
+    // process, so a Hermes that crashed or was killed leaves them running with
+    // nothing to stream them. None of them can belong to this instance yet.
+    if (const auto systemctl = find_program("systemctl"); !systemctl.empty()) {
+      run_program({systemctl, "--user", "--quiet", "stop", "hermes-detached-*.scope", "hermes-detached-*.service"}, 30s);
+    }
+#endif
     return std::make_unique<deinit_t>();
   }
 
   void terminate_process_group(boost::process::v1::child &proc, boost::process::v1::group &group, std::chrono::seconds exit_timeout) {
-    if (group.valid() && platf::process_group_running((std::uintptr_t) group.native_handle())) {
-      if (exit_timeout.count() > 0) {
-        // Request processes in the group to exit gracefully
-        if (platf::request_process_group_exit((std::uintptr_t) group.native_handle())) {
-          // If the request was successful, wait for a little while for them to exit.
-          BOOST_LOG(info) << "Successfully requested the app to exit. Waiting up to "sv << exit_timeout.count() << " seconds for it to close."sv;
-
-          // group::wait_for() and similar functions are broken and deprecated, so we use a simple polling loop
-          while (platf::process_group_running((std::uintptr_t) group.native_handle()) && (--exit_timeout).count() >= 0) {
-            std::this_thread::sleep_for(1s);
+    if (group.valid()) {
+      const auto handle = (std::uintptr_t) group.native_handle();
+      const auto running = [handle]() {
+#ifdef __linux__
+        // Reap our own terminated children while waiting; zombies alone must
+        // not keep signal-0 liveness true until the entire grace period expires.
+        platf::process_group::reap_children(handle);
+#endif
+        return platf::process_group_running(handle);
+      };
+      if (running()) {
+        if (exit_timeout.count() > 0 && platf::request_process_group_exit(handle)) {
+          BOOST_LOG(info) << "Successfully requested the app to exit. Waiting up to "sv
+                          << exit_timeout.count() << " seconds for it to close."sv;
+          const auto deadline = std::chrono::steady_clock::now() + exit_timeout;
+          while (running() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(50ms);
           }
-
-          if (exit_timeout.count() < 0) {
+          if (running()) {
             BOOST_LOG(warning) << "App did not fully exit within the timeout. Terminating the app's remaining processes."sv;
           } else {
             BOOST_LOG(info) << "All app processes have successfully exited."sv;
           }
         } else {
-          BOOST_LOG(info) << "App did not respond to a graceful termination request. Forcefully terminating the app's processes."sv;
+          BOOST_LOG(info) << "Forcefully terminating the app's remaining processes."sv;
         }
-      } else {
-        BOOST_LOG(info) << "No graceful exit timeout was specified for this app. Forcefully terminating the app's processes."sv;
-      }
 
-      // We always call terminate() even if we waited successfully for all processes above.
-      // This ensures the process group state is consistent with the OS in boost.
-      std::error_code ec;
-      group.terminate(ec);
+        std::error_code ec;
+        group.terminate(ec);
+        if (ec && ec != std::errc::no_such_process) {
+          BOOST_LOG(warning) << "Unable to terminate app process group [" << handle << "]: " << ec.message();
+        }
+#ifdef __linux__
+        // SIGKILL delivery is asynchronous. Give reaping a bounded window before
+        // releasing process/pipe/display ownership and handing control to systemd.
+        const auto deadline = std::chrono::steady_clock::now() + 1s;
+        while (running() && std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(10ms);
+        }
+        if (running()) {
+          BOOST_LOG(warning) << "App process group [" << handle << "] still exists after forced termination.";
+        }
+#endif
+      }
+      // Also detach an already-exited group so resetting its Boost wrapper
+      // cannot issue an implicit, unlogged kill later in cleanup.
       group.detach();
     }
 
     if (proc.valid()) {
-      // avoid zombie process
       proc.detach();
     }
+  }
+
+  static void finish_undo_command(
+    boost::process::v1::child &child,
+    boost::process::v1::group &group,
+    std::chrono::seconds exit_timeout
+  ) {
+#ifdef __linux__
+    std::error_code ec;
+    const bool finished = platf::process_group::wait_for_exit([&]() {
+      return child.running(ec);
+    }, std::max(10s, exit_timeout));
+    if (!finished) {
+      BOOST_LOG(warning) << "Undo command exceeded its cleanup deadline; terminating its process group.";
+      terminate_process_group(child, group, 0s);
+      return;
+    }
+    if (ec) {
+      BOOST_LOG(warning) << "Unable to read undo command status: " << ec.message();
+    } else if (child.exit_code() != 0) {
+      BOOST_LOG(warning) << "Undo command exited with code [" << child.exit_code() << ']';
+    }
+    group.detach();
+    child.detach();
+#else
+    (void) exit_timeout;
+    child.wait();
+    if (child.exit_code() != 0) {
+      BOOST_LOG(warning) << "Undo command exited with code [" << child.exit_code() << ']';
+    }
+    group.detach();
+#endif
   }
 
   boost::filesystem::path find_working_directory(const std::string &cmd, const boost::process::v1::environment &env) {
@@ -837,18 +1517,21 @@ namespace proc {
     std::shared_ptr<rtsp_stream::launch_session_t> launch_session,
     bool apply_scale,
     const ctx_t *session_app,
-    std::optional<uid_t> session_owner_uid
+    std::optional<uid_t> session_owner_uid,
+    bool isolated_session
   ) {
 #ifdef _WIN32
     (void) launch_session;
     (void) apply_scale;
     (void) session_app;
     (void) session_owner_uid;
+    (void) isolated_session;
     return 0;
 #else
     if (config::video.virtual_display_backend != "hermes_kms" ||
-        (!config::video.hermes_kms_multi_output &&
-         !config::video.hermes_kms_isolated_sessions)) {
+        (isolated_session ?
+           !config::video.hermes_kms_isolated_sessions :
+           !config::video.hermes_kms_multi_output)) {
       return 0;
     }
 
@@ -902,7 +1585,7 @@ namespace proc {
       device_uuid = uuid_util::uuid_t::parse(launch_session->unique_id);
     }
 
-    if (config::video.hermes_kms_isolated_sessions) {
+    if (isolated_session) {
       // The display is a session resource. Mix in the launch ID so a stale
       // connection from the same paired client cannot collide with a new one.
       device_uuid.b32[2] ^= launch_session->id;
@@ -926,7 +1609,8 @@ namespace proc {
       target_fps,
       launch_session->display_guid,
       session_owner_uid,
-      linux_virtual_display_layout(app.virtual_display_layout)
+      linux_virtual_display_layout(app.virtual_display_layout),
+      isolated_session
     );
     if (display_name.empty()) {
       return 503;
@@ -944,7 +1628,7 @@ namespace proc {
       BOOST_LOG(warning) << "Virtual display did not reach "sv << launch_session->width << 'x'
                          << launch_session->height << "; streaming the display's active mode instead."sv;
     }
-    if (!config::video.hermes_kms_isolated_sessions &&
+    if (!isolated_session &&
         !VDISPLAY::activateVirtualDisplayOutput(display_name)) {
       BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] The compositor did not activate session output "
                        << display_name << "; removing it instead of capturing another monitor.";
@@ -957,7 +1641,7 @@ namespace proc {
     launch_session->session_virtual_display_cleanup_pending = true;
     launch_session->display_name = display_name;
     launch_session->drm_device_path = VDISPLAY::getHermesKmsDevicePath(display_name);
-    if (config::video.hermes_kms_isolated_sessions &&
+    if (isolated_session &&
         launch_session->drm_device_path.empty()) {
       BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] Could not resolve the independent DRM card for "
                        << display_name;
@@ -989,12 +1673,12 @@ namespace proc {
 #else
     if (!config::video.hermes_kms_isolated_sessions ||
         config::video.virtual_display_backend != "hermes_kms") {
-      return execute(app, std::move(launch_session));
+      launch_session->launch_error_message = "Independent-session capability is unavailable.";
+      return 503;
     }
     if (app.session_type == "shared") {
-      BOOST_LOG(error) << "[IsolatedSession] The legacy shared-host profile cannot run "
-                          "concurrently with independent sessions. Disable "
-                          "hermes_kms_isolated_sessions to use the host desktop.";
+      BOOST_LOG(error) << "[IsolatedSession] Shared-host profile was incorrectly routed "
+                          "to the isolated-session executor.";
       return 400;
     }
 
@@ -1007,21 +1691,12 @@ namespace proc {
                            << " already has a launch in progress.";
         return 409;
       }
-      if (const auto existing = find_isolated_client_locked(launch_session->unique_id);
-          isolated_runtime_running(existing)) {
-        BOOST_LOG(warning) << "[IsolatedSession] Client " << launch_session->device_name
-                           << " already owns runtime " << existing->runtime_id;
-        return 409;
-      } else if (existing) {
-        stale_runtime = existing;
-        isolated_runtimes.erase(existing->launch_session_id);
-      }
+      stale_runtime = find_isolated_client_locked(launch_session->unique_id);
       isolated_launching_clients.emplace(
         launch_session->unique_id,
         launch_cancelled
       );
     }
-    stop_isolated_runtime(stale_runtime);
     auto release_launch_reservation = util::fail_guard([
       client_uuid = launch_session->unique_id,
       launch_cancelled
@@ -1033,6 +1708,24 @@ namespace proc {
         isolated_launching_clients.erase(it);
       }
     });
+    // The reservation prevents a second launch for this client while liveness
+    // is queried. A broker timeout must not hold every other client's registry
+    // lock while we wait for it.
+    if (isolated_runtime_running(stale_runtime)) {
+      BOOST_LOG(warning) << "[IsolatedSession] Client " << launch_session->device_name
+                         << " already owns runtime " << stale_runtime->runtime_id;
+      return 409;
+    }
+    if (stale_runtime) {
+      {
+        std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+        const auto it = isolated_runtimes.find(stale_runtime->launch_session_id);
+        if (it != isolated_runtimes.end() && it->second == stale_runtime) {
+          isolated_runtimes.erase(it);
+        }
+      }
+      stop_isolated_runtime(stale_runtime);
+    }
     auto launch_was_cancelled = [&]() {
       if (!launch_cancelled->load(std::memory_order_relaxed)) {
         return false;
@@ -1058,11 +1751,31 @@ namespace proc {
       (std::filesystem::path {isolated_runtime_root()} / runtime->runtime_id).string();
     runtime->runtime_dir = runtime->assets_dir;
 
+    // Install cleanup before acquiring the audio sink or creating directories.
+    // Every failed launch must release the resources it has acquired so far.
+    auto cleanup = util::fail_guard([&]() {
+      stop_isolated_runtime(runtime);
+      if (launch_session->session_virtual_display_cleanup_pending) {
+        // stop_isolated_runtime() owns the actual display removal once the
+        // runtime has copied display_name/display_guid.
+        if (runtime->display_name.empty()) {
+          VDISPLAY::removeVirtualDisplay(launch_session->display_guid);
+        }
+        launch_session->session_virtual_display_cleanup_pending = false;
+        launch_session->session_scoped_virtual_display = false;
+        launch_session->display_name.clear();
+      }
+    });
+
     // With a broker present the session gets a uid of its own, and the single
     // runtime directory has to become two: the session's, which systemd made
     // for that uid and Hermes cannot write, and this one, which Hermes writes
     // the generated compositor config into and the session only reads.
-    if (platf::session_broker::available()) {
+    // A detached Plasma desktop is the user's own, by definition, so it never
+    // takes a helper account; every other isolated session still does.
+    const bool own_plasma_desktop =
+      runtime->profile == "desktop" && config::video.hermes_kms_session_compositor == "plasma";
+    if (!own_plasma_desktop && platf::session_broker::available()) {
       runtime->account = platf::session_broker::ensure(runtime->client_uuid);
       if (!runtime->account) {
         // Falling back to the host user here would quietly hand this client the
@@ -1076,34 +1789,12 @@ namespace proc {
       runtime->runtime_dir = "/run/user/" + std::to_string(runtime->account->uid);
     }
 
-    // One sink per session, with the layout this client negotiated at launch.
-    //
-    // Only where the session shares the host's audio server. A session with a
-    // uid of its own gets a user manager, and with it an audio server of its
-    // own that nothing here can reach - /run/user/<uid> is 0700 and somebody
-    // else's. A sink created in the host's server would then be one the session
-    // never plays into, and capturing it would hand the client silence, which
-    // is worse than the host's audio it hears today.
-    //
-    // A failure is not fatal either way: the session falls back to what it did
-    // before any of this existed.
-    if (!runtime->account) {
-      const int audio_channels = launch_session->surround_info & 65535;
-      const std::string audio_sink = "sink-" + runtime->runtime_id;
-      if (audio::create_session_sink(audio_sink, audio_channels)) {
-        runtime->audio_sink = audio_sink;
-        BOOST_LOG(info) << "[IsolatedSession] Session " << runtime->runtime_id << " plays into "
-                        << audio_sink << " (" << audio_channels << " channels).";
-      } else {
-        BOOST_LOG(warning) << "[IsolatedSession] Could not create a private audio sink for "
-                           << runtime->runtime_id
-                           << "; this session will share the host's audio, and the client will "
-                              "hear whatever the host is playing.";
+    // Only a session of the Hermes user shares its Steam instance.
+    if (!runtime->account && (app.stop_desktop_steam == "on" || (app.stop_desktop_steam != "off" && runs_steam(app)))) {
+      stop_desktop_steam();
+      if (launch_was_cancelled()) {
+        return 503;
       }
-    } else {
-      BOOST_LOG(warning) << "[IsolatedSession] Session " << runtime->runtime_id
-                         << " runs as its own user, which has an audio server Hermes cannot "
-                            "reach; audio for this session is not isolated yet.";
     }
 
     std::error_code dir_ec;
@@ -1120,20 +1811,350 @@ namespace proc {
                        << (dir_ec ? dir_ec.message() : std::strerror(errno));
       return -1;
     }
+    if (!runtime->account) {
+      link_host_discord_ipc(runtime->runtime_dir);
+    }
 
-    auto cleanup = util::fail_guard([&]() {
-      stop_isolated_runtime(runtime);
-      if (launch_session->session_virtual_display_cleanup_pending) {
-        // stop_isolated_runtime() owns the actual display removal once the
-        // runtime has copied display_name/display_guid.
-        if (runtime->display_name.empty()) {
-          VDISPLAY::removeVirtualDisplay(launch_session->display_guid);
+    // One sink per session, with the layout this client negotiated at launch.
+    //
+    // Only where the session shares the host's audio server. A session with a
+    // uid of its own gets a user manager, and with it an audio server of its
+    // own that nothing here can reach - /run/user/<uid> is 0700 and somebody
+    // else's. A sink created in the host's server would then be one the session
+    // never plays into, and capturing it would hand the client silence, which
+    // is worse than the host's audio it hears today.
+    //
+    // A failure is not fatal for an application: it falls back to what it did
+    // before any of this existed. A same-user desktop must never fall back to
+    // recording the host's sink, so it is refused instead.
+    if (!runtime->account) {
+      const int audio_channels = launch_session->surround_info & 65535;
+      const std::string audio_sink = "sink-" + runtime->runtime_id;
+      // Preferably in a PipeWire server of its own, which knows no host device
+      // and which the host's server never sees. Its mic is silent until a
+      // client's microphone streams into it, so nothing records the host's.
+      const auto mic_source = platf::session_mic_source(audio_sink);
+      runtime->audio_server = platf::session_audio::start(runtime->runtime_dir, audio_sink, audio_channels, mic_source);
+      if (runtime->audio_server) {
+        runtime->audio_sink = audio_sink;
+        // Clients that negotiate a microphone are heard through this source.
+        if (config::audio.stream_mic) {
+          runtime->mic_source = mic_source;
         }
-        launch_session->session_virtual_display_cleanup_pending = false;
-        launch_session->session_scoped_virtual_display = false;
-        launch_session->display_name.clear();
+      } else if (own_plasma_desktop) {
+        // A sink on the host's server would only steer PulseAudio clients:
+        // native PipeWire ones would still play on the host's own outputs.
+        launch_session->launch_error_message = "Could not start the detached desktop's own audio server.";
+        BOOST_LOG(error) << "[IsolatedSession] Could not start a private audio server for "
+                         << runtime->runtime_id << "; refusing to share the host's audio devices.";
+        return 503;
+      } else if (audio::create_session_sink(audio_sink, audio_channels)) {
+        runtime->audio_sink = audio_sink;
+        BOOST_LOG(info) << "[IsolatedSession] Session " << runtime->runtime_id << " plays into "
+                        << audio_sink << " on the host's audio server (" << audio_channels << " channels).";
+      } else if (runtime->profile == "desktop") {
+        launch_session->launch_error_message = "Could not create the detached desktop's private audio sink.";
+        BOOST_LOG(error) << "[IsolatedSession] Could not create a private audio sink for "
+                         << runtime->runtime_id << "; refusing to capture host audio.";
+        return 503;
+      } else {
+        BOOST_LOG(warning) << "[IsolatedSession] Could not create a private audio sink for "
+                           << runtime->runtime_id
+                           << "; this session will share the host's audio, and the client will "
+                              "hear whatever the host is playing.";
       }
-    });
+    } else {
+      BOOST_LOG(warning) << "[IsolatedSession] Session " << runtime->runtime_id
+                         << " runs as its own user, which has an audio server Hermes cannot "
+                            "reach; audio for this session is not isolated yet.";
+    }
+
+    // hermes_kms_session_compositor = plasma, the default: the user's own
+    // Plasma, detached.
+    //
+    // A detached desktop is stock KWin on a virtual output of its own, run as
+    // this same user in a transient unit of the user's own systemd manager:
+    // same uid, same home, same files, a private D-Bus and runtime directory.
+    // It has no DRM device, so it can neither wake nor rearrange a physical
+    // monitor, and no libinput, so the keyboard and mouse at the machine never
+    // reach it. Hermes captures it and drives its input over two explicit
+    // sockets, and never falls back to the host desktop.
+    if (runtime->profile == "desktop" && config::video.hermes_kms_session_compositor == "plasma") {
+      if (!app.prep_cmds.empty()) {
+        // They exist to rearrange the host's displays for a stream, which is
+        // exactly what a detached desktop must leave alone.
+        BOOST_LOG(info) << "[IsolatedSession] Not running " << app.prep_cmds.size()
+                        << " prep command(s) for a detached desktop; they act on the host desktop.";
+      }
+
+      // Weston is an opt-in fallback, never a requirement, so every way this
+      // can fail names it - for the client and in the log alike.
+      const auto plasma_failed = [&](const std::string &reason) {
+        constexpr std::string_view fallback {
+          " To use Weston instead, if it is installed, set hermes_kms_session_compositor = weston."
+        };
+        launch_session->launch_error_message = "The detached Plasma desktop " + reason + '.' + std::string {fallback};
+        BOOST_LOG(error) << "[IsolatedSession] " << launch_session->launch_error_message;
+        return 503;
+      };
+
+  #ifndef SUNSHINE_BUILD_KWIN_TRANSPORT
+      return plasma_failed(
+        "is not available: Hermes was built without the KWin transport, which needs "
+        "plasma-wayland-protocols 1.23 or newer"
+      );
+  #endif
+      const auto systemd_run = find_program("systemd-run");
+      const auto dbus_run_session = find_program("dbus-run-session");
+      const auto session_tool = find_detached_session_tool();
+      std::error_code self_ec;
+      const auto self = std::filesystem::canonical("/proc/self/exe", self_ec);
+      std::vector<std::string> missing;
+      for (const auto &[name, path] : std::initializer_list<std::pair<const char *, std::string>> {
+             {"kwin_wayland_wrapper", find_program("kwin_wayland_wrapper")},
+             {"startplasma-wayland", find_program("startplasma-wayland")},
+             {"kscreen-doctor", find_program("kscreen-doctor")},
+             {"systemd-run", systemd_run},
+             {"dbus-run-session", dbus_run_session},
+             {"hermes-detached-session", session_tool},
+           }) {
+        if (path.empty()) {
+          missing.emplace_back(name);
+        }
+      }
+      if (!missing.empty()) {
+        std::string list;
+        for (const auto &name : missing) {
+          list += (list.empty() ? "" : ", ") + name;
+        }
+        return plasma_failed("cannot start: " + list + " not found");
+      }
+      if (self_ec) {
+        return plasma_failed("cannot start: Hermes cannot resolve its own executable");
+      }
+      // Startup leaves the encoders unprobed when nothing is on screen, and a
+      // probe can fail; capture needs a chosen encoder either way. Validate one
+      // before starting the desktop, without a screen, as startup would have:
+      // a temporary host output would wake the monitors this desktop leaves
+      // alone. A failure here cannot be ignored, as there is nothing to encode
+      // with.
+      {
+        std::lock_guard<std::mutex> probe_lock(encoder_probe_mutex);
+        if (rtsp_stream::session_count() == 0 && video::probe_encoders_without_display()) {
+          launch_session->launch_error_message = "No working video encoder was found for the detached desktop.";
+          BOOST_LOG(error) << "[IsolatedSession] " << launch_session->launch_error_message;
+          return 503;
+        }
+      }
+
+      const int width = static_cast<int>(launch_session->width ? launch_session->width : 1920);
+      const int height = static_cast<int>(launch_session->height ? launch_session->height : 1080);
+      runtime->user_unit = true;
+      runtime->unit = detached_unit_name(runtime->runtime_id);
+      // The desktop's own PipeWire carries both its sound and KWin's
+      // screencast. It knows no hardware, so nothing played in the desktop
+      // can reach the host's outputs, whatever output an app asks for.
+      runtime->kwin_pipewire_socket = runtime->audio_server->pipewire_remote();
+      // Runtime ids restart with Hermes, so an earlier instance may have left
+      // a unit of this name behind, and its status files with it.
+      stop_user_unit(runtime->unit);
+      for (const auto *stale : {"ready", "failure", "status"}) {
+        std::error_code remove_ec;
+        std::filesystem::remove(std::filesystem::path {runtime->runtime_dir} / stale, remove_ec);
+      }
+
+      // Hermes starts the desktop itself, in a mount namespace with a private
+      // /dev where it can (isolate-devices, as for isolated Gamescope
+      // sessions): host input devices and sound cards are hidden, and the
+      // desktop gets only what Hermes gives it. systemd-run --scope then puts
+      // it in a transient unit of the user's manager and execs in place, so
+      // the namespace stays and the desktop keeps a cgroup of its own. It
+      // reaches that manager over the host's bus; env then sets the desktop's
+      // own environment for everything below it.
+      std::vector<std::string> command {
+        systemd_run,
+        "--user",
+        "--scope",
+        "--quiet",
+        "--collect",
+        "--unit=" + runtime->unit,
+        "--property=TimeoutStopSec=15",
+      };
+      if (const auto owner = own_service_unit(); !owner.empty()) {
+        // Stopping Hermes stops every desktop it started. PartOf= would also
+        // restart one alongside Hermes, bringing up a desktop nobody asked for.
+        command.push_back("--property=StopPropagatedFrom=" + owner);
+      }
+      command.insert(command.end(), {"--", "env"});
+      // The user manager carries the host desktop's session variables once
+      // Plasma has imported them; none of them may leak into this one. Nor
+      // may what Hermes sets on itself: AMD_DEBUG for its own encoder, and
+      // the tray's QT_QPA_PLATFORM=minimal when it found no display.
+      for (const auto *name : {"DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "SESSION_MANAGER", "XDG_SESSION_ID", "XDG_SEAT", "XDG_VTNR", "XDG_SESSION_DESKTOP", "XDG_CURRENT_DESKTOP", "DESKTOP_SESSION", "KDE_FULL_SESSION", "KDE_SESSION_UID", "KDE_SESSION_VERSION", "KDE_APPLICATIONS_AS_SCOPE", "AMD_DEBUG", "QT_QPA_PLATFORM"}) {
+        command.push_back("--unset="s + name);
+      }
+      command.insert(command.end(), {
+                                      "XDG_RUNTIME_DIR=" + runtime->runtime_dir,
+                                      "XDG_SESSION_TYPE=wayland",
+                                      "PULSE_SERVER=" + runtime->audio_server->pulse_server(),
+                                      "PIPEWIRE_REMOTE=" + runtime->kwin_pipewire_socket,
+                                      dbus_run_session,
+                                      "--",
+                                      session_tool,
+                                      "--bootstrap",
+                                      std::to_string(width),
+                                      std::to_string(height),
+                                      self.string(),
+                                      std::to_string(launch_session->fps ? launch_session->fps : 60000),
+                                    });
+      // run_command takes one command line; refuse what would not survive it.
+      std::string command_line;
+      for (const auto &argument : command) {
+        if (argument.empty() || argument.find_first_of(" \t\n\"'\\") != std::string::npos) {
+          return plasma_failed("cannot start: an argument contains whitespace or quotes (" + argument + ")");
+        }
+        command_line += (command_line.empty() ? "" : " ") + argument;
+      }
+
+      const auto devices = platf::session_devices::available() ?
+                             platf::session_devices::options_t {true, true} :
+                             platf::session_devices::options_t {};
+      std::unique_ptr<platf::session_devices::plan_t> plan;
+      if (devices.devices) {
+        const auto staging = std::filesystem::path {runtime->runtime_dir} / "dev";
+        std::error_code staging_ec;
+        std::filesystem::create_directories(staging, staging_ec);
+        plan = platf::session_devices::plan_t::isolate(staging.string(), devices);
+      } else {
+        BOOST_LOG(warning) << "[IsolatedSession] Hermes lacks CAP_SYS_ADMIN and CAP_MKNOD; detached desktop "
+                           << runtime->runtime_id << " sees the host's devices.";
+      }
+
+      BOOST_LOG(info) << "[IsolatedSession] Starting detached desktop " << runtime->runtime_id
+                      << " (" << width << 'x' << height << ") in user unit " << runtime->unit;
+      {
+        std::lock_guard<std::mutex> lock(runtime->process_mutex);
+        std::error_code launch_ec;
+        boost::filesystem::path working_dir {runtime->runtime_dir};
+        runtime->process = platf::session_devices::run_command(
+          plan.get(),
+          command_line,
+          working_dir,
+          boost::this_process::environment(),
+          nullptr,
+          launch_ec,
+          nullptr
+        );
+        if (launch_ec) {
+          return plasma_failed("could not be started: " + launch_ec.message());
+        }
+        if (plan) {
+          runtime->namespace_pid = runtime->process.id();
+          BOOST_LOG(info) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
+                          << " has a private /dev: host input and sound devices hidden.";
+        }
+      }
+      if (runtime->namespace_pid) {
+        // The client's gamepads carry this tag. udev keeps devices so tagged
+        // off every seat and closed to the user's processes (60-hermes.rules);
+        // Hermes gives the desktop its own copies of their nodes instead.
+        // Without it, gamepads are refused rather than shown to the host.
+        const auto tag = "hermes-detached-" + runtime->runtime_id;
+        // For 60-hermes.rules, as for isolated Gamescope sessions: the
+        // desktop's mount namespace and Hermes' pid, so that the Steam Input
+        // pads a Steam in this desktop makes are kept off the host too.
+        runtime->isolated_seat_flag = (std::filesystem::path {host_runtime_dir()} / "hermes" / "isolated" / tag).string();
+        std::error_code flag_ec;
+        std::filesystem::create_directories(std::filesystem::path {runtime->isolated_seat_flag}.parent_path(), flag_ec);
+        std::ofstream {runtime->isolated_seat_flag}
+          << std::filesystem::read_symlink("/proc/" + std::to_string(runtime->namespace_pid) + "/ns/mnt", flag_ec).string()
+          << ' ' << ::getpid() << '\n';
+        runtime->device_mirror = platf::session_devices::mirror(runtime->namespace_pid, tag);
+        if (runtime->device_mirror) {
+          runtime->seat_id = tag;
+        } else {
+          BOOST_LOG(warning) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
+                             << " gets no gamepads: its private /dev cannot be given devices.";
+        }
+      }
+
+      const auto root = std::filesystem::path {runtime->runtime_dir};
+      const auto deadline = std::chrono::steady_clock::now() + 60s;
+      auto next_unit_check = std::chrono::steady_clock::now() + 1s;
+      const auto systemctl = find_program("systemctl");
+      for (;;) {
+        if (launch_was_cancelled()) {
+          return 503;
+        }
+        std::error_code ec;
+        if (std::filesystem::exists(root / "failure", ec)) {
+          return plasma_failed(
+            "failed to start (" + read_small_file(root / "failure") + "; journalctl --user -u " +
+            runtime->unit + ")"
+          );
+        }
+        if (detached_desktop_alive(*runtime)) {
+          break;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_unit_check) {
+          next_unit_check = now + 1s;
+          if (!systemctl.empty() &&
+              run_program({systemctl, "--user", "--quiet", "is-active", runtime->unit}, 5s) != 0) {
+            return plasma_failed(
+              "exited while starting (last stage: " + read_small_file(root / "status") +
+              "; journalctl --user -u " + runtime->unit + ")"
+            );
+          }
+        }
+        if (now >= deadline) {
+          return plasma_failed(
+            "was not ready within 60 seconds (last stage: " + read_small_file(root / "status") +
+            "; journalctl --user -u " + runtime->unit + ")"
+          );
+        }
+        std::this_thread::sleep_for(100ms);
+      }
+
+      runtime->kwin_wayland_socket = detached_wayland_socket(runtime->runtime_dir);
+      BOOST_LOG(info) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
+                      << " is up on " << runtime->kwin_wayland_socket;
+
+      // The app's command and detached commands run inside the desktop, as
+      // if started from its menu. A command that does not start leaves the
+      // desktop up, as it would at the machine.
+      if (!app.cmd.empty()) {
+        start_in_detached_desktop(*runtime, app, app.cmd, "0-app");
+      }
+      for (size_t index = 0; index < app.detached.size(); ++index) {
+        start_in_detached_desktop(*runtime, app, app.detached[index], "1-detached-" + std::to_string(index));
+      }
+
+      launch_session->isolated_session = true;
+      launch_session->isolated_runtime_owner_id = runtime->launch_session_id;
+      launch_session->isolated_session_profile = runtime->profile;
+      launch_session->isolated_runtime_id = runtime->runtime_id;
+      launch_session->isolated_seat_id = runtime->seat_id;
+      launch_session->wayland_display = runtime->kwin_wayland_socket;
+      launch_session->kwin_wayland_socket = runtime->kwin_wayland_socket;
+      launch_session->kwin_pipewire_socket = runtime->kwin_pipewire_socket;
+      launch_session->virtual_display = true;
+
+      {
+        std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+        if (launch_cancelled->load(std::memory_order_relaxed)) {
+          BOOST_LOG(info) << "[IsolatedSession] Launch cancelled during runtime handoff for client "
+                          << launch_session->device_name;
+          return 503;
+        }
+        isolated_runtimes[runtime->launch_session_id] = runtime;
+      }
+      cleanup.disable();
+
+      BOOST_LOG(info) << "[IsolatedSession] Detached desktop " << runtime->runtime_id
+                      << " ready at " << width << 'x' << height;
+      return 0;
+    }
 
     // The account was ensured above, before the display exists, so a card the
     // broker creates here can be made for it: the session's compositor runs as
@@ -1144,7 +2165,8 @@ namespace proc {
           &app,
           runtime->account ?
             std::optional<uid_t> {runtime->account->uid} :
-            std::nullopt
+            std::nullopt,
+          true
         );
         result != 0) {
       return result;
@@ -1246,27 +2268,138 @@ namespace proc {
     const auto connector = VDISPLAY::getHermesKmsConnectorName(runtime->display_name);
     std::string launch_command;
 
+    // Erased, not emptied: wlroots and gamescope try to nest whenever these are
+    // set at all, and exit before touching the DRM device they were handed.
+    const auto forget_wayland_display = [&runtime]() {
+      runtime->wayland_display.clear();
+      for (const auto *name : {"WAYLAND_DISPLAY", "WAYLAND_SOCKET",
+                               "_WAYLAND_DISPLAY", "DISPLAY",
+                               "HERMES_WAYLAND_DISPLAY"}) {
+        runtime->env.erase(name);
+      }
+    };
+
     if (runtime->profile == "application") {
+      forget_wayland_display();
       if (app.cmd.empty()) {
         BOOST_LOG(error) << "[IsolatedSession] Application profile requires a command.";
         return -1;
       }
-      if (boost::process::v1::search_path("gamescope").empty()) {
-        BOOST_LOG(error) << "[IsolatedSession] Application profile requires gamescope.";
+      const auto gamescope = find_gamescope();
+      const auto &gamescope_binary = gamescope.binary;
+      if (gamescope_binary.empty()) {
+        BOOST_LOG(error) << "[IsolatedSession] Application profile requires gamescope; Hermes' own build "
+                            "installs to /usr/lib/hermes-gamescope (see scripts/install.sh).";
         return -1;
       }
+      if (!gamescope.prefix.empty()) {
+        // Gamescope starts its children through gamescopereaper, which it
+        // finds on PATH: the reaper has to be the one from the same build.
+        // Its WSI layer lives in the same prefix and is not registered with
+        // the system loader, so the session's Vulkan applications are pointed
+        // at it.
+        const auto bin_dir = (std::filesystem::path {gamescope.prefix} / "bin").string();
+        const auto path = runtime->env.count("PATH") ? runtime->env["PATH"].to_string() : std::string {};
+        runtime->env["PATH"] = path.empty() ? bin_dir : bin_dir + ":" + path;
+        const auto layer_dir = std::filesystem::path {gamescope.prefix} / "share" / "vulkan" / "implicit_layer.d";
+        if (std::error_code layer_ec; std::filesystem::is_directory(layer_dir, layer_ec)) {
+          const auto layers = runtime->env.count("VK_ADD_IMPLICIT_LAYER_PATH") ?
+                                runtime->env["VK_ADD_IMPLICIT_LAYER_PATH"].to_string() :
+                                std::string {};
+          runtime->env["VK_ADD_IMPLICIT_LAYER_PATH"] = layers.empty() ? layer_dir.string() : layer_dir.string() + ":" + layers;
+        }
+      }
+      BOOST_LOG(info) << "[IsolatedSession] Using " << gamescope_binary;
 
-      launch_command = std::format(
-        "gamescope --backend=drm -W {} -H {} -w {} -h {} -r {} "
-        "--xwayland-count 1 --expose-wayland --force-windows-fullscreen{} -- {}",
-        width,
-        height,
-        width,
-        height,
-        refresh_hz,
-        connector.empty() ? std::string {} : " -O " + connector,
-        app.cmd
-      );
+      // Gamescope scans out on this session's own Hermes-KMS card and renders
+      // on the real GPU. Upstream cannot be told the two apart: it opens the
+      // primary node of the GPU it renders with, which is the card the host's
+      // desktop is on, and either fails to become DRM master there or fights
+      // the desktop for it. So the card goes to Gamescope explicitly, and a
+      // build that cannot take it is refused rather than let loose on the
+      // host's display.
+      //
+      // The card is this session's, never a process-wide setting: two
+      // sessions are two cards.
+      if (const char *legacy_device = std::getenv("HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE");
+          legacy_device && *legacy_device) {
+        BOOST_LOG(warning) << "[IsolatedSession] HERMES_ISOLATED_GAMESCOPE_DRM_DEVICE is no longer read; "
+                           << "each session scans out on its own card, here "
+                           << runtime->drm_device_path << '.';
+      }
+      if (!platf::gamescope::is_primary_card_path(runtime->drm_device_path)) {
+        BOOST_LOG(error) << "[IsolatedSession] Session card " << runtime->drm_device_path
+                         << " is not a DRM primary node; Gamescope cannot scan out on it.";
+        return 503;
+      }
+
+      std::optional<platf::gamescope::drm_selector_e> selector;
+      if (const char *forced = std::getenv("HERMES_ISOLATED_GAMESCOPE_DRM_FLAG");
+          forced && *forced) {
+        selector = platf::gamescope::drm_selector_from_override(forced);
+        if (!selector) {
+          BOOST_LOG(warning) << "[IsolatedSession] Ignoring HERMES_ISOLATED_GAMESCOPE_DRM_FLAG=" << forced
+                             << "; expected --prefer-drm, --drm-device or none.";
+        }
+      }
+      if (!selector) {
+        selector = gamescope_drm_selector(gamescope_binary);
+      }
+      if (!selector) {
+        BOOST_LOG(error) << "[IsolatedSession] " << gamescope_binary
+                         << " cannot scan out on a different device than it renders with, so it "
+                            "would open the host GPU's display instead of this session's card. Install "
+                            "Hermes' Gamescope (scripts/install.sh), use one with --prefer-drm "
+                            "(ValveSoftware/gamescope#2220), or set "
+                            "HERMES_ISOLATED_GAMESCOPE_DRM_FLAG for a build whose --help does not "
+                            "list the option it accepts.";
+        return 503;
+      }
+      if (*selector == platf::gamescope::drm_selector_e::none) {
+        BOOST_LOG(warning) << "[IsolatedSession] Launching Gamescope without a scanout device "
+                              "(HERMES_ISOLATED_GAMESCOPE_DRM_FLAG=none); it will pick the GPU it "
+                              "renders with, not " << runtime->drm_device_path << '.';
+      } else {
+        // Also read by #2220 when the flag is absent. Setting both costs
+        // nothing and keeps the device in the session's environment, where a
+        // Gamescope started by a script inside the session finds it too.
+        runtime->env["GAMESCOPE_PREFER_DRM"] = runtime->drm_device_path;
+      }
+
+      // Steam picks the visible app and shows its overlay only in gamescope's
+      // Steam mode (-e). Games need an Xwayland apart from Steam's: sharing
+      // one, the overlay takes their X focus and Wine minimizes them for good.
+      // auto turns it on for a steam command; the environment switch predates
+      // the setting and still forces it on everywhere, for testing.
+      bool steam_mode = platf::gamescope::steam_mode_for(app.gamescope_steam_mode, app.cmd);
+      try {
+        const auto arguments = boost::program_options::split_unix(app.gamescope_args);
+        if (const auto option = platf::gamescope::session_option_override(arguments)) {
+          BOOST_LOG(error) << "[IsolatedSession] gamescope-args cannot override the session's card, backend or mode: " << *option;
+          return 400;
+        }
+      } catch (const std::exception &exception) {
+        BOOST_LOG(error) << "[IsolatedSession] Invalid gamescope-args: " << exception.what();
+        return 400;
+      }
+      if (const char *forced_steam_mode = std::getenv("HERMES_ISOLATED_GAMESCOPE_STEAM_MODE");
+          forced_steam_mode && std::string_view {forced_steam_mode} == "1") {
+        steam_mode = true;
+      }
+
+      launch_command = platf::gamescope::launch_command({
+        .binary = gamescope_binary,
+        .width = width,
+        .height = height,
+        .refresh_hz = refresh_hz,
+        .connector = connector,
+        .selector = *selector,
+        .scanout_card = runtime->drm_device_path,
+        .steam_mode = steam_mode,
+        .args = app.gamescope_args,
+        .command = app.cmd,
+      });
+      BOOST_LOG(info) << "[IsolatedSession] " << launch_command;
     } else {
       const auto profile = load_compositor_profile(config::video.hermes_kms_session_compositor);
       if (!profile) {
@@ -1287,18 +2420,7 @@ namespace proc {
       // fails to connect to a socket that will never exist, and exits before
       // it ever looks at the DRM device it was given.
       if (profile->discover_socket) {
-        runtime->wayland_display.clear();
-        // Erased, not emptied. wlroots picks its backend by asking whether
-        // these are set at all - getenv() != NULL - so leaving an empty
-        // WAYLAND_DISPLAY or DISPLAY behind makes it try to nest inside a
-        // parent compositor or an X server, fail to connect to something that
-        // was never there, and exit before it looks at the DRM device it was
-        // handed. populate_session_environment() sets both, so both have to go.
-        for (const auto *name : {"WAYLAND_DISPLAY", "WAYLAND_SOCKET",
-                                 "_WAYLAND_DISPLAY", "DISPLAY",
-                                 "HERMES_WAYLAND_DISPLAY"}) {
-          runtime->env.erase(name);
-        }
+        forget_wayland_display();
       }
 
       // Expanded against the assets directory, not the session's runtime
@@ -1437,9 +2559,19 @@ namespace proc {
                       << runtime->account->user << " (uid " << runtime->account->uid
                       << ") in " << runtime->unit << "; its log is in the journal.";
     } else {
-      runtime->process = platf::run_command(
-        app.elevated,
-        true,
+      const auto devices = session_device_options(app);
+      if (!devices) {
+        return 503;
+      }
+      std::unique_ptr<platf::session_devices::plan_t> plan;
+      if (devices->devices || devices->sound) {
+        const auto staging = std::filesystem::path {runtime->runtime_dir} / "dev";
+        std::error_code staging_ec;
+        std::filesystem::create_directories(staging, staging_ec);
+        plan = platf::session_devices::plan_t::isolate(staging.string(), *devices);
+      }
+      runtime->process = platf::session_devices::run_command(
+        plan.get(),
         launch_command,
         working_dir,
         runtime->env,
@@ -1452,12 +2584,48 @@ namespace proc {
                          << launch_ec.message();
         return -1;
       }
+      if (plan) {
+        runtime->namespace_pid = runtime->process.id();
+        BOOST_LOG(info) << "[IsolatedSession] Session " << runtime->runtime_id << " has a private /dev: host devices "
+                        << (devices->devices ? "hidden" : "visible") << ", sound devices "
+                        << (devices->sound ? "hidden" : "visible") << '.';
+      }
+      if (devices->devices) {
+        // Before any of the seat's devices, which come with the stream. For
+        // 60-hermes.rules: the session's mount namespace and Hermes' pid, to
+        // tell the Steam Input pads the session makes; for 74-: no ACL.
+        runtime->isolated_seat_flag = (std::filesystem::path {host_runtime_dir()} / "hermes" / "isolated" / runtime->seat_id).string();
+        std::error_code flag_ec;
+        std::filesystem::create_directories(std::filesystem::path {runtime->isolated_seat_flag}.parent_path(), flag_ec);
+        std::ofstream {runtime->isolated_seat_flag}
+          << std::filesystem::read_symlink("/proc/" + std::to_string(runtime->namespace_pid) + "/ns/mnt", flag_ec).string()
+          << ' ' << ::getpid() << '\n';
+        runtime->device_mirror = platf::session_devices::mirror(runtime->namespace_pid, runtime->seat_id);
+        if (!runtime->device_mirror) {
+          return -1;
+        }
+      }
     }
 
+    // How long the compositor has to attach a framebuffer to the session's
+    // output, which is what Hermes-KMS reports as ready. A desktop compositor
+    // does that as it starts. An application session can take far longer to
+    // put anything up - Steam's gamepad UI under Gamescope was reported in #57
+    // to need up to 30 seconds - and giving up at the old five seconds failed
+    // sessions that were only slow. A compositor that dies is still caught on
+    // the next poll, so the longer deadline costs nothing when it fails.
+    const auto first_frame_timeout = app.first_frame_timeout.count() > 0 ?
+                                       app.first_frame_timeout :
+                                       runtime->profile == "application" ?
+                                       std::chrono::seconds {30} :
+                                       std::chrono::seconds {5};
+    const auto first_frame_started = std::chrono::steady_clock::now();
+    const auto first_frame_deadline = first_frame_started + first_frame_timeout;
+    bool reported_slow_first_frame = false;
     bool scanout_ready = false;
     int active_width = 0;
     int active_height = 0;
-    for (int attempt = 0; attempt < 100; ++attempt) {
+    while (std::chrono::steady_clock::now() < first_frame_deadline) {
       if (launch_was_cancelled()) {
         return 503;
       }
@@ -1485,11 +2653,19 @@ namespace proc {
       if (scanout_ready && active_width > 0 && active_height > 0) {
         break;
       }
+      if (!reported_slow_first_frame &&
+          std::chrono::steady_clock::now() - first_frame_started >= 5s) {
+        reported_slow_first_frame = true;
+        BOOST_LOG(info) << "[IsolatedSession] Still waiting for the first frame on "
+                        << runtime->display_name << "; allowing up to "
+                        << first_frame_timeout.count() << "s.";
+      }
       std::this_thread::sleep_for(50ms);
     }
     if (!scanout_ready) {
-      BOOST_LOG(error) << "[IsolatedSession] Timed out waiting for compositor scanout on "
-                       << runtime->display_name;
+      BOOST_LOG(error) << "[IsolatedSession] No frame reached " << runtime->display_name
+                       << " within " << first_frame_timeout.count()
+                       << "s. Raise first-frame-timeout for this app if it is only slow to start.";
       return 503;
     }
     if (launch_was_cancelled()) {
@@ -1577,10 +2753,10 @@ namespace proc {
     }
 
     {
-      static std::mutex encoder_probe_mutex;
       std::lock_guard<std::mutex> probe_lock(encoder_probe_mutex);
       const auto previous_output = config::video.output_name;
-      config::video.output_name = display_device::map_display_name(runtime->display_name);
+      auto mapped_name = display_device::map_display_name(runtime->display_name);
+      config::video.output_name = mapped_name.empty() ? runtime->display_name : std::move(mapped_name);
       auto restore_output = util::fail_guard([&]() {
         config::video.output_name = previous_output;
       });
@@ -1683,6 +2859,17 @@ namespace proc {
 #endif
   }
 
+  bool proc_t::isolated_client_present(const std::string &client_uuid) {
+#ifndef _WIN32
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    return isolated_launching_clients.contains(client_uuid) ||
+           find_isolated_client_locked(client_uuid) != nullptr;
+#else
+    (void) client_uuid;
+    return false;
+#endif
+  }
+
   void proc_t::terminate_all_isolated() {
 #ifndef _WIN32
     std::vector<std::shared_ptr<isolated_runtime_t>> runtimes;
@@ -1706,22 +2893,28 @@ namespace proc {
 
   int proc_t::running_for_client(const std::string &client_uuid) {
 #ifndef _WIN32
-    std::shared_ptr<isolated_runtime_t> stale;
-    int app_id = 0;
+    std::shared_ptr<isolated_runtime_t> runtime;
     {
       std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
-      const auto runtime = find_isolated_client_locked(client_uuid);
-      if (!runtime) {
+      runtime = find_isolated_client_locked(client_uuid);
+    }
+    if (!runtime) {
+      return 0;
+    }
+    const bool active = isolated_runtime_running(runtime);
+    {
+      std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+      const auto it = isolated_runtimes.find(runtime->launch_session_id);
+      if (it == isolated_runtimes.end() || it->second != runtime) {
         return 0;
       }
-      if (isolated_runtime_running(runtime)) {
+      if (active && !runtime->stopping.load()) {
         return util::from_view(runtime->app.id);
       }
-      stale = runtime;
-      isolated_runtimes.erase(runtime->launch_session_id);
+      isolated_runtimes.erase(it);
     }
-    stop_isolated_runtime(stale);
-    return app_id;
+    stop_isolated_runtime(runtime);
+    return 0;
 #else
     (void) client_uuid;
     return running();
@@ -1730,9 +2923,19 @@ namespace proc {
 
   std::string proc_t::running_app_uuid_for_client(const std::string &client_uuid) {
 #ifndef _WIN32
+    std::shared_ptr<isolated_runtime_t> runtime;
+    {
+      std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+      runtime = find_isolated_client_locked(client_uuid);
+    }
+    if (!isolated_runtime_running(runtime)) {
+      return {};
+    }
     std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
-    const auto runtime = find_isolated_client_locked(client_uuid);
-    return isolated_runtime_running(runtime) ? runtime->app.uuid : std::string {};
+    const auto it = isolated_runtimes.find(runtime->launch_session_id);
+    return it != isolated_runtimes.end() && it->second == runtime && !runtime->stopping.load() ?
+             runtime->app.uuid :
+             std::string {};
 #else
     (void) client_uuid;
     return get_running_app_uuid();
@@ -1817,7 +3020,14 @@ namespace proc {
     // registry lock across that would stall every launch and teardown behind a
     // round trip.
     const auto now = std::chrono::steady_clock::now();
+    std::vector<std::shared_ptr<isolated_runtime_t>> stopped;
     for (const auto &runtime : runtimes) {
+      const bool running = isolated_runtime_running(runtime);
+      if (!running) {
+        stopped.push_back(runtime);
+        continue;
+      }
+
       isolated_session_t session;
       session.launch_session_id = runtime->launch_session_id;
       session.client_uuid = runtime->client_uuid;
@@ -1834,10 +3044,28 @@ namespace proc {
       }
       session.unit = runtime->unit;
       session.audio_sink = runtime->audio_sink;
-      session.running = isolated_runtime_running(runtime);
+      session.running = true;
       session.uptime_seconds =
         std::chrono::duration_cast<std::chrono::seconds>(now - runtime->started_at).count();
       sessions.push_back(std::move(session));
+    }
+
+    std::vector<std::shared_ptr<isolated_runtime_t>> removed;
+    {
+      std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+      for (const auto &runtime : stopped) {
+        const auto it = isolated_runtimes.find(runtime->launch_session_id);
+        if (it != isolated_runtimes.end() && it->second == runtime) {
+          isolated_runtimes.erase(it);
+          removed.push_back(runtime);
+        }
+      }
+    }
+
+    for (const auto &runtime : removed) {
+      BOOST_LOG(info) << "[IsolatedSession] Removing stale runtime "
+                      << runtime->runtime_id << " while listing sessions.";
+      stop_isolated_runtime(runtime);
     }
 
     std::ranges::sort(sessions, [](const auto &left, const auto &right) {
@@ -1863,13 +3091,91 @@ namespace proc {
     return {};
   }
 
+  std::string proc_t::isolated_audio_server(uint32_t launch_session_id) {
+#ifndef _WIN32
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    const auto it = isolated_runtimes.find(launch_session_id);
+    if (it != isolated_runtimes.end() && it->second && it->second->audio_server) {
+      return it->second->audio_server->pulse_server();
+    }
+#else
+    (void) launch_session_id;
+#endif
+    return {};
+  }
+
+  std::string proc_t::isolated_mic_source(uint32_t launch_session_id) {
+#ifndef _WIN32
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    const auto it = isolated_runtimes.find(launch_session_id);
+    if (it != isolated_runtimes.end() && it->second) {
+      return it->second->mic_source;
+    }
+#else
+    (void) launch_session_id;
+#endif
+    return {};
+  }
+
+  bool proc_t::isolated_session_has_account(uint32_t launch_session_id) {
+#ifndef _WIN32
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    const auto it = isolated_runtimes.find(launch_session_id);
+    return it != isolated_runtimes.end() && it->second && it->second->account;
+#else
+    (void) launch_session_id;
+    return false;
+#endif
+  }
+
   bool proc_t::prepare_isolated_resume(
     std::shared_ptr<rtsp_stream::launch_session_t> launch_session
   ) {
 #ifndef _WIN32
-    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
-    const auto runtime = find_isolated_client_locked(launch_session->unique_id);
+    std::shared_ptr<isolated_runtime_t> runtime;
+    {
+      std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+      runtime = find_isolated_client_locked(launch_session->unique_id);
+    }
     if (!isolated_runtime_running(runtime)) {
+      if (runtime) {
+        bool removed = false;
+        {
+          std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+          const auto it = isolated_runtimes.find(runtime->launch_session_id);
+          if (it != isolated_runtimes.end() && it->second == runtime) {
+            isolated_runtimes.erase(it);
+            removed = true;
+          }
+        }
+        if (removed) {
+          BOOST_LOG(info) << "[IsolatedSession] Removing stale runtime "
+                          << runtime->runtime_id << " before resume.";
+          stop_isolated_runtime(runtime);
+        }
+      }
+      return false;
+    }
+    if (runtime->user_unit) {
+      std::lock_guard<std::mutex> mode_lock(runtime->process_mutex);
+      if (runtime->stopping.load()) {
+        return false;
+      }
+      const auto helper = find_detached_session_tool();
+      const int width = static_cast<int>(launch_session->width ? launch_session->width : 1920);
+      const int height = static_cast<int>(launch_session->height ? launch_session->height : 1080);
+      const int refresh = launch_session->fps ? launch_session->fps : 60000;
+      if (helper.empty() || run_program({helper, "--configure-output", runtime->runtime_dir, std::to_string(width), std::to_string(height), std::to_string(refresh)}, 8s) != 0) {
+        launch_session->launch_error_message = "Could not apply the requested Detached display mode; see the Hermes log";
+        BOOST_LOG(error) << "[IsolatedSession] " << launch_session->launch_error_message;
+        return false;
+      }
+    }
+    std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
+    const auto it = isolated_runtimes.find(runtime->launch_session_id);
+    // The client may have started a newer runtime while the broker replied.
+    if (it == isolated_runtimes.end() || it->second != runtime || runtime->stopping.load() ||
+        find_isolated_client_locked(launch_session->unique_id) != runtime) {
       return false;
     }
 
@@ -1885,6 +3191,12 @@ namespace proc {
     launch_session->display_guid = runtime->display_guid;
     launch_session->drm_device_path = runtime->drm_device_path;
     launch_session->wayland_display = runtime->wayland_display;
+    launch_session->kwin_wayland_socket = runtime->kwin_wayland_socket;
+    launch_session->kwin_pipewire_socket = runtime->kwin_pipewire_socket;
+    if (!runtime->app.allow_client_commands) {
+      launch_session->client_do_cmds.clear();
+      launch_session->client_undo_cmds.clear();
+    }
     return true;
 #else
     (void) launch_session;
@@ -2694,18 +4006,15 @@ namespace proc {
                                               find_working_directory(cmd.undo_cmd, _env) :
                                               boost::filesystem::path(_app.working_dir);
       BOOST_LOG(info) << "Executing Undo Cmd: ["sv << cmd.undo_cmd << ']';
-      auto child = platf::run_command(cmd.elevated, true, cmd.undo_cmd, working_dir, _env, _pipe.get(), ec, nullptr);
+      boost::process::v1::group undo_group;
+      auto child = platf::run_command(cmd.elevated, true, cmd.undo_cmd, working_dir, _env, _pipe.get(), ec, &undo_group);
 
       if (ec) {
-        BOOST_LOG(warning) << "System: "sv << ec.message();
+        BOOST_LOG(warning) << "Undo command could not start: "sv << ec.message();
+        continue;
       }
 
-      child.wait();
-      auto ret = child.exit_code();
-
-      if (ret != 0) {
-        BOOST_LOG(warning) << "Return code ["sv << ret << ']';
-      }
+      finish_undo_command(child, undo_group, _app.exit_timeout);
     }
 
     _pipe.reset();
@@ -3236,6 +4545,53 @@ namespace proc {
     fileTree["version"] = this_version;
   }
 
+  /**
+   * v5: the Detached Desktop and Detached Steam entries, added once to an
+   * existing list as they are to a new one: each after the host entry it is
+   * the detached counterpart of, or at the end. An entry the user deleted
+   * stays deleted, since this runs once.
+   */
+  void migration_v5(nlohmann::json& fileTree) {
+    static const int this_version = 5;
+#ifdef __linux__
+    if (!fileTree.contains("apps") || !fileTree["apps"].is_array()) {
+      fileTree["apps"] = nlohmann::json::array();
+    }
+    auto &apps = fileTree["apps"];
+    const auto add = [&](const char *uuid, const char *after, nlohmann::json entry) {
+      for (const auto &app : apps) {
+        if (app.is_object() && app.value("uuid", "") == uuid) {
+          return;
+        }
+      }
+      entry["uuid"] = uuid;
+      auto position = apps.end();
+      for (auto it = apps.begin(); it != apps.end(); ++it) {
+        if (it->is_object() && it->value("name", "") == after) {
+          position = std::next(it);
+          break;
+        }
+      }
+      BOOST_LOG(info) << "Adding app '" << entry.value("name", "") << "'.";
+      apps.insert(position, std::move(entry));
+    };
+    add(DETACHED_DESKTOP_UUID, "Desktop", {
+      {"name", "Detached Desktop"},
+      {"image-path", "detached-desktop.png"},
+      {"session-type", "desktop"},
+      {"allow-client-commands", false},
+    });
+    add(DETACHED_STEAM_UUID, "Steam Big Picture", {
+      {"name", "Detached Steam"},
+      {"image-path", "detached-steam.png"},
+      {"session-type", "desktop"},
+      {"cmd", "steam steam://open/bigpicture"},
+      {"allow-client-commands", false},
+    });
+#endif
+    fileTree["version"] = this_version;
+  }
+
   void migrate(nlohmann::json& fileTree, const std::string& fileName) {
     int file_version = 0;
     if (fileTree.contains("version")) {
@@ -3249,6 +4605,10 @@ namespace proc {
     }
     if (file_version < 3) {
       migration_v3(fileTree);
+      changed = true;
+    }
+    if (file_version < 5) {
+      migration_v5(fileTree);
       changed = true;
     }
     if (changed) {
@@ -3297,6 +4657,12 @@ namespace proc {
           proc::ctx_t ctx;
           ctx.idx = std::to_string(i);
           ctx.uuid = app_node.at("uuid");
+          // Hermes' own detached entries exist only with independent sessions,
+          // which are what makes a desktop detached.
+          if ((ctx.uuid == DETACHED_DESKTOP_UUID || ctx.uuid == DETACHED_STEAM_UUID) &&
+              (!config::video.hermes_kms_isolated_sessions || config::video.virtual_display_backend != "hermes_kms")) {
+            continue;
+          }
 
           // Build the list of preparation commands.
           std::vector<proc::cmd_t> prep_cmds;
@@ -3399,6 +4765,26 @@ namespace proc {
                                << "' for app " << name << "; using auto.";
             ctx.session_type = "auto";
           }
+          {
+            // Accepted as a number or a numeric string, the way an edited
+            // apps.json tends to hold it; anything else means the default.
+            int first_frame_timeout = 0;
+            if (const auto it = app_node.find("first-frame-timeout"); it != app_node.end()) {
+              if (it->is_number_integer()) {
+                first_frame_timeout = it->get<int>();
+              } else if (it->is_string()) {
+                try {
+                  first_frame_timeout = std::stoi(it->get<std::string>());
+                } catch (const std::exception &) {
+                  first_frame_timeout = 0;
+                }
+              }
+            }
+            if (first_frame_timeout < 0) {
+              BOOST_LOG(warning) << "Negative first-frame-timeout for app " << name << "; using the default.";
+            }
+            ctx.first_frame_timeout = std::chrono::seconds {std::clamp(first_frame_timeout, 0, 600)};
+          }
           ctx.virtual_display_layout = app_node.value("virtual-display-layout", "auto");
           if (ctx.virtual_display_layout != "auto" &&
               ctx.virtual_display_layout != "extend" &&
@@ -3409,6 +4795,26 @@ namespace proc {
                                << "' for app " << name << "; using auto.";
             ctx.virtual_display_layout = "auto";
           }
+          auto mode = [&](const char *key) {
+            std::string value = "auto";
+            if (const auto it = app_node.find(key); it != app_node.end()) {
+              // A boolean is how an earlier build of this branch stored
+              // gamescope-steam-mode.
+              value = it->is_boolean() ? (it->get<bool>() ? "on" : "off") :
+                      it->is_string()  ? it->get<std::string>() :
+                                         std::string {"auto"};
+            }
+            if (value != "auto" && value != "on" && value != "off") {
+              BOOST_LOG(warning) << "Unknown " << key << " '" << value << "' for app " << name << "; using auto.";
+              value = "auto";
+            }
+            return value;
+          };
+          ctx.gamescope_steam_mode = mode("gamescope-steam-mode");
+          ctx.isolate_devices = mode("isolate-devices");
+          ctx.isolate_sound = mode("isolate-sound");
+          ctx.stop_desktop_steam = mode("stop-desktop-steam");
+          ctx.gamescope_args = parse_env_val(this_env, app_node.value("gamescope-args", ""));
           ctx.gamepad = app_node.value("gamepad", "");
 
           // Calculate a unique application id.

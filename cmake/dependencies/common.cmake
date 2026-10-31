@@ -22,6 +22,19 @@ find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 pkg_check_modules(CURL REQUIRED libcurl)
 
+# PyroWave is an experimental, optional Vulkan codec. Builds without the
+# library retain the existing H.264/HEVC/AV1 paths unchanged.
+option(SUNSHINE_REQUIRE_PYROWAVE "Fail configuration when the optional PyroWave SDK is unavailable" OFF)
+option(SUNSHINE_BUNDLE_PYROWAVE "Install the PyroWave runtime privately with Hermes" OFF)
+pkg_check_modules(PYROWAVE QUIET IMPORTED_TARGET pyrowave-shared>=0.5)
+if(SUNSHINE_REQUIRE_PYROWAVE AND NOT PYROWAVE_FOUND)
+    message(FATAL_ERROR "PyroWave was required but pyrowave-shared >= 0.5 was not found")
+endif()
+if(PYROWAVE_FOUND)
+    # The public C API uses Vulkan types; its SDK does not export their headers.
+    pkg_check_modules(PYROWAVE_VULKAN REQUIRED IMPORTED_TARGET vulkan)
+endif()
+
 # miniupnp
 pkg_check_modules(MINIUPNP miniupnpc REQUIRED)
 include_directories(SYSTEM ${MINIUPNP_INCLUDE_DIRS})

@@ -19,6 +19,13 @@ namespace stream {
   constexpr auto VIDEO_STREAM_PORT = 9;
   constexpr auto CONTROL_PORT = 10;
   constexpr auto AUDIO_STREAM_PORT = 11;
+  constexpr auto MIC_STREAM_PORT = 12;
+
+// Client microphone encryption, from Apollo's mic passthrough
+// (logabell/moonlight-common-c-mic); upstream moonlight-common-c lacks it.
+#ifndef SS_ENC_MICROPHONE
+  #define SS_ENC_MICROPHONE 0x08
+#endif
 
   struct session_t;
 
@@ -36,6 +43,9 @@ namespace stream {
     uint32_t encryptionFlagsEnabled;
 
     std::optional<int> gcmap;
+
+    /// The session mic the client's microphone plays into; empty for none.
+    std::string mic_source;
   };
 
   namespace session {
@@ -87,6 +97,7 @@ namespace stream {
     std::shared_ptr<session_t> alloc(config_t &config, rtsp_stream::launch_session_t &launch_session);
     std::string uuid(const session_t& session);
     bool uuid_match(const session_t& session, const std::string_view& uuid);
+    bool isolated(const session_t &session);
     bool update_device_info(session_t& session, const std::string& name, const crypto::PERM& newPerm);
     int start(session_t &session, const std::string &addr_string);
     void stop(session_t &session, termination_reason_e reason = termination_reason_e::UNKNOWN);

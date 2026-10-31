@@ -23,6 +23,15 @@ struct AVPacket;
 
 namespace video {
 
+  // PyroWave's place in the protocol, as Hestia's moonlight-common-c defines
+  // it (VIDEO_FORMAT_PYROWAVE in Limelight.h). Sunshine hands out its codec
+  // bits and stream formats in sequence - the next ServerCodecModeSupport bit
+  // after SCM_AV1_HIGH10_444 is 0x00800000 and bitStreamFormat went 0, 1, 2 -
+  // so these stay well clear of them: a codec Sunshine adds next can't be read
+  // as PyroWave, and a client asking for it can't get PyroWave.
+  inline constexpr int PYROWAVE_VIDEO_FORMAT = 64;  // x-nv-vqos[0].bitStreamFormat
+  inline constexpr uint32_t PYROWAVE_SERVER_CODEC_MODE = 0x40000000;  // SCM_PYROWAVE
+
   /* Encoding configuration requested by remote client */
   struct config_t {
     // DO NOT CHANGE ORDER OR ADD FIELDS IN THE MIDDLE!!!!!
@@ -40,7 +49,7 @@ namespace video {
        SDR encoding colorspace (encoderCscMode >> 1) : 0 - BT.601, 1 - BT.709, 2 - BT.2020 */
     int encoderCscMode;
 
-    int videoFormat;  // 0 - H.264, 1 - HEVC, 2 - AV1
+    int videoFormat;  // 0 - H.264, 1 - HEVC, 2 - AV1, PYROWAVE_VIDEO_FORMAT - PyroWave
 
     /* Encoding color depth (bit depth): 0 - 8-bit, 1 - 10-bit
        HDR encoding activates when color depth is higher than 8-bit and the display which is being captured is operating in HDR mode */
@@ -57,6 +66,9 @@ namespace video {
     std::string display_name;
     // Internal capability probing encodes synthetic frames, never a stream.
     bool encoder_probe {false};
+    // Explicit native detached endpoints; empty preserves existing capture.
+    std::string kwin_wayland_socket;
+    std::string kwin_pipewire_socket;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);
@@ -206,6 +218,10 @@ namespace video {
           return hevc;
         case 2:
           return av1;
+        case PYROWAVE_VIDEO_FORMAT:
+          // PyroWave uses this encoder only for capture and RGB-to-YUV
+          // conversion; its bitstream is produced by the PyroWave API.
+          return h264;
       }
     }
 
@@ -226,6 +242,20 @@ namespace video {
 
   // encoders
   extern encoder_t software;
+
+  // True only when this build has a compatible PyroWave C API and a usable
+  // Vulkan device. The probe is cached for the process lifetime.
+  bool pyrowave_available();
+
+  /**
+   * @brief The most bytes one PyroWave frame may take.
+   *
+   * PyroWave's rate control is a per-frame ceiling, so the client's bitrate is
+   * spread evenly over its frame rate. It never exceeds an uncompressed 4:2:0
+   * frame, which the encoder has no use for, and never drops below 16 KiB,
+   * where every frame would be a smear.
+   */
+  std::size_t pyrowave_frame_budget(const config_t &config);
 
 #if !defined(__APPLE__)
   extern encoder_t nvenc;  // available for windows and linux
@@ -383,6 +413,17 @@ namespace video {
    * @warning This is only safe to call when there is no client actively streaming.
    */
   int probe_encoders();
+
+#ifdef __linux__
+  /**
+   * @brief Probe encoders without opening any screen.
+   * @details For when no screen can be captured - every monitor asleep, say.
+   * Creating a virtual output instead would wake every monitor the compositor
+   * has, so the encoders are validated on a display with nothing behind it.
+   * @return 0 on success, -1 if no encoder works.
+   */
+  int probe_encoders_without_display();
+#endif
 
   /**
    * @brief Result of the last encoder probe, for diagnostics/metrics.

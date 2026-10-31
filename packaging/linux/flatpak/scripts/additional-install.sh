@@ -16,4 +16,6 @@ flatpak-spawn --host pkexec modprobe uhid
 UDEV=$(cat /app/share/sunshine/udev/rules.d/60-hermes.rules)
 echo "Configuring mouse permission."
 flatpak-spawn --host pkexec sh -c "echo '$UDEV' > /etc/udev/rules.d/60-hermes.rules"
+# Quoted rules would not survive the echo above; tee reads them from stdin.
+flatpak-spawn --host pkexec tee /etc/udev/rules.d/74-hermes-session-acl.rules > /dev/null < /app/share/sunshine/udev/rules.d/74-hermes-session-acl.rules
 echo "Restart computer for mouse permission to take effect."

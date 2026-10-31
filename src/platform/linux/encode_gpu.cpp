@@ -4,10 +4,12 @@
  */
 // standard includes
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <mutex>
@@ -170,5 +172,131 @@ namespace platf {
       }
     }
     return best.fd;
+  }
+
+  namespace {
+    /**
+     * The name a GPU is sold under, where the system knows it: libdrm's table
+     * of AMD names by device and revision, or the NVIDIA driver's model line.
+     * Empty when neither says, as for Intel.
+     */
+    std::string gpu_marketing_name(const std::string &sysfs, const std::string &vendor, const std::string &device, const std::string &revision) {
+      const auto upper = [](std::string text) {
+        std::ranges::transform(text, text.begin(), [](unsigned char c) {
+          return static_cast<char>(std::toupper(c));
+        });
+        return text;
+      };
+      if (vendor == "1002") {
+        // "7550,\tC0,\tAMD Radeon RX 9070 XT": one line per device and revision.
+        for (const auto *path : {"/usr/share/libdrm/amdgpu.ids", "/usr/local/share/libdrm/amdgpu.ids"}) {
+          std::ifstream ids {path};
+          for (std::string line; std::getline(ids, line);) {
+            if (line.empty() || line.front() == '#') {
+              continue;
+            }
+            const auto first = line.find(',');
+            const auto second = first == std::string::npos ? first : line.find(',', first + 1);
+            if (second == std::string::npos) {
+              continue;
+            }
+            const auto trim = [](std::string text) {
+              const auto begin = text.find_first_not_of(" \t");
+              const auto end = text.find_last_not_of(" \t\r");
+              return begin == std::string::npos ? std::string {} : text.substr(begin, end - begin + 1);
+            };
+            if (upper(trim(line.substr(0, first))) == upper(device) &&
+                upper(trim(line.substr(first + 1, second - first - 1))) == upper(revision)) {
+              return trim(line.substr(second + 1));
+            }
+          }
+        }
+      } else if (vendor == "10de") {
+        // /proc/driver/nvidia/gpus/<PCI address>/information: "Model: \t NVIDIA ...".
+        std::error_code ec;
+        const auto address = std::filesystem::canonical(sysfs, ec).filename().string();
+        std::ifstream information {"/proc/driver/nvidia/gpus/" + address + "/information"};
+        for (std::string line; std::getline(information, line);) {
+          if (line.starts_with("Model:")) {
+            const auto begin = line.find_first_not_of(" \t", 6);
+            return begin == std::string::npos ? std::string {} : line.substr(begin);
+          }
+        }
+      }
+      return {};
+    }
+  }  // namespace
+
+  namespace {
+    std::string describe_render_node(int fd) {
+      struct stat st {};
+      if (::fstat(fd, &st) || !S_ISCHR(st.st_mode)) {
+        return {};
+      }
+      const auto sysfs = std::format("/sys/dev/char/{}:{}/device/", major(st.st_rdev), minor(st.st_rdev));
+      const auto read_id = [&](const char *file) {
+        std::string value;
+        std::ifstream {sysfs + file} >> value;
+        return value.starts_with("0x") ? value.substr(2) : value;
+      };
+      std::error_code ec;
+      const auto node = std::filesystem::read_symlink(std::format("/proc/self/fd/{}", fd), ec).string();
+      const auto driver = driver_name(fd);
+      if (driver == "hermes-kms"sv) {
+        // A virtual device: no PCI id, but the driver's own version.
+        version_t version {drmGetVersion(fd)};
+        return version ? std::format("{} (hermes-kms {}.{}.{})", node, version->version_major, version->version_minor, version->version_patchlevel) :
+                         std::format("{} (hermes-kms)", node);
+      }
+      const auto vendor = read_id("vendor");
+      const auto device = read_id("device");
+      auto name = gpu_marketing_name(sysfs, vendor, device, read_id("revision"));
+      if (name.empty()) {
+        const auto vendor_name = vendor == "1002" ? "AMD"s : vendor == "10de" ? "NVIDIA"s : vendor == "8086" ? "Intel"s : "PCI"s;
+        name = std::format("{} {}:{}", vendor_name, vendor, device);
+      }
+      // A GPU in the CPU has a small carve-out of memory, a card gigabytes.
+      if (const auto memory = video_memory(fd); memory > 0 && memory < 1024ull * 1024 * 1024) {
+        name += ", integrated";
+      }
+      return std::format("{} ({}, {})", node, driver, name);
+    }
+  }  // namespace
+
+  std::string encode_gpu_description(bool nvenc) {
+    const int fd = open_encode_render_node(nvenc);
+    if (fd < 0) {
+      return {};
+    }
+    auto close_fd = util::fail_guard([fd]() {
+      ::close(fd);
+    });
+    return describe_render_node(fd);
+  }
+
+  std::vector<std::string> render_node_descriptions() {
+    std::vector<std::string> descriptions;
+    std::error_code ec;
+    std::vector<std::filesystem::path> nodes;
+    for (const auto &entry : std::filesystem::directory_iterator {"/dev/dri", ec}) {
+      if (entry.path().filename().string().starts_with("renderD")) {
+        nodes.push_back(entry.path());
+      }
+    }
+    std::ranges::sort(nodes);
+    for (const auto &node : nodes) {
+      const int fd = ::open(node.c_str(), O_RDWR | O_CLOEXEC);
+      if (fd < 0) {
+        descriptions.push_back(node.string() + " (cannot open: " + std::strerror(errno) + ")");
+        continue;
+      }
+      auto description = describe_render_node(fd);
+      if (driver_name(fd) == "hermes-kms"sv) {
+        description += " - capture node, not used for encoding";
+      }
+      ::close(fd);
+      descriptions.push_back(std::move(description));
+    }
+    return descriptions;
   }
 }  // namespace platf

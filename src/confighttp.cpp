@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <deque>
+#include <map>
 #include <limits>
 #include <optional>
 #include <iterator>
@@ -2652,7 +2653,8 @@ namespace confighttp {
       std::vector<std::string> usb;
       for (const auto &entry : fs::directory_iterator {"/sys/bus/usb/devices", ec}) {
         const auto vendor = read_word(entry.path() / "idVendor");
-        if (vendor.empty()) {
+        // usbN are the controllers' own root hubs, not devices.
+        if (vendor.empty() || entry.path().filename().string().starts_with("usb")) {
           continue;
         }
         const auto product = read_line(entry.path() / "product");
@@ -2700,7 +2702,7 @@ namespace confighttp {
         const auto driver = fs::read_symlink(connector.parent_path() / connector.filename().string().substr(0, connector.filename().string().find('-')) / "device/driver", ec).filename().string();
         out << "  " << std::format("{:<26}", connector.filename().string()) << ' ' << std::format("{:<12}", status)
             << " enabled=" << read_word(connector / "enabled") << " power=" << read_word(connector / "dpms")
-            << " mode=" << (status == "connected" ? read_line(connector / "modes") : "-") << "  driver=" << driver << '\n';
+            << " preferred=" << (status == "connected" ? read_line(connector / "modes") : "-") << "  driver=" << driver << '\n';
       }
       if (connectors.empty()) {
         out << "  None.\n";
@@ -2709,9 +2711,14 @@ namespace confighttp {
       out << "\n== Hermes sessions ==\n";
       const auto sessions = proc::proc.list_isolated();
       for (const auto &session : sessions) {
-        out << "  " << session.client_name << ": " << session.app_name << " (" << session.profile << ", " << session.compositor
-            << (session.display.empty() ? "" : ", display " + session.display) << (session.unit.empty() ? "" : ", " + session.unit)
-            << ") " << (session.running ? "running" : "NOT RUNNING") << '\n';
+        std::string details = session.profile;
+        for (const auto &detail : {session.compositor, session.display.empty() ? ""s : "display " + session.display, session.unit}) {
+          if (!detail.empty()) {
+            details += ", " + detail;
+          }
+        }
+        out << "  " << session.client_name << ": " << session.app_name << " (" << details << ") "
+            << (session.running ? "running" : "NOT RUNNING") << '\n';
       }
       if (sessions.empty()) {
         out << "  No isolated or detached sessions.\n";
@@ -2916,7 +2923,51 @@ namespace confighttp {
         text.append(buffer, n);
       }
       ::pclose(kernel);
-      out << (text.empty() ? "None.\n"s : text);
+      // The same message, differing only in numbers, can repeat hundreds of
+      // times; one line each, with a count, lets the rare ones show.
+      struct message_t {
+        std::string example, last_time;
+        std::size_t count = 0;
+        std::size_t order = 0;
+      };
+      std::map<std::string, message_t> messages;
+      std::istringstream lines {text};
+      for (std::string line; std::getline(lines, line);) {
+        // "Oct 31 11:52:30 Haven kernel: message"
+        const auto kernel_at = line.find(" kernel: ");
+        const auto message = kernel_at == std::string::npos ? line : line.substr(kernel_at + 9);
+        // Numbers, hex addresses included, become '#'.
+        std::string key;
+        for (std::size_t i = 0; i < message.size();) {
+          if (std::isdigit(static_cast<unsigned char>(message[i]))) {
+            while (i < message.size() && (std::isxdigit(static_cast<unsigned char>(message[i])) || message[i] == 'x' || message[i] == ':' || message[i] == '.')) {
+              ++i;
+            }
+            key += '#';
+          } else {
+            key += message[i++];
+          }
+        }
+        auto &entry = messages[key];
+        if (!entry.count++) {
+          entry.example = message;
+          entry.order = messages.size();
+        }
+        entry.last_time = line.substr(0, std::min<std::size_t>(15, line.size()));
+      }
+      std::vector<const message_t *> sorted;
+      for (const auto &[key, entry] : messages) {
+        sorted.push_back(&entry);
+      }
+      std::ranges::sort(sorted, [](const auto *a, const auto *b) {
+        return a->count != b->count ? a->count > b->count : a->order < b->order;
+      });
+      for (const auto *entry : sorted) {
+        out << std::format("{:>5}x  last {}  {}\n", entry->count, entry->last_time, entry->example);
+      }
+      if (sorted.empty()) {
+        out << "None.\n";
+      }
     }
 #endif
     out << "\n== Runtime state ==\n" << hestia_runtime_status_json().dump(2) << '\n';

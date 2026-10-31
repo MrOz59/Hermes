@@ -46,7 +46,7 @@ function(hermes_add_kwin_transport)
     set_target_properties(hermes-kwin-transport PROPERTIES
         CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
     target_include_directories(hermes-kwin-transport PRIVATE "${generated}")
-    target_include_directories(hermes-kwin-transport PUBLIC "${CMAKE_SOURCE_DIR}/src/platform/linux")
+    target_include_directories(hermes-kwin-transport PRIVATE "${CMAKE_SOURCE_DIR}/src/platform/linux")
     target_link_libraries(hermes-kwin-transport PUBLIC
         PkgConfig::HERMES_KWIN_WAYLAND PkgConfig::HERMES_KWIN_PIPEWIRE Threads::Threads)
     target_link_libraries(sunshine hermes-kwin-transport)
@@ -70,6 +70,7 @@ function(hermes_add_kwin_transport)
     # automatically. The check needs authorization in the private desktop only.
     add_executable(hermes-kwin-transport-check EXCLUDE_FROM_ALL
         "${CMAKE_SOURCE_DIR}/tools/hermes-kwin-transport-check.cpp")
+    target_include_directories(hermes-kwin-transport-check PRIVATE "${CMAKE_SOURCE_DIR}/src/platform/linux")
     target_link_libraries(hermes-kwin-transport-check PRIVATE hermes-kwin-transport)
     set_target_properties(hermes-kwin-transport-check PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     add_executable(hermes-session-frame-check EXCLUDE_FROM_ALL

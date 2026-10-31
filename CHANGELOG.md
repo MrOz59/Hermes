@@ -184,6 +184,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Sessions that do not ask for a virtual display are unaffected.
 
 ### Fixed
+- Detached's private KWin connections are opened by the unprivileged session
+  helper, so KWin can identify and authorize them when the packaged Hermes
+  retains file capabilities for ordinary KMS capture and session isolation.
+  The main process keeps its capabilities and KWin's permission checks remain
+  enabled.
 - Initialize stream state before publishing it to the control thread and cancel initial audio/video ping waits promptly when a session stops, preventing premature timeouts and teardown watchdog crashes.
 - Experimental isolated Gamescope sessions now wait for the private audio
   graph's actual sink/source defaults and live session manager before starting

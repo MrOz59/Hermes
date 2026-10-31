@@ -5,7 +5,7 @@
 #include "kwin_session.h"
 
 #include "fake-input.h"
-#include "session_socket.h"
+#include "wayland_peer.h"
 #include "zkde-screencast-unstable-v1.h"
 
 #include <algorithm>
@@ -244,7 +244,11 @@ namespace platf::kwin {
   std::unique_ptr<connection_t> connection_t::open(const endpoint_t &endpoint, bool capture, bool input, std::string &error) {
     error.clear();
     auto state = std::make_unique<impl_t>();
-    int fd = connect_session_socket(endpoint.wayland_socket, error);
+    // Keep the helper alive until KWin has resolved the peer executable and
+    // authorized the registry. The accepted socket retains its peer identity
+    // when handed to this capability-bearing process through SCM_RIGHTS.
+    wayland_peer_t peer;
+    int fd = peer.open(endpoint.wayland_socket, error);
     if (fd < 0) {
       return nullptr;
     }

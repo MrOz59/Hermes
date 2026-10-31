@@ -1431,6 +1431,7 @@ namespace nvhttp {
           );
 
         rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+        BOOST_LOG(info) << "Client " << named_cert_p->name << " launched Terminate" << (terminate_isolated ? " for its isolated session." : ".");
         if (terminate_isolated) {
           rtsp_stream::terminate_session(named_cert_p->uuid);
           proc::proc.terminate_isolated_client(named_cert_p->uuid);
@@ -1912,6 +1913,7 @@ namespace nvhttp {
       );
 
     rtsp_stream::cancel_pending_launch(named_cert_p->uuid);
+    BOOST_LOG(info) << "Client " << named_cert_p->name << " quit its app" << (cancel_isolated ? " and isolated session." : ".");
     if (cancel_isolated) {
       rtsp_stream::terminate_session(named_cert_p->uuid);
       proc::proc.terminate_isolated_client(named_cert_p->uuid);

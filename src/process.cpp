@@ -1175,13 +1175,35 @@ namespace proc {
     bool detached_desktop_alive(const isolated_runtime_t &runtime) {
       std::error_code ec;
       if (std::filesystem::exists(std::filesystem::path {runtime.runtime_dir} / "failure", ec)) {
+        BOOST_LOG(info) << "[IsolatedSession] Detached desktop " << runtime.runtime_id << " reported a failure: "
+                        << read_small_file(std::filesystem::path {runtime.runtime_dir} / "failure");
+        return false;
+      }
+      const auto socket = detached_wayland_socket(runtime.runtime_dir);
+      if (socket.empty()) {
+        BOOST_LOG(info) << "[IsolatedSession] Detached desktop " << runtime.runtime_id << " is no longer ready.";
         return false;
       }
       // Never a blocking connect: this runs under the runtime registry lock,
       // and a compositor that stopped accepting would hold that lock forever
-      // once its backlog filled. A full backlog still means it is there.
-      const auto socket = detached_wayland_socket(runtime.runtime_dir);
-      return !socket.empty() && VDISPLAY::displayServerReachable(socket, {}, {});
+      // once its backlog filled. A full backlog still means it is there. A
+      // compositor busy for a moment is not gone, and a false answer here
+      // ends the desktop and everything in it, so it gets a few tries.
+      for (int attempt = 0; attempt < 5; ++attempt) {
+        if (attempt) {
+          std::this_thread::sleep_for(100ms);
+        }
+        if (VDISPLAY::displayServerReachable(socket, {}, {})) {
+          if (attempt) {
+            BOOST_LOG(info) << "[IsolatedSession] Detached desktop " << runtime.runtime_id << " answered after "
+                            << attempt + 1 << " tries.";
+          }
+          return true;
+        }
+      }
+      BOOST_LOG(info) << "[IsolatedSession] Detached desktop " << runtime.runtime_id << " does not answer on " << socket << ": "
+                      << std::strerror(errno);
+      return false;
     }
 
     bool isolated_runtime_running(const std::shared_ptr<isolated_runtime_t> &runtime) {

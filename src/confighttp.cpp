@@ -19,9 +19,12 @@
 #include <deque>
 #include <limits>
 #include <optional>
+#include <iterator>
+#include <cctype>
 #include <mutex>
 #ifndef _WIN32
   #include <sys/utsname.h>
+  #include <unistd.h>
 #endif
 #ifdef __linux__
   #include <cerrno>
@@ -2273,6 +2276,7 @@ namespace confighttp {
       double gpu_percent = -1;
       double gpu_celsius = -1;
       double gpu_watts = -1;
+      double gpu_mhz = -1;
       double vram_used_mib = -1;
       double ram_available_mib = -1;
       long long net_errors = -1;  ///< Dropped or errored packets on the network cards since the last sample.
@@ -2338,7 +2342,52 @@ namespace confighttp {
       long long cpu_energy_uj = -1;
       std::chrono::steady_clock::time_point cpu_energy_at;
       long long net_errors = -1, udp_dropped = -1;
+      long long gpu_energy_uj = -1;
+      std::chrono::steady_clock::time_point gpu_energy_at;
     } previous;
+
+    // The first number in a file of several: amdgpu's clock list marks the
+    // current one with '*', "1: 2450Mhz *".
+    double current_amdgpu_clock(const fs::path &path) {
+      std::ifstream stream {path};
+      for (std::string line; std::getline(stream, line);) {
+        if (line.find('*') != std::string::npos) {
+          const auto colon = line.find(':');
+          return colon == std::string::npos ? -1 : std::atof(line.c_str() + colon + 1);
+        }
+      }
+      return -1;
+    }
+
+    // nvidia-smi ships with the driver and needs no privileges.
+    void read_nvidia(const std::string &pci_address, system_t &s) {
+      const auto command = "nvidia-smi -i " + pci_address +
+                           " --query-gpu=utilization.gpu,temperature.gpu,power.draw,memory.used,clocks.gr"
+                           " --format=csv,noheader,nounits 2>/dev/null";
+      FILE *smi = ::popen(command.c_str(), "r");
+      if (!smi) {
+        return;
+      }
+      char line[256] {};
+      const bool read = std::fgets(line, sizeof(line), smi) != nullptr;
+      ::pclose(smi);
+      if (!read) {
+        return;
+      }
+      std::array<double *, 5> fields {&s.gpu_percent, &s.gpu_celsius, &s.gpu_watts, &s.vram_used_mib, &s.gpu_mhz};
+      std::istringstream values {line};
+      std::string value;
+      for (auto *field : fields) {
+        if (!std::getline(values, value, ',')) {
+          break;
+        }
+        char *end = nullptr;
+        const double number = std::strtod(value.c_str(), &end);
+        if (end != value.c_str()) {
+          *field = number;
+        }
+      }
+    }
 
     std::string encode_card;  ///< The encoding GPU's sysfs device directory.
 
@@ -2385,18 +2434,50 @@ namespace confighttp {
       }
       if (!encode_card.empty()) {
         const fs::path card {encode_card};
-        if (const auto busy = read_number(card / "gpu_busy_percent")) {
-          s.gpu_percent = static_cast<double>(*busy);
-        }
-        if (const auto vram = read_number(card / "mem_info_vram_used")) {
-          s.vram_used_mib = *vram / 1048576.0;
-        }
-        if (const auto gpu = hwmon({"amdgpu"}, card / "hwmon")) {
-          s.gpu_celsius = temperature(*gpu, "junction");
-          if (const auto power = read_number(*gpu / "power1_average").or_else([&]() {
-                return read_number(*gpu / "power1_input");
-              })) {
-            s.gpu_watts = *power / 1e6;
+        std::error_code ec;
+        const auto driver = fs::read_symlink(card / "driver", ec).filename().string();
+        if (driver == "amdgpu") {
+          if (const auto busy = read_number(card / "gpu_busy_percent")) {
+            s.gpu_percent = static_cast<double>(*busy);
+          }
+          if (const auto vram = read_number(card / "mem_info_vram_used")) {
+            s.vram_used_mib = *vram / 1048576.0;
+          }
+          s.gpu_mhz = current_amdgpu_clock(card / "pp_dpm_sclk");
+          if (const auto gpu = hwmon({"amdgpu"}, card / "hwmon")) {
+            s.gpu_celsius = temperature(*gpu, "junction");
+            if (const auto power = read_number(*gpu / "power1_average").or_else([&]() {
+                  return read_number(*gpu / "power1_input");
+                })) {
+              s.gpu_watts = *power / 1e6;
+            }
+          }
+        } else if (driver == "nvidia") {
+          read_nvidia(fs::canonical(card, ec).filename().string(), s);
+        } else if (driver == "i915" || driver == "xe") {
+          // The current clock: i915 reports it under its card, xe per GT.
+          for (const auto &entry : fs::directory_iterator {card / "drm", ec}) {
+            if (const auto mhz = read_number(entry.path() / "gt_act_freq_mhz")) {
+              s.gpu_mhz = static_cast<double>(*mhz);
+            }
+          }
+          if (const auto mhz = read_number(card / "tile0/gt0/freq0/act_freq")) {
+            s.gpu_mhz = static_cast<double>(*mhz);
+          }
+          // Arc cards report temperature and energy; most integrated ones do not.
+          if (const auto gpu = hwmon({"i915", "xe"}, card / "hwmon")) {
+            s.gpu_celsius = temperature(*gpu, "pkg");
+            if (const auto energy = read_number(*gpu / "energy1_input")) {
+              const auto now = std::chrono::steady_clock::now();
+              if (previous.gpu_energy_uj >= 0 && *energy >= previous.gpu_energy_uj) {
+                const double seconds = std::chrono::duration<double>(now - previous.gpu_energy_at).count();
+                if (seconds > 0) {
+                  s.gpu_watts = (*energy - previous.gpu_energy_uj) / 1e6 / seconds;
+                }
+              }
+              previous.gpu_energy_uj = *energy;
+              previous.gpu_energy_at = now;
+            }
           }
         }
       }
@@ -2548,6 +2629,171 @@ namespace confighttp {
     }
   }  // namespace
 
+#ifdef __linux__
+    /**
+     * What is attached to and running on the machine, as an unprivileged
+     * user can read it: USB devices, input devices, display outputs with
+     * their state, Hermes' own sessions, network links with their speed,
+     * sound cards, and the programs using the most memory and CPU time.
+     */
+    void machine_snapshot(std::ostream &out) {
+      namespace fs = std::filesystem;
+      using report_timeline::read_number;
+      using report_timeline::read_word;
+      std::error_code ec;
+      const auto read_line = [](const fs::path &path) {
+        std::ifstream stream {path};
+        std::string line;
+        std::getline(stream, line);
+        return line;
+      };
+
+      out << "\n== USB devices ==\n";
+      std::vector<std::string> usb;
+      for (const auto &entry : fs::directory_iterator {"/sys/bus/usb/devices", ec}) {
+        const auto vendor = read_word(entry.path() / "idVendor");
+        if (vendor.empty()) {
+          continue;
+        }
+        const auto product = read_line(entry.path() / "product");
+        const auto maker = read_line(entry.path() / "manufacturer");
+        const auto speed = read_word(entry.path() / "speed");
+        usb.push_back(std::format("{:<10} {}:{}  {}{}{}  ({} Mbps)", entry.path().filename().string(), vendor, read_word(entry.path() / "idProduct"),
+                                  maker, maker.empty() || product.empty() ? "" : " ", product.empty() ? "(no name)" : product, speed.empty() ? "?" : speed));
+      }
+      std::ranges::sort(usb);
+      for (const auto &line : usb) {
+        out << "  " << line << '\n';
+      }
+      if (usb.empty()) {
+        out << "  None readable.\n";
+      }
+
+      out << "\n== Input devices ==\n";
+      {
+        std::ifstream devices {"/proc/bus/input/devices"};
+        std::string name, phys;
+        for (std::string line; std::getline(devices, line);) {
+          if (line.starts_with("N: Name=")) {
+            name = line.substr(8);
+          } else if (line.starts_with("P: Phys=")) {
+            phys = line.substr(8);
+          } else if (line.starts_with("H: Handlers=")) {
+            out << "  " << name << (phys.empty() ? "" : "  [" + phys + "]") << "  -> " << line.substr(12) << '\n';
+            name.clear();
+            phys.clear();
+          }
+        }
+      }
+
+      out << "\n== Display outputs ==\n";
+      std::vector<fs::path> connectors;
+      for (const auto &entry : fs::directory_iterator {"/sys/class/drm", ec}) {
+        const auto name = entry.path().filename().string();
+        if (name.starts_with("card") && name.find('-') != std::string::npos) {
+          connectors.push_back(entry.path());
+        }
+      }
+      std::ranges::sort(connectors);
+      for (const auto &connector : connectors) {
+        const auto status = read_word(connector / "status");
+        const auto driver = fs::read_symlink(connector.parent_path() / connector.filename().string().substr(0, connector.filename().string().find('-')) / "device/driver", ec).filename().string();
+        out << "  " << std::format("{:<26}", connector.filename().string()) << ' ' << std::format("{:<12}", status)
+            << " enabled=" << read_word(connector / "enabled") << " power=" << read_word(connector / "dpms")
+            << " mode=" << (status == "connected" ? read_line(connector / "modes") : "-") << "  driver=" << driver << '\n';
+      }
+      if (connectors.empty()) {
+        out << "  None.\n";
+      }
+
+      out << "\n== Hermes sessions ==\n";
+      const auto sessions = proc::proc.list_isolated();
+      for (const auto &session : sessions) {
+        out << "  " << session.client_name << ": " << session.app_name << " (" << session.profile << ", " << session.compositor
+            << (session.display.empty() ? "" : ", display " + session.display) << (session.unit.empty() ? "" : ", " + session.unit)
+            << ") " << (session.running ? "running" : "NOT RUNNING") << '\n';
+      }
+      if (sessions.empty()) {
+        out << "  No isolated or detached sessions.\n";
+      }
+      out << "  Streams now: " << rtsp_stream::session_count() << '\n';
+      out << "  App running on the host desktop: " << (proc::proc.running() > 0 ? proc::proc.get_last_run_app_name() : "none"s) << '\n';
+
+      out << "\n== Network links ==\n";
+      for (const auto &entry : fs::directory_iterator {"/sys/class/net", ec}) {
+        const auto name = entry.path().filename().string();
+        if (name == "lo") {
+          continue;
+        }
+        const auto speed = read_number(entry.path() / "speed");
+        const bool wireless = fs::exists(entry.path() / "wireless");
+        out << "  " << std::format("{:<16}", name) << ' ' << std::format("{:<8}", read_word(entry.path() / "operstate"))
+            << (wireless ? " Wi-Fi" : speed && *speed > 0 ? std::format(" {} Mbps", *speed) : " speed unknown")
+            << " mtu=" << read_word(entry.path() / "mtu") << '\n';
+      }
+
+      out << "\n== Sound cards ==\n";
+      {
+        std::ifstream cards {"/proc/asound/cards"};
+        std::string line;
+        bool any = false;
+        while (std::getline(cards, line)) {
+          if (!line.empty() && line.find('[') != std::string::npos) {
+            out << "  " << boost::algorithm::trim_copy(line) << '\n';
+            any = true;
+          }
+        }
+        if (!any) {
+          out << "  None.\n";
+        }
+      }
+
+      // Names only: arguments can hold anything.
+      struct program_t {
+        std::string name;
+        long long rss_kib = 0;
+        double cpu_seconds = 0;
+      };
+      std::vector<program_t> programs;
+      const double ticks = static_cast<double>(::sysconf(_SC_CLK_TCK));
+      const long long page_kib = ::sysconf(_SC_PAGESIZE) / 1024;
+      for (const auto &entry : fs::directory_iterator {"/proc", ec}) {
+        const auto pid = entry.path().filename().string();
+        if (pid.empty() || !std::isdigit(static_cast<unsigned char>(pid[0]))) {
+          continue;
+        }
+        const auto stat = read_line(entry.path() / "stat");
+        const auto open = stat.find('('), close = stat.rfind(')');
+        if (open == std::string::npos || close == std::string::npos) {
+          continue;
+        }
+        std::istringstream fields {stat.substr(close + 2)};
+        std::vector<std::string> v {std::istream_iterator<std::string> {fields}, {}};
+        if (v.size() < 22) {
+          continue;
+        }
+        // v[0] is field 3 (state), so utime (14) is v[11], stime (15) v[12], rss (24) v[21].
+        programs.push_back({stat.substr(open + 1, close - open - 1), std::stoll(v[21]) * page_kib,
+                            (std::stod(v[11]) + std::stod(v[12])) / ticks});
+      }
+      const auto list = [&](const char *title, auto key, auto show) {
+        std::ranges::sort(programs, [&](const auto &a, const auto &b) {
+          return key(a) > key(b);
+        });
+        out << '\n' << title << '\n';
+        for (std::size_t n = 0; n < std::min<std::size_t>(20, programs.size()); ++n) {
+          out << "  " << std::format("{:<20}", programs[n].name) << ' ' << show(programs[n]) << '\n';
+        }
+      };
+      list("== Programs using the most memory ==", [](const program_t &p) { return static_cast<double>(p.rss_kib); }, [](const program_t &p) {
+        return std::format("{:>8.0f} MiB", p.rss_kib / 1024.0);
+      });
+      list("== Programs that used the most CPU time ==", [](const program_t &p) { return p.cpu_seconds; }, [](const program_t &p) {
+        return std::format("{:>10.0f} s", p.cpu_seconds);
+      });
+    }
+#endif
+
   /**
    * One plain-text file that explains a host to someone who cannot see it:
    * the machine and its GPUs, the last capture-path check, the warnings and
@@ -2596,6 +2842,10 @@ namespace confighttp {
     out << "Encodes on: " << (encoding.empty() ? "no GPU qualifies"s : encoding) << '\n';
 #endif
 
+#ifdef __linux__
+    machine_snapshot(out);
+#endif
+
     out << "\n== Last capture-path check ==\n";
     const auto readiness = video::last_capture_readiness();
     if (!readiness.checked) {
@@ -2632,13 +2882,13 @@ namespace confighttp {
       const auto count = [](long long v) -> std::string {
         return v < 0 ? "-"s : std::to_string(v);
       };
-      out << "time      streams  size        fps    Mbps   enc ms  cap->enc  dropped | CPU %  CPU °C  CPU W | GPU %  GPU °C  GPU W  VRAM MiB | RAM free MiB | net errors  UDP dropped\n";
+      out << "time      streams  size        fps    Mbps   enc ms  cap->enc  dropped | CPU %  CPU °C  CPU W | GPU %  GPU °C  GPU W  GPU MHz  VRAM MiB | RAM free MiB | net errors  UDP dropped\n";
       for (const auto &sample : samples) {
         const auto &p = sample.pipeline;
         const auto &m = sample.system;
         // The pipeline's last figures stay published once a stream ends.
         const bool streaming = sample.sessions > 0 && p.valid;
-        out << std::format("{}  {:>7}  {:>10}  {:>5}  {:>6}  {:>7}  {:>8}  {:>7} | {:>5}  {:>6}  {:>5} | {:>5}  {:>6}  {:>5}  {:>8} | {:>12} | {:>10}  {:>11}\n",
+        out << std::format("{}  {:>7}  {:>10}  {:>5}  {:>6}  {:>7}  {:>8}  {:>7} | {:>5}  {:>6}  {:>5} | {:>5}  {:>6}  {:>5}  {:>7}  {:>8} | {:>12} | {:>10}  {:>11}\n",
                            local_time(sample.at, "%H:%M:%S"), sample.sessions,
                            streaming ? std::format("{}x{}", p.width, p.height) : "-"s,
                            streaming ? std::format("{:.1f}", p.fps) : "-"s,
@@ -2647,11 +2897,12 @@ namespace confighttp {
                            streaming ? std::format("{:.2f}", p.capture_to_encode_ms) : "-"s,
                            streaming ? std::to_string(p.frames_dropped) : "-"s,
                            value(m.cpu_percent, "{:.0f}"), value(m.cpu_celsius, "{:.0f}"), value(m.cpu_watts, "{:.0f}"),
-                           value(m.gpu_percent, "{:.0f}"), value(m.gpu_celsius, "{:.0f}"), value(m.gpu_watts, "{:.0f}"),
+                           value(m.gpu_percent, "{:.0f}"), value(m.gpu_celsius, "{:.0f}"), value(m.gpu_watts, "{:.0f}"), value(m.gpu_mhz, "{:.0f}"),
                            value(m.vram_used_mib, "{:.0f}"), value(m.ram_available_mib, "{:.0f}"),
                            count(m.net_errors), count(m.udp_dropped));
       }
-      out << "CPU W needs root on recent kernels; \"-\" means it could not be read. GPU figures are for the encoding GPU.\n";
+      out << "\"-\" means the value could not be read without root: CPU W on recent kernels, and an Intel GPU's usage.\n"
+             "GPU figures are for the encoding GPU: amdgpu and Intel from sysfs, NVIDIA from nvidia-smi.\n";
     }
 
 #ifdef __linux__

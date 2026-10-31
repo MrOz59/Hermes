@@ -3702,6 +3702,39 @@ namespace proc {
 
     _env["APOLLO_APP_STATUS"] = "RUNNING";
 
+#ifdef __linux__
+    // Steam Big Picture switches the window of the Steam already running,
+    // on whichever monitor it was; a virtual display created for the stream
+    // would stay empty (#31). Have the compositor move it there.
+    if (!this->display_name.empty()) {
+      const auto names_program = [](const std::string &command, std::string_view program) {
+        std::istringstream words {command};
+        for (std::string word; words >> word;) {
+          if (std::filesystem::path {word}.filename() == program) {
+            return true;
+          }
+        }
+        return false;
+      };
+      std::vector<std::string> classes;
+      bool steam = names_program(_app.cmd, "steam");
+      bool gamescope = names_program(_app.cmd, "gamescope") || names_program(_app.cmd, "hermes-gamescope-launch") ||
+                       launch_session->launch_mode == "gamescope";
+      for (const auto &command : _app.detached) {
+        steam = steam || names_program(command, "steam");
+        gamescope = gamescope || names_program(command, "gamescope") || names_program(command, "hermes-gamescope-launch");
+      }
+      if (gamescope) {
+        classes.emplace_back("gamescope");
+      } else if (steam) {
+        classes.emplace_back("steam");
+      }
+      if (!classes.empty()) {
+        VDISPLAY::placeWindowsOnVirtualDisplay(this->display_name, classes);
+      }
+    }
+#endif
+
     for (auto &cmd : _app.detached) {
       boost::filesystem::path working_dir = _app.working_dir.empty() ?
                                               find_working_directory(cmd, _env) :

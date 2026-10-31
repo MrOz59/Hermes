@@ -12,6 +12,7 @@
 #include <boost/locale.hpp>
 #include <libevdev/libevdev.h>
 #include <map>
+#include <mutex>
 #include <stdexcept>
 
 namespace platf {
@@ -138,13 +139,44 @@ namespace platf {
     }
   }
 
+  namespace {
+    // One input connection per detached desktop, for its whole life. KWin
+    // gives the desktop's seat a pointer and keyboard only while such a
+    // connection exists; with none, a game's pointer lock leaves Xwayland
+    // asking for a lock on no pointer, and it exits.
+    std::mutex kept_kwin_input_mutex;
+    std::map<std::string, std::shared_ptr<kwin::connection_t>> kept_kwin_input;
+  }  // namespace
+
   input_t input_private_kwin(const std::string &wayland_socket, const std::string &session_tag) {
-    std::string error;
-    std::shared_ptr<kwin::connection_t> connection = kwin::connection_t::open({wayland_socket, {}, {}}, false, true, error);
-    if (!connection) {
-      throw std::runtime_error("Private KWin input: " + error);
+    std::lock_guard lock {kept_kwin_input_mutex};
+    auto &connection = kept_kwin_input[wayland_socket];
+    // A connection KWin has dropped is no use to the next stream.
+    if (connection && !connection->dispatch(std::chrono::milliseconds(0))) {
+      connection.reset();
     }
-    return {new input_raw_t(std::move(connection), session_tag)};
+    if (!connection) {
+      std::string error;
+      connection = kwin::connection_t::open({wayland_socket, {}, {}}, false, true, error);
+      if (!connection) {
+        kept_kwin_input.erase(wayland_socket);
+        throw std::runtime_error("Private KWin input: " + error);
+      }
+    }
+    return {new input_raw_t(connection, session_tag)};
+  }
+
+  void forget_private_kwin_input(const std::string &wayland_socket) {
+    std::shared_ptr<kwin::connection_t> connection;
+    {
+      std::lock_guard lock {kept_kwin_input_mutex};
+      const auto found = kept_kwin_input.find(wayland_socket);
+      if (found == kept_kwin_input.end()) {
+        return;
+      }
+      connection = std::move(found->second);
+      kept_kwin_input.erase(found);
+    }
   }
 }  // namespace platf
 

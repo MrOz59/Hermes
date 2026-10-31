@@ -1307,6 +1307,12 @@ namespace proc {
         // The desktop's gamepads, kept between its streams, go with it.
         platf::forget_kept_gamepads(runtime->seat_id);
       }
+#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+      if (runtime->user_unit && !runtime->kwin_wayland_socket.empty()) {
+        // So do its pointer and keyboard.
+        platf::forget_private_kwin_input(runtime->kwin_wayland_socket);
+      }
+#endif
       runtime->device_mirror.reset();
       runtime->namespace_pid = 0;
       if (!runtime->isolated_seat_flag.empty()) {

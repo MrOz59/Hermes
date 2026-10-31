@@ -1181,7 +1181,7 @@ namespace proc {
       }
       const auto socket = detached_wayland_socket(runtime.runtime_dir);
       if (socket.empty()) {
-        BOOST_LOG(info) << "[IsolatedSession] Detached desktop " << runtime.runtime_id << " is no longer ready.";
+        // Not ready yet while it starts; gone once its supervisor has exited.
         return false;
       }
       // Never a blocking connect: this runs under the runtime registry lock,

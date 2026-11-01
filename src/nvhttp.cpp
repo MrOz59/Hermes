@@ -1517,6 +1517,9 @@ namespace nvhttp {
     }
 
     bool no_active_sessions = rtsp_stream::shared_session_count() == 0;
+    // Whether this request started the app or the isolated session, as
+    // opposed to finding it already running.
+    bool started_here = false;
 
     if (is_input_only) {
       BOOST_LOG(info) << "Launching input only session..."sv;
@@ -1573,6 +1576,7 @@ namespace nvhttp {
           tree.put("root.gamesession", 0);
           return;
         }
+        started_here = true;
       } else if (appid == current_appid || (!appuuid_str.empty() && appuuid_str == current_app_uuid)) {
         // We're basically resuming the same app
 
@@ -1632,6 +1636,7 @@ namespace nvhttp {
 
           return;
         }
+        started_here = true;
       }
     } else {
       tree.put("root.<xmlattr>.status_code", 403);
@@ -1665,11 +1670,37 @@ namespace nvhttp {
       stream.framerate = launch_session->fps / 1000;
       std::string failure;
       if (video::check_capture_path(stream, failure)) {
-        BOOST_LOG(error) << "Capture readiness: " << failure;
-        tree.put("root.<xmlattr>.status_code", 503);
-        tree.put("root.<xmlattr>.status_message", failure + ".");
-        tree.put("root.gamesession", 0);
-        return;
+        if (config::video.ignore_encoder_probe_failure) {
+          // The same escape hatch the encoder probe honours.
+          BOOST_LOG(warning) << "Capture readiness: " << failure << "; continuing due to user configuration."sv;
+        } else {
+          BOOST_LOG(error) << "Capture readiness: " << failure;
+          // Undo what this launch started. Left running, the app would be
+          // resumed by the client's retry, which skips this check.
+          if (started_here) {
+            if (isolated_launch) {
+              proc::proc.terminate_isolated(
+                launch_session->isolated_runtime_owner_id ? launch_session->isolated_runtime_owner_id : launch_session->id
+              );
+            } else {
+              proc::proc.terminate();
+              display_device::revert_configuration();
+            }
+          }
+#ifdef __linux__
+          // An output prepared above for this launch alone has no stream to release it.
+          if (!isolated_launch && launch_session->session_virtual_display_cleanup_pending) {
+            VDISPLAY::removeVirtualDisplay(launch_session->display_guid);
+            launch_session->session_virtual_display_cleanup_pending = false;
+            launch_session->session_scoped_virtual_display = false;
+            launch_session->display_name.clear();
+          }
+#endif
+          tree.put("root.<xmlattr>.status_code", 503);
+          tree.put("root.<xmlattr>.status_message", failure + ".");
+          tree.put("root.gamesession", 0);
+          return;
+        }
       }
     }
 

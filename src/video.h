@@ -414,6 +414,43 @@ namespace video {
    */
   int probe_encoders();
 
+  /**
+   * @brief Run one real frame through the path a stream will use.
+   * @details Opens the display, captures a frame from it, converts it on the
+   * encoder's device and encodes it, with the encoder already chosen. Done
+   * before a client is told the stream is ready, so a broken step is named
+   * then rather than shown as a black stream.
+   * @param stream The stream's capture settings: its display_name (empty for
+   * the process-wide display) and frame rate. Size and codec are the check's.
+   * @param failure Set to the failed step and its reason.
+   * @return 0 when a frame went all the way through, or when the display
+   * produced no new frame in time (logged; a static screen may not); -1 when
+   * a step failed.
+   */
+  int check_capture_path(const config_t &stream, std::string &failure);
+
+  /**
+   * @brief What the last capture-path check found, for a client to show.
+   */
+  struct capture_readiness_t {
+    bool checked {false};  ///< Whether a check has run since Hermes started.
+    bool ok {false};  ///< Whether a frame went all the way through, or the display was only idle.
+    bool frame_seen {false};  ///< Whether a real frame was captured and encoded.
+    std::string capture;  ///< What was captured, and how.
+    int width {0};
+    int height {0};
+    int framerate {0};
+    std::string encoder;  ///< The encoder, such as vaapi or nvenc.
+    std::string gpu;  ///< The GPU it encodes on, where the platform can say.
+    std::string failure;  ///< The failed step and its reason, when not ok.
+    std::int64_t checked_at {0};  ///< Unix time of the check, in seconds.
+  };
+
+  /**
+   * @brief The result of the last check_capture_path().
+   */
+  capture_readiness_t last_capture_readiness();
+
 #ifdef __linux__
   /**
    * @brief Probe encoders without opening any screen.

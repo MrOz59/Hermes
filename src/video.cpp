@@ -43,6 +43,10 @@ extern "C" {
   #endif
 #endif
 
+#ifdef __linux__
+  #include "platform/linux/misc.h"
+#endif
+
 #ifdef _WIN32
   #include "platform/windows/virtual_display.h"
 extern "C" {
@@ -3335,6 +3339,158 @@ namespace video {
 
     fg.disable();
     return true;
+  }
+
+  static int check_capture_path_impl(const config_t &stream, std::string &failure, capture_readiness_t &result) {
+    using namespace std::literals;
+    if (!chosen_encoder) {
+      failure = "No working video encoder was found";
+      return -1;
+    }
+    const auto &encoder = *chosen_encoder;
+    // The display the stream's capture will open, chosen the same way: the
+    // session's own, else the one this launch set up, else the configured
+    // output among those present.
+    auto name = stream.display_name.empty() ? proc::proc.display_name : stream.display_name;
+    if (name.empty()) {
+      std::vector<std::string> display_names;
+      int display_p = -1;
+      refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+      if (display_p >= 0 && display_p < static_cast<int>(display_names.size())) {
+        name = display_names[display_p];
+      }
+    }
+    // Name what is captured as the user knows it: the output, and how.
+    const auto label = !stream.kwin_wayland_socket.empty() ?
+                         "the detached desktop via KWin screencast"s :
+                         (name.empty() ? "the primary display"s : "display ["s + name + ']') +
+                           (config::video.capture.empty() ? ""s : " via "s + config::video.capture);
+    result.capture = label;
+
+    // The stream's display, as an H.264 SDR stream: every encoder has it.
+    config_t config = stream;
+    config.width = 1920;
+    config.height = 1080;
+    config.framerate = stream.framerate > 0 ? stream.framerate : 60;
+    config.bitrate = 1000;
+    config.slicesPerFrame = 1;
+    config.numRefFrames = 0;
+    config.encoderCscMode = 1;
+    config.videoFormat = 0;
+    config.dynamicRange = 0;
+    config.chromaSamplingType = 0;
+    config.enableIntraRefresh = 0;
+    config.input_only = false;
+    config.encoder_probe = false;
+    auto disp = platf::display(encoder.platform_formats->dev_type, name, config);
+    if (!disp) {
+      failure = "Capture could not open " + label;
+      return -1;
+    }
+    config.width = disp->width;
+    config.height = disp->height;
+    result.width = disp->width;
+    result.height = disp->height;
+    result.framerate = config.framerate;
+    result.encoder = encoder.name;
+#ifdef __linux__
+    result.gpu = platf::encode_gpu_description(encoder.platform_formats->dev_type == platf::mem_type_e::cuda);
+#endif
+
+    // One real frame. Capture backends call back on every poll, with
+    // frame_captured false when nothing changed, so a deadline here ends it.
+    std::shared_ptr<platf::img_t> frame;
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    bool timed_out = false;
+    std::vector<std::shared_ptr<platf::img_t>> pool;
+    bool cursor = false;
+    const auto status = disp->capture(
+      [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) {
+        if (frame_captured && img) {
+          frame = std::move(img);
+          return false;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+          timed_out = true;
+          return false;
+        }
+        return true;
+      },
+      [&](std::shared_ptr<platf::img_t> &img_out) {
+        for (auto &img : pool) {
+          if (img.use_count() == 1) {
+            img_out = img;
+            return true;
+          }
+        }
+        if (pool.size() >= 3) {
+          return false;
+        }
+        img_out = pool.emplace_back(disp->alloc_img());
+        return static_cast<bool>(img_out);
+      },
+      &cursor
+    );
+    if (!frame) {
+      if (timed_out || status == platf::capture_e::timeout) {
+        // A display that is up but has nothing new to show is not broken.
+        BOOST_LOG(warning) << "Capture readiness: " << label << " produced no new frame within 5 seconds; continuing"sv;
+        return 0;
+      }
+      failure = "Capture failed on " + label;
+      return -1;
+    }
+
+    auto encode_device = make_encode_device(*disp, encoder, config);
+    if (!encode_device) {
+      failure = "The " + std::string {encoder.name} + " encoder cannot take frames from " + label;
+      return -1;
+    }
+    auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
+    if (!session) {
+      failure = "The " + std::string {encoder.name} + " encoder could not start for " + label;
+      return -1;
+    }
+    if (session->convert(*frame)) {
+      failure = "A frame from " + label + " could not be imported or converted on the " + std::string {encoder.name} + " encoder's GPU";
+      return -1;
+    }
+    session->request_idr_frame();
+    auto packets = mail::man->queue<packet_t>(mail::video_packets);
+    for (int attempt = 0; !packets->peek(); ++attempt) {
+      if (attempt == 10 || encode(1, *session, packets, nullptr, {})) {
+        failure = "The " + std::string {encoder.name} + " encoder failed on a frame from " + label;
+        return -1;
+      }
+    }
+    packets->pop();
+
+    const auto &gpu = result.gpu;
+    result.frame_seen = true;
+    BOOST_LOG(info) << "Capture readiness: " << label << " (" << disp->width << 'x' << disp->height << " at "
+                    << config.framerate << " fps) captured, converted and encoded by " << encoder.name
+                    << (gpu.empty() ? ""s : " on "s + gpu);
+    return 0;
+  }
+
+  static std::mutex capture_readiness_mutex;
+  static capture_readiness_t capture_readiness;
+
+  int check_capture_path(const config_t &stream, std::string &failure) {
+    capture_readiness_t result;
+    const int status = check_capture_path_impl(stream, failure, result);
+    result.checked = true;
+    result.ok = status == 0;
+    result.failure = status ? failure : std::string {};
+    result.checked_at = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    std::lock_guard lock {capture_readiness_mutex};
+    capture_readiness = std::move(result);
+    return status;
+  }
+
+  capture_readiness_t last_capture_readiness() {
+    std::lock_guard lock {capture_readiness_mutex};
+    return capture_readiness;
   }
 
 #ifdef __linux__

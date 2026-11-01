@@ -46,22 +46,26 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed base-devel git boost gtest nlohmann-json \
-            ffmpeg libpulse pipewire pipewire-pulse wireplumber
+            ffmpeg libpulse libpipewire pipewire pipewire-pulse wireplumber
       - uses: actions/checkout@v4
       - name: Initialize only the platform header dependency
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git submodule update --init --depth 1 third-party/moonlight-common-c
+      # The session mic is a PipeWire stream Hermes keeps on the private
+      # server (#89), so the test links libpipewire like Hermes does.
       - name: Compile production private-server and capture code
         run: |
           mkdir -p build-audio
           g++ -std=c++23 -O0 -g -DBOOST_LOG_DYN_LINK \
             -DHERMES_SESSION_AUDIO_STANDALONE=1 -I . -I third-party \
+            $(pkg-config --cflags libpipewire-0.3) \
             src/platform/linux/audio.cpp src/platform/linux/session_audio.cpp \
             tests/consumers/linux_session_broker_test_logging.cpp \
             tests/unit/platform/test_session_audio.cpp \
             -lgtest_main -lgtest -lboost_log -lboost_thread -lboost_filesystem \
-            -lboost_regex -lboost_chrono -lboost_atomic -lpulse -lpulse-simple -pthread \
+            -lboost_regex -lboost_chrono -lboost_atomic -lpulse -lpulse-simple \
+            $(pkg-config --libs libpipewire-0.3) -pthread \
             -o build-audio/test_session_audio
       - name: Test real concurrent graphs, resumed capture and startup failure
         timeout-minutes: 3

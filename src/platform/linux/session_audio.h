@@ -33,16 +33,13 @@ namespace platf::session_audio {
 
   /**
    * @brief Start a server in runtime_dir with sink as its only output and, if
-   *        mic is not empty, a source of that name playing session_mic_fifo(mic).
+   *        mic is not empty, a source of that name that open_mic(mic) feeds.
    * @return nullptr where PipeWire or WirePlumber is missing or fails to start.
    */
   std::unique_ptr<server_t> start(const std::string &runtime_dir, const std::string &sink, int channels, const std::string &mic);
 
   /// Record sink's monitor on the server at pulse_server.
   std::unique_ptr<mic_t> microphone(const std::string &pulse_server, const std::string &sink, const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size);
-
-  /// The FIFO a session mic reads from.
-  std::string session_mic_fifo(const std::string &mic);
 
   /// Open a session mic for writing 48 kHz mono samples, or nullptr.
   std::unique_ptr<mic_writer_t> open_mic(const std::string &mic);

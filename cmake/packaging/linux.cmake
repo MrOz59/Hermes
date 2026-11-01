@@ -152,6 +152,7 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "\
             libnuma1, \
             libopengl0, \
             libopus0, \
+            libpipewire-0.3-0, \
             libpulse0, \
             libsm6, \
             libva2, \
@@ -187,6 +188,7 @@ set(CPACK_RPM_PACKAGE_REQUIRES "\
             numactl-libs >= 2.0.14, \
             openssl >= 3.0.2, \
             opus >= 1.3, \
+            pipewire-libs, \
             pulseaudio-libs >= 10.0, \
             which >= 2.21")
 

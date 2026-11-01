@@ -1413,14 +1413,6 @@ namespace stream {
   }
 
   void micRecvThread(broadcast_ctx_t &ctx) {
-#ifndef _WIN32
-    // A session mic whose source is gone fails writes with EPIPE instead.
-    sigset_t sigpipe;
-    sigemptyset(&sigpipe);
-    sigaddset(&sigpipe, SIGPIPE);
-    pthread_sigmask(SIG_BLOCK, &sigpipe, nullptr);
-#endif
-
     auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     std::array<char, 2048> buf;
     udp::endpoint peer;

@@ -43,6 +43,7 @@ BuildRequires: npm
 BuildRequires: numactl-devel
 BuildRequires: openssl-devel
 BuildRequires: opus-devel
+BuildRequires: pipewire-devel
 BuildRequires: pulseaudio-libs-devel
 BuildRequires: qt6-qtbase-devel
 BuildRequires: qt6-qtsvg-devel
@@ -96,6 +97,7 @@ Requires: miniupnpc >= 2.2.4
 Requires: numactl-libs >= 2.0.14
 Requires: openssl >= 3.0.2
 Requires: opus >= 1.3
+Requires: pipewire-libs
 Requires: pulseaudio-libs >= 10.0
 Requires: qt6-qtbase
 Requires: qt6-qtsvg

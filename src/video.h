@@ -423,11 +423,12 @@ namespace video {
    * @param stream The stream's capture settings: its display_name (empty for
    * the process-wide display) and frame rate. Size and codec are the check's.
    * @param failure Set to the failed step and its reason.
+   * @param client The paired client whose launch this check is for.
    * @return 0 when a frame went all the way through, or when the display
    * produced no new frame in time (logged; a static screen may not); -1 when
    * a step failed.
    */
-  int check_capture_path(const config_t &stream, std::string &failure);
+  int check_capture_path(const config_t &stream, std::string &failure, const std::string &client = {});
 
   /**
    * @brief What the last capture-path check found, for a client to show.
@@ -444,12 +445,19 @@ namespace video {
     std::string gpu;  ///< The GPU it encodes on, where the platform can say.
     std::string failure;  ///< The failed step and its reason, when not ok.
     std::int64_t checked_at {0};  ///< Unix time of the check, in seconds.
+    std::string client;  ///< The paired client whose launch ran the check.
   };
 
   /**
    * @brief The result of the last check_capture_path().
    */
   capture_readiness_t last_capture_readiness();
+
+  /**
+   * @brief Forget the last check if it was for client's launch: a later
+   * launch of theirs ran without one, so it says nothing about that stream.
+   */
+  void forget_capture_readiness(const std::string &client);
 
 #ifdef __linux__
   /**

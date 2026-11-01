@@ -2236,16 +2236,19 @@ namespace confighttp {
    * What the stream about to start, or running, goes through: the capture,
    * its size and rate, the encoder and its GPU, as the last capture-path
    * check found them. A client shows it so its user knows the stream is
-   * served the way they expect. readiness is null before any check.
+   * served the way they expect. readiness is null before any check, and
+   * when the last check was not for this client's launch: with several
+   * clients, another's stream says nothing about the one asking.
    */
   void get_hestia_stream_info(resp_https_t response, req_https_t request) {
     if (!authenticate_hestia_client(response, request, crypto::PERM::view, "stream info")) {
       return;
     }
+    const auto client = std::static_pointer_cast<crypto::named_cert_t>(request->userp);
 
     const auto readiness = video::last_capture_readiness();
     nlohmann::json body {{"ok", true}, {"readiness", nullptr}};
-    if (readiness.checked) {
+    if (readiness.checked && readiness.client == client->uuid) {
       body["readiness"] = {
         {"ok", readiness.ok},
         {"frame_seen", readiness.frame_seen},

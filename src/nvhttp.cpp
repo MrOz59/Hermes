@@ -1669,7 +1669,7 @@ namespace nvhttp {
       stream.kwin_pipewire_socket = launch_session->kwin_pipewire_socket;
       stream.framerate = launch_session->fps / 1000;
       std::string failure;
-      if (video::check_capture_path(stream, failure)) {
+      if (video::check_capture_path(stream, failure, named_cert_p->uuid)) {
         if (config::video.ignore_encoder_probe_failure) {
           // The same escape hatch the encoder probe honours.
           BOOST_LOG(warning) << "Capture readiness: " << failure << "; continuing due to user configuration."sv;
@@ -1702,6 +1702,10 @@ namespace nvhttp {
           return;
         }
       }
+    } else if (!is_input_only) {
+      // Another stream holds the encoder, so this launch ran no check: an
+      // earlier one of this client's would describe a stream it no longer has.
+      video::forget_capture_readiness(named_cert_p->uuid);
     }
 
     if (!rtsp_stream::launch_session_raise(launch_session)) {

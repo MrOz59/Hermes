@@ -3476,8 +3476,9 @@ namespace video {
   static std::mutex capture_readiness_mutex;
   static capture_readiness_t capture_readiness;
 
-  int check_capture_path(const config_t &stream, std::string &failure) {
+  int check_capture_path(const config_t &stream, std::string &failure, const std::string &client) {
     capture_readiness_t result;
+    result.client = client;
     const int status = check_capture_path_impl(stream, failure, result);
     result.checked = true;
     result.ok = status == 0;
@@ -3491,6 +3492,13 @@ namespace video {
   capture_readiness_t last_capture_readiness() {
     std::lock_guard lock {capture_readiness_mutex};
     return capture_readiness;
+  }
+
+  void forget_capture_readiness(const std::string &client) {
+    std::lock_guard lock {capture_readiness_mutex};
+    if (capture_readiness.checked && capture_readiness.client == client) {
+      capture_readiness = {};
+    }
   }
 
 #ifdef __linux__

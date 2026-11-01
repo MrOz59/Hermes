@@ -2446,8 +2446,13 @@ namespace proc {
       if (steam_mode) {
         runtime->held_x_displays = hold_x_display_gaps(2);
         if (!runtime->held_x_displays.empty()) {
+          // Joined by hand: GCC 13 (Ubuntu 24.04) has no std::format for ranges.
+          std::string held;
+          for (const int display : runtime->held_x_displays) {
+            held += (held.empty() ? "[" : ", ") + std::to_string(display);
+          }
           BOOST_LOG(info) << "[IsolatedSession] Holding X displays below gamescope's so Steam's games land on its Xwayland: "
-                          << std::format("{}", runtime->held_x_displays);
+                          << held << ']';
         }
       }
 

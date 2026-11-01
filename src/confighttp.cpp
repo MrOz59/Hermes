@@ -2392,7 +2392,10 @@ namespace confighttp {
 
     std::string encode_card;  ///< The encoding GPU's sysfs device directory.
 
-    system_t read_system() {
+    // gpu: also read the encoding GPU. Only while a stream is sampled: its
+    // sysfs files and nvidia-smi wake a GPU that runtime PM has suspended,
+    // which an idle host must never do every five seconds.
+    system_t read_system(bool gpu) {
       system_t s;
 
       // CPU usage, from the change in /proc/stat since the last sample.
@@ -2427,13 +2430,13 @@ namespace confighttp {
       }
 
       // The encoding GPU, where its driver reports on it (amdgpu does).
-      if (encode_card.empty()) {
+      if (gpu && encode_card.empty()) {
         const auto description = platf::encode_gpu_description();
         if (const auto space = description.find(' '); description.starts_with("/dev/dri/")) {
           encode_card = "/sys/class/drm/" + fs::path {description.substr(0, space)}.filename().string() + "/device";
         }
       }
-      if (!encode_card.empty()) {
+      if (gpu && !encode_card.empty()) {
         const fs::path card {encode_card};
         std::error_code ec;
         const auto driver = fs::read_symlink(card / "driver", ec).filename().string();
@@ -2472,7 +2475,8 @@ namespace confighttp {
               const auto now = std::chrono::steady_clock::now();
               if (previous.gpu_energy_uj >= 0 && *energy >= previous.gpu_energy_uj) {
                 const double seconds = std::chrono::duration<double>(now - previous.gpu_energy_at).count();
-                if (seconds > 0) {
+                // Not across a gap with no reading, as after an idle spell.
+                if (seconds > 0 && seconds < 10) {
                   s.gpu_watts = (*energy - previous.gpu_energy_uj) / 1e6 / seconds;
                 }
               }
@@ -2549,7 +2553,7 @@ namespace confighttp {
       return s;
     }
 #else
-    system_t read_system() {
+    system_t read_system(bool) {
       return {};
     }
 #endif
@@ -2561,14 +2565,16 @@ namespace confighttp {
     void record() {
       using namespace std::literals;
       static auto last_streaming = std::chrono::steady_clock::time_point {};
-      // Read every time, so the changes it reports span five seconds even
-      // for the first sample of a stream.
-      auto system = read_system();
       const int sessions = rtsp_stream::session_count();
       const auto now = std::chrono::steady_clock::now();
       if (sessions > 0) {
         last_streaming = now;
-      } else if (last_streaming == std::chrono::steady_clock::time_point {} || now - last_streaming > 60s) {
+      }
+      const bool sampling = last_streaming != std::chrono::steady_clock::time_point {} && now - last_streaming <= 60s;
+      // The /proc counters every time, so the changes they report span five
+      // seconds even for the first sample of a stream; the GPU only while sampling.
+      auto system = read_system(sampling);
+      if (!sampling) {
         return;
       }
       sample_t sample {std::chrono::system_clock::now(), sessions, video::get_pipeline_metrics(), system};

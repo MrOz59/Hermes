@@ -1,6 +1,6 @@
 /**
  * @file tests/web/locale.test.js
- * @brief Every translation compiles.
+ * @brief Every translation compiles, and one that does not costs only itself.
  *
  * vue-i18n compiles a message the first time it is shown and, in production,
  * throws on a syntax error. A bare `@` (linked-message syntax) in the isolated
@@ -12,6 +12,8 @@ import { join } from 'node:path'
 
 import { compile } from '@intlify/core-base'
 import { describe, expect, it } from 'vitest'
+
+import { safeMessageCompiler } from '../../src_assets/common/assets/web/locale.js'
 
 const localeDir = join(import.meta.dirname, '../../src_assets/common/assets/web/public/assets/locale')
 
@@ -34,4 +36,19 @@ describe('locale files', () => {
       expect(broken).toEqual([])
     })
   }
+})
+
+describe('safeMessageCompiler', () => {
+  it('shows a malformed message as written instead of throwing', () => {
+    const message = 'run hermes-kms-seatd@N.service'
+    const onError = e => { throw e }
+    const original = console.error
+    console.error = () => {}
+    try {
+      const msg = safeMessageCompiler(message, { locale: 'en', key: 'k', onError })
+      expect(msg({})).toBe(message)
+    } finally {
+      console.error = original
+    }
+  })
 })

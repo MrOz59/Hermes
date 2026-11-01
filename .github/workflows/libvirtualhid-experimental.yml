@@ -345,7 +345,7 @@ jobs:
                 wayland libx11 libxrandr libxfixes libxcb libxi libxtst libxss \
                 libxcursor libxkbcommon libva libvdpau libcap \
                 curl libevdev libinput sdl2 systemd miniupnpc libpulse qt6-base \
-                qt6-svg icu numactl acl util-linux kmod
+                qt6-svg icu numactl acl util-linux kmod libpipewire
               chmod +x build/tests/test_sunshine build/tests/hermes-hid-consumer \
                 cmake-build-libvirtualhid-tests/tests/test_libvirtualhid
               for binary in build/tests/test_sunshine build/tests/hermes-hid-consumer \

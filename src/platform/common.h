@@ -838,6 +838,14 @@ namespace platf {
    * the tag is not empty (the desktop has a private /dev that receives them).
    */
   input_t input_private_kwin(const std::string &wayland_socket, const std::string &session_tag = {});
+
+  /**
+   * Close the private KWin input kept for the desktop on wayland_socket. Its
+   * pointer and keyboard outlive each stream: a desktop left with no pointer
+   * at all makes Xwayland exit when a game holds a pointer lock, taking every
+   * X11 application with it.
+   */
+  void forget_private_kwin_input(const std::string &wayland_socket);
 #endif
   /**
    * @brief Get the current mouse position on screen

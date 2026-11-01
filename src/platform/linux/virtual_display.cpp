@@ -825,6 +825,10 @@ namespace VDISPLAY {
     constexpr uint32_t session_access_uapi_version = 11;
     constexpr uint32_t dynamic_devices_uapi_version = 12;
     constexpr uint32_t session_lifecycle_uapi_version = 13;
+    /// The newest UAPI this source is written against: ACQUIRE_FRAME2, which
+    /// returns each frame's colour state, arrived in 14. Raise it together
+    /// with support for whatever a later driver adds.
+    constexpr uint32_t newest_known_uapi_version = 14;
     constexpr size_t name_len = 32;
 
     constexpr uint64_t cap_virtual_output = 1ULL << 0;
@@ -5811,6 +5815,98 @@ namespace VDISPLAY {
     return false;
   }
 
+  /**
+   * The version DKMS installed for the running kernel, or empty.
+   *
+   * DKMS records the build it installed for a kernel as the link
+   * kernel-<release>-<arch> -> <version>/<release>/<arch> beside its builds,
+   * so this names what modprobe would load next, not merely something built.
+   */
+  static std::string dkms_version_for_running_kernel(const std::string &dkms_name) {
+    utsname system_info {};
+    if (uname(&system_info) != 0) {
+      return {};
+    }
+
+    std::error_code ec;
+    const auto target = fs::read_symlink(
+      fs::path("/var/lib/dkms") / dkms_name /
+        (std::string("kernel-") + system_info.release + '-' + system_info.machine),
+      ec
+    );
+    if (ec || target.empty()) {
+      return {};
+    }
+    // Relative in every DKMS release seen; an absolute link names the same
+    // three trailing components.
+    if (target.is_absolute()) {
+      return target.parent_path().parent_path().filename().string();
+    }
+    return target.begin()->string();
+  }
+
+  /**
+   * The release a version string names: "0.4.0.r12.gabc1234", as the git
+   * package writes it, and "0.4.0" from the driver both give "0.4.0". Two
+   * builds of one release cannot be told apart this way, so a comparison of
+   * the results only ever reports a real difference.
+   */
+  static std::string release_of(const std::string &version) {
+    std::string release;
+    int parts = 0;
+    std::size_t start = 0;
+    while (parts < 3 && start <= version.size()) {
+      const auto end = std::min(version.find('.', start), version.size());
+      const auto part = version.substr(start, end - start);
+      if (part.empty() || !std::all_of(part.begin(), part.end(), [](unsigned char c) { return std::isdigit(c); })) {
+        break;
+      }
+      release += (parts ? "." : "") + part;
+      ++parts;
+      start = end + 1;
+    }
+    return parts == 3 ? release : std::string {};
+  }
+
+  /**
+   * A Hermes-KMS render node meant for the desktop user that this process may
+   * not open, or empty.
+   *
+   * The probe opens render nodes and skips any it cannot, so a node the udev
+   * rules never granted looks exactly like no driver at all. Read the driver
+   * from sysfs instead, which needs no access to the node. Session cards are
+   * skipped: they belong to a private seat or to one client's uid, and
+   * refusing them to everyone else is the driver working as intended.
+   */
+  static std::string inaccessible_hermes_kms_render_node() {
+    std::error_code ec;
+    for (const auto &entry : fs::directory_iterator("/sys/class/drm", ec)) {
+      const auto name = entry.path().filename().string();
+      if (!name.starts_with("renderD")) {
+        continue;
+      }
+      std::error_code link_ec;
+      const auto driver = fs::read_symlink(entry.path() / "device" / "driver", link_ec);
+      if (link_ec || driver.filename() != "hermes-kms") {
+        continue;
+      }
+
+      std::string role;
+      std::string access_uid;
+      std::ifstream {entry.path() / "device" / "hermes_kms_role"} >> role;
+      std::ifstream {entry.path() / "device" / "hermes_kms_access_uid"} >> access_uid;
+      if (role == "session" || !access_uid.empty()) {
+        continue;
+      }
+
+      const auto node = fs::path("/dev/dri") / name;
+      if (::access(node.c_str(), R_OK) != 0 && errno == EACCES) {
+        return node.string();
+      }
+    }
+    return {};
+  }
+
   static bool dkms_build_failed(const std::string &dkms_name) {
     const fs::path dkms_root = fs::path("/var/lib/dkms") / dkms_name;
     std::error_code ec;
@@ -6006,8 +6102,11 @@ namespace VDISPLAY {
 
     // No usable hermes-kms device node. Distinguish why so the UI can point at
     // the right fix: module not built for this kernel, a DKMS build that
-    // failed, the module simply not loaded, or a loaded module that never
-    // created a device node.
+    // failed, the module simply not loaded, a loaded module that never
+    // created a device node, or one whose node this user may not open.
+    if (!inaccessible_hermes_kms_render_node().empty()) {
+      return HERMES_KMS_DIAGNOSTIC::NO_ACCESS;
+    }
     if (!kernel_module_loaded("hermes_kms")) {
       if (dkms_build_failed("hermes-kms")) {
         return HERMES_KMS_DIAGNOSTIC::DKMS_BUILD_FAILED;
@@ -6044,7 +6143,24 @@ namespace VDISPLAY {
       .running_kernel = running_kernel_release(),
       .dkms_kernels = dkms_kernels("hermes-kms"),
       .active_displays = {},
+      .inaccessible_node = {},
+      .installed_version = dkms_version_for_running_kernel("hermes-kms"),
+      .reload_needed = false,
+      .newest_known_uapi_version = hermes_kms::newest_known_uapi_version,
     };
+
+    if (status.diagnostic == HERMES_KMS_DIAGNOSTIC::NO_ACCESS) {
+      status.inaccessible_node = inaccessible_hermes_kms_render_node();
+    }
+
+    // A driver package updated while the old module stays loaded keeps
+    // serving the old driver until the module is reloaded, which for most
+    // people means a restart. Only a different release is reported: the
+    // loaded driver names no build, so two builds of one release look alike.
+    if (!probe.driver_version.empty()) {
+      const auto installed = release_of(status.installed_version);
+      status.reload_needed = !installed.empty() && installed != release_of(probe.driver_version);
+    }
 
     // device_count includes the seat0 HOST card; only session_device_count has
     // a matching private seatd instance.

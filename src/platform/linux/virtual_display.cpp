@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cctype>
 #include <cerrno>
+#include <cstdarg>
 #include <cstddef>
 #include <cmath>
 #include <cstdio>
@@ -24,7 +25,6 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <filesystem>
-#include <cstdarg>
 #include <fstream>
 #include <limits>
 #include <map>
@@ -3910,33 +3910,26 @@ namespace VDISPLAY {
         file << "// Hermes: put the streamed application's windows on the session's virtual output.\n"
                 "const output = workspace.screens.find(screen => screen.name === \"" << output << "\");\n"
                 "const classes = [" << class_list << "];\n"
-                // Only the window the stream is for: Big Picture, or the nested
-                // Gamescope. Other Steam windows (friends, chat, the store,
-                // dialogs) share its class and are left where they are.
-                "function wanted(window) {\n"
-                "  if (!output || !window.normalWindow || !classes.includes(window.resourceClass)) {\n"
-                "    return false;\n"
-                "  }\n"
-                "  return window.resourceClass !== \"steam\" || window.caption.includes(\"Big Picture\");\n"
-                "}\n"
                 "function place(window) {\n"
-                "  if (!wanted(window) || (window.output === output && window.fullScreen)) {\n"
+                "  if (!output || !window.normalWindow || !classes.includes(window.resourceClass) || window.output === output) {\n"
                 "    return;\n"
                 "  }\n"
+                // Only fullscreen that was there comes back: Gamescope's -f
+                // window, or Big Picture, which also makes itself fullscreen on
+                // whichever output it is on. Other Steam windows keep their size.
                 "  // A window already fullscreen on another output keeps that output's size\n"
                 "  // when moved; leaving fullscreen first lets KWin fit it to this one.\n"
-                "  window.fullScreen = false;\n"
+                "  const wasFullScreen = window.fullScreen;\n"
+                "  if (wasFullScreen) {\n"
+                "    window.fullScreen = false;\n"
+                "  }\n"
                 "  workspace.sendClientToScreen(window, output);\n"
-                "  window.fullScreen = true;\n"
+                "  if (wasFullScreen) {\n"
+                "    window.fullScreen = true;\n"
+                "  }\n"
                 "}\n"
-                // Steam turns its existing window into Big Picture: the
-                // caption changes, no window is added.
-                "function watch(window) {\n"
-                "  place(window);\n"
-                "  window.captionChanged.connect(() => place(window));\n"
-                "}\n"
-                "workspace.windowList().forEach(watch);\n"
-                "workspace.windowAdded.connect(watch);\n";
+                "workspace.windowList().forEach(place);\n"
+                "workspace.windowAdded.connect(place);\n";
         if (!file) {
           BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not write " << script.string() << "; windows stay where KWin opens them.";
           return;

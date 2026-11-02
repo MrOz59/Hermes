@@ -3716,12 +3716,34 @@ namespace proc {
         }
         return false;
       };
+      // Only a Steam command that opens Big Picture. One that starts a game
+      // (steam://rungameid/<id>, -applaunch <id>) gets a new window, which
+      // KWin already opens on the virtual output, and the Steam client's own
+      // windows stay where they are.
+      const auto opens_big_picture = [&](const std::string &command) {
+        if (!names_program(command, "steam")) {
+          return false;
+        }
+        std::istringstream words {command};
+        for (std::string word; words >> word;) {
+          const auto first = word.find_first_not_of("\"'");
+          const auto last = word.find_last_not_of("\"'");
+          if (first == std::string::npos) {
+            continue;
+          }
+          word = word.substr(first, last - first + 1);
+          if (word.rfind("steam://open/bigpicture", 0) == 0 || word == "-gamepadui" || word == "-bigpicture" || word == "-tenfoot") {
+            return true;
+          }
+        }
+        return false;
+      };
       std::vector<std::string> classes;
-      bool steam = names_program(_app.cmd, "steam");
+      bool steam = opens_big_picture(_app.cmd);
       bool gamescope = names_program(_app.cmd, "gamescope") || names_program(_app.cmd, "hermes-gamescope-launch") ||
                        launch_session->launch_mode == "gamescope";
       for (const auto &command : _app.detached) {
-        steam = steam || names_program(command, "steam");
+        steam = steam || opens_big_picture(command);
         gamescope = gamescope || names_program(command, "gamescope") || names_program(command, "hermes-gamescope-launch");
       }
       if (gamescope) {

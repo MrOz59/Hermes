@@ -141,6 +141,23 @@ TEST(SessionAttach, WhatHermesSetForItselfDoesNotReachTheRestart) {
   ::unsetenv("HERMES_TEST_SET_AFTER_START");
 }
 
+TEST(SessionAttach, APlainRestartKeepsWhatHermesSetForItselfOut) {
+  // A restart from the Web UI or the tray before login re-executes Hermes
+  // without joining a session. Handed the live environment, the new process
+  // would start with the tray's QT_QPA_PLATFORM=minimal as part of its
+  // initial environment, keep it when it later joins the desktop, and every
+  // kscreen-doctor it runs would then see no outputs at all.
+  ASSERT_EQ(::setenv("HERMES_TEST_SET_AFTER_START", "minimal", 1), 0);
+
+  const auto restart = platf::session_attach::restart_environment();
+
+  EXPECT_FALSE(restart.empty());
+  for (const auto &assignment : restart) {
+    EXPECT_NE(assignment.rfind("HERMES_TEST_SET_AFTER_START=", 0), 0u) << assignment;
+  }
+  ::unsetenv("HERMES_TEST_SET_AFTER_START");
+}
+
 namespace {
 
   namespace fs = std::filesystem;

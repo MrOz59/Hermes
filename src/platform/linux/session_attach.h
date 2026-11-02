@@ -86,10 +86,17 @@ namespace platf::session_attach {
   void drop_stale_display_environment();
 
   /**
-   * @brief The environment the next restart must be given, or empty to keep
-   *        the current one. Read by platf::restart()'s re-exec.
+   * @brief The environment the next restart must be given, as "NAME=value"
+   *        strings for execve(). Read by platf::restart()'s re-exec.
+   *
+   * The session's environment once Hermes is joining one. Otherwise the one
+   * Hermes was started with, never the live one: a restart from the Web UI or
+   * the tray before login would otherwise carry the tray's
+   * QT_QPA_PLATFORM=minimal into the next process, where it would look like
+   * part of the environment Hermes was started with and survive joining the
+   * session too. Empty only if neither can be read.
    */
-  const std::vector<std::string> &restart_environment();
+  std::vector<std::string> restart_environment();
 
   /**
    * @brief Start watching for a session to attach to.

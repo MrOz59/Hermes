@@ -242,8 +242,11 @@ namespace platf::session_attach {
     return assignments;
   }
 
-  const std::vector<std::string> &restart_environment() {
-    return pending_restart_environment;
+  std::vector<std::string> restart_environment() {
+    if (!pending_restart_environment.empty()) {
+      return pending_restart_environment;
+    }
+    return merged_environment(initial_environment(), {});
   }
 
   std::unique_ptr<platf::deinit_t> start() {

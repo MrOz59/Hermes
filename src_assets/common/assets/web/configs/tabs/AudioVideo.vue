@@ -41,6 +41,7 @@ const evdiInfoLoading = ref(false)
 const hermesKmsInfo = ref(props.hermesKmsInfo || {})
 const hermesKmsDiagnostic = ref(props.hermesKmsDiagnostic)
 const hermesKmsInfoLoading = ref(false)
+const sessionFeatures = ref([])
 const clipboardInfo = ref({})
 const clipboardLoading = ref(false)
 const clipboardInstalling = ref(false)
@@ -101,6 +102,7 @@ const refreshHermesKmsInfo = async () => {
     if (result.status) {
       hermesKmsInfo.value = result.hermesKmsInfo || {}
       hermesKmsDiagnostic.value = hermesKmsInfo.value.diagnostic || hermesKmsDiagnostic.value
+      sessionFeatures.value = result.sessionFeatures || []
     }
   } finally {
     hermesKmsInfoLoading.value = false
@@ -165,6 +167,17 @@ const hermesKmsGuide = computed(() => {
         description: 'config.hermes_kms_missing_caps_desc',
         steps: ['config.hermes_kms_update_step', 'config.hermes_kms_restart_step'],
         commands: withIsolatedRuntime(cloneAndInstall),
+      }
+    case 'no_access':
+      return {
+        title: 'config.hermes_kms_no_access_title',
+        description: 'config.hermes_kms_no_access_desc',
+        steps: ['config.hermes_kms_no_access_step', 'config.hermes_kms_restart_pc_step'],
+        commands: [
+          `getfacl ${hermesKmsInfo.value.inaccessibleNode || '/dev/dri/renderD*'}`,
+          '# in the Hermes-KMS source folder:',
+          'sudo make install-runtime-udev',
+        ],
       }
     case 'device_node_missing':
       return {
@@ -613,9 +626,16 @@ const validateFallbackMode = (event) => {
           {{ hermesKmsInfo.runningKernel || '—' }}
           <span v-if="hermesKmsInfo.dkmsKernels?.length" class="text-body-secondary"> · DKMS: {{ hermesKmsInfo.dkmsKernels.join(', ') }}</span>
         </dd>
+        <template v-if="hermesKmsInfo.installedVersion">
+          <dt class="col-sm-4">{{ $t('config.hermes_kms_status_installed_version') }}</dt>
+          <dd class="col-sm-8">{{ hermesKmsInfo.installedVersion }}</dd>
+        </template>
         <dt class="col-sm-4">{{ $t('config.hermes_kms_status_uapi') }}</dt>
         <dd class="col-sm-8">
           {{ hermesKmsInfo.uapiVersion || '—' }} / {{ hermesKmsInfo.requiredUapiVersion || '—' }}
+          <span v-if="hermesKmsInfo.newestKnownUapiVersion" class="text-body-secondary">
+            · {{ $t('config.hermes_kms_status_uapi_known', {version: hermesKmsInfo.newestKnownUapiVersion}) }}
+          </span>
         </dd>
         <dt class="col-sm-4">{{ $t('config.hermes_kms_status_outputs') }}</dt>
         <dd class="col-sm-8">
@@ -638,6 +658,8 @@ const validateFallbackMode = (event) => {
           </dd>
         </template>
       </dl>
+      <div v-if="hermesKmsInfo.reloadNote" class="alert alert-warning small mt-3 mb-0">{{ hermesKmsInfo.reloadNote }}</div>
+      <div v-if="hermesKmsInfo.newerNote" class="alert alert-info small mt-3 mb-0">{{ hermesKmsInfo.newerNote }}</div>
       <div class="mt-3">
         <div class="small fw-semibold mb-1">{{ $t('config.evdi_status_displays') }}</div>
         <div v-if="!hermesKmsInfo.activeDisplays?.length" class="small text-body-secondary">{{ $t('config.evdi_status_none') }}</div>
@@ -675,6 +697,25 @@ const validateFallbackMode = (event) => {
          v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms' && hermesKmsSharedMultiOutputEnabled && isolatedVirtualDisplayEnabled">
       {{ $t('config.hermes_kms_multi_output_isolated_warning') }}
     </div>
+
+    <section class="border-top pt-3 mt-4" v-if="platform === 'linux' && sessionFeatures.length">
+      <div class="d-flex align-items-center justify-content-between mb-2">
+        <h3 class="h6 mb-0">{{ $t('config.session_features_title') }}</h3>
+        <button type="button" class="btn btn-outline-secondary btn-sm" :disabled="hermesKmsInfoLoading" @click="refreshHermesKmsInfo" :title="$t('config.session_features_refresh')">
+          <i class="fa-solid fa-arrows-rotate" :class="{'fa-spin': hermesKmsInfoLoading}"></i>
+        </button>
+      </div>
+      <p class="small text-body-secondary mb-2">{{ $t('config.session_features_intro') }}</p>
+      <ul class="list-unstyled small mb-0">
+        <li v-for="item in sessionFeatures" :key="item.feature" class="mb-2">
+          <i class="fa-solid me-1"
+             :class="item.readiness === 'ready' ? 'fa-circle-check text-success' : item.readiness === 'unavailable' ? 'fa-circle-xmark text-danger' : 'fa-circle-exclamation text-warning'"></i>
+          <strong class="text-capitalize">{{ item.feature }}</strong>: {{ item.readiness }}
+          <div class="text-body-secondary">{{ item.detail }}</div>
+          <div v-if="item.remediation" class="text-body-secondary">{{ $t('config.session_features_fix') }} {{ item.remediation }}</div>
+        </li>
+      </ul>
+    </section>
 
     <section class="border-top pt-3 mt-4" v-if="platform === 'linux'">
       <div class="d-flex align-items-center justify-content-between mb-3">

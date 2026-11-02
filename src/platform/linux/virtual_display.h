@@ -82,6 +82,7 @@ namespace VDISPLAY {
     UAPI_TOO_OLD,
     MISSING_CAPABILITIES,
     DEVICE_NODE_MISSING,
+    NO_ACCESS,  ///< The driver's desktop render node exists but this user may not open it.
   };
 
   struct HermesKmsStatus {
@@ -104,6 +105,16 @@ namespace VDISPLAY {
     std::string running_kernel;
     std::vector<std::string> dkms_kernels;
     std::vector<EvdiVirtualDisplayStatus> active_displays;
+    std::string inaccessible_node;  ///< The render node behind NO_ACCESS, e.g. /dev/dri/renderD130.
+    /// The version DKMS installed for the running kernel, empty when the
+    /// module was not installed through DKMS or DKMS's records are unreadable.
+    std::string installed_version;
+    /// installed_version is a different release from the loaded driver, so the
+    /// driver in use is not the one installed until the module is reloaded.
+    bool reload_needed {false};
+    /// The newest UAPI this Hermes knows. A driver above it is newer than this
+    /// release of Hermes, which usually works but has not been tried with it.
+    uint32_t newest_known_uapi_version {0};
   };
 
   struct EvdiStatus {

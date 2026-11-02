@@ -440,9 +440,81 @@ namespace confighttp {
         return "missing_capabilities";
       case VDISPLAY::HERMES_KMS_DIAGNOSTIC::DEVICE_NODE_MISSING:
         return "device_node_missing";
+      case VDISPLAY::HERMES_KMS_DIAGNOSTIC::NO_ACCESS:
+        return "no_access";
     }
 
     return "module_not_loaded";
+  }
+
+  /**
+   * What this session can and cannot do, feature by feature, with the reason
+   * and the fix: the assessment Hermes logs at startup, for the Web UI and
+   * the diagnostic report.
+   */
+  static nlohmann::json session_features_json() {
+    auto features = nlohmann::json::array();
+    for (const auto &report : VDISPLAY::assessSession(VDISPLAY::probeSessionFacts())) {
+      features.push_back({
+        {"feature", VDISPLAY::featureName(report.feature)},
+        {"readiness", VDISPLAY::readinessName(report.readiness)},
+        {"detail", report.detail},
+        {"remediation", report.remediation},
+      });
+    }
+    return features;
+  }
+
+  /**
+   * What is wrong with the Hermes-KMS driver, in a sentence or two, for the
+   * preflight and the report. Empty when the driver is ready.
+   */
+  static std::string hermes_kms_problem(const VDISPLAY::HermesKmsStatus &status) {
+    using enum VDISPLAY::HERMES_KMS_DIAGNOSTIC;
+    switch (status.diagnostic) {
+      case READY:
+        return {};
+      case MODULE_NOT_INSTALLED:
+        return "The Hermes-KMS driver is not installed for the running kernel (" + status.running_kernel + ").";
+      case DKMS_BUILD_FAILED:
+        return "The Hermes-KMS driver failed to build for the running kernel (" + status.running_kernel +
+               "); DKMS's make.log for that kernel says why.";
+      case MODULE_NOT_LOADED:
+        return "The Hermes-KMS driver is installed but not loaded.";
+      case UAPI_TOO_OLD:
+        return "The loaded Hermes-KMS driver (" + status.driver_version + ", interface " +
+               std::to_string(status.uapi_version) + ") is older than this Hermes needs (interface " +
+               std::to_string(status.required_uapi_version) + "). Update the driver.";
+      case MISSING_CAPABILITIES:
+        return "The loaded Hermes-KMS driver (" + status.driver_version +
+               ") lacks features this Hermes needs. Update the driver.";
+      case DEVICE_NODE_MISSING:
+        return "The Hermes-KMS driver is loaded but created no device.";
+      case NO_ACCESS:
+        return "The Hermes-KMS driver is loaded, but Hermes may not open " + status.inaccessible_node +
+               ". The driver's udev rules give that node to the user logged in at the PC: check that "
+               "they are installed and that Hermes runs as that user.";
+    }
+    return {};
+  }
+
+  /** The driver installed is not the one running; empty when they match. */
+  static std::string hermes_kms_reload_note(const VDISPLAY::HermesKmsStatus &status) {
+    if (!status.reload_needed) {
+      return {};
+    }
+    return "Hermes-KMS " + status.installed_version + " is installed, but " + status.driver_version +
+           " is still loaded. Restart the PC to use the installed driver.";
+  }
+
+  /** The driver is newer than this Hermes knows; empty otherwise. */
+  static std::string hermes_kms_newer_note(const VDISPLAY::HermesKmsStatus &status) {
+    if (status.uapi_version <= status.newest_known_uapi_version) {
+      return {};
+    }
+    return "This driver (interface " + std::to_string(status.uapi_version) +
+           ") is newer than this Hermes (interface " + std::to_string(status.newest_known_uapi_version) +
+           "). That usually works; if virtual displays misbehave, update Hermes.";
   }
 
   static nlohmann::json hermes_kms_status_json() {
@@ -467,6 +539,13 @@ namespace confighttp {
       {"runningKernel", status.running_kernel},
       {"dkmsKernels", status.dkms_kernels},
       {"activeDisplays", nlohmann::json::array()},
+      {"inaccessibleNode", status.inaccessible_node},
+      {"installedVersion", status.installed_version},
+      {"reloadNeeded", status.reload_needed},
+      {"newestKnownUapiVersion", status.newest_known_uapi_version},
+      {"problem", hermes_kms_problem(status)},
+      {"reloadNote", hermes_kms_reload_note(status)},
+      {"newerNote", hermes_kms_newer_note(status)},
     };
 
     for (const auto &display : status.active_displays) {
@@ -2211,6 +2290,40 @@ namespace confighttp {
       add("virtual_display", "warn",
           "Session type is '" + evdi.session_type + "'; virtual-display support is limited.");
     }
+
+    // Hermes-KMS: whether the driver is there, whether it pairs with this
+    // Hermes, and what that means for streaming. Never a failure: without it
+    // a physical monitor still streams.
+    if (config::video.virtual_display_backend == "hermes_kms") {
+      const auto kms = VDISPLAY::getHermesKmsStatus();
+      std::string message;
+      const char *status = "ok";
+      if (kms.diagnostic == VDISPLAY::HERMES_KMS_DIAGNOSTIC::READY) {
+        message = "Hermes-KMS " + kms.driver_version + " is ready (interface " + std::to_string(kms.uapi_version) + ").";
+      } else {
+        status = "warn";
+        message = hermes_kms_problem(kms) +
+                  " Until it is fixed, no virtual display can be created, so apps set to create one will not "
+                  "start. Streaming a physical monitor still works, and the EVDI backend also gives virtual "
+                  "displays, without HDR10, a second virtual display or isolated sessions.";
+      }
+      if (const auto note = hermes_kms_reload_note(kms); !note.empty()) {
+        status = "warn";
+        message += ' ' + note;
+      }
+      if (const auto note = hermes_kms_newer_note(kms); !note.empty()) {
+        message += ' ' + note;
+      }
+      add("hermes_kms", status, std::move(message));
+    } else if (config::video.virtual_display_backend == "evdi") {
+      const auto kms = VDISPLAY::getHermesKmsStatus();
+      add("hermes_kms", "ok",
+          std::string {"Virtual displays use EVDI. HDR10, more than one virtual display, isolated sessions and "
+                       "zero-copy capture need the Hermes-KMS backend (virtual_display_backend = hermes_kms)."} +
+            (kms.diagnostic == VDISPLAY::HERMES_KMS_DIAGNOSTIC::READY ?
+               " Hermes-KMS " + kms.driver_version + " is installed and ready if you switch." :
+               std::string {}));
+    }
 #endif
 
     // Session/compositor environment (informational).
@@ -2979,6 +3092,25 @@ namespace confighttp {
       }
     }
 #endif
+#ifdef __linux__
+    out << "\n== What this session can do ==\n";
+    for (const auto &feature : session_features_json()) {
+      out << feature["feature"].get<std::string>() << ": " << feature["readiness"].get<std::string>() << " - "
+          << feature["detail"].get<std::string>();
+      if (const auto fix = feature["remediation"].get<std::string>(); !fix.empty()) {
+        out << " Fix: " << fix;
+      }
+      out << '\n';
+    }
+    {
+      const auto kms = VDISPLAY::getHermesKmsStatus();
+      for (const auto &note : {hermes_kms_problem(kms), hermes_kms_reload_note(kms), hermes_kms_newer_note(kms)}) {
+        if (!note.empty()) {
+          out << "Hermes-KMS: " << note << '\n';
+        }
+      }
+    }
+#endif
     out << "\n== Runtime state ==\n" << hestia_runtime_status_json().dump(2) << '\n';
     out << "\n== Streaming preflight ==\n" << hestia_preflight_json().dump(2) << '\n';
     out << "\n== Settings (secrets removed) ==\n" << redacted_settings();
@@ -3326,6 +3458,9 @@ printf "evdi\\n" > /etc/modules-load.d/evdi.conf')EVDI";
 #ifdef __linux__
     output_tree["status"] = true;
     output_tree["hermesKmsInfo"] = hermes_kms_status_json();
+    // Only here, not in every config response: it asks the compositor and
+    // kscreen-doctor, which is worth it when the user opens this panel.
+    output_tree["sessionFeatures"] = session_features_json();
 #else
     output_tree["status"] = false;
     output_tree["error"] = "Hermes-KMS is only available on Linux.";

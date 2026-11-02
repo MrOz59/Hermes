@@ -47,8 +47,10 @@ namespace platf::session_attach {
    * before login is always. Carried into the re-exec, that one variable would
    * be inherited by kscreen-doctor and every other Qt tool Hermes runs, none of
    * which can reach Wayland through the minimal platform. What a restart of
-   * the unit would be given is what the kernel still holds for this process,
-   * laid under what the user manager holds now.
+   * the unit would be given is the environment this process was started
+   * with, copied before main(), laid under what the user manager holds now.
+   * Not /proc/self/environ: with its file capabilities, the packaged Hermes
+   * is non-dumpable and cannot open it.
    */
   environment_t initial_environment();
 

@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - 'scripts/install.sh'
+      - 'scripts/tests/installer-offline.sh'
       - 'README.md'
       - '.github/workflows/installer-check.yml'
   pull_request:
     paths:
       - 'scripts/install.sh'
+      - 'scripts/tests/installer-offline.sh'
       - 'README.md'
       - '.github/workflows/installer-check.yml'
 
@@ -29,6 +31,9 @@ jobs:
           grep -q 'DETACHED DESKTOP / DETACHED STEAM' scripts/install.sh
           grep -q 'install_kms_broker()' scripts/install.sh
           grep -q 'post_install_checks()' scripts/install.sh
+      - name: Offline installer helper tests
+        shell: bash
+        run: bash scripts/tests/installer-offline.sh
       - name: ShellCheck errors
         shell: bash
         run: |

@@ -3495,6 +3495,9 @@ namespace video {
       return -1;
     }
 
+#ifdef __linux__
+    platf::note_vaapi_encode_gpu(-1);
+#endif
     auto encode_device = make_encode_device(*disp, encoder, config);
     if (!encode_device) {
       failure = "The " + std::string {encoder.name} + " encoder cannot take frames from " + label;
@@ -3519,6 +3522,15 @@ namespace video {
     }
     packets->pop();
 
+#ifdef __linux__
+    // Report the GPU that encoded, not the one adapter_name names: KMS
+    // capture encodes on the GPU the captured display is on.
+    if (std::string_view {encoder.name} == "vaapi"sv) {
+      if (auto actual = platf::last_vaapi_encode_gpu(); !actual.empty()) {
+        result.gpu = std::move(actual);
+      }
+    }
+#endif
     const auto &gpu = result.gpu;
     result.frame_seen = true;
     BOOST_LOG(info) << "Capture readiness: " << label << " (" << disp->width << 'x' << disp->height << " at "

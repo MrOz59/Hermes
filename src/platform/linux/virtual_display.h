@@ -1018,6 +1018,14 @@ namespace VDISPLAY {
 
   /** Activate a virtual output using the current session's display protocol. */
   bool activateVirtualDisplayOutput(const std::string &displayName);
+
+  /**
+   * Put windows of these classes on the session's virtual output, now and as
+   * they appear, until the display is removed. KWin only; elsewhere nothing
+   * happens. For an application that reuses a window already open on a
+   * physical monitor, such as Steam switching to Big Picture.
+   */
+  void placeWindowsOnVirtualDisplay(const std::string &displayName, const std::vector<std::string> &windowClasses);
   /** Enable/restore exclusive layout for an EVDI virtual display. */
   bool enableExclusiveVirtualDisplay(const std::string &displayName);
   void restoreExclusiveVirtualDisplay();

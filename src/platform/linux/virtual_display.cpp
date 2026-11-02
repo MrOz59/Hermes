@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cctype>
 #include <cerrno>
+#include <cstdarg>
 #include <cstddef>
 #include <cmath>
 #include <cstdio>
@@ -3843,6 +3844,155 @@ namespace VDISPLAY {
 
     static void unmap_input_devices(const std::string & /* display_name */) {}
 #endif
+
+#ifdef SUNSHINE_BUILD_SDBUS
+    /**
+     * Windows of these classes, put on a session's virtual output by a KWin
+     * script, keyed by the display the session made.
+     *
+     * KWin opens a new window on the output under the pointer, which during a
+     * stream is the virtual one, so most applications land there by
+     * themselves. Steam Big Picture does not: the app's command asks the Steam
+     * already running to switch its existing window, which stays on the
+     * physical monitor it was on (#31). Nothing creates a window for KWin to
+     * place. KWin's own scripting moves such windows, now and as they appear,
+     * and they go back once the output is removed.
+     */
+    std::mutex placements_mutex;
+    std::map<std::string, std::string> placements;  ///< Display name to script plugin name.
+
+    static bool call_kwin_scripting(sd_bus *bus, const char *path, const char *interface, const char *method, sd_bus_message **reply, const char *types, ...) {
+      sd_bus_error error = SD_BUS_ERROR_NULL;
+      va_list arguments;
+      va_start(arguments, types);
+      sd_bus_message *message = nullptr;
+      int status = sd_bus_message_new_method_call(bus, &message, kwin_service, path, interface, method);
+      if (status >= 0 && types) {
+        status = sd_bus_message_appendv(message, types, arguments);
+      }
+      va_end(arguments);
+      if (status >= 0) {
+        status = sd_bus_call(bus, message, 2000000, &error, reply);
+      }
+      sd_bus_message_unref(message);
+      if (status < 0) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] KWin scripting " << method << " failed: "
+                           << (error.message ? error.message : std::strerror(-status));
+      }
+      sd_bus_error_free(&error);
+      return status >= 0;
+    }
+
+    static void place_windows(const std::string &display_name, const std::vector<std::string> &classes) {
+      std::string output;
+      {
+        std::lock_guard<std::mutex> lock(layouts_mutex);
+        const auto it = layouts.find(display_name);
+        if (it == layouts.end()) {
+          return;
+        }
+        output = it->second.virtual_output;
+      }
+      if (!safe_output_name(output) || classes.empty()) {
+        return;
+      }
+      std::string class_list;
+      for (const auto &window_class : classes) {
+        if (window_class.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789.-_") != std::string::npos) {
+          return;
+        }
+        class_list += (class_list.empty() ? "\"" : ", \"") + window_class + '"';
+      }
+
+      const auto plugin = "hermes-place-" + output;
+      const auto directory = std::filesystem::path {"/run/user"} / std::to_string(::getuid()) / "hermes";
+      const auto script = directory / (plugin + ".js");
+      std::error_code ec;
+      std::filesystem::create_directories(directory, ec);
+      {
+        std::ofstream file {script, std::ios::trunc};
+        file << "// Hermes: put the streamed application's windows on the session's virtual output.\n"
+                "const output = workspace.screens.find(screen => screen.name === \"" << output << "\");\n"
+                "const classes = [" << class_list << "];\n"
+                "function place(window) {\n"
+                "  if (!output || !window.normalWindow || !classes.includes(window.resourceClass) || window.output === output) {\n"
+                "    return;\n"
+                "  }\n"
+                // Only fullscreen that was there comes back: Gamescope's -f
+                // window, or Big Picture, which also makes itself fullscreen on
+                // whichever output it is on. Other Steam windows keep their size.
+                "  // A window already fullscreen on another output keeps that output's size\n"
+                "  // when moved; leaving fullscreen first lets KWin fit it to this one.\n"
+                "  const wasFullScreen = window.fullScreen;\n"
+                "  if (wasFullScreen) {\n"
+                "    window.fullScreen = false;\n"
+                "  }\n"
+                "  workspace.sendClientToScreen(window, output);\n"
+                "  if (wasFullScreen) {\n"
+                "    window.fullScreen = true;\n"
+                "  }\n"
+                "}\n"
+                "workspace.windowList().forEach(place);\n"
+                "workspace.windowAdded.connect(place);\n";
+        if (!file) {
+          BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not write " << script.string() << "; windows stay where KWin opens them.";
+          return;
+        }
+      }
+
+      sd_bus *bus = nullptr;
+      if (open_user_bus(&bus) < 0 || !bus) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not reach KWin to place windows on " << output << '.';
+        return;
+      }
+      // A script of the same name from an earlier session would make loading fail.
+      call_kwin_scripting(bus, "/Scripting", "org.kde.kwin.Scripting", "unloadScript", nullptr, "s", plugin.c_str());
+      sd_bus_message *reply = nullptr;
+      int32_t id = -1;
+      if (call_kwin_scripting(bus, "/Scripting", "org.kde.kwin.Scripting", "loadScript", &reply, "ss", script.c_str(), plugin.c_str())) {
+        sd_bus_message_read(reply, "i", &id);
+        sd_bus_message_unref(reply);
+      }
+      bool running = false;
+      if (id >= 0) {
+        const auto path = "/Scripting/Script" + std::to_string(id);
+        // KWin 6 names it /Scripting/Script<id>; older ones /<id>.
+        running = call_kwin_scripting(bus, path.c_str(), "org.kde.kwin.Script", "run", nullptr, nullptr) ||
+                  call_kwin_scripting(bus, ("/" + std::to_string(id)).c_str(), "org.kde.kwin.Script", "run", nullptr, nullptr);
+      }
+      sd_bus_unref(bus);
+      if (!running) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] KWin did not run the window placement script; windows stay where KWin opens them.";
+        return;
+      }
+      std::lock_guard<std::mutex> lock(placements_mutex);
+      placements[display_name] = plugin;
+      BOOST_LOG(info) << "[VDISPLAY/KScreen] Windows of " << class_list << " go to " << output << " for this session.";
+    }
+
+    static void unplace_windows(const std::string &display_name) {
+      std::string plugin;
+      {
+        std::lock_guard<std::mutex> lock(placements_mutex);
+        const auto it = placements.find(display_name);
+        if (it == placements.end()) {
+          return;
+        }
+        plugin = std::move(it->second);
+        placements.erase(it);
+      }
+      sd_bus *bus = nullptr;
+      if (open_user_bus(&bus) >= 0 && bus) {
+        call_kwin_scripting(bus, "/Scripting", "org.kde.kwin.Scripting", "unloadScript", nullptr, "s", plugin.c_str());
+        sd_bus_unref(bus);
+      }
+      std::error_code ec;
+      std::filesystem::remove(std::filesystem::path {"/run/user"} / std::to_string(::getuid()) / "hermes" / (plugin + ".js"), ec);
+    }
+#else
+    static void place_windows(const std::string &, const std::vector<std::string> &) {}
+    static void unplace_windows(const std::string &) {}
+#endif
   }  // namespace kscreen
 
   // GNOME / Mutter output management. Mutter does not speak kscreen-doctor or
@@ -7297,6 +7447,7 @@ namespace VDISPLAY {
         lock.unlock();
         kscreen::restore(vdinfo.name);
         kscreen::unmap_input_devices(vdinfo.name);
+        kscreen::unplace_windows(vdinfo.name);
         mutter::restore(vdinfo.name);
         mutter::unmap_input_devices();
         lock.lock();
@@ -7318,6 +7469,7 @@ namespace VDISPLAY {
     lock.unlock();
     kscreen::restore(vdinfo.name);
     kscreen::unmap_input_devices(vdinfo.name);
+    kscreen::unplace_windows(vdinfo.name);
     mutter::restore(vdinfo.name);
     mutter::unmap_input_devices();
 
@@ -7728,6 +7880,12 @@ namespace VDISPLAY {
     (void) connector;
     return false;
 #endif
+  }
+
+  void placeWindowsOnVirtualDisplay(const std::string &displayName, const std::vector<std::string> &windowClasses) {
+    if (kscreen::is_active(displayName)) {
+      kscreen::place_windows(displayName, windowClasses);
+    }
   }
 
   bool activateVirtualDisplayOutput(const std::string &displayName) {

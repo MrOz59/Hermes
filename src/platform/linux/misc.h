@@ -48,6 +48,21 @@ namespace platf {
   std::string encode_gpu_description(bool nvenc = false);
 
   /**
+   * @brief Record the GPU a VAAPI encoder actually opened, from its DRM fd.
+   *
+   * KMS capture hands the encoder the render node of the GPU the captured
+   * display is on, which need not be the one adapter_name names. A negative
+   * fd forgets the last one.
+   */
+  void note_vaapi_encode_gpu(int fd);
+
+  /**
+   * @brief The GPU the last VAAPI encoder opened, described as
+   * encode_gpu_description() does, or an empty string.
+   */
+  std::string last_vaapi_encode_gpu();
+
+  /**
    * @brief Describe every GPU render node, as encode_gpu_description() does,
    * the capture-only Hermes-KMS node included and marked as such.
    */

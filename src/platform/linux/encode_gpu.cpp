@@ -274,6 +274,22 @@ namespace platf {
     return describe_render_node(fd);
   }
 
+  namespace {
+    std::mutex last_vaapi_gpu_mutex;
+    std::string last_vaapi_gpu;
+  }  // namespace
+
+  void note_vaapi_encode_gpu(int fd) {
+    auto description = fd < 0 ? std::string {} : describe_render_node(fd);
+    std::lock_guard lock {last_vaapi_gpu_mutex};
+    last_vaapi_gpu = std::move(description);
+  }
+
+  std::string last_vaapi_encode_gpu() {
+    std::lock_guard lock {last_vaapi_gpu_mutex};
+    return last_vaapi_gpu;
+  }
+
   std::vector<std::string> render_node_descriptions() {
     std::vector<std::string> descriptions;
     std::error_code ec;

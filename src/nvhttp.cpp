@@ -1667,6 +1667,9 @@ namespace nvhttp {
       stream.display_name = launch_session->display_name;
       stream.kwin_wayland_socket = launch_session->kwin_wayland_socket;
       stream.kwin_pipewire_socket = launch_session->kwin_pipewire_socket;
+      // The preflight must know that the client asked for HDR; an HDR output
+      // cannot be validated by trying to capture it as an SDR-only stream.
+      stream.dynamicRange = launch_session->enable_hdr ? 1 : 0;
       stream.framerate = launch_session->fps / 1000;
       std::string failure;
       if (video::check_capture_path(stream, failure, named_cert_p->uuid)) {

@@ -383,12 +383,37 @@ The quickest way is the installer, run as the user Hermes will stream for:
 curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.sh | bash
 ```
 
-It installs the Hermes package for your distribution (Arch, CachyOS, Ubuntu
-24.04/26.04 or Fedora 43/44) and then asks, one at a time, about the
-[Hermes-KMS](#installing-the-hermes-kms-driver) driver, experimental isolated
-sessions (with Hermes' own Gamescope build) and streaming the login screen.
-Add `--nightly` for the rolling build of `main`, `--dry-run` to see the
-commands without running them. To install by hand instead:
+It installs Hermes for Arch/CachyOS, Ubuntu 24.04/26.04 or Fedora 43/44,
+then offers the matching [Hermes-KMS](#installing-the-hermes-kms-driver)
+v0.4.1 driver from its published release assets, verified against SHA-256
+checksums. Where no native driver package is available, it offers a
+**separate, opt-in** source build from the pinned release tag. Kernel headers
+must match the running kernel. Immutable ostree systems (such as Bazzite)
+require the documented image-based driver setup instead.
+
+The installer explains **two distinct independent-session options** in
+Hermes 0.7.0, both experimental:
+
+- **Detached Desktop / Detached Steam (KDE Plasma 6 Wayland):** the user's
+  own Plasma desktop and Steam library on a separate virtual display, without
+  disturbing the physical desktop. This requires Hermes-KMS, but **does not
+  require Gamescope, seatd or the private DRM seat broker**.
+- **Isolated Gamescope applications:** a game on its own DRM card/input seat,
+  with private audio and optional device isolation. This additionally
+  requires Hermes' patched Gamescope, seatd, PipeWire and the Hermes-KMS
+  seat broker. The setup is offered only when requested; the distribution's
+  regular Gamescope remains untouched. Patched Gamescope is unavailable on
+  Ubuntu 24.04.
+
+After the installer enables the user service, it checks for the Hermes
+binary, the service status, DKMS and, if selected, patched Gamescope.
+These checks **do not certify real GPU streaming**; reboot when prompted,
+then use the Audio/Video diagnostics in the Web UI and test a real client.
+
+The installer leaves optional independent sessions and pre-login streaming
+**disabled by default**. Run as your normal user, not root. Use `--nightly`
+for a rolling Hermes build (the driver stays pinned to 0.4.1), `--dry-run`
+to preview actions, or `--help` to review options. To install manually:
 
 Every push to `main` refreshes the rolling **nightly** prerelease, and a tagged
 version publishes a normal release, both at

@@ -182,8 +182,24 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   virtual display failed, both to clients that show the host's message and
   when launching from the Web UI; Artemis still shows only the error code.
   Sessions that do not ask for a virtual display are unaffected.
+- Getting Started now covers installing Hermes natively on Bazzite and other
+  Fedora Atomic images, layering the Fedora package with `rpm-ostree`, with the
+  EVDI and Hermes-KMS steps that go with it ([#101]). The headless container
+  stays documented as the alternative.
 
 ### Fixed
+- The Audio/Video tab no longer goes blank when independent client sessions
+  are enabled ([#98], [#96]). The isolated-sessions warning named
+  `hermes-kms-seatd@N.service` with a bare `@`, which vue-i18n reads as a
+  linked message and refuses to compile, taking the whole tab down. It is
+  escaped again; a translation that fails to compile is now shown as written
+  instead of hiding its page, and a test compiles every string of every locale
+  so the next one fails the build.
+- The `.deb` and `.rpm` packages load EVDI at boot with one device ([#100]), as
+  the Arch package already did, so the default virtual-display backend works
+  without a manual `modprobe evdi`, including on image-based systems such as
+  Bazzite that ship EVDI prebuilt. A system without EVDI only logs that the
+  module is missing.
 - Apply and verify requested Detached resolution and refresh rate at startup and resume, keeping KWin output settings private.
 - Disable BlueDevil autoload only in private Detached desktops to prevent
   repeated OBEX startup attempts, leaving host Bluetooth configuration unchanged.
@@ -331,6 +347,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   where libsystemd deliberately hides the environment variables used by
   `sd_bus_open_user()`. Hermes falls back to the standard per-user bus address
   derived from its real uid. This also restores GNOME's D-Bus layout watch.
+
+[#96]: https://github.com/MrOz59/Hermes/pull/96
+[#98]: https://github.com/MrOz59/Hermes/pull/98
+[#100]: https://github.com/MrOz59/Hermes/pull/100
+[#101]: https://github.com/MrOz59/Hermes/pull/101
 
 ## [0.6.0] - 2026-09-22
 

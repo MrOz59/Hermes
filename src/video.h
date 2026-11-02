@@ -416,13 +416,34 @@ namespace video {
   int probe_encoders();
 
   /**
+   * @brief Codec and color depth for a capture readiness check.
+   *
+   * An HDR launch may legitimately use SDR when the output cannot provide
+   * HDR, so choose the test format from the output's effective color state.
+   */
+  struct capture_readiness_mode_t {
+    int video_format;   ///< 0: H.264, 1: HEVC, 2: AV1.
+    int dynamic_range;  ///< 0: SDR 8-bit, 1: HDR 10-bit.
+  };
+
+  /**
+   * @brief Choose a readiness mode without ever encoding PQ scanout as SDR.
+   * @return No mode when an SDR client encounters HDR output, or when the
+   * encoder has no supported HDR codec for an HDR output.
+   */
+  std::optional<capture_readiness_mode_t> choose_capture_readiness_mode(
+    bool client_hdr_requested, bool display_hdr, bool hevc_hdr_supported, bool av1_hdr_supported
+  );
+
+  /**
    * @brief Run one real frame through the path a stream will use.
    * @details Opens the display, captures a frame from it, converts it on the
    * encoder's device and encodes it, with the encoder already chosen. Done
    * before a client is told the stream is ready, so a broken step is named
    * then rather than shown as a black stream.
-   * @param stream The stream's capture settings: its display_name (empty for
-   * the process-wide display) and frame rate. Size and codec are the check's.
+   * @param stream The stream's capture settings: display_name (empty for
+   * the process-wide display), frame rate and client HDR request. The check
+   * chooses its own size and a codec matching the effective display color.
    * @param failure Set to the failed step and its reason.
    * @param client The paired client whose launch this check is for.
    * @return 0 when a frame went all the way through, or when the display

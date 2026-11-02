@@ -5,6 +5,7 @@
 #pragma once
 
 // standard includes
+#include <optional>
 #include <string>
 #include <vector>
 

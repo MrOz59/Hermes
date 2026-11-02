@@ -9,6 +9,7 @@
 #include <chrono>
 #include <csignal>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <fcntl.h>
@@ -17,7 +18,20 @@
 #include <unistd.h>
 
 namespace platf::bounded_command {
+  /**
+   * Held shared by every bounded command from before its fork until its child
+   * is reaped, and taken exclusively by proc_t::running() before it reaps
+   * stray children with waitpid(-1). Without it, that waitpid can take a
+   * command's exit status first: waitpid(child) then fails with ECHILD, and a
+   * complete reply is discarded as a failure.
+   */
+  inline std::shared_mutex &reap_mutex() {
+    static std::shared_mutex mutex;
+    return mutex;
+  }
+
   inline std::optional<std::string> output(const std::string &command, std::chrono::milliseconds timeout, bool *timed_out) {
+    std::shared_lock reap_lock {reap_mutex()};
     if (timed_out) {
       *timed_out = false;
     }

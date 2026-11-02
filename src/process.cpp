@@ -38,6 +38,9 @@
   #include <unistd.h>
   #include <xf86drm.h>
 
+  #ifdef __linux__
+    #include "platform/linux/bounded_command.h"
+  #endif
   #include "platform/linux/gamescope_session.h"
   #include "platform/linux/window_placement.h"
   // For the GBM allocation probe: picking the render node an isolated session
@@ -3986,6 +3989,16 @@ namespace proc {
     // calls to bp::wait() and platf::process_group_running() which both
     // invoke waitpid() under the hood.
     auto reaper = util::fail_guard([]() {
+  #ifdef __linux__
+      // A bounded command (kscreen-doctor and the like) reaps its own child.
+      // Reaping it here would take its exit status, and its complete reply
+      // would be thrown away. Skip this round while one runs; whatever exits
+      // meanwhile is reaped on a later call.
+      std::unique_lock lock {platf::bounded_command::reap_mutex(), std::try_to_lock};
+      if (!lock) {
+        return;
+      }
+  #endif
       while (waitpid(-1, nullptr, WNOHANG) > 0);
     });
 #endif

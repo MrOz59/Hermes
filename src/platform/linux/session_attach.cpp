@@ -7,8 +7,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
-#include <fstream>
-#include <iterator>
 #include <mutex>
 #include <string_view>
 #include <thread>
@@ -38,6 +36,23 @@ namespace platf::session_attach {
       "XDG_CURRENT_DESKTOP"sv,
       "XDG_SESSION_TYPE"sv,
     };
+
+    std::vector<std::string> copy_environment() {
+      std::vector<std::string> assignments;
+      for (char **entry = environ; entry && *entry; ++entry) {
+        assignments.emplace_back(*entry);
+      }
+      return assignments;
+    }
+
+    /**
+     * The environment as the process was started with it, copied before main()
+     * runs and anything in Hermes changes it. /proc/self/environ would hold the
+     * same, but the packaged binary has file capabilities, so the kernel makes
+     * the process non-dumpable and its /proc entries belong to root: Hermes
+     * cannot open its own environ and would fall back to the live environment.
+     */
+    const std::vector<std::string> startup_environment = copy_environment();
 
     constexpr auto poll_interval = 5s;
 
@@ -196,18 +211,7 @@ namespace platf::session_attach {
   }
 
   environment_t initial_environment() {
-    std::ifstream initial {"/proc/self/environ", std::ios::binary};
-    if (initial) {
-      const std::string block {std::istreambuf_iterator<char> {initial}, std::istreambuf_iterator<char> {}};
-      if (!block.empty()) {
-        return parse_environment_block(block);
-      }
-    }
-    std::vector<std::string> assignments;
-    for (char **entry = environ; entry && *entry; ++entry) {
-      assignments.emplace_back(*entry);
-    }
-    return parse_environment(assignments);
+    return parse_environment(startup_environment);
   }
 
   bool attach_needed(const environment_t &own, const environment_t &session) {
@@ -242,8 +246,11 @@ namespace platf::session_attach {
     return assignments;
   }
 
-  const std::vector<std::string> &restart_environment() {
-    return pending_restart_environment;
+  std::vector<std::string> restart_environment() {
+    if (!pending_restart_environment.empty()) {
+      return pending_restart_environment;
+    }
+    return merged_environment(initial_environment(), {});
   }
 
   std::unique_ptr<platf::deinit_t> start() {

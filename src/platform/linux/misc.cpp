@@ -497,10 +497,11 @@ std::string get_local_ip_for_gateway() {
       close(fd);
     }
 
-    // Re-exec ourselves with the same arguments. The environment is the same
-    // too unless a graphical session started after Hermes did, in which case
-    // this is where Hermes joins it.
-    const auto &environment = session_attach::restart_environment();
+    // Re-exec ourselves with the same arguments, and with the environment
+    // Hermes was started with rather than the one it has changed since: what
+    // a restart of the unit would give it. If a graphical session started
+    // after Hermes did, this is also where Hermes joins it.
+    const auto environment = session_attach::restart_environment();
     if (!environment.empty()) {
       std::vector<char *> envp;
       envp.reserve(environment.size() + 1);

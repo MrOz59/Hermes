@@ -246,7 +246,7 @@ download_checked_kms() {
 has_kms_installed() {
   [ "$DRY_RUN" = 0 ] || return 1
   command -v dkms >/dev/null 2>&1 || return 1
-  dkms status -m hermes-kms 2>/dev/null | grep -F "$(uname -r)" | grep -q installed
+  dkms status -m hermes-kms 2>/dev/null | grep -F "hermes-kms/0.4.1" | grep -F "$(uname -r)" | grep -q installed
 }
 
 verify_kms_installed() {

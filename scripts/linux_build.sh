@@ -179,6 +179,7 @@ function add_arch_deps() {
     'libdrm'
     'libevdev'
     'libmfx'
+    'libpipewire'
     'libpulse'
     'libva'
     'libx11'
@@ -227,6 +228,7 @@ function add_debian_based_deps() {
     "git"
     "graphviz"
     "libcap-dev"  # KMS
+    "libacl1-dev"  # Per-device session input ACLs
     "libcurl4-openssl-dev"
     "libdrm-dev"  # KMS
     "libevdev-dev"
@@ -234,6 +236,7 @@ function add_debian_based_deps() {
     "libminiupnpc-dev"
     "libnuma-dev"
     "libopus-dev"
+    "libpipewire-0.3-dev"
     "libpulse-dev"
     "libssl-dev"
     "libwayland-dev"  # Wayland
@@ -289,6 +292,7 @@ function add_fedora_deps() {
     "graphviz"
     "libappstream-glib"
     "libcap-devel"
+    "libacl-devel"
     "libcurl-devel"
     "libdrm-devel"
     "libevdev-devel"
@@ -308,6 +312,7 @@ function add_fedora_deps() {
     "numactl-devel"
     "openssl-devel"
     "opus-devel"
+    "pipewire-devel"
     "pulseaudio-libs-devel"
     "qt6-qtbase-devel"
     "qt6-qtsvg-devel"

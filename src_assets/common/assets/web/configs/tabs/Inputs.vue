@@ -29,6 +29,10 @@ const config = ref(props.config)
 
         <PlatformLayout :platform="platform">
           <template #linux>
+            <option value="generic">{{ $t("config.gamepad_generic") }}</option>
+            <option value="x360">{{ $t("config.gamepad_x360") }}</option>
+            <option value="xseries">{{ $t("config.gamepad_xseries") }}</option>
+            <option value="ds4">{{ $t("config.gamepad_ds4") }}</option>
             <option value="ds5">{{ $t("config.gamepad_ds5") }}</option>
             <option value="switch">{{ $t("config.gamepad_switch") }}</option>
             <option value="xone">{{ $t("config.gamepad_xone") }}</option>
@@ -41,6 +45,19 @@ const config = ref(props.config)
         </PlatformLayout>
       </select>
       <div class="form-text">{{ $t('config.gamepad_desc') }}</div>
+    </div>
+
+    <div class="mb-3" v-if="platform === 'linux' && config.controller === 'enabled'">
+      <label for="linux_gamepad_backend" class="form-label">{{ $t('config.linux_gamepad_backend') }}</label>
+      <select id="linux_gamepad_backend" class="form-select" v-model="config.linux_gamepad_backend">
+        <option value="auto">{{ $t('_common.auto') }}</option>
+        <option value="native">{{ $t('config.linux_gamepad_backend_native') }}</option>
+        <option value="uinput">{{ $t('config.linux_gamepad_backend_uinput') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.linux_gamepad_backend_desc') }}</div>
+      <div class="form-text text-warning" v-if="config.linux_gamepad_backend === 'uinput' && ['ds4', 'ds5', 'switch'].includes(config.gamepad)">
+        {{ $t('config.linux_gamepad_backend_conflict') }}
+      </div>
     </div>
 
     <!-- Additional options based on gamepad type -->
@@ -74,8 +91,8 @@ const config = ref(props.config)
                             default="true"
                   ></Checkbox>
                 </template>
-                <!-- DS4 option: DS4 back button as touchpad click (on Automatic: Windows only) -->
-                <template v-if="config.gamepad === 'ds4' || (config.gamepad === 'auto' && platform === 'windows')">
+                <!-- Back/Select can click any PlayStation-style virtual touchpad. -->
+                <template v-if="config.gamepad === 'ds4' || (platform === 'linux' && config.gamepad === 'ds5') || (config.gamepad === 'auto' && (platform === 'windows' || platform === 'linux'))">
                   <Checkbox class="mb-3"
                             id="ds4_back_as_touchpad_click"
                             locale-prefix="config"
@@ -83,12 +100,12 @@ const config = ref(props.config)
                             default="true"
                   ></Checkbox>
                 </template>
-                <!-- DS5 Option: Controller MAC randomization (on Automatic: Linux only) -->
-                <template v-if="config.gamepad === 'ds5' || (config.gamepad === 'auto' && platform === 'linux')">
+                <!-- Linux PlayStation profiles share the MAC identity policy. -->
+                <template v-if="platform === 'linux' && (config.gamepad === 'ds4' || config.gamepad === 'ds5' || config.gamepad === 'auto')">
                   <Checkbox class="mb-3"
-                            id="ds5_inputtino_randomize_mac"
+                            id="virtualhid_randomize_mac"
                             locale-prefix="config"
-                            v-model="config.ds5_inputtino_randomize_mac"
+                            v-model="config.virtualhid_randomize_mac"
                             default="true"
                   ></Checkbox>
                 </template>
@@ -174,6 +191,15 @@ const config = ref(props.config)
               id="native_pen_touch"
               locale-prefix="config"
               v-model="config.native_pen_touch"
+              default="true"
+    ></Checkbox>
+
+    <!-- Ignore the client's connect-time mouse wiggle in isolated sessions -->
+    <Checkbox v-if="config.mouse === 'enabled'"
+              class="mb-3"
+              id="isolated_ignore_mouse_wiggle"
+              locale-prefix="config"
+              v-model="config.isolated_ignore_mouse_wiggle"
               default="true"
     ></Checkbox>
 

@@ -107,10 +107,40 @@ CI publishes with `makepkg -sf` from the repository root.
 
 ### Image-based distributions (Bazzite, Silverblue, SteamOS)
 
-`/usr` is read-only there, so no package lands on the installed system.
-`packaging/container` holds a runtime image that runs Hermes on a headless sway
-session; only the kernel module has to exist on the host. See
-`packaging/container/README.md`.
+`/usr` is read-only there, so a package is added to the system image instead of
+installed into it.
+
+**Bazzite and other Fedora Atomic images.** The Fedora `.rpm` layers with
+`rpm-ostree` and streams the desktop you are logged in to, the same as on
+Fedora. Use the package for the image's Fedora release
+(`rpm-ostree status` shows it; Bazzite is Fedora 44 at the time of writing):
+
+```bash
+rpm-ostree install ./hermes-*.fc44.x86_64.rpm
+systemctl reboot
+```
+
+After the reboot, `getcap /usr/bin/hermes` shows the capabilities the package
+sets, and the service starts like on any other distribution:
+
+```bash
+systemctl --user enable --now hermes
+```
+
+Bazzite's default firewall zone already allows the ports Hermes uses.
+
+For a virtual display, Bazzite ships EVDI prebuilt; the package loads it at boot
+with one device (#100), so the default backend works after that first reboot. For
+Hermes-KMS, which DKMS cannot install on a read-only `/usr`, the driver
+repository builds a derived Bazzite image with the module in it
+([Image-based systems](https://github.com/MrOz59/Hermes-KMS#image-based-systems-bazzite-and-compatible-bootcostree-images)).
+Switching to that image drops packages layered with `rpm-ostree`, so layer Hermes
+again afterwards. Hermes-KMS hands its device to the user logged in at the
+machine, so a machine meant to stream from boot needs automatic login.
+
+**A headless session instead.** `packaging/container` holds a runtime image that
+runs Hermes on a headless sway session, separate from the desktop; only the
+kernel module has to exist on the host. See `packaging/container/README.md`.
 
 ### The virtual display driver
 
@@ -155,7 +185,7 @@ needed for a binary you built yourself, or after the capability was removed.
 
 ##### Enable
 ```bash
-sudo setcap cap_sys_admin+p $(readlink -f $(which hermes))
+sudo setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p $(readlink -f $(which hermes))
 ```
 
 #### X11 Capture

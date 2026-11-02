@@ -34,6 +34,7 @@ apt-get install -y --no-install-recommends \
   git \
   graphviz \
   libcap-dev \
+  libacl1-dev \
   libcurl4-openssl-dev \
   libdrm-dev \
   libevdev-dev \
@@ -41,6 +42,7 @@ apt-get install -y --no-install-recommends \
   libminiupnpc-dev \
   libnuma-dev \
   libopus-dev \
+  libpipewire-0.3-dev \
   libpulse-dev \
   libqt6svg6-dev \
   libssl-dev \

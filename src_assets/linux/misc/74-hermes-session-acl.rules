@@ -1,0 +1,9 @@
+# After 73-seat-late.rules: uaccess clears ACLs on a seat with no active
+# session, which is every hermes-kms-N seat 60-hermes.rules assigns. Apps in the
+# session (Steam reading gamepads) run as the Hermes-KMS session user.
+# A session with a private /dev gets its own copies of the nodes; Hermes flags
+# its seat so the host's nodes stay closed to the desktop.
+# hidraw too: libvirtualhid's controllers are UHID devices, and Steam drives
+# PlayStation and Switch pads through hidraw. 60-hermes.rules passes the seat
+# down to them, and to seats past 8 a session broker allocates.
+ACTION=="add|change", SUBSYSTEM=="input|hidraw", KERNEL=="event*|js*|hidraw*", ENV{ID_SEAT}=="hermes-kms-[0-9]*", RUN+="/bin/sh -c 'uid=$$(cat /etc/hermes-kms/session-user) && { [ -e /run/user/$$uid/hermes/isolated/$env{ID_SEAT} ] || exec setfacl -m u:$$uid:rw $env{DEVNAME}; }'"

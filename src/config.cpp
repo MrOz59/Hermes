@@ -502,7 +502,7 @@ namespace config {
     false,  // hermes_kms_multi_output
     false,  // hermes_kms_isolated_sessions
     "auto"s,  // gamescope_backend
-    "weston"s,  // hermes_kms_session_compositor
+    "plasma"s,  // hermes_kms_session_compositor
 
     {
       video_t::dd_t::config_option_e::disabled,  // configuration_option
@@ -523,12 +523,14 @@ namespace config {
     "1920x1080x60",  // fallback_mode
     false, // isolated Display
     false, // ignore_encoder_probe_failure
+    false, // pyrowave (experimental, opt-in)
   };
 
   audio_t audio {
     {},  // audio_sink
     {},  // virtual_sink
     true,  // stream audio
+    false,  // stream_mic
     true,  // install_steam_drivers
     true, // keep_sink_default
     true, // auto_capture
@@ -570,10 +572,11 @@ namespace config {
       platf::supported_gamepads(nullptr).front().name.data(),
       platf::supported_gamepads(nullptr).front().name.size(),
     },  // Default gamepad
-    true,  // back as touchpad click enabled (manual DS4 only)
+    "auto"s,  // Linux: preserve evdev rumble for Xbox; native HID for PlayStation/Switch
+    true,  // Back as PlayStation touchpad click (Linux DS4/DS5, Windows manual DS4)
     true,  // client gamepads with motion events are emulated as DS4
     true,  // client gamepads with touchpads are emulated as DS4
-    true,  // ds5_inputtino_randomize_mac
+    true,  // virtualhid_randomize_mac
 
     true,  // keyboard enabled
     true,  // mouse enabled
@@ -581,6 +584,7 @@ namespace config {
     true,  // always send scancodes
     true,  // high resolution scrolling
     true,  // native pen/touch support
+    true,  // isolated_ignore_mouse_wiggle
     false, // enable input only mode
     true, // forward_rumble
   };
@@ -721,6 +725,17 @@ namespace config {
     return keys;
   }
 
+  static void normalize_input_config_alias(std::unordered_map<std::string, std::string> &vars) {
+    for (const auto alias : {"ds5_virtualhid_randomize_mac", "ds5_inputtino_randomize_mac"}) {
+      auto legacy = vars.extract(alias);
+      if (!legacy.empty()) {
+        legacy.key() = "virtualhid_randomize_mac";
+        // Canonical wins; otherwise prefer the newer alias over Inputtino.
+        vars.insert(std::move(legacy));
+      }
+    }
+  }
+
   std::unordered_map<std::string, std::string> parse_config(const ::std::string_view &file_content) {
     std::unordered_map<std::string, std::string> vars;
 
@@ -743,6 +758,9 @@ namespace config {
       vars.emplace(std::move(*var));
     }
 
+    // Canonicalize here as well as at apply time so the configuration UI sees
+    // an older saved value instead of silently showing the new key's default.
+    normalize_input_config_alias(vars);
     return vars;
   }
 
@@ -1139,6 +1157,7 @@ namespace config {
   }
 
   void apply_config(std::unordered_map<std::string, std::string> &&vars) {
+    normalize_input_config_alias(vars);
 #ifndef __ANDROID__
     // TODO: Android can possibly support this
     if (!fs::exists(stream.file_apps.c_str())) {
@@ -1246,14 +1265,10 @@ namespace config {
     }
     bool_f(vars, "hermes_kms_multi_output", video.hermes_kms_multi_output);
     bool_f(vars, "hermes_kms_isolated_sessions", video.hermes_kms_isolated_sessions);
-    if (video.hermes_kms_multi_output && video.hermes_kms_isolated_sessions) {
-      BOOST_LOG(warning) << "hermes_kms_isolated_sessions supersedes "
-                            "hermes_kms_multi_output; shared-desktop output "
-                            "management will remain disabled.";
-    }
     string_restricted_f(vars, "gamescope_backend", video.gamescope_backend, {"auto"sv, "wayland"sv, "sdl"sv, "drm"sv});
-    // Deliberately unrestricted: weston is the profile Hermes ships and tests,
-    // and any other name is a profile the administrator dropped in themselves.
+    // Deliberately unrestricted: plasma is the user's own desktop, weston and
+    // labwc are the profiles Hermes ships as opt-in fallbacks, and any other
+    // name is a profile the administrator dropped in themselves.
     string_f(vars, "hermes_kms_session_compositor", video.hermes_kms_session_compositor);
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);
@@ -1283,6 +1298,7 @@ namespace config {
     string_f(vars, "fallback_mode", video.fallback_mode);
     bool_f(vars, "isolated_virtual_display_option", video.isolated_virtual_display_option);
     bool_f(vars, "ignore_encoder_probe_failure", video.ignore_encoder_probe_failure);
+    bool_f(vars, "pyrowave", video.pyrowave);
 
     path_f(vars, "pkey", nvhttp.pkey);
     path_f(vars, "cert", nvhttp.cert);
@@ -1302,6 +1318,7 @@ namespace config {
     string_f(vars, "audio_sink", audio.sink);
     string_f(vars, "virtual_sink", audio.virtual_sink);
     bool_f(vars, "stream_audio", audio.stream);
+    bool_f(vars, "stream_mic", audio.stream_mic);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
     bool_f(vars, "keep_sink_default", audio.keep_default);
     bool_f(vars, "auto_capture_sink", audio.auto_capture);
@@ -1352,10 +1369,11 @@ namespace config {
     }
 
     string_restricted_f(vars, "gamepad"s, input.gamepad, get_supported_gamepad_options());
+    string_restricted_f(vars, "linux_gamepad_backend"s, input.linux_gamepad_backend, {"auto"sv, "native"sv, "uinput"sv});
     bool_f(vars, "ds4_back_as_touchpad_click", input.ds4_back_as_touchpad_click);
     bool_f(vars, "motion_as_ds4", input.motion_as_ds4);
     bool_f(vars, "touchpad_as_ds4", input.touchpad_as_ds4);
-    bool_f(vars, "ds5_inputtino_randomize_mac", input.ds5_inputtino_randomize_mac);
+    bool_f(vars, "virtualhid_randomize_mac", input.virtualhid_randomize_mac);
 
     bool_f(vars, "mouse", input.mouse);
     bool_f(vars, "keyboard", input.keyboard);
@@ -1365,6 +1383,7 @@ namespace config {
 
     bool_f(vars, "high_resolution_scrolling", input.high_resolution_scrolling);
     bool_f(vars, "native_pen_touch", input.native_pen_touch);
+    bool_f(vars, "isolated_ignore_mouse_wiggle", input.isolated_ignore_mouse_wiggle);
     bool_f(vars, "enable_input_only_mode", input.enable_input_only_mode);
 
     bool_f(vars, "system_tray", sunshine.system_tray);
@@ -1617,3 +1636,4 @@ namespace config {
     return 0;
   }
 }  // namespace config
+

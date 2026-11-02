@@ -25,6 +25,35 @@ enum class window_system_e {
 
 extern window_system_e window_system;
 
+namespace platf {
+  /**
+   * @brief Open the render node of the best GPU to encode a stream on.
+   * @details adapter_name when it is set. Otherwise every real GPU is ranked
+   * by the video it can encode - AV1, then HEVC Main10, HEVC, H.264 - with
+   * more video memory breaking a tie, and the best one wins; for NVENC an
+   * NVIDIA GPU comes first. The capture-only Hermes-KMS node never qualifies.
+   * @param nvenc Whether the stream encodes with NVENC rather than VAAPI.
+   * @return An owned file descriptor, or -1.
+   */
+  int open_encode_render_node(bool nvenc = false);
+
+  /**
+   * @brief Describe the GPU a stream encodes on, for logs and diagnostics:
+   * its render node, driver and the name it is sold under, or its PCI id.
+   * @param nvenc Whether the stream encodes with NVENC rather than VAAPI.
+   * @return For example "/dev/dri/renderD128 (amdgpu, AMD Radeon RX 9070 XT)",
+   * or "(amdgpu, AMD 1002:7550)" where the name is unknown, or an
+   * empty string when no GPU qualifies.
+   */
+  std::string encode_gpu_description(bool nvenc = false);
+
+  /**
+   * @brief Describe every GPU render node, as encode_gpu_description() does,
+   * the capture-only Hermes-KMS node included and marked as such.
+   */
+  std::vector<std::string> render_node_descriptions();
+}  // namespace platf
+
 namespace dyn {
   typedef void (*apiproc)(void);
 
@@ -32,3 +61,8 @@ namespace dyn {
   void *handle(const std::vector<const char *> &libs);
 
 }  // namespace dyn
+
+namespace platf {
+  /** Ask the user manager to stop Hermes when Quit was selected inside its service. */
+  bool request_user_service_stop();
+}

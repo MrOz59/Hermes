@@ -20,6 +20,7 @@ install=sunshine.install
 _gcc_version=14
 
 depends=(
+  'acl'
   'avahi'
   'curl'
   'libcap'

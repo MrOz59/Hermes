@@ -21,6 +21,7 @@
 #include "cuda.h"
 #include "graphics.h"
 #include "misc.h"
+#include "pyrowave.h"
 #include "src/config.h"
 #include "src/globals.h"
 #include "src/logging.h"
@@ -538,6 +539,12 @@ namespace platf {
     std::shared_ptr<img_t> alloc_img() override {
       return std::make_shared<x11_img_t>();
     }
+
+#ifdef HAVE_PYROWAVE
+    std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() override {
+      return pyrowave::make_ram_encode_device(width, height);
+    }
+#endif
 
     std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_VAAPI

@@ -57,6 +57,7 @@
 #include <xf86drmMode.h>
 
 // local includes
+#include "bounded_command.h"
 #include "card_broker.h"
 #include "hermes_kms_capture.h"
 #include "misc.h"
@@ -526,6 +527,8 @@ namespace VDISPLAY {
 
   static std::mutex vdisplay_mutex;
   static DRIVER_STATUS driver_status = DRIVER_STATUS::UNKNOWN;
+  // Serialize display creation/removal while allowing event delivery during compositor RPCs.
+  static std::mutex vdisplay_lifecycle_mutex;
   static std::atomic<bool> watchdog_running {false};
   // Guards closeVDisplayDevice() against running its teardown more than once.
   static std::atomic<bool> device_open {false};
@@ -1248,12 +1251,7 @@ namespace VDISPLAY {
     }
 
     static bool multi_output_requested() {
-      return config::video.hermes_kms_multi_output &&
-             !config::video.hermes_kms_isolated_sessions;
-    }
-
-    static bool isolated_sessions_requested() {
-      return config::video.hermes_kms_isolated_sessions;
+      return config::video.hermes_kms_multi_output;
     }
 
     static uint32_t required_uapi_version() {
@@ -1268,7 +1266,7 @@ namespace VDISPLAY {
     static bool has_required_caps(
       uint64_t flags,
       bool require_multi_output = multi_output_requested(),
-      bool require_multi_device = isolated_sessions_requested()
+      bool require_multi_device = false
     ) {
       constexpr uint64_t required = cap_virtual_output | cap_output_control | cap_frame_acquire |
                                     cap_dmabuf_export | cap_output_identity | cap_session_owner |
@@ -1880,6 +1878,7 @@ namespace VDISPLAY {
     evdi_handle handle;    // EVDI handle
     int drm_fd;            // DRM fd for card
     bool active;
+    bool removal_pending {false};
     bool using_evdi;       // true while an EVDI display is connected
     bool using_hermes_kms; // true while a Hermes-KMS output owner fd is held
     bool hermes_kms_session_lifecycle; // driver can revoke this session's bindings (uapi >= 13)
@@ -1894,6 +1893,12 @@ namespace VDISPLAY {
   };
 
   static std::map<std::string, VirtualDisplayInfo> virtual_displays;
+
+  static bool remove_virtual_display_locked(
+    const std::string &guid_str,
+    std::unique_lock<std::mutex> &lock,
+    bool shutting_down = false
+  );
 
   /**
    * A Hermes-KMS output kept connected for the login greeter after the display
@@ -2737,87 +2742,7 @@ namespace VDISPLAY {
   }
 
   std::optional<std::string> boundedCommandOutput(const std::string &command, std::chrono::milliseconds timeout, bool *timed_out) {
-    if (timed_out) {
-      *timed_out = false;
-    }
-    int out[2];
-    if (::pipe2(out, O_CLOEXEC) != 0) {
-      return std::nullopt;
-    }
-    const pid_t child = ::fork();
-    if (child < 0) {
-      ::close(out[0]);
-      ::close(out[1]);
-      return std::nullopt;
-    }
-    if (child == 0) {
-      // Its own process group, so that running over takes down whatever the
-      // shell started along with the shell.
-      ::setpgid(0, 0);
-      ::dup2(out[1], STDOUT_FILENO);
-      ::execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char *>(nullptr));
-      ::_exit(127);
-    }
-    ::close(out[1]);
-
-    std::string output;
-    std::array<char, 4096> buffer {};
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    bool pipe_open = true;
-    bool exited = false;
-    bool expired = false;
-    int status = -1;
-    while (pipe_open || !exited) {
-      if (std::chrono::steady_clock::now() >= deadline) {
-        expired = true;
-        break;
-      }
-      if (pipe_open) {
-        // Once the command has exited, whatever is still in the pipe is all
-        // there will be: a descendant that kept it open is not waited for.
-        pollfd readable {out[0], POLLIN, 0};
-        const int ready = ::poll(&readable, 1, exited ? 0 : 20);
-        if (ready > 0) {
-          const ssize_t got = ::read(out[0], buffer.data(), buffer.size());
-          if (got > 0) {
-            output.append(buffer.data(), static_cast<size_t>(got));
-          } else if (got == 0 || errno != EINTR) {
-            pipe_open = false;
-          }
-        } else if (exited && ready == 0) {
-          pipe_open = false;
-        }
-      } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds {10});
-      }
-      if (!exited) {
-        const pid_t reaped = ::waitpid(child, &status, WNOHANG);
-        if (reaped == child) {
-          exited = true;
-        } else if (reaped < 0 && errno != EINTR) {
-          exited = true;  // Not ours to wait for any more; the status is unknown.
-          status = -1;
-        }
-      }
-    }
-    ::close(out[0]);
-
-    if (expired) {
-      ::kill(-child, SIGKILL);
-      ::kill(child, SIGKILL);
-      if (!exited) {
-        while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
-        }
-      }
-      if (timed_out) {
-        *timed_out = true;
-      }
-      return std::nullopt;
-    }
-    if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-      return std::nullopt;
-    }
-    return output;
+    return platf::bounded_command::output(command, timeout, timed_out);
   }
 
   namespace kscreen {
@@ -2840,10 +2765,13 @@ namespace VDISPLAY {
       std::string virtual_output;
       bool physical_output_disabled {false};
       bool preserve_physical_outputs {false};
+      bool restore_pending {false};
+      bool release_requested {false};
     };
 
     static std::mutex layouts_mutex;
     static std::map<std::string, layout_t> layouts;
+    static bool startup_recovery_pending {false};
 
     static bool available() {
       if (sessionCompositor() != compositor_e::kwin) {
@@ -2862,20 +2790,28 @@ namespace VDISPLAY {
       return output.value_or(std::string {});
     }
 
-    static std::vector<output_t> outputs() {
+    static monitor_restore::snapshot_t output_snapshot() {
       std::vector<output_t> result;
       if (!available()) {
-        return result;
+        return std::nullopt;
       }
 
       const auto json_text = command_output("kscreen-doctor -j");
       if (json_text.empty()) {
-        return result;
+        return std::nullopt;
       }
 
       try {
         const auto data = nlohmann::json::parse(json_text);
-        for (const auto &entry : data.value("outputs", nlohmann::json::array())) {
+        if (!data.is_object() || !data.contains("outputs") || !data["outputs"].is_array()) {
+          return std::nullopt;
+        }
+        for (const auto &entry : data["outputs"]) {
+          if (!entry.is_object() || !entry.contains("name") || !entry["name"].is_string() ||
+              !entry.contains("connected") || !entry["connected"].is_boolean() ||
+              !entry.contains("enabled") || !entry["enabled"].is_boolean()) {
+            return std::nullopt;
+          }
           output_t output {
             .name = entry.value("name", std::string {}),
             .connected = entry.value("connected", false),
@@ -2892,8 +2828,13 @@ namespace VDISPLAY {
         }
       } catch (const std::exception &error) {
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not parse output layout: " << error.what();
+        return std::nullopt;
       }
       return result;
+    }
+
+    static std::vector<output_t> outputs() {
+      return output_snapshot().value_or(std::vector<output_t> {});
     }
 
     static std::set<std::string> connected_output_names(const std::vector<output_t> &current) {
@@ -2991,6 +2932,10 @@ namespace VDISPLAY {
         for (const auto &[output, priority] : valid) {
           file << output << ' ' << priority << '\n';
         }
+        file.flush();
+        if (!file) {
+          return false;
+        }
       }
 
       std::error_code ec;
@@ -3037,21 +2982,43 @@ namespace VDISPLAY {
       fs::remove(path, ec);
     }
 
+    static bool restore_outputs(const std::map<std::string, int> &saved) {
+      return monitor_restore::restore(saved, output_snapshot, [](const auto &targets) {
+        return run_layout_command(enable_outputs_command(targets));
+      });
+    }
+
+    // Called with layouts_mutex held. One display must not erase another
+    // session's recovery record when it finishes restoring its own monitors.
+    static bool persist_pending_recovery() {
+      std::map<std::string, int> pending;
+      for (const auto &[name, layout] : layouts) {
+        if (layout.physical_output_disabled || layout.restore_pending) {
+          pending.insert(layout.original_outputs.begin(), layout.original_outputs.end());
+        }
+      }
+      if (pending.empty()) {
+        if (!startup_recovery_pending) {
+          clear_recovery_state();
+        }
+        return true;
+      }
+      return write_recovery_state(pending);
+    }
+
     static void recover_on_startup() {
+      std::lock_guard<std::mutex> lock(layouts_mutex);
       const auto saved_outputs = read_recovery_state();
       if (saved_outputs.empty()) {
+        startup_recovery_pending = false;
         return;
       }
-
-      std::string names;
-      for (const auto &[output, priority] : saved_outputs) {
-        names += names.empty() ? output : ", " + output;
-      }
-      BOOST_LOG(info) << "[VDISPLAY/KScreen] Recovering physical outputs left disabled by a previous session: " << names;
-      if (run_layout_command(enable_outputs_command(saved_outputs))) {
+      BOOST_LOG(info) << "[VDISPLAY/KScreen] Recovering the saved physical output layout.";
+      startup_recovery_pending = !restore_outputs(saved_outputs);
+      if (!startup_recovery_pending) {
         clear_recovery_state();
       } else {
-        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Startup recovery failed; retaining recovery state for the next attempt.";
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Physical output recovery is pending; retaining the saved layout.";
       }
     }
 
@@ -3374,7 +3341,13 @@ namespace VDISPLAY {
       for (const auto &[output, priority] : targets) {
         command += " output." + output + ".disable";
       }
-      if (!write_recovery_state(targets)) {
+      const auto previous = it->second;
+      // A rejected/timed-out transaction can still have changed some outputs.
+      // Publish the complete recovery targets before asking KWin to apply it.
+      it->second.original_outputs = targets;
+      it->second.physical_output_disabled = true;
+      if (!persist_pending_recovery()) {
+        it->second = previous;
         BOOST_LOG(error) << "[VDISPLAY/KScreen] Refusing exclusive mode because monitor recovery state could not be written.";
         return false;
       }
@@ -3384,41 +3357,77 @@ namespace VDISPLAY {
       }
       BOOST_LOG(info) << "[VDISPLAY/KScreen] Exclusive mode disabled " << targets.size()
                       << " physical output(s) in favour of " << it->second.virtual_output;
-      it->second.original_outputs = std::move(targets);
-      it->second.physical_output_disabled = true;
       return true;
     }
 
-    static void restore(const std::string &display_name) {
+    static bool restore(const std::string &display_name, bool release_layout = true) {
       std::lock_guard<std::mutex> lock(layouts_mutex);
       const auto it = layouts.find(display_name);
       if (it == layouts.end()) {
-        return;
+        return true;
       }
-      // Detached mode never intentionally rewrites the physical outputs, so
-      // teardown must not turn around and replay them either. If an exclusive
-      // transition somehow did occur, physical_output_disabled wins and the
-      // normal recovery path still restores the monitors.
-      if (it->second.preserve_physical_outputs && !it->second.physical_output_disabled) {
-        layouts.erase(it);
-        return;
+      auto &layout = it->second;
+      layout.release_requested |= release_layout;
+      if (layout.preserve_physical_outputs && !layout.physical_output_disabled) {
+        if (release_layout) {
+          layouts.erase(it);
+        }
+        return true;
       }
 
-      // Re-enable every physical output with the priority it had before the
-      // session, in one command, so the desktop never sits with two primaries
-      // or none. The virtual connector itself disappears when the display is
-      // torn down, so we don't need to .disable it explicitly, but restoring
-      // the physical priorities is what brings the screens back.
+      layout.restore_pending = true;
+      if (!restore_outputs(layout.original_outputs)) {
+        persist_pending_recovery();
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Physical output restoration is not confirmed for "
+                           << display_name << "; retaining its layout for another attempt.";
+        return false;
+      }
+      layout.restore_pending = false;
+      if (release_layout) {
+        layouts.erase(it);
+      }
+      persist_pending_recovery();
+      return true;
+    }
+
+    static bool restore_all() {
+      std::vector<std::string> names;
+      {
+        std::lock_guard<std::mutex> lock(layouts_mutex);
+        for (const auto &[name, layout] : layouts) {
+          if (layout.physical_output_disabled) {
+            names.push_back(name);
+          }
+        }
+      }
       bool restored = true;
-      if (!it->second.original_outputs.empty()) {
-        restored = run_layout_command(enable_outputs_command(it->second.original_outputs));
+      for (const auto &name : names) {
+        restored = restore(name, false) && restored;
       }
-      if (restored) {
-        clear_recovery_state();
-      } else {
-        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Physical output restoration failed; retaining recovery state for the next startup.";
+      return restored;
+    }
+
+    static bool retry_pending_restores() {
+      std::vector<std::pair<std::string, bool>> pending;
+      bool retry_startup = false;
+      {
+        std::lock_guard<std::mutex> lock(layouts_mutex);
+        retry_startup = startup_recovery_pending;
+        for (const auto &[name, layout] : layouts) {
+          if (layout.restore_pending && layout.release_requested) {
+            pending.emplace_back(name, layout.release_requested);
+          }
+        }
       }
-      layouts.erase(it);
+      if (retry_startup) {
+        recover_on_startup();
+      }
+      bool restored = true;
+      for (const auto &[name, release_layout] : pending) {
+        restored = restore(name, release_layout) && restored;
+      }
+      std::lock_guard<std::mutex> lock(layouts_mutex);
+      return restored && !startup_recovery_pending;
     }
 
     // ------------------------------------------------------------------
@@ -3643,7 +3652,7 @@ namespace VDISPLAY {
     static void restore_input_bindings(const input_binding_t &binding) {
       for (std::size_t i = 0; i < bound_device_names.size(); ++i) {
         const auto command = input_binding_restore_command(bound_device_names[i], binding.previous_uuids[i]);
-        if (command.empty() || std::system(command.c_str()) != 0) {
+        if (command.empty() || !boundedCommandOutput(command, command_timeout, nullptr)) {
           BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not restore the output " << bound_device_names[i]
                              << " was bound to before the session.";
         }
@@ -3715,6 +3724,10 @@ namespace VDISPLAY {
                            << ". Touch input will land where KWin guesses.";
         return;
       }
+      // The input pump is joined during teardown. Bound synchronous KWin
+      // property calls so a disappearing compositor cannot hold that join
+      // behind sd-bus's default 25-second timeout for each property.
+      sd_bus_set_method_call_timeout(started->bus, 2000000);
       const int matched = sd_bus_match_signal(
         started->bus,
         &started->slot,
@@ -3781,7 +3794,7 @@ namespace VDISPLAY {
         {
           std::lock_guard<std::mutex> layouts_lock(layouts_mutex);
           for (const auto &[name, layout] : layouts) {
-            if (name != display_name && safe_output_name(layout.virtual_output)) {
+            if (name != display_name && !layout.release_requested && safe_output_name(layout.virtual_output)) {
               successor = name;
               successor_output = layout.virtual_output;
               break;
@@ -6497,6 +6510,7 @@ namespace VDISPLAY {
   // ============================================================================
 
   DRIVER_STATUS openVDisplayDevice() {
+    std::lock_guard<std::mutex> lifecycle_lock(vdisplay_lifecycle_mutex);
     std::lock_guard<std::mutex> lock(vdisplay_mutex);
 
     if (driver_status == DRIVER_STATUS::OK) {
@@ -6622,36 +6636,19 @@ namespace VDISPLAY {
         watchdog_thread.join();
       }
     }
-    stop_evdi_events_thread();
-
-    std::lock_guard<std::mutex> lock(vdisplay_mutex);
+    std::lock_guard<std::mutex> lifecycle_lock(vdisplay_lifecycle_mutex);
+    std::unique_lock<std::mutex> lock(vdisplay_mutex);
 
     release_parked_locked("Hermes is shutting down.");
-
-    // Clean up all virtual displays
-    for (auto &[guid, vdinfo] : virtual_displays) {
-      if (vdinfo.active) {
-        if (vdinfo.using_evdi && vdinfo.handle) {
-          if (vdinfo.evdi_buffer_id > 0) {
-            evdi.unregister_buffer(vdinfo.handle, vdinfo.evdi_buffer_id);
-          }
-          evdi.disconnect(vdinfo.handle);
-          evdi.close(vdinfo.handle);
-        }
-        if (vdinfo.using_hermes_kms && vdinfo.drm_fd >= 0) {
-          hermes_kms::set_output(vdinfo.drm_fd, false, 0, 0, 0, vdinfo.session_id);
-        }
-        if (vdinfo.drm_fd >= 0) {
-          ::close(vdinfo.drm_fd);
-        }
-        kscreen::restore(vdinfo.name);
-        kscreen::unmap_input_devices(vdinfo.name);
-        mutter::restore(vdinfo.name);
-        mutter::unmap_input_devices();
-      }
-      hermes_kms::forget_secret(vdinfo.session_token.data(), sizeof(vdinfo.session_token));
+    while (!virtual_displays.empty()) {
+      const auto guid = virtual_displays.begin()->first;
+      remove_virtual_display_locked(guid, lock, true);
     }
-    virtual_displays.clear();
+    // An orphaned layout can remain after a post-hotplug verification failure.
+    lock.unlock();
+    kscreen::retry_pending_restores();
+    stop_evdi_events_thread();
+    lock.lock();
 
     // Unload EVDI library
     unload_evdi_library();
@@ -6680,6 +6677,7 @@ namespace VDISPLAY {
         }
 
         bool display_lost = false;
+        std::vector<std::string> pending_removals;
         {
           std::lock_guard<std::mutex> lock(vdisplay_mutex);
           // The output kept for the greeter has done its job once a user
@@ -6689,6 +6687,10 @@ namespace VDISPLAY {
             release_parked_locked("the greeter no longer holds the seat.");
           }
           for (const auto &[guid, vdinfo] : virtual_displays) {
+            if (vdinfo.removal_pending) {
+              pending_removals.push_back(guid);
+              continue;
+            }
             if (vdinfo.active && vdinfo.using_evdi && vdinfo.handle) {
               // Check EVDI device health
               int ready = evdi.get_event_ready(vdinfo.handle);
@@ -6704,6 +6706,19 @@ namespace VDISPLAY {
                 display_lost = true;
                 break;
               }
+            }
+          }
+        }
+
+        {
+          std::lock_guard<std::mutex> lifecycle_lock(vdisplay_lifecycle_mutex);
+          // Compositor calls must not hold vdisplay_mutex: EVDI needs its
+          // event pump to acknowledge pageflips during output transitions.
+          kscreen::retry_pending_restores();
+          std::unique_lock<std::mutex> lock(vdisplay_mutex);
+          for (const auto &guid : pending_removals) {
+            if (virtual_displays.contains(guid)) {
+              remove_virtual_display_locked(guid, lock);
             }
           }
         }
@@ -6743,9 +6758,27 @@ namespace VDISPLAY {
     uint32_t fps,
     const uuid_util::uuid_t &guid,
     std::optional<uid_t> session_owner_uid,
-    virtual_display_layout_e layout
+    virtual_display_layout_e layout,
+    bool isolated_session
   ) {
-    std::lock_guard<std::mutex> lock(vdisplay_mutex);
+    std::lock_guard<std::mutex> lifecycle_lock(vdisplay_lifecycle_mutex);
+    if (!kscreen::retry_pending_restores()) {
+      BOOST_LOG(error) << "[VDISPLAY/KScreen] A physical output restoration is still pending; delaying virtual display creation.";
+      return {};
+    }
+    std::unique_lock<std::mutex> lock(vdisplay_mutex);
+    std::vector<std::string> pending_removals;
+    for (const auto &[name, display] : virtual_displays) {
+      if (display.removal_pending) {
+        pending_removals.push_back(name);
+      }
+    }
+    for (const auto &name : pending_removals) {
+      if (!remove_virtual_display_locked(name, lock)) {
+        BOOST_LOG(error) << "[VDISPLAY] A previous virtual display is still being released.";
+        return {};
+      }
+    }
 
     if (driver_status != DRIVER_STATUS::OK) {
       BOOST_LOG(error) << "[VDISPLAY] Driver not initialized.";
@@ -6844,7 +6877,7 @@ namespace VDISPLAY {
       // has to use: releasing it to claim a fresh one would be the very unplug
       // it was kept to avoid. It is already owned and lit, so only the mode and
       // a capability for the new consumers are needed.
-      if (parked_display && !config::video.hermes_kms_isolated_sessions) {
+      if (parked_display && !isolated_session) {
         uint64_t parked_session = parked_display->session_id;
         bool mode_set = false;
         // The driver rate-limits output changes; like a fresh claim, a refusal
@@ -6891,7 +6924,7 @@ namespace VDISPLAY {
 
       if (adopted) {
         // Nothing to claim.
-      } else if (config::video.hermes_kms_isolated_sessions) {
+      } else if (isolated_session) {
         claimed = hermes_kms::claim_available_device_output(
           device,
           width,
@@ -6963,7 +6996,7 @@ namespace VDISPLAY {
                         << " requested=" << status.requested_width << 'x' << status.requested_height
                         << '@' << status.requested_refresh_hz
                         << " flags=0x" << std::hex << status.flags << std::dec;
-        if (!config::video.hermes_kms_isolated_sessions &&
+        if (!isolated_session &&
             !vdinfo.connector_name.empty()) {
           kscreen::activate_evdi_output(
             vdinfo.name,
@@ -7072,11 +7105,11 @@ namespace VDISPLAY {
     return display_name;
   }
 
-  bool removeVirtualDisplay(const uuid_util::uuid_t &guid) {
-    std::lock_guard<std::mutex> lock(vdisplay_mutex);
-
-    std::string guid_str = guid.string();
-
+  static bool remove_virtual_display_locked(
+    const std::string &guid_str,
+    std::unique_lock<std::mutex> &lock,
+    bool shutting_down
+  ) {
     auto it = virtual_displays.find(guid_str);
     if (it == virtual_displays.end()) {
       BOOST_LOG(warning) << "[VDISPLAY] Virtual display not found: " << guid_str;
@@ -7085,6 +7118,22 @@ namespace VDISPLAY {
 
     auto &vdinfo = it->second;
     BOOST_LOG(info) << "[VDISPLAY] Removing virtual display: " << vdinfo.name;
+    vdinfo.removal_pending = true;
+    // Keep the owner fd and virtual output alive until physical restoration
+    // is confirmed. Release the registry lock while KWin applies its layout,
+    // so EVDI pageflips and status queries can continue to make progress.
+    lock.unlock();
+    const bool physical_restored = kscreen::restore(vdinfo.name, false);
+    lock.lock();
+    if (!physical_restored && !shutting_down) {
+      BOOST_LOG(warning) << "[VDISPLAY] Deferring removal of " << vdinfo.name
+                         << " until physical output restoration can be confirmed.";
+      return false;
+    }
+    if (!physical_restored) {
+      BOOST_LOG(warning) << "[VDISPLAY] Physical output restoration remains pending at shutdown; "
+                            "the saved layout will be retried on startup.";
+    }
 
     if (vdinfo.using_evdi && vdinfo.handle) {
       if (vdinfo.evdi_buffer_id > 0) {
@@ -7119,7 +7168,7 @@ namespace VDISPLAY {
       // what this output is showing, the display goes and the output stays.
       // Only the host seat's card qualifies - a private seat or a broker card
       // never carries the greeter.
-      if (!parked_display && vdinfo.broker_card.empty() && vdinfo.session_index < 0 &&
+      if (!shutting_down && !parked_display && vdinfo.broker_card.empty() && vdinfo.session_index < 0 &&
           removalStrandsGreeter(
             greeter_holds_seat().value_or(false),
             waitForConnectorEnabled(vdinfo.connector_name, std::chrono::milliseconds {0}),
@@ -7129,10 +7178,13 @@ namespace VDISPLAY {
                            "the seat and this is its only output. The next session reuses it, and it is released "
                            "once someone has logged in.";
         hermes_kms::forget_secret(vdinfo.session_token.data(), sizeof(vdinfo.session_token));
+        lock.unlock();
         kscreen::restore(vdinfo.name);
         kscreen::unmap_input_devices(vdinfo.name);
         mutter::restore(vdinfo.name);
         mutter::unmap_input_devices();
+        lock.lock();
+        vdinfo.removal_pending = false;
         parked_display = std::move(vdinfo);
         virtual_displays.erase(it);
         return true;
@@ -7147,11 +7199,13 @@ namespace VDISPLAY {
       hyprland::remove_output(vdinfo.connector_name);
     }
     hermes_kms::forget_secret(vdinfo.session_token.data(), sizeof(vdinfo.session_token));
+    lock.unlock();
     kscreen::restore(vdinfo.name);
     kscreen::unmap_input_devices(vdinfo.name);
     mutter::restore(vdinfo.name);
     mutter::unmap_input_devices();
 
+    lock.lock();
     if (vdinfo.drm_fd >= 0) {
       ::close(vdinfo.drm_fd);
     }
@@ -7164,6 +7218,12 @@ namespace VDISPLAY {
 
     BOOST_LOG(info) << "[VDISPLAY] Virtual display removed successfully.";
     return true;
+  }
+
+  bool removeVirtualDisplay(const uuid_util::uuid_t &guid) {
+    std::lock_guard<std::mutex> lifecycle_lock(vdisplay_lifecycle_mutex);
+    std::unique_lock<std::mutex> lock(vdisplay_mutex);
+    return remove_virtual_display_locked(guid.string(), lock);
   }
 
   static std::string virtual_display_connector_name(const std::string &display_name);
@@ -7780,6 +7840,7 @@ namespace VDISPLAY {
   }
 
   bool enableExclusiveVirtualDisplay(const std::string &displayName) {
+    std::lock_guard<std::mutex> lifecycle_lock(vdisplay_lifecycle_mutex);
     if (window_system == window_system_e::WAYLAND && kscreen::is_active(displayName)) {
       const bool enabled = kscreen::make_exclusive(displayName);
       if (enabled) {
@@ -7849,7 +7910,15 @@ namespace VDISPLAY {
   }
 
   void restoreExclusiveVirtualDisplay() {
+    std::lock_guard<std::mutex> lifecycle_lock(vdisplay_lifecycle_mutex);
     if (!exclusive_virtual_display_active) {
+      return;
+    }
+
+    if (window_system == window_system_e::WAYLAND && kscreen::available()) {
+      if (kscreen::restore_all()) {
+        exclusive_virtual_display_active = false;
+      }
       return;
     }
 

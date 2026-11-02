@@ -1,0 +1,6 @@
+# Apply account ACLs after the distribution's uaccess rules and before the
+# add event is published. SDL's udev path may not retry an initial denied open.
+# The root-only helper accepts a numbered kernel node name; it derives UID and
+# ownership independently from the broker's trusted lease and sysfs identity.
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="event*|js*", ENV{ID_SEAT}=="hermes-kms-*", TEST=="/usr/bin/hermes-session-broker", RUN+="/usr/bin/hermes-session-broker --input-node %k"
+ACTION=="add|change", SUBSYSTEM=="hidraw", ENV{ID_SEAT}=="hermes-kms-*", TEST=="/usr/bin/hermes-session-broker", RUN+="/usr/bin/hermes-session-broker --input-node %k"

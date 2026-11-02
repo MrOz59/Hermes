@@ -118,7 +118,7 @@
         },
         "supported_codecs": {
           "type": "array",
-          "items": { "enum": ["h264", "hevc", "av1"] },
+          "items": { "enum": ["h264", "hevc", "av1", "pyrowave"] },
           "uniqueItems": true
         }
       }

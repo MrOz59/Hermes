@@ -86,3 +86,40 @@ TEST_F(EncoderStatusTest, ProbeRecordsAttempts) {
     ASSERT_GT(status.attempts.size(), 1u);
   }
 }
+
+namespace {
+  video::config_t pyrowave_config(int width, int height, int framerate, int bitrate_kbps) {
+    video::config_t config {};
+    config.width = width;
+    config.height = height;
+    config.framerate = framerate;
+    config.bitrate = bitrate_kbps;
+    config.videoFormat = video::PYROWAVE_VIDEO_FORMAT;
+    return config;
+  }
+}  // namespace
+
+TEST(PyroWaveFrameBudget, SpreadsTheBitrateOverTheFrameRate) {
+  // 300 Mbps at 60 fps: 5 Mbit, or 625000 bytes, per frame.
+  EXPECT_EQ(video::pyrowave_frame_budget(pyrowave_config(1920, 1080, 60, 300000)), 625000u);
+}
+
+TEST(PyroWaveFrameBudget, AcceptsAFrameRateInThousandths) {
+  EXPECT_EQ(
+    video::pyrowave_frame_budget(pyrowave_config(1920, 1080, 60000, 300000)),
+    video::pyrowave_frame_budget(pyrowave_config(1920, 1080, 60, 300000))
+  );
+}
+
+TEST(PyroWaveFrameBudget, NeverExceedsAnUncompressedFrame) {
+  // 2 Gbps at 30 fps would allow 8.3 MB, but a 1080p 4:2:0 frame is 3.1 MB.
+  EXPECT_EQ(video::pyrowave_frame_budget(pyrowave_config(1920, 1080, 30, 2000000)), 1920u * 1080u * 3u / 2u);
+}
+
+TEST(PyroWaveFrameBudget, KeepsAFloorForTinyBitrates) {
+  EXPECT_EQ(video::pyrowave_frame_budget(pyrowave_config(1920, 1080, 120, 500)), 16u * 1024u);
+}
+
+TEST(PyroWaveFrameBudget, SurvivesAMissingFrameRateOrBitrate) {
+  EXPECT_EQ(video::pyrowave_frame_budget(pyrowave_config(1280, 720, 0, 0)), 16u * 1024u);
+}

@@ -4,101 +4,27 @@
  */
 #include "session_broker.h"
 
-#include <array>
-#include <cerrno>
-#include <chrono>
-#include <cstdlib>
-#include <cstring>
-#include <sstream>
-
-#include <fcntl.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/un.h>
-#include <unistd.h>
-
+#include "session_broker_transport.h"
 #include "src/logging.h"
-#include "src/utility.h"
+
+#include <algorithm>
+#include <charconv>
+#include <cstdlib>
+#include <limits>
+#include <sstream>
+#include <sys/stat.h>
 
 namespace platf::session_broker {
 
   namespace {
 
     constexpr const char *default_socket_path = "/run/hermes/session-broker.sock";
-    constexpr size_t max_reply_bytes = 4096;
 
-    // The whole conversation - connect, request, reply - shares one deadline.
-    // It is generous on purpose: the broker accepts serially and an ENSURE may
-    // have to wait out another client's slow connection and then create an
-    // account. A broker that cannot answer within it is one that must not
-    // hang the launch (and, through the liveness poll, the session machinery)
-    // behind it.
-    constexpr auto broker_timeout = std::chrono::seconds(15);
-
-    /**
-     * @brief Wait until `fd` is ready for `events` or the deadline passes.
-     *
-     * True when the descriptor is ready (or hung up, which the read or write
-     * that follows reports precisely); false when the deadline passed first.
-     */
-    bool wait_ready(int fd, short events, std::chrono::steady_clock::time_point deadline) {
-      for (;;) {
-        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-          deadline - std::chrono::steady_clock::now());
-        if (remaining.count() <= 0) {
-          return false;
-        }
-        pollfd descriptor {fd, events, 0};
-        const int ready = ::poll(&descriptor, 1, static_cast<int>(remaining.count()));
-        if (ready > 0) {
-          return (descriptor.revents & (events | POLLERR | POLLHUP | POLLNVAL)) != 0;
-        }
-        if (ready == 0) {
-          return false;
-        }
-        if (errno != EINTR) {
-          return false;
-        }
-      }
-    }
-
-    /**
-     * @brief connect() with a deadline.
-     *
-     * A full listen backlog makes connect block indefinitely; with the
-     * broker stalled that would freeze the caller in the one place the
-     * deadline cannot otherwise reach.
-     */
-    bool connect_with_timeout(int fd, const sockaddr *address, socklen_t length,
-                              std::chrono::steady_clock::time_point deadline) {
-      const int flags = ::fcntl(fd, F_GETFL, 0);
-      if (flags >= 0) {
-        ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-      }
-
-      int result = ::connect(fd, address, length);
-      if (result != 0 && (errno == EINPROGRESS || errno == EAGAIN)) {
-        if (!wait_ready(fd, POLLOUT, deadline)) {
-          result = -1;
-          errno = ETIMEDOUT;
-        } else {
-          int socket_error = 0;
-          socklen_t error_length = sizeof(socket_error);
-          if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &error_length) != 0 ||
-              socket_error != 0) {
-            errno = socket_error != 0 ? socket_error : errno;
-            result = -1;
-          } else {
-            result = 0;
-          }
-        }
-      }
-
-      if (flags >= 0) {
-        ::fcntl(fd, F_SETFL, flags);  // Restore blocking mode.
-      }
-      return result == 0;
+    bool valid_client_id(std::string_view value) {
+      return !value.empty() && value.size() <= 64 && std::ranges::all_of(value, [](char ch) {
+        return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') ||
+               (ch >= 'A' && ch <= 'F') || ch == '-';
+      });
     }
 
     std::string socket_path() {
@@ -120,77 +46,11 @@ namespace platf::session_broker {
      * without either being split on whitespace.
      */
     std::optional<std::string> ask(const std::string &request) {
-      const auto path = socket_path();
-      sockaddr_un address {};
-      address.sun_family = AF_UNIX;
-      if (path.size() >= sizeof(address.sun_path)) {
-        BOOST_LOG(error) << "[session-broker] Socket path is too long: " << path;
-        return std::nullopt;
+      auto result = detail::exchange(socket_path(), request, detail::request_timeout(request));
+      if (!result.reply) {
+        BOOST_LOG(warning) << "[session-broker] " << result.error;
       }
-      std::memcpy(address.sun_path, path.c_str(), path.size());
-
-      const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-      if (fd < 0) {
-        BOOST_LOG(error) << "[session-broker] Could not create a socket: " << std::strerror(errno);
-        return std::nullopt;
-      }
-      auto guard = util::fail_guard([fd]() {
-        ::close(fd);
-      });
-
-      const auto deadline = std::chrono::steady_clock::now() + broker_timeout;
-      if (!connect_with_timeout(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address), deadline)) {
-        BOOST_LOG(debug) << "[session-broker] No broker at " << path << ": " << std::strerror(errno);
-        return std::nullopt;
-      }
-
-      // Partial writes are the normal case once a request carries a desktop's
-      // worth of environment, so this loops where a single-line protocol could
-      // get away with one write.
-      size_t offset = 0;
-      while (offset < request.size()) {
-        if (!wait_ready(fd, POLLOUT, deadline)) {
-          BOOST_LOG(error) << "[session-broker] Timed out sending the request to the broker.";
-          return std::nullopt;
-        }
-        const ssize_t count = ::write(fd, request.data() + offset, request.size() - offset);
-        if (count <= 0) {
-          BOOST_LOG(error) << "[session-broker] Could not send the request: " << std::strerror(errno);
-          return std::nullopt;
-        }
-        offset += static_cast<size_t>(count);
-      }
-      ::shutdown(fd, SHUT_WR);
-
-      std::string reply;
-      std::array<char, 512> buffer {};
-      while (reply.size() < max_reply_bytes) {
-        if (!wait_ready(fd, POLLIN, deadline)) {
-          BOOST_LOG(error) << "[session-broker] Timed out waiting for the broker's reply.";
-          return std::nullopt;
-        }
-        const ssize_t count = ::read(fd, buffer.data(), buffer.size());
-        if (count < 0) {
-          BOOST_LOG(error) << "[session-broker] Could not read the reply: " << std::strerror(errno);
-          return std::nullopt;
-        }
-        if (count == 0) {
-          break;
-        }
-        reply.append(buffer.data(), static_cast<size_t>(count));
-        if (reply.find('\n') != std::string::npos) {
-          break;
-        }
-      }
-
-      if (const auto newline = reply.find('\n'); newline != std::string::npos) {
-        reply.resize(newline);
-      }
-      if (reply.empty()) {
-        BOOST_LOG(error) << "[session-broker] The broker closed without answering.";
-        return std::nullopt;
-      }
-      return reply;
+      return std::move(result.reply);
     }
 
     std::vector<std::string> fields(const std::string &line) {
@@ -231,27 +91,31 @@ namespace platf::session_broker {
       const std::optional<std::string> &reply,
       const char *request
     ) {
-      const auto parts = succeeded(reply, request);
-      if (!parts) {
+      if (!reply) {
         return std::nullopt;
       }
-      if (parts->size() < 3) {
-        BOOST_LOG(error) << "[session-broker] " << request << " returned an incomplete account.";
-        return std::nullopt;
-      }
-
+      std::istringstream stream {*reply};
+      std::string tag, uid_text;
       account_t account;
-      account.user = (*parts)[0];
-      account.home = (*parts)[2];
-      // A uid of 0 would mean the session runs as root, so a value that does
-      // not parse is refused rather than defaulted.
-      const auto uid = std::strtoul((*parts)[1].c_str(), nullptr, 10);
-      if (uid == 0 || uid > 0xFFFFFFFFUL) {
-        BOOST_LOG(error) << "[session-broker] " << request << " returned an unusable uid: "
-                         << (*parts)[1];
+      if (!(stream >> tag >> account.user >> uid_text) || tag != "OK") {
+        BOOST_LOG(warning) << "[session-broker] " << request << " was refused or malformed: " << *reply;
         return std::nullopt;
       }
-      account.uid = static_cast<uid_t>(uid);
+      std::getline(stream, account.home);
+      if (account.home.starts_with(' ')) {
+        account.home.erase(0, 1);
+      }
+      const auto parsed = std::from_chars(uid_text.data(), uid_text.data() + uid_text.size(), account.uid);
+      const bool name = account.user.starts_with("hermes-s") && account.user.size() >= 9 && account.user.size() <= 16 &&
+                        std::ranges::all_of(std::string_view {account.user}.substr(8), [](char ch) {
+                          return ch >= '0' && ch <= '9';
+                        });
+      if (!name || account.home.empty() || account.home.front() != '/' ||
+          parsed.ec != std::errc {} || parsed.ptr != uid_text.data() + uid_text.size() ||
+          account.uid == 0 || account.uid == std::numeric_limits<uid_t>::max()) {
+        BOOST_LOG(error) << "[session-broker] " << request << " returned an unusable account: " << *reply;
+        return std::nullopt;
+      }
       return account;
     }
 
@@ -259,11 +123,12 @@ namespace platf::session_broker {
 
   bool available() {
     struct stat info {};
+
     return ::stat(socket_path().c_str(), &info) == 0 && S_ISSOCK(info.st_mode);
   }
 
   std::optional<account_t> ensure(const std::string &client_uuid) {
-    if (client_uuid.empty()) {
+    if (!valid_client_id(client_uuid)) {
       return std::nullopt;
     }
     const auto account = account_from(ask("ENSURE " + client_uuid + "\n"), "ENSURE");
@@ -275,7 +140,7 @@ namespace platf::session_broker {
   }
 
   std::optional<account_t> lookup(const std::string &client_uuid) {
-    if (client_uuid.empty()) {
+    if (!valid_client_id(client_uuid)) {
       return std::nullopt;
     }
     return account_from(ask("LOOKUP " + client_uuid + "\n"), "LOOKUP");
@@ -287,7 +152,13 @@ namespace platf::session_broker {
     const std::vector<std::string> &environment,
     const std::string &scope
   ) {
-    if (client_uuid.empty() || arguments.empty()) {
+    if (!valid_client_id(client_uuid) || arguments.empty()) {
+      return std::nullopt;
+    }
+    if (scope.size() > 16 || !std::ranges::all_of(scope, [](char ch) {
+          return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9');
+        })) {
+      BOOST_LOG(error) << "[session-broker] Refusing a malformed application scope.";
       return std::nullopt;
     }
 
@@ -325,7 +196,7 @@ namespace platf::session_broker {
   }
 
   std::optional<std::string> wayland_socket(const std::string &client_uuid) {
-    if (client_uuid.empty()) {
+    if (!valid_client_id(client_uuid)) {
       return std::nullopt;
     }
     // Quiet on failure: this is polled while a compositor starts, and for most
@@ -341,24 +212,42 @@ namespace platf::session_broker {
     return parts[1];
   }
 
-  bool active(const std::string &client_uuid) {
-    if (client_uuid.empty()) {
+  std::optional<bool> query_active(const std::string &client_uuid) {
+    if (!valid_client_id(client_uuid)) {
       return false;
     }
-    const auto parts = succeeded(ask("STATUS " + client_uuid + "\n"), "STATUS");
-    if (!parts || parts->empty()) {
+    const auto reply = ask("STATUS " + client_uuid + "\n");
+    if (reply && reply->starts_with("ERR notfound ")) {
       return false;
     }
-    // A unit that is still starting is running as far as the caller is
-    // concerned. Reading only `active` here would report a compositor that
-    // systemd has not finished launching as one that already died, and the
-    // launch would be abandoned a few milliseconds before it succeeded.
+    const auto parts = succeeded(reply, "STATUS");
+    if (!parts || parts->size() != 2) {
+      return std::nullopt;
+    }
+    constexpr std::string_view prefix {"hermes-session-"}, suffix {".service"};
+    const std::string_view unit {parts->back()};
+    if (!unit.starts_with(prefix) || !unit.ends_with(suffix) || unit.size() <= prefix.size() + suffix.size() ||
+        !std::ranges::all_of(unit.substr(prefix.size(), unit.size() - prefix.size() - suffix.size()), [](char ch) {
+          return ch >= '0' && ch <= '9';
+        })) {
+      return std::nullopt;
+    }
     const auto &state = parts->front();
-    return state == "active" || state == "activating" || state == "reloading";
+    if (state == "active" || state == "activating" || state == "reloading") {
+      return true;
+    }
+    if (state == "inactive" || state == "failed" || state == "deactivating") {
+      return false;
+    }
+    return std::nullopt;
+  }
+
+  bool active(const std::string &client_uuid) {
+    return query_active(client_uuid).value_or(false);
   }
 
   bool stop(const std::string &client_uuid) {
-    if (client_uuid.empty()) {
+    if (!valid_client_id(client_uuid)) {
       return false;
     }
     return succeeded(ask("STOP " + client_uuid + "\n"), "STOP").has_value();

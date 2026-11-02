@@ -54,7 +54,7 @@ const configFlagEnabled = (value) => {
 const hermesKmsMultiOutputEnabled = computed(() => configFlagEnabled(props.config.hermes_kms_multi_output))
 const hermesKmsIsolatedSessionsEnabled = computed(() => configFlagEnabled(props.config.hermes_kms_isolated_sessions))
 const hermesKmsSharedMultiOutputEnabled = computed(
-  () => hermesKmsMultiOutputEnabled.value && !hermesKmsIsolatedSessionsEnabled.value
+  () => hermesKmsMultiOutputEnabled.value
 )
 const isolatedVirtualDisplayEnabled = computed(() => configFlagEnabled(props.config.isolated_virtual_display_option))
 
@@ -421,6 +421,15 @@ const validateFallbackMode = (event) => {
               locale-prefix="config"
               v-model="config.stream_audio"
               default="true"
+    ></Checkbox>
+
+    <!-- Client microphone into independent sessions -->
+    <Checkbox v-if="platform === 'linux'"
+              class="mb-3"
+              id="stream_mic"
+              locale-prefix="config"
+              v-model="config.stream_mic"
+              default="false"
     ></Checkbox>
 
     <AdapterNameSelector

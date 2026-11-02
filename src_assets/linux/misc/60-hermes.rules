@@ -4,22 +4,53 @@ KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", GROUP="input
 # Allows Sunshine to access /dev/uhid
 KERNEL=="uhid", GROUP="input", MODE="0660", TAG+="uaccess"
 
-# Joypads
+# libvirtualhid's UHID controllers are renamed by kernel drivers (for example,
+# hid-playstation exposes every DualSense as "Wireless Controller"), so device
+# names are not a safe ownership or isolation key. Mark the HID parent from its
+# physical identity, then pass that marker through input/input-event and hidraw
+# children. This also grants the client-visible hidraw node without matching a
+# real controller that happens to have the same name.
+SUBSYSTEM=="hid", ENV{HID_PHYS}=="libvirtualhid/uhid/*", ENV{HERMES_VIRTUAL_INPUT}="1"
+SUBSYSTEM=="hid", ENV{HID_PHYS}=="hermes-kms-[0-9]*", ENV{HERMES_VIRTUAL_INPUT}="1", ENV{ID_SEAT}="$env{HID_PHYS}"
+
+# A UHID controller's input device is two levels below the HID parent. Running
+# the same import for inputN and then eventN/jsN propagates both properties to
+# the node consumed by libinput, SDL and games. hidraw is a direct HID child.
+# Imports must be unconditional: ATTR{phys} does not exist on event/js nodes,
+# and even a negative ATTR comparison does not match a missing attribute.
+SUBSYSTEM=="input", IMPORT{parent}="HERMES_VIRTUAL_INPUT"
+SUBSYSTEM=="input", IMPORT{parent}="ID_SEAT"
+SUBSYSTEM=="hidraw", IMPORT{parent}="HERMES_VIRTUAL_INPUT"
+SUBSYSTEM=="hidraw", IMPORT{parent}="ID_SEAT"
+
+# Match inputN itself, where phys exists, then its children import this value.
+# This supports broker-allocated seats beyond the old 1..8 pool.
+SUBSYSTEM=="input", ATTR{phys}=="hermes-kms-[0-9]*", ENV{HERMES_VIRTUAL_INPUT}="1", ENV{ID_SEAT}="$attr{phys}"
+SUBSYSTEM=="input", ENV{HERMES_VIRTUAL_INPUT}=="1", GROUP:="input", MODE:="0660", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ENV{HERMES_VIRTUAL_INPUT}=="1", GROUP:="input", MODE:="0660", TAG+="uaccess"
+
+# Legacy name-based joypad rules also cover the uinput fallback and older
+# installations. UHID devices use the identity rules above.
 KERNEL=="hidraw*", ATTRS{name}=="Sunshine PS5 (virtual) pad", GROUP="input", MODE="0660", TAG+="uaccess"
 SUBSYSTEMS=="input", ATTRS{name}=="Sunshine X-Box One (virtual) pad", GROUP="input", MODE="0660", TAG+="uaccess"
 SUBSYSTEMS=="input", ATTRS{name}=="Sunshine gamepad (virtual) motion sensors", GROUP="input", MODE="0660", TAG+="uaccess"
 SUBSYSTEMS=="input", ATTRS{name}=="Sunshine Nintendo (virtual) pad", GROUP="input", MODE="0660", TAG+="uaccess"
 
-# Experimental isolated sessions stamp the independent DRM seat
-# (hermes-kms-N) into the uinput phys field. Assign those devices to the
-# matching compositor seat so one client's keyboard/mouse/touch devices do not
-# enter another desktop. Explicit rules avoid relying on unsupported dynamic
-# ATTRS substitution.
-SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-1", ENV{ID_SEAT}="hermes-kms-1", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
-SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-2", ENV{ID_SEAT}="hermes-kms-2", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
-SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-3", ENV{ID_SEAT}="hermes-kms-3", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
-SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-4", ENV{ID_SEAT}="hermes-kms-4", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
-SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-5", ENV{ID_SEAT}="hermes-kms-5", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
-SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-6", ENV{ID_SEAT}="hermes-kms-6", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
-SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-7", ENV{ID_SEAT}="hermes-kms-7", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
-SUBSYSTEM=="input", ATTRS{phys}=="hermes-kms-8", ENV{ID_SEAT}="hermes-kms-8", TAG+="seat", GROUP="input", MODE="0660", TAG+="uaccess"
+# Steam Input pads (uinput, Valve, no phys) made inside a session or detached
+# desktop with a private /dev join its seat, so the desktop gets no ACL for them; Hermes copies them
+# into the session. The session is the one whose mount namespace (in Hermes'
+# seat flag) alone holds /dev/uinput, Hermes aside; a uinput device records
+# no creator.
+SUBSYSTEM=="input", KERNEL=="event*|js*", DEVPATH=="/devices/virtual/input/*", ATTRS{id/vendor}=="28de", ATTRS{phys}=="", IMPORT{program}="/bin/sh -c 'uid=$$(cat /etc/hermes-kms/session-user) || exit 0; holders=$$(find /proc/[0-9]*/fd -lname /dev/uinput 2>/dev/null | cut -d/ -f3 | sort -u); for flag in /run/user/$$uid/hermes/isolated/hermes-kms-* /run/user/$$uid/hermes/isolated/hermes-detached-*; do [ -f $$flag ] || continue; read ns hermes < $$flag; found=0; for pid in $$holders; do [ $$pid = $$hermes ] && continue; [ x$$(readlink /proc/$$pid/ns/mnt) = x$$ns ] || { found=0; break; }; found=1; done; [ $$found = 1 ] && echo ID_SEAT=$${flag##*/} && exit 0; done; exit 0'"
+SUBSYSTEM=="input", ENV{ID_SEAT}=="hermes-kms-*", TAG+="seat", GROUP:="input", MODE:="0660", TAG+="uaccess"
+# Detached desktops run as the same user as the host desktop, so no group, mode
+# or ACL could give one of them a device that the user's host applications
+# could not open too. A client's gamepads made for a detached desktop carry its
+# tag in phys. Keep them off every seat and closed to every user; Hermes gives
+# the desktop its own copies of their nodes in its private /dev.
+SUBSYSTEM=="hid", ENV{HID_PHYS}=="hermes-detached-*", ENV{HERMES_DETACHED_INPUT}="1", ENV{ID_SEAT}="$env{HID_PHYS}"
+SUBSYSTEM=="input", ATTR{phys}=="hermes-detached-*", ENV{HERMES_DETACHED_INPUT}="1", ENV{ID_SEAT}="$attr{phys}"
+SUBSYSTEM=="input|hidraw", IMPORT{parent}="HERMES_DETACHED_INPUT"
+SUBSYSTEM=="input|hidraw", ENV{HERMES_DETACHED_INPUT}=="1", TAG+="seat", OWNER:="root", GROUP:="root", MODE:="0600"
+# The Steam Input pads a Steam in a detached desktop makes, likewise.
+SUBSYSTEM=="input", ENV{ID_SEAT}=="hermes-detached-*", TAG+="seat", OWNER:="root", GROUP:="root", MODE:="0600"

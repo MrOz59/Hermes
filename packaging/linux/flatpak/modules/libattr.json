@@ -1,0 +1,14 @@
+{
+  "name": "libattr",
+  "buildsystem": "autotools",
+  "config-opts": [
+    "--disable-static"
+  ],
+  "sources": [
+    {
+      "type": "archive",
+      "url": "https://download.savannah.nongnu.org/releases/attr/attr-2.5.2.tar.xz",
+      "sha256": "f2e97b0ab7ce293681ab701915766190d607a1dba7fae8a718138150b700a70b"
+    }
+  ]
+}

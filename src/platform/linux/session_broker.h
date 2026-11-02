@@ -16,9 +16,9 @@ namespace platf::session_broker {
    * @brief The account a paired client owns.
    *
    * The name and the home are derived by the broker from a slot, never from
-   * anything the client sent, so neither is a value this side chooses or needs
-   * to validate. The uid is what makes the isolation real: it is the only
-   * boundary on Linux the kernel enforces between one client's files and
+   * anything the client sent, so neither is a value this side chooses.
+   * Malformed account replies are refused. The uid makes the isolation real:
+   * it is the only boundary Linux enforces between one client's files and
    * another's, or the host's.
    */
   struct account_t {
@@ -41,7 +41,9 @@ namespace platf::session_broker {
    *
    * Idempotent: a client that comes back gets the account it had, which is what
    * makes its files still be there. Fails when the Hermes user is not in the
-   * broker's allow file, or when every configured slot is in use.
+   * broker's allow file, or when every configured slot is in use. Account and
+   * lifetime mutations have a bounded three-minute budget, including queues;
+   * read-only queries retain their short deadline.
    */
   std::optional<account_t> ensure(const std::string &client_uuid);
 
@@ -94,6 +96,16 @@ namespace platf::session_broker {
    * that knows, and the broker is how this side reaches it.
    */
   bool active(const std::string &client_uuid);
+
+  /**
+   * @brief Query liveness without treating communication failure as session exit.
+   * @return True for active/activating/reloading, false for a confirmed stopped
+   *         or unmapped session, nullopt for unavailable/malformed/unknown status.
+   *
+   * Lifecycle monitoring should use this query and preserve a live session on
+   * nullopt. The bool active() wrapper retains its older false-on-error contract.
+   */
+  std::optional<bool> query_active(const std::string &client_uuid);
 
   /**
    * @brief Stop the client's session unit. Stopping one that is already gone

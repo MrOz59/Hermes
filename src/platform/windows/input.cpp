@@ -1237,6 +1237,13 @@ namespace platf {
     raw->vigem->free_target(nr);
   }
 
+  void release_gamepad(input_t &input, int nr) {
+    free_gamepad(input, nr);
+  }
+
+  void forget_kept_gamepads(const std::string &) {
+  }
+
   /**
    * @brief Converts the standard button flags into X360 format.
    * @param gamepad_state The gamepad button/axis state sent from the client.

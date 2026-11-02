@@ -3,7 +3,10 @@
  * @brief Definitions for audio capture and encoding.
  */
 // standard includes
+#include <algorithm>
+#include <array>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <thread>
 
@@ -16,6 +19,9 @@
 #include "globals.h"
 #include "logging.h"
 #include "platform/common.h"
+#ifndef _WIN32
+  #include "platform/linux/session_audio.h"
+#endif
 #include "thread_safe.h"
 #include "utility.h"
 
@@ -140,10 +146,9 @@ namespace audio {
       apply_surround_params(stream, config.customStreamParams);
     }
 
-    auto ref = get_audio_ctx_ref();
-    if (!ref) {
-      return;
-    }
+    auto frame_size = config.packetDuration * stream.sampleRate / 1000;
+    std::function<std::unique_ptr<platf::mic_t>()> open_microphone;
+    audio_ctx_ref_t ref;
 
     auto init_failure_fg = util::fail_guard([&shutdown_event]() {
       BOOST_LOG(error) << "Unable to initialize audio capture. The stream will not have audio."sv;
@@ -154,68 +159,80 @@ namespace audio {
       return;
     });
 
-    auto &control = ref->control;
-    if (!control) {
-      return;
+#ifndef _WIN32
+    // A session with an audio server of its own is recorded there, without the
+    // host's audio control and the virtual sinks it adds to the host's server.
+    if (!config.session_server.empty()) {
+      open_microphone = [&]() {
+        return platf::session_audio::microphone(config.session_server, config.session_sink, stream.mapping, stream.channelCount, stream.sampleRate, frame_size);
+      };
     }
+#endif
 
-    // A session that owns a sink takes it and considers nothing else. Every
-    // priority below is a sink the whole machine shares, which is the one thing
-    // an isolated session must not record.
-    std::string session_sink = config.session_sink;
-
-    // Order of priority:
-    // 1. Virtual sink
-    // 2. Audio sink
-    // 3. Host
-    std::string *sink = &ref->sink.host;
-    if (!session_sink.empty()) {
-      sink = &session_sink;
-    } else if (!config::audio.sink.empty()) {
-      sink = &config::audio.sink;
-    }
-
-    // Prefer the virtual sink if host playback is disabled or there's no other sink
-    if (session_sink.empty() && ref->sink.null &&
-        (!config.flags[config_t::HOST_AUDIO] || sink->empty())) {
-      auto &null = *ref->sink.null;
-      switch (stream.channelCount) {
-        case 2:
-          sink = &null.stereo;
-          break;
-        case 6:
-          sink = &null.surround51;
-          break;
-        case 8:
-          sink = &null.surround71;
-          break;
+    if (!open_microphone) {
+      ref = get_audio_ctx_ref();
+      if (!ref || !ref->control) {
+        return;
       }
-    }
+      auto &control = ref->control;
 
-    BOOST_LOG(info) << "Selected audio sink: "sv << *sink;
+      // A session that owns a sink takes it and considers nothing else. Every
+      // priority below is a sink the whole machine shares, which is the one thing
+      // an isolated session must not record.
+      std::string session_sink = config.session_sink;
 
-    // Only the first to start a session may change the default sink, and an
-    // isolated session is never that one. Moving the host's default is how the
-    // host's own audio is made to reach a stream; doing it for a session that
-    // is somebody else's would put the host - and every other session - into
-    // that client's ears, and take the audio away from whoever was streaming
-    // before.
-    if (session_sink.empty() && !ref->sink_flag->exchange(true, std::memory_order_acquire)) {
-      // If the selected sink is different than the current one, change sinks.
-      ref->restore_sink = ref->sink.host != *sink;
-      if (ref->restore_sink) {
-        if (control->set_sink(*sink)) {
-          return;
+      // Order of priority:
+      // 1. Virtual sink
+      // 2. Audio sink
+      // 3. Host
+      std::string *sink = &ref->sink.host;
+      if (!session_sink.empty()) {
+        sink = &session_sink;
+      } else if (!config::audio.sink.empty()) {
+        sink = &config::audio.sink;
+      }
+
+      // Prefer the virtual sink if host playback is disabled or there's no other sink
+      if (session_sink.empty() && ref->sink.null &&
+          (!config.flags[config_t::HOST_AUDIO] || sink->empty())) {
+        auto &null = *ref->sink.null;
+        switch (stream.channelCount) {
+          case 2:
+            sink = &null.stereo;
+            break;
+          case 6:
+            sink = &null.surround51;
+            break;
+          case 8:
+            sink = &null.surround71;
+            break;
         }
       }
-    }
 
-    auto frame_size = config.packetDuration * stream.sampleRate / 1000;
-    auto open_microphone = [&]() {
-      return session_sink.empty() ?
-               control->microphone(stream.mapping, stream.channelCount, stream.sampleRate, frame_size) :
-               control->microphone_from(session_sink, stream.mapping, stream.channelCount, stream.sampleRate, frame_size);
-    };
+      BOOST_LOG(info) << "Selected audio sink: "sv << *sink;
+
+      // Only the first to start a session may change the default sink, and an
+      // isolated session is never that one. Moving the host's default is how the
+      // host's own audio is made to reach a stream; doing it for a session that
+      // is somebody else's would put the host - and every other session - into
+      // that client's ears, and take the audio away from whoever was streaming
+      // before.
+      if (session_sink.empty() && !ref->sink_flag->exchange(true, std::memory_order_acquire)) {
+        // If the selected sink is different than the current one, change sinks.
+        ref->restore_sink = ref->sink.host != *sink;
+        if (ref->restore_sink) {
+          if (control->set_sink(*sink)) {
+            return;
+          }
+        }
+      }
+
+      open_microphone = [&]() {
+        return config.session_sink.empty() ?
+                 ref->control->microphone(stream.mapping, stream.channelCount, stream.sampleRate, frame_size) :
+                 ref->control->microphone_from(config.session_sink, stream.mapping, stream.channelCount, stream.sampleRate, frame_size);
+      };
+    }
 
     auto mic = open_microphone();
     if (!mic) {
@@ -458,6 +475,58 @@ namespace audio {
       return;
     }
     ref->control->remove_session_sink(name);
+  }
+
+  client_mic_t::client_mic_t(std::unique_ptr<platf::mic_writer_t> writer):
+      writer {std::move(writer)} {
+    int status = OPUS_OK;
+    decoder.reset(opus_decoder_create(SAMPLE_RATE, 1, &status));
+    if (status != OPUS_OK) {
+      decoder.reset();
+      BOOST_LOG(error) << "Couldn't create the client microphone decoder: "sv << opus_strerror(status);
+    }
+  }
+
+  void client_mic_t::write(std::uint16_t sequence, const std::uint8_t *data, std::size_t size) {
+    const int frame = opus_packet_get_nb_samples(data, size, SAMPLE_RATE);
+    if (!decoder || frame <= 0) {
+      return;
+    }
+
+    int lost = 0;
+    if (last_sequence) {
+      const auto gap = static_cast<std::int16_t>(sequence - *last_sequence);
+      if (gap <= 0) {
+        return;
+      }
+      lost = std::min(gap - 1, 5);
+    }
+    last_sequence = sequence;
+
+    // 120 ms, Opus' longest frame.
+    std::array<opus_int16, 5760> pcm;
+    // Conceal all but the last lost frame, which this packet's FEC carries.
+    for (; lost > 0; --lost) {
+      const bool fec = lost == 1;
+      const int samples = opus_decode(decoder.get(), fec ? data : nullptr, fec ? size : 0, pcm.data(), frame, fec);
+      if (samples > 0) {
+        writer->write(pcm.data(), samples);
+      }
+    }
+
+    const int samples = opus_decode(decoder.get(), data, size, pcm.data(), pcm.size(), 0);
+    if (samples > 0) {
+      writer->write(pcm.data(), samples);
+    }
+  }
+
+  std::unique_ptr<client_mic_t> open_client_mic(const std::string &source) {
+#ifndef _WIN32
+    if (auto writer = platf::session_audio::open_mic(source)) {
+      return std::make_unique<client_mic_t>(std::move(writer));
+    }
+#endif
+    return nullptr;
   }
 
   bool is_audio_ctx_sink_available(const audio_ctx_t &ctx) {

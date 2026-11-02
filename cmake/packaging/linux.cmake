@@ -34,6 +34,10 @@ if(SUNSHINE_BUILD_CARD_BROKER)
             RENAME "card-broker.allow.example")
 endif()
 
+if(TARGET hermes-detached-session)
+    install(TARGETS hermes-detached-session DESTINATION "bin")
+endif()
+
 if(SUNSHINE_BUILD_SESSION_BROKER)
     install(TARGETS hermes-session-broker DESTINATION "bin")
     # Same reasoning as the card broker's: shipping this as a live config file
@@ -57,6 +61,8 @@ install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/session-compositors/
 
 if(${SUNSHINE_BUILD_APPIMAGE} OR ${SUNSHINE_BUILD_FLATPAK})
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.rules"
+            "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/74-hermes-session-acl.rules"
+            "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/99-hermes-session-input.rules"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/udev/rules.d")
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.conf"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/modules-load.d")
@@ -82,6 +88,8 @@ else()
 
     if(UDEV_FOUND)
         install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.rules"
+                "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/74-hermes-session-acl.rules"
+                "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/99-hermes-session-input.rules"
                 DESTINATION "${UDEV_RULES_INSTALL_DIR}")
     endif()
     # polkit has no pkg-config variable for its rules directory; unlike the
@@ -97,7 +105,14 @@ else()
         install(FILES "${CMAKE_CURRENT_BINARY_DIR}/sunshine.service"
                 DESTINATION "${SYSTEMD_USER_UNIT_INSTALL_DIR}")
         install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.conf"
+                "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/61-hermes-evdi.conf"
                 DESTINATION "${SYSTEMD_MODULES_LOAD_DIR}")
+        # modprobe.d has no pkg-config variable. It sits beside modules-load.d
+        # (/usr/lib on every distribution, lib64 or not), where kmod reads it
+        # whatever prefix Hermes itself was built with.
+        get_filename_component(HERMES_MODULES_CONFIG_DIR "${SYSTEMD_MODULES_LOAD_DIR}" DIRECTORY)
+        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-evdi-modprobe.conf"
+                DESTINATION "${HERMES_MODULES_CONFIG_DIR}/modprobe.d" RENAME "hermes-evdi.conf")
         # A system unit, unlike sunshine.service: it runs as root because
         # configfs is root's, and is socket-activated so it is not running
         # while nobody is asking for a card.
@@ -122,7 +137,7 @@ set(CPACK_RPM_POST_INSTALL_SCRIPT_FILE "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc
 
 # Apply setcap for RPM
 # https://github.com/coreos/rpm-ostree/discussions/5036#discussioncomment-10291071
-set(CPACK_RPM_USER_FILELIST "%caps(cap_sys_admin+p) ${SUNSHINE_EXECUTABLE_PATH}")
+set(CPACK_RPM_USER_FILELIST "%caps(cap_sys_admin,cap_mknod,cap_sys_chroot+p) ${SUNSHINE_EXECUTABLE_PATH}")
 
 # Dependencies
 set(CPACK_DEB_COMPONENT_INSTALL ON)
@@ -134,6 +149,7 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "\
             ${CPACK_DEB_PLATFORM_PACKAGE_DEPENDS} \
             debianutils, \
             libcap2, \
+            libcap2-bin, \
             libcurl4, \
             libdrm2, \
             libgbm1, \
@@ -143,6 +159,7 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "\
             libnuma1, \
             libopengl0, \
             libopus0, \
+            libpipewire-0.3-0, \
             libpulse0, \
             libsm6, \
             libva2, \
@@ -178,6 +195,7 @@ set(CPACK_RPM_PACKAGE_REQUIRES "\
             numactl-libs >= 2.0.14, \
             openssl >= 3.0.2, \
             opus >= 1.3, \
+            pipewire-libs, \
             pulseaudio-libs >= 10.0, \
             which >= 2.21")
 
@@ -198,6 +216,11 @@ endif()
 
 # This should automatically figure out dependencies, doesn't work with the current config
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+
+if(SUNSHINE_BUILD_SESSION_BROKER)
+    string(APPEND CPACK_DEBIAN_PACKAGE_DEPENDS ", libacl1")
+    string(APPEND CPACK_RPM_PACKAGE_REQUIRES ", libacl")
+endif()
 
 # application icon
 # Installed as hermes.svg rather than apollo.svg so the package does not claim a

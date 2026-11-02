@@ -26,6 +26,9 @@ ExecStartPre=/bin/sleep 5
 @SUNSHINE_SERVICE_START_COMMAND@
 @SUNSHINE_SERVICE_STOP_COMMAND@
 ExecStopPost=-/usr/bin/hermes-monitor-recovery
+# Fedora defaults to aborting timed-out services, producing misleading
+# Gamescope/Wine coredumps. Escalate directly to the final kill signal instead.
+TimeoutStopFailureMode=kill
 Restart=on-failure
 RestartSec=5s
 

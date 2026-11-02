@@ -1,0 +1,35 @@
+name: Linux process lifecycle regressions
+
+on:
+  pull_request:
+    paths:
+      - 'src/process.cpp'
+      - 'src/system_tray.cpp'
+      - 'src/platform/linux/process_group.h'
+      - 'src/platform/linux/service_lifecycle.h'
+      - 'src/platform/linux/misc.*'
+      - 'packaging/linux/sunshine.service.in'
+      - 'tests/unit/platform/test_process_group.cpp'
+      - '.github/workflows/process-lifecycle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  processes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize GoogleTest
+        run: git submodule update --init --depth 1 third-party/googletest
+      - name: Compile real process-group regressions
+        run: |
+          g++ -std=c++23 -Wall -Wextra -Werror -pthread -I. \
+            -Ithird-party/googletest/googletest/include -Ithird-party/googletest/googletest \
+            tests/unit/platform/test_process_group.cpp \
+            third-party/googletest/googletest/src/gtest-all.cc \
+            third-party/googletest/googletest/src/gtest_main.cc -o /tmp/hermes-process-tests
+      - name: Exercise launcher exit, orphaned descendants, SIGTERM and SIGKILL
+        run: /tmp/hermes-process-tests --gtest_color=yes --gtest_repeat=20

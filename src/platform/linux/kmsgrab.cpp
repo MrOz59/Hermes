@@ -30,6 +30,7 @@
 #include "cuda.h"
 #include "dmabuf_mapping.h"
 #include "graphics.h"
+#include "pyrowave.h"
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
@@ -1719,6 +1720,12 @@ namespace platf {
         return capture_e::ok;
       }
 
+#ifdef HAVE_PYROWAVE
+      std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() override {
+        return pyrowave::make_ram_encode_device(width, height);
+      }
+#endif
+
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
@@ -1900,6 +1907,12 @@ namespace platf {
         }
       }
 
+#ifdef HAVE_PYROWAVE
+      std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() override {
+        return pyrowave::make_ram_encode_device(width, height);
+      }
+#endif
+
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e) override {
 #ifdef SUNSHINE_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
@@ -1937,6 +1950,12 @@ namespace platf {
       display_vram_t(mem_type_e mem_type):
           display_t(mem_type) {
       }
+
+#ifdef HAVE_PYROWAVE
+      std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() override {
+        return pyrowave::make_gpu_encode_device(width, height, dup(card.render_fd.el), img_offset_x, img_offset_y);
+      }
+#endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_VAAPI
@@ -2137,10 +2156,10 @@ namespace platf {
       env_width = width;
       env_height = height;
 
-      // An isolated session runs a compositor that drives nothing but this
-      // output, so the display really is the whole desktop and there is no
-      // host layout to ask about.
-      if (config::video.hermes_kms_isolated_sessions) {
+      // A session-device output belongs to an isolated compositor that drives
+      // only this display. Shared-host outputs still need host desktop geometry,
+      // even when isolated-session capability is enabled for other clients.
+      if (!VDISPLAY::getHermesKmsSeatName(display_name).empty()) {
         return;
       }
 
@@ -2270,7 +2289,7 @@ namespace platf {
         // The Hermes render node only exports DMA-BUFs; it is not a render GPU,
         // so VAAPI must run on a real GPU (e.g. amdgpu/renderD128). Honour an
         // explicitly configured adapter; only auto-scan when none was set.
-        encode_render_fd.el = open_real_render_node();
+        encode_render_fd.el = open_encode_render_node(mem_type == mem_type_e::cuda);
         if (encode_render_fd.el < 0) {
           BOOST_LOG(error) << "Hermes-KMS capture: no render GPU found for encoding."sv;
           return -1;
@@ -2294,74 +2313,13 @@ namespace platf {
         return 0;
       }
 
-      // Open the render node of a real GPU (not the Hermes virtual device),
-      // used to import the captured DMA-BUFs and run the encoder.
-      //
-      // The auto-scan walks every render node on the machine and is meant to
-      // reject some of them, the Hermes node above all; only an adapter the
-      // user named explicitly deserves an error, the rest is the search
-      // talking to itself.
-      static bool is_usable_encode_node(int fd, std::string_view node, bool log_failures) {
-        version_t version {drmGetVersion(fd)};
-        if (!version || !version->name) {
-          BOOST_LOG(log_failures ? error : debug)
-            << "Hermes-KMS capture: could not identify DRM adapter "sv << node;
-          return false;
-        }
-        if (std::string_view {version->name} == "hermes-kms"sv) {
-          BOOST_LOG(log_failures ? error : debug)
-            << "Hermes-KMS capture: adapter "sv << node
-            << " is the capture-only Hermes render node, not an encoding GPU."sv;
-          return false;
-        }
-        return true;
+#ifdef HAVE_PYROWAVE
+      std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() override {
+        // The same real GPU the VAAPI path encodes on; the Hermes render node
+        // only exports.
+        return pyrowave::make_gpu_encode_device(width, height, dup(encode_render_fd.el), img_offset_x, img_offset_y);
       }
-
-      static int open_real_render_node() {
-        if (!config::video.adapter_name.empty()) {
-          const auto &node = config::video.adapter_name;
-          const int candidate = ::open(node.c_str(), O_RDWR | O_CLOEXEC);
-          if (candidate < 0) {
-            BOOST_LOG(error) << "Hermes-KMS capture: could not open configured adapter "sv
-                             << node << ": "sv << strerror(errno);
-            return -1;
-          }
-          if (!is_usable_encode_node(candidate, node, true)) {
-            ::close(candidate);
-            return -1;
-          }
-          return candidate;
-        }
-
-        std::array<drmDevicePtr, DRM_MAX_MINOR> devices {};
-        const int n = drmGetDevices2(0, devices.data(), static_cast<int>(devices.size()));
-        if (n <= 0) {
-          return -1;
-        }
-        const int device_count = std::min(n, static_cast<int>(devices.size()));
-        int fd = -1;
-        for (int i = 0; i < device_count; ++i) {
-          if (!devices[i] || !(devices[i]->available_nodes & (1U << DRM_NODE_RENDER))) {
-            continue;
-          }
-          const char *node = devices[i]->nodes[DRM_NODE_RENDER];
-          if (!node) {
-            continue;
-          }
-          const int candidate = ::open(node, O_RDWR | O_CLOEXEC);
-          if (candidate < 0) {
-            continue;
-          }
-          if (!is_usable_encode_node(candidate, node, false)) {
-            ::close(candidate);
-            continue;
-          }
-          fd = candidate;
-          break;
-        }
-        drmFreeDevices(devices.data(), device_count);
-        return fd;
-      }
+#endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_VAAPI
@@ -2699,6 +2657,15 @@ namespace platf {
       int dummy_img(platf::img_t *img) override {
         return 0;
       }
+
+#ifdef HAVE_PYROWAVE
+      std::unique_ptr<avcodec_encode_device_t> make_pyrowave_encode_device() override {
+        // The route NVIDIA hosts take: their EGL import of Hermes-KMS buffers
+        // is unreliable, so the frame arrives here by CPU copy and is
+        // uploaded to the real GPU for conversion.
+        return pyrowave::make_ram_encode_device(width, height, file_t {open_encode_render_node()}, source_fourcc);
+      }
+#endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_CUDA

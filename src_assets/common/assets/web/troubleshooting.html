@@ -179,6 +179,17 @@
         </div>
       </div>
     </div>
+    <!-- Diagnostic report -->
+    <div class="card p-2 my-4">
+      <div class="card-body">
+        <h2 id="report">{{ $t('troubleshooting.report') }}</h2>
+        <br>
+        <p>{{ $t('troubleshooting.report_desc') }}</p>
+        <a class="btn btn-primary" href="./api/diagnostics/report" download>
+          <i class="fas fa-file-arrow-down"></i> {{ $t('troubleshooting.report_download') }}
+        </a>
+      </div>
+    </div>
     <!-- Logs -->
     <div class="card p-2 my-4">
       <div class="card-body">

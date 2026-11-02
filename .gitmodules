@@ -23,10 +23,6 @@
 	path = third-party/googletest
 	url = https://github.com/google/googletest.git
 	branch = main
-[submodule "third-party/inputtino"]
-	path = third-party/inputtino
-	url = https://github.com/MrOz59/inputtino.git
-	branch = feat/uinput-device-phys
 [submodule "third-party/libdisplaydevice"]
 	path = third-party/libdisplaydevice
 	url = https://github.com/LizardByte/libdisplaydevice.git

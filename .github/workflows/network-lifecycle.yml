@@ -2,7 +2,7 @@ name: Network lifecycle regressions
 
 on:
   push:
-    branches: [main, master, fix/issue-71-stream-reconnect]
+    branches: [main, master, fix/issue-71-stream-reconnect, experimental/isolated-session-improvements, release/october-integration]
     paths:
       - 'src/network.*'
       - 'src/thread_safe.h'
@@ -11,6 +11,7 @@ on:
       - 'src/platform/linux/misc.cpp'
       - 'tests/unit/test_clipboard_process.cpp'
       - 'tests/unit/test_network.cpp'
+      - 'tests/helpers/executed_helper.h'
       - 'tests/unit/test_thread_safe.cpp'
       - 'tests/network_lifecycle/**'
       - '.github/workflows/network-lifecycle.yml'
@@ -23,6 +24,7 @@ on:
       - 'src/platform/linux/misc.cpp'
       - 'tests/unit/test_clipboard_process.cpp'
       - 'tests/unit/test_network.cpp'
+      - 'tests/helpers/executed_helper.h'
       - 'tests/unit/test_thread_safe.cpp'
       - 'tests/network_lifecycle/**'
       - '.github/workflows/network-lifecycle.yml'
@@ -54,3 +56,9 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: ctest --test-dir build-network --output-on-failure
+
+      - name: Stress post-exec socket release and inheritance detection
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: build-network/network_lifecycle_tests --gtest_color=yes --gtest_filter='HostCreateTests/HostCreateTest.*ExecutedHelper*' --gtest_repeat=100

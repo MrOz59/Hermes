@@ -301,6 +301,36 @@ namespace crypto {
       return update_outlen + final_outlen;
     }
 
+    int cbc_t::decrypt(const std::string_view &cipher, std::vector<std::uint8_t> &plaintext, aes_t *iv) {
+      if (!decrypt_ctx) {
+        decrypt_ctx.reset(EVP_CIPHER_CTX_new());
+        if (EVP_DecryptInit_ex(decrypt_ctx.get(), EVP_aes_128_cbc(), nullptr, key.data(), iv->data()) != 1) {
+          decrypt_ctx.reset();
+          return -1;
+        }
+        EVP_CIPHER_CTX_set_padding(decrypt_ctx.get(), padding);
+      }
+
+      if (EVP_DecryptInit_ex(decrypt_ctx.get(), nullptr, nullptr, nullptr, iv->data()) != 1) {
+        return -1;
+      }
+
+      // Padding only shrinks the plaintext, and a final block is up to one block.
+      plaintext.resize(cipher.size() + 16);
+
+      int update_outlen, final_outlen;
+      if (EVP_DecryptUpdate(decrypt_ctx.get(), plaintext.data(), &update_outlen, (const std::uint8_t *) cipher.data(), cipher.size()) != 1) {
+        return -1;
+      }
+
+      if (EVP_DecryptFinal_ex(decrypt_ctx.get(), plaintext.data() + update_outlen, &final_outlen) != 1) {
+        return -1;
+      }
+
+      plaintext.resize(update_outlen + final_outlen);
+      return 0;
+    }
+
     ecb_t::ecb_t(const aes_t &key, bool padding):
         cipher_t {EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_new(), key, padding} {
     }

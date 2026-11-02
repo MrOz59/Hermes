@@ -40,6 +40,8 @@ modules:
   - "modules/avahi.json"
   - "modules/boost.json"
   - "modules/libevdev.json"
+  - "modules/libattr.json"
+  - "modules/libacl.json"
   - "modules/libnotify.json"
   - "modules/miniupnpc.json"
   - "modules/numactl.json"

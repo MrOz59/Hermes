@@ -3,6 +3,7 @@
  * @brief Definitions for VA-API hardware accelerated capture.
  */
 // standard includes
+#include <algorithm>
 #include <fcntl.h>
 #include <format>
 #include <sstream>
@@ -524,9 +525,7 @@ namespace va {
 
     va::display_t display {vaGetDisplayDRM(fd)};
     if (!display) {
-      auto render_device = config::video.adapter_name.empty() ? "/dev/dri/renderD128" : config::video.adapter_name.c_str();
-
-      BOOST_LOG(error) << "Couldn't open a va display from DRM with device: "sv << render_device;
+      BOOST_LOG(error) << "Couldn't open a va display from DRM on the encoding GPU"sv;
       return -1;
     }
 
@@ -621,6 +620,49 @@ namespace va {
     return true;
   }
 
+  int encode_capability(int fd) {
+    va::display_t display {vaGetDisplayDRM(fd)};
+    if (!display) {
+      return 0;
+    }
+    // libva reports its driver search on stderr; a ranking pass is not the
+    // place for it.
+    vaSetErrorCallback(display.get(), nullptr, nullptr);
+    vaSetInfoCallback(display.get(), nullptr, nullptr);
+
+    int major, minor;
+    if (vaInitialize(display.get(), &major, &minor) != VA_STATUS_SUCCESS) {
+      return 0;
+    }
+
+    const auto encodes = [&](VAProfile profile) {
+      std::vector<VAEntrypoint> entrypoints(vaMaxNumEntrypoints(display.get()));
+      int count = 0;
+      if (vaQueryConfigEntrypoints(display.get(), profile, entrypoints.data(), &count) != VA_STATUS_SUCCESS) {
+        return false;
+      }
+      entrypoints.resize(count);
+      return std::ranges::any_of(entrypoints, [](VAEntrypoint entrypoint) {
+        return entrypoint == VAEntrypointEncSlice || entrypoint == VAEntrypointEncSliceLP;
+      });
+    };
+
+    if (!encodes(VAProfileH264Main) && !encodes(VAProfileH264High)) {
+      return 0;
+    }
+    int capability = 1;
+    if (encodes(VAProfileHEVCMain)) {
+      capability |= 2;
+    }
+    if (encodes(VAProfileHEVCMain10)) {
+      capability |= 4;
+    }
+    if (encodes(VAProfileAV1Profile0)) {
+      capability |= 8;
+    }
+    return capability;
+  }
+
   std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, file_t &&card, int offset_x, int offset_y, bool vram) {
     if (vram) {
       auto egl = std::make_unique<va::va_vram_t>();
@@ -642,13 +684,9 @@ namespace va {
   }
 
   std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, int offset_x, int offset_y, bool vram) {
-    auto render_device = config::video.adapter_name.empty() ? "/dev/dri/renderD128" : config::video.adapter_name.c_str();
-
-    file_t file = open(render_device, O_RDWR);
+    file_t file {platf::open_encode_render_node()};
     if (file.el < 0) {
-      char string[1024];
-      BOOST_LOG(error) << "Couldn't open "sv << render_device << ": " << strerror_r(errno, string, sizeof(string));
-
+      BOOST_LOG(error) << "Couldn't open a GPU to encode on"sv;
       return nullptr;
     }
 

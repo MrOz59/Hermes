@@ -307,6 +307,13 @@ const KeyCodeMap kKeyCodesMap[] = {
     BOOST_LOG(info) << "free_gamepad: Gamepad not yet implemented for MacOS."sv;
   }
 
+  void release_gamepad(input_t &input, int nr) {
+    free_gamepad(input, nr);
+  }
+
+  void forget_kept_gamepads(const std::string &) {
+  }
+
   void gamepad_update(input_t &input, int nr, const gamepad_state_t &gamepad_state) {
     BOOST_LOG(info) << "gamepad: Gamepad not yet implemented for MacOS."sv;
   }

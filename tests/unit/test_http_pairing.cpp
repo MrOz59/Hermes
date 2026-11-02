@@ -98,32 +98,41 @@ TEST_P(PairingTest, Run) {
   // on-disk state, which erase_all_clients() would).
   const auto clients_before = get_all_clients().size();
 
+  // Use map-owned sessions like the real request handler. Heap-owned test-only
+  // sessions hid a use-after-free when phase 4 erased the live map entry twice.
+  pair_session_t initial;
+  initial.client = input.session->client;
+  initial.async_insert_pin.salt = input.session->async_insert_pin.salt;
+  const std::string client_id = initial.client.uniqueID;
+  auto &session = begin_pairing_session(std::move(initial));
+
   // phase 1
-  getservercert(*input.session, tree, input.pin);
+  getservercert(session, tree, input.pin);
   ASSERT_EQ(tree.get<int>("root.paired") == 1, expected.phase_1_success);
   if (!expected.phase_1_success) {
     return;
   }
 
   // phase 2
-  clientchallenge(*input.session, tree, input.client_challenge);
+  clientchallenge(session, tree, input.client_challenge);
   ASSERT_EQ(tree.get<int>("root.paired") == 1, expected.phase_2_success);
   if (!expected.phase_2_success) {
     return;
   }
 
   // phase 3
-  serverchallengeresp(*input.session, tree, input.server_challenge_resp);
+  serverchallengeresp(session, tree, input.server_challenge_resp);
   ASSERT_EQ(tree.get<int>("root.paired") == 1, expected.phase_3_success);
   if (!expected.phase_3_success) {
     return;
   }
-  input.session->serverchallenge = input.override_server_challenge;
+  session.serverchallenge = input.override_server_challenge;
 
   // phase 4
-  const std::string input_client_name = input.session->client.name;
-  clientpairingsecret(*input.session, tree, input.client_pairing_secret);
+  const std::string input_client_name = session.client.name;
+  clientpairingsecret(session, tree, input.client_pairing_secret);
   ASSERT_EQ(tree.get<int>("root.paired") == 1, expected.phase_4_success);
+  EXPECT_FALSE(cancel_pending_pairing(client_id)) << "completed handshake was not removed";
 
   // On success the client is added to the authorized-client list as a named
   // cert; confirm one more client is present and that ours is among them.
@@ -278,4 +287,66 @@ TEST(PairingTest, OutOfOrderCalls) {
   // Calling it again should fail
   getservercert(sess, tree, "test");
   ASSERT_FALSE(tree.get<int>("root.paired") == 1);
+}
+
+TEST(PairingRecoveryTest, NewAttemptReplacesStalePhaseForSameClient) {
+  config::sunshine.flags[config::flag::FRESH_STATE] = true;
+  setup(PRIVATE_KEY, PUBLIC_CERT);
+  pair_session_t first;
+  first.client.uniqueID = "retry-client";
+  first.async_insert_pin.salt = "ff5dc6eda99339a8a0793e216c4257c4";
+  auto &stale = begin_pairing_session(std::move(first));
+  boost::property_tree::ptree tree;
+  getservercert(stale, tree, "1234");
+  ASSERT_EQ(stale.last_phase, PAIR_PHASE::GETSERVERCERT);
+
+  pair_session_t second;
+  second.client.uniqueID = "retry-client";
+  second.client.name = "Replacement";
+  second.async_insert_pin.salt = "aa5dc6eda99339a8a0793e216c4257c4";
+  auto &fresh = begin_pairing_session(std::move(second));
+  EXPECT_EQ(fresh.last_phase, PAIR_PHASE::NONE);
+  EXPECT_EQ(fresh.client.name, "Replacement");
+  getservercert(fresh, tree, "5678");
+  EXPECT_EQ(tree.get<int>("root.paired"), 1);
+  EXPECT_EQ(fresh.last_phase, PAIR_PHASE::GETSERVERCERT);
+  EXPECT_TRUE(cancel_pending_pairing("retry-client"));
+  EXPECT_FALSE(cancel_pending_pairing("retry-client"));
+}
+
+TEST(PairingRecoveryTest, CancellationIsScopedAndDoesNotRevokeAuthorizedClients) {
+  const auto clients_before = get_all_clients().size();
+  pair_session_t first, second;
+  first.client.uniqueID = "cancel-client-a";
+  second.client.uniqueID = "cancel-client-b";
+  begin_pairing_session(std::move(first));
+  begin_pairing_session(std::move(second));
+  EXPECT_TRUE(cancel_pending_pairing("cancel-client-a"));
+  EXPECT_FALSE(cancel_pending_pairing("cancel-client-a"));
+  EXPECT_TRUE(cancel_pending_pairing("cancel-client-b"));
+  EXPECT_EQ(get_all_clients().size(), clients_before);
+}
+
+TEST(PairingRecoveryTest, RejectingMalformedSaltSafelyErasesMapOwnedSession) {
+  pair_session_t initial;
+  initial.client.uniqueID = "bad-salt-client";
+  initial.async_insert_pin.salt = "short";
+  auto &session = begin_pairing_session(std::move(initial));
+  boost::property_tree::ptree tree;
+  getservercert(session, tree, "1234");
+  EXPECT_EQ(tree.get<int>("root.paired"), 0);
+  EXPECT_FALSE(cancel_pending_pairing("bad-salt-client"));
+}
+
+TEST(PairingRecoveryTest, PinSubmissionSkipsSessionAlreadyExchangingChallenges) {
+  pair_session_t initial;
+  initial.client.uniqueID = "not-waiting-for-pin";
+  initial.async_insert_pin.salt = "ff5dc6eda99339a8a0793e216c4257c4";
+  auto &session = begin_pairing_session(std::move(initial));
+  boost::property_tree::ptree tree;
+  getservercert(session, tree, "1234");
+  EXPECT_FALSE(pin("5678", "Unexpected rename"));
+  // The PIN API must not advance/reject an unrelated in-flight challenge.
+  EXPECT_EQ(session.last_phase, PAIR_PHASE::GETSERVERCERT);
+  EXPECT_TRUE(cancel_pending_pairing("not-waiting-for-pin"));
 }

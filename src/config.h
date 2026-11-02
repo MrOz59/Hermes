@@ -157,12 +157,14 @@ namespace config {
     std::string fallback_mode;
     bool isolated_virtual_display_option;
     bool ignore_encoder_probe_failure;
+    bool pyrowave;
   };
 
   struct audio_t {
     std::string sink;
     std::string virtual_sink;
     bool stream;
+    bool stream_mic;
     bool install_steam_drivers;
     bool keep_default;
     bool auto_capture;
@@ -207,10 +209,11 @@ namespace config {
     std::chrono::duration<double> key_repeat_period;
 
     std::string gamepad;
+    std::string linux_gamepad_backend;
     bool ds4_back_as_touchpad_click;
     bool motion_as_ds4;
     bool touchpad_as_ds4;
-    bool ds5_inputtino_randomize_mac;
+    bool virtualhid_randomize_mac;
 
     bool keyboard;
     bool mouse;
@@ -220,6 +223,7 @@ namespace config {
 
     bool high_resolution_scrolling;
     bool native_pen_touch;
+    bool isolated_ignore_mouse_wiggle;
 
     bool enable_input_only_mode;
     bool forward_rumble;
@@ -332,3 +336,4 @@ namespace config {
    */
   const std::set<std::string> &server_computed_keys();
 }  // namespace config
+

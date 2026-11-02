@@ -21,6 +21,7 @@ BuildRequires: cmake >= 3.25.0
 BuildRequires: desktop-file-utils
 BuildRequires: libappstream-glib
 BuildRequires: libcap-devel
+BuildRequires: libacl-devel
 BuildRequires: libcurl-devel
 BuildRequires: libdrm-devel
 BuildRequires: libevdev-devel
@@ -42,6 +43,7 @@ BuildRequires: npm
 BuildRequires: numactl-devel
 BuildRequires: openssl-devel
 BuildRequires: opus-devel
+BuildRequires: pipewire-devel
 BuildRequires: pulseaudio-libs-devel
 BuildRequires: qt6-qtbase-devel
 BuildRequires: qt6-qtsvg-devel
@@ -75,6 +77,7 @@ BuildRequires: gcc14-c++
 # One entry per library the executable links against. Keep in sync with
 # `objdump -p <binary> | grep NEEDED` and with cmake/packaging/linux.cmake.
 Requires: libcap >= 2.22
+Requires: libacl
 Requires: libcurl >= 7.0
 Requires: libdrm > 2.4.97
 Requires: libevdev >= 1.5.6
@@ -94,6 +97,7 @@ Requires: miniupnpc >= 2.2.4
 Requires: numactl-libs >= 2.0.14
 Requires: openssl >= 3.0.2
 Requires: opus >= 1.3
+Requires: pipewire-libs
 Requires: pulseaudio-libs >= 10.0
 Requires: qt6-qtbase
 Requires: qt6-qtsvg
@@ -128,6 +132,7 @@ cmake_args=(
   "-DBUILD_WERROR=ON"
   "-DCMAKE_BUILD_TYPE=Release"
   "-DCMAKE_INSTALL_PREFIX=%{_prefix}"
+  "-DCMAKE_INSTALL_LIBDIR=%{_lib}"
   "-DSUNSHINE_ASSETS_DIR=%{_datadir}/sunshine"
   "-DSUNSHINE_EXECUTABLE_PATH=%{_bindir}/sunshine"
   "-DSUNSHINE_ENABLE_WAYLAND=ON"
@@ -251,8 +256,8 @@ fi
 
 %files
 # Executables
-%caps(cap_sys_admin+p) %{_bindir}/sunshine
-%caps(cap_sys_admin+p) %{_bindir}/sunshine-*
+%caps(cap_sys_admin,cap_mknod,cap_sys_chroot+p) %{_bindir}/sunshine
+%caps(cap_sys_admin,cap_mknod,cap_sys_chroot+p) %{_bindir}/sunshine-*
 
 # Systemd unit file for user services
 %{_userunitdir}/sunshine.service

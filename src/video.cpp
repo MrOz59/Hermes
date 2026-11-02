@@ -3341,6 +3341,26 @@ namespace video {
     return true;
   }
 
+  std::optional<capture_readiness_mode_t> choose_capture_readiness_mode(
+    bool client_hdr_requested, bool display_hdr, bool hevc_hdr_supported, bool av1_hdr_supported
+  ) {
+    if (!display_hdr) {
+      // The driver or output may have downgraded a requested HDR launch to SDR.
+      return capture_readiness_mode_t {0, 0};
+    }
+    if (!client_hdr_requested) {
+      // Never pass HDR/PQ frames through an SDR encoder without tone mapping.
+      return std::nullopt;
+    }
+    if (hevc_hdr_supported) {
+      return capture_readiness_mode_t {1, 1};
+    }
+    if (av1_hdr_supported) {
+      return capture_readiness_mode_t {2, 1};
+    }
+    return std::nullopt;
+  }
+
   static int check_capture_path_impl(const config_t &stream, std::string &failure, capture_readiness_t &result) {
     using namespace std::literals;
     if (!chosen_encoder) {
@@ -3367,7 +3387,9 @@ namespace video {
                            (config::video.capture.empty() ? ""s : " via "s + config::video.capture);
     result.capture = label;
 
-    // The stream's display, as an H.264 SDR stream: every encoder has it.
+    // Keep the inexpensive SDR/H.264 check for SDR launches. For an HDR launch,
+    // first open a probe-only display to learn the *effective* output mode;
+    // virtual displays may legitimately fall back to SDR despite an HDR request.
     config_t config = stream;
     config.width = 1920;
     config.height = 1080;
@@ -3381,12 +3403,44 @@ namespace video {
     config.chromaSamplingType = 0;
     config.enableIntraRefresh = 0;
     config.input_only = false;
-    config.encoder_probe = false;
+    config.encoder_probe = stream.dynamicRange != 0;
     auto disp = platf::display(encoder.platform_formats->dev_type, name, config);
     if (!disp) {
       failure = "Capture could not open " + label;
       return -1;
     }
+
+    if (stream.dynamicRange) {
+      const bool display_hdr = disp->is_hdr();
+      const auto mode = choose_capture_readiness_mode(
+        true, display_hdr,
+        encoder.hevc[encoder_t::DYNAMIC_RANGE],
+        encoder.av1[encoder_t::DYNAMIC_RANGE]
+      );
+      if (!mode) {
+        failure = "Capture output is HDR, but encoder [" + std::string {encoder.name} +
+                  "] has no supported HDR codec (HEVC Main10 or AV1 Main10)";
+        return -1;
+      }
+
+      config.videoFormat = mode->video_format;
+      config.dynamicRange = mode->dynamic_range;
+      config.encoder_probe = false;
+      // Do not validate the relaxed encoder probe: reopen with real stream
+      // restrictions and test capture, conversion and encoding on that path.
+      disp.reset();
+      disp = platf::display(encoder.platform_formats->dev_type, name, config);
+      if (!disp) {
+        failure = "Capture could not open " + label +
+                  (display_hdr ? " in HDR mode" : " after HDR-to-SDR fallback");
+        return -1;
+      }
+      if (disp->is_hdr() != display_hdr) {
+        failure = "Capture color mode changed while checking " + label;
+        return -1;
+      }
+    }
+
     config.width = disp->width;
     config.height = disp->height;
     result.width = disp->width;

@@ -591,13 +591,13 @@ EOF
     arch | ubuntu) pkg_install seatd pipewire pipewire-pulse wireplumber ;;
     fedora) pkg_install seatd pipewire pipewire-pulseaudio wireplumber ;;
   esac
-  if ! install_kms_broker; then
-    notes+=("Private-seat broker could not be configured; Gamescope application isolation is not ready.")
-    return 0
-  fi
   install_gamescope
   if [ "$did_gamescope" != 1 ]; then
     notes+=("Hermes Gamescope not installed; use Detached sessions only until the patched Gamescope is available.")
+    return 0
+  fi
+  if ! install_kms_broker; then
+    notes+=("Private-seat broker could not be configured; Gamescope application isolation is not ready.")
     return 0
   fi
   if [ "$DRY_RUN" = 0 ] &&

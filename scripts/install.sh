@@ -112,7 +112,7 @@ Installs Hermes from its GitHub releases and asks about each optional piece.
 
 Options:
   --nightly   install the rolling nightly build of main instead of the
-              latest release
+              latest release (KMS remains pinned to v0.4.1 for Hermes 0.7.0)
   --yes       take the default answer to every question (optional pieces
               that default to no stay off)
   --dry-run   show what would run without changing anything
@@ -693,9 +693,42 @@ enable_service() {
   fi
 }
 
+post_install_checks() {
+  step "Post-install checks"
+  if [ "$DRY_RUN" = 1 ]; then
+    info "Dry run only: no packages, services or configuration were changed."
+    return 0
+  fi
+  if command -v hermes >/dev/null 2>&1; then
+    ok "Hermes executable found in PATH."
+  else
+    warn "Hermes executable missing from PATH."
+  fi
+  if systemctl --user is-active --quiet hermes; then
+    ok "Hermes user service is active."
+  else
+    warn "Service not active: run systemctl --user status hermes."
+  fi
+  if [ "$kms_ready" = 1 ]; then
+    verify_kms_installed || true
+    if command -v modinfo >/dev/null 2>&1; then
+      info "Hermes-KMS installed module version: $(modinfo -F version hermes_kms 2>/dev/null || echo unknown)."
+    fi
+  fi
+  if [ "$did_gamescope" = 1 ]; then
+    if [ -x /usr/lib/hermes-gamescope/bin/gamescope ] || [ -x /opt/hermes-gamescope/bin/gamescope ]; then
+      ok "Patched Gamescope executable found."
+    else
+      warn "Patched Gamescope not found in its expected prefix."
+    fi
+  fi
+  info "Package checks cannot verify real GPU capture, input or private sessions."
+  info "After a reboot, use the Hermes Audio/Video diagnostics and test a stream."
+}
+
 summary() {
   step "Done"
-  info "Web UI: https://localhost:47990 (set a username and password on first visit)."
+  info "Web UI: https://localhost:47990 (create a username and password on first visit)."
   [ "$kms_ready" = 1 ] && info "Hermes-KMS: available for this kernel."
   [ "$did_detached" = 1 ] && info "Detached Desktop/Steam: enabled (needs KDE Plasma 6 Wayland)."
   [ "$did_broker" = 1 ] && info "Private-seat brokers: configured."
@@ -707,7 +740,7 @@ summary() {
     warn "$note"
   done
   if [ "$need_reboot" = 1 ]; then
-    printf '\n    %sReboot to load the driver and the new group memberships.%s\n' "$bold" "$reset"
+    printf '\n    %sReboot before testing the new driver or private DRM seats.%s\n' "$bold" "$reset"
   fi
 }
 
@@ -737,6 +770,7 @@ main() {
   install_isolated
   setup_prelogin
   enable_service
+  post_install_checks
   summary
 }
 

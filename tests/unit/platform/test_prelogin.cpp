@@ -280,7 +280,8 @@ TEST(PreloginChecks, DevicesTheSeatGrantCoversAreNotEnough) {
 
   EXPECT_FALSE(report.ready);
   EXPECT_NE(check(report, "input").fix.find("usermod -aG input ana"), std::string::npos);
-  EXPECT_NE(check(report, "virtual_display").fix.find("hermes-kms-setup"), std::string::npos);
+  // The script is not on PATH: the seatd package installs it here (#61).
+  EXPECT_NE(check(report, "virtual_display").fix.find("/usr/lib/hermes-kms/hermes-kms-setup configure"), std::string::npos);
 }
 
 TEST(PreloginChecks, OnlyHermesKmsHasBeenRunBeforeLogin) {

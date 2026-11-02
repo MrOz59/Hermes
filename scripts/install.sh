@@ -398,6 +398,47 @@ EOF
   ok "Hermes-KMS installation completed. Reboot before testing."
 }
 
+# The default Plasma Detached Desktop does not require this private-seat helper.
+install_kms_broker() {
+  step "Private DRM card/seat broker for Gamescope sessions"
+  local assets url pattern file rc
+  if [ "$broker_from_source" = 0 ]; then
+    assets=$(release_assets "$KMS_REPO" "$KMS_RELEASE") || die "Cannot read Hermes-KMS broker release."
+    case "$distro" in
+      arch) pattern='/hermes-kms-seatd-git-.*-any\.pkg\.tar\.zst$' ;;
+      ubuntu) pattern='/hermes-kms-seatd_.*_all\.deb$' ;;
+      fedora) pattern="/hermes-kms-seatd-.*\.fc${distro_version}\.noarch\.rpm$" ;;
+    esac
+    url=$(release_asset_url "$assets" "$pattern")
+    if [ -z "$url" ]; then
+      warn "No matching private-seat package for ${distro} ${distro_version}."
+      return 1
+    fi
+    file="${workdir}/${url##*/}"
+    download_checked_kms "$assets" "$url" "$file"
+    install_local_package "$file"
+  fi
+
+  if [ "$DRY_RUN" = 0 ] && [ ! -x /usr/lib/hermes-kms/hermes-kms-setup ]; then
+    warn "Missing /usr/lib/hermes-kms/hermes-kms-setup after package install."
+    return 1
+  fi
+  info "Configuring the private-seat pool for UID $(id -u), not the root user."
+  rc=0
+  as_root /usr/lib/hermes-kms/hermes-kms-setup configure --user "$(id -u)" || rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 10 ]; then
+    warn "Private seat setup failed (exit ${rc}). Gamescope isolation will not be enabled."
+    return 1
+  fi
+  if [ "$rc" -eq 10 ]; then
+    warn "The updated seat/card topology will be active after a reboot."
+    need_reboot=1
+  fi
+  did_broker=1
+  ok "Private-seat broker is configured."
+  return 0
+}
+
 install_gamescope() {
   explain <<EOF
 Isolated application sessions run the game in Gamescope, on the session's own
@@ -495,58 +536,93 @@ EOF
 }
 
 install_isolated() {
-  step "Isolated sessions (experimental)"
-  if gamescope_unavailable; then
-    warn "Isolated sessions through Gamescope are unavailable on Ubuntu 24.04 for now."
-    explain <<'EOF'
-The Gamescope they run in needs newer Wayland, libdrm and xkbcommon libraries
-than Ubuntu 24.04 ships, so Hermes' Gamescope build is not packaged for it.
-They work on Ubuntu 26.04, Fedora 43/44, Arch and CachyOS. The rest of Hermes
-works on 24.04 as usual.
-EOF
-    notes+=("Isolated sessions through Gamescope are unavailable on Ubuntu 24.04 for now.")
-    return 0
-  fi
-  if [ "$did_kms" = 0 ]; then
-    info "Skipped: isolated sessions need Hermes-KMS."
-    return 0
-  fi
+  step "Independent sessions — Hermes 0.7.0 (experimental)"
   explain <<'EOF'
-An isolated session runs the game in its own Gamescope, on its own virtual
-display and input seat, as your user. The desktop stays usable at the same
-time, and neither sees the other's input, audio or controllers: each session
-gets a private audio server (PipeWire), and can get a private /dev holding
-only its client's devices. This is experimental and changes as it is tested.
-EOF
-  ask "Set up isolated sessions?" n || return 0
+Hermes has TWO ways to keep remote streams separate from the host desktop:
 
+DETACHED DESKTOP / DETACHED STEAM (KDE Plasma 6, Wayland)
+  Built with help from PunkUnity's work. Your own Plasma account, files,
+  settings and Steam library run on a detached virtual output; the physical
+  desktop stays usable and its keyboard/mouse do not control the remote view.
+  These modes do NOT need a patched Gamescope or private-seat broker.
+
+ISOLATED APPLICATION (Gamescope DRM)
+  A game runs in its own patched Gamescope on a dedicated Hermes-KMS DRM card
+  and input seat, with separate PipeWire audio and optional private devices.
+  This needs a private-seat broker, seatd and Hermes' Gamescope build.
+
+Both are experimental, per-app choices in the Web UI. Normal Desktop and
+shared-host streams remain available. Future releases may change these modes.
+EOF
+  if [ "$kms_ready" = 0 ]; then
+    warn "Skipping independent sessions: a working Hermes-KMS driver is required."
+    return 0
+  fi
+  if ! ask "Enable independent sessions (including Detached Desktop/Steam)?" n; then
+    return 0
+  fi
+  if [ "${XDG_SESSION_TYPE:-}" != wayland ] ||
+     [[ "${XDG_CURRENT_DESKTOP:-}" != *KDE* && "${KDE_FULL_SESSION:-}" != true ]]; then
+    warn "Detached Desktop/Steam needs an active KDE Plasma 6 Wayland desktop."
+    warn "You can enable the feature now, but it will not work on an X11/other desktop."
+  fi
+
+  set_config virtual_display_backend hermes_kms
+  set_config hermes_kms_isolated_sessions enabled
+  did_detached=1
+  ok "Independent-session capability enabled; shared streaming remains available."
+  info "Use Detached Desktop or Detached Steam in the app list, or choose session-type per app."
+
+  if gamescope_unavailable; then
+    warn "Ubuntu 24.04 cannot run the patched Gamescope. Detached Desktop/Steam remains an option on Plasma Wayland."
+    return 0
+  fi
+  if ! ask "Also install support for isolated Gamescope application sessions?" n; then
+    info "No Gamescope or seatd changes are needed for Plasma Detached Desktop/Steam."
+    return 0
+  fi
+
+  explain <<'EOF'
+Application isolation is a hardware-dependent experiment. It launches games
+on private DRM cards and input seats, not inside the host desktop. This can
+conflict with unsupported GPU drivers or other session management.
+EOF
   case "$distro" in
-    arch) pkg_install seatd pipewire pipewire-pulse wireplumber ;;
-    ubuntu) pkg_install seatd pipewire pipewire-pulse wireplumber ;;
+    arch | ubuntu) pkg_install seatd pipewire pipewire-pulse wireplumber ;;
     fedora) pkg_install seatd pipewire pipewire-pulseaudio wireplumber ;;
   esac
-  if getent group seat >/dev/null; then
-    as_root usermod -aG seat "$USER"
-    need_reboot=1
+  if ! install_kms_broker; then
+    notes+=("Private-seat broker could not be configured; Gamescope application isolation is not ready.")
+    return 0
   fi
-
   install_gamescope
+  if [ "$did_gamescope" != 1 ]; then
+    notes+=("Hermes Gamescope not installed; use Detached sessions only until the patched Gamescope is available.")
+    return 0
+  fi
+  if [ "$DRY_RUN" = 0 ] &&
+     [ ! -x /usr/lib/hermes-gamescope/bin/gamescope ] &&
+     [ ! -x /opt/hermes-gamescope/bin/gamescope ]; then
+    warn "Patched Gamescope executable was not found after install."
+    notes+=("Gamescope application isolation not ready: verify the installed Gamescope binary.")
+    return 0
+  fi
 
   explain <<'EOF'
-A private /dev hides the host's controllers, keyboards and other devices from
-the session, and the session's virtual devices from the desktop. Hermes needs
-three file capabilities on its binary for it (cap_sys_admin, which it already
-has for capture, plus cap_mknod and cap_sys_chroot). Without them sessions
-still run, but see the host's /dev.
+An optional private /dev hides host input controllers, keyboard and audio
+devices from the remote game. It needs capabilities on the Hermes binary.
+Review this permission carefully: cap_sys_admin is very powerful. Packages
+may reset capabilities during an upgrade.
 EOF
-  if ask "Give Hermes the capabilities for a private /dev?" y; then
-    as_root setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p /usr/bin/hermes
-    notes+=("Reinstalling or upgrading Hermes resets its file capabilities; run this installer again or setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p /usr/bin/hermes.")
+  if ask "Allow private /dev device isolation?" n; then
+    if [ "$DRY_RUN" = 0 ] && ! command -v setcap >/dev/null 2>&1; then
+      warn "setcap missing; install your distribution's libcap tools first."
+    else
+      as_root setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p /usr/bin/hermes
+    fi
   fi
-
-  set_config hermes_kms_isolated_sessions enabled
   did_isolated=1
-  ok "Isolated sessions enabled."
+  ok "Dedicated Gamescope session prerequisites configured. Choose session-type = application per app."
 }
 
 setup_prelogin() {
@@ -559,7 +635,7 @@ on into the desktop. It has been run on KDE Plasma with SDDM, Hermes-KMS and an
 AMD GPU. It needs Hermes-KMS, your user in the input group, and a greeter that
 lights a new display by itself (SDDM's Wayland greeter).
 EOF
-  if [ "$did_kms" = 0 ]; then
+  if [ "$kms_ready" = 0 ]; then
     info "Skipped: streaming the login screen needs Hermes-KMS."
     return 0
   fi
@@ -620,8 +696,10 @@ enable_service() {
 summary() {
   step "Done"
   info "Web UI: https://localhost:47990 (set a username and password on first visit)."
-  [ "$did_kms" = 1 ] && info "Hermes-KMS: installed."
-  [ "$did_isolated" = 1 ] && info "Isolated sessions: enabled; choose a session type per application in the Web UI."
+  [ "$kms_ready" = 1 ] && info "Hermes-KMS: available for this kernel."
+  [ "$did_detached" = 1 ] && info "Detached Desktop/Steam: enabled (needs KDE Plasma 6 Wayland)."
+  [ "$did_broker" = 1 ] && info "Private-seat brokers: configured."
+  [ "$did_isolated" = 1 ] && info "Gamescope application isolation: configured; select session-type per app."
   [ "$did_gamescope" = 1 ] && info "Gamescope for Hermes: installed."
   [ "$did_prelogin" = 1 ] && info "Login screen streaming: enabled."
   local note

@@ -11,6 +11,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-02
+
 ### Added
 - `scripts/install.sh` installs Hermes from its GitHub releases on Arch,
   CachyOS, Ubuntu and Fedora and asks about each optional piece: the

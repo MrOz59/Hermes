@@ -11,6 +11,37 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+### Added
+- Hermes checks the Hermes-KMS driver against itself and says what works
+  without it ([#99], from PunkUnity). Three cases it reported wrongly or not
+  at all: a driver whose render node Hermes may not open (`no_access`, until
+  now shown as no driver at all), a DKMS update installed for the running
+  kernel while the old release stays loaded, and a driver whose interface is
+  newer than the one this Hermes knows (14). The answer appears in the
+  streaming preflight (a `hermes_kms` check that warns but never fails), in
+  `/api/hermes-kms/status`, in the Audio/Video tab and in the diagnostic
+  report. With the EVDI backend, the preflight says what needs Hermes-KMS and
+  whether a usable driver is already installed. The Audio/Video tab and the
+  report also list what this session can do, feature by feature, with the
+  reason and the fix.
+- `isolated_hide_hid_gamepads` (off by default) gives an isolated session only
+  the hidraw nodes of emulated Switch Pro, DualShock 4 and DualSense pads
+  ([#95], from d3adb5). Steam reads them there and does not grab the kernel's
+  gamepad, so a game reading that gamepad as well got every press twice; with
+  this on, games see Steam Input's controller alone. A game run without Steam
+  Input then has no controller.
+
+### Changed
+- Emulated Switch Pro, DualShock 4 and DualSense pads keep one MAC address per
+  paired client and controller number, the same in every session, seat and
+  reconnection, so Steam's per-controller layouts stay applied
+  (`virtualhid_stable_mac`, on by default; [#95], from d3adb5). It takes
+  precedence over `virtualhid_randomize_mac`; turn it off for the previous
+  per-session addresses.
+
+[#95]: https://github.com/MrOz59/Hermes/pull/95
+[#99]: https://github.com/MrOz59/Hermes/pull/99
+
 ## [0.7.0] - 2026-11-02
 
 ### Added

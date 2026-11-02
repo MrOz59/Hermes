@@ -66,6 +66,7 @@
 #include "src/logging.h"
 #include "src/utility.h"
 #include "virtual_display.h"
+#include "window_placement.h"
 #ifdef SUNSHINE_BUILD_WAYLAND
   #include "wayland.h"
 #endif
@@ -3883,7 +3884,7 @@ namespace VDISPLAY {
       return status >= 0;
     }
 
-    static void place_windows(const std::string &display_name, const std::vector<std::string> &classes) {
+    static void place_windows(const std::string &display_name, const std::vector<std::string> &classes, const std::vector<std::uint32_t> &gamescope_pids) {
       std::string output;
       {
         std::lock_guard<std::mutex> lock(layouts_mutex);
@@ -3896,12 +3897,9 @@ namespace VDISPLAY {
       if (!safe_output_name(output) || classes.empty()) {
         return;
       }
-      std::string class_list;
-      for (const auto &window_class : classes) {
-        if (window_class.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789.-_") != std::string::npos) {
-          return;
-        }
-        class_list += (class_list.empty() ? "\"" : ", \"") + window_class + '"';
+      const auto contents = platf::window_placement::kwin_script(output, classes, gamescope_pids);
+      if (contents.empty()) {
+        return;
       }
 
       const auto plugin = "hermes-place-" + output;
@@ -3911,29 +3909,7 @@ namespace VDISPLAY {
       std::filesystem::create_directories(directory, ec);
       {
         std::ofstream file {script, std::ios::trunc};
-        file << "// Hermes: put the streamed application's windows on the session's virtual output.\n"
-                "const output = workspace.screens.find(screen => screen.name === \"" << output << "\");\n"
-                "const classes = [" << class_list << "];\n"
-                "function place(window) {\n"
-                "  if (!output || !window.normalWindow || !classes.includes(window.resourceClass) || window.output === output) {\n"
-                "    return;\n"
-                "  }\n"
-                // Only fullscreen that was there comes back: Gamescope's -f
-                // window, or Big Picture, which also makes itself fullscreen on
-                // whichever output it is on. Other Steam windows keep their size.
-                "  // A window already fullscreen on another output keeps that output's size\n"
-                "  // when moved; leaving fullscreen first lets KWin fit it to this one.\n"
-                "  const wasFullScreen = window.fullScreen;\n"
-                "  if (wasFullScreen) {\n"
-                "    window.fullScreen = false;\n"
-                "  }\n"
-                "  workspace.sendClientToScreen(window, output);\n"
-                "  if (wasFullScreen) {\n"
-                "    window.fullScreen = true;\n"
-                "  }\n"
-                "}\n"
-                "workspace.windowList().forEach(place);\n"
-                "workspace.windowAdded.connect(place);\n";
+        file << contents;
         if (!file) {
           BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not write " << script.string() << "; windows stay where KWin opens them.";
           return;
@@ -3967,7 +3943,7 @@ namespace VDISPLAY {
       }
       std::lock_guard<std::mutex> lock(placements_mutex);
       placements[display_name] = plugin;
-      BOOST_LOG(info) << "[VDISPLAY/KScreen] Windows of " << class_list << " go to " << output << " for this session.";
+      BOOST_LOG(info) << "[VDISPLAY/KScreen] Application windows go to " << output << " for this session.";
     }
 
     static void unplace_windows(const std::string &display_name) {
@@ -3990,7 +3966,7 @@ namespace VDISPLAY {
       std::filesystem::remove(std::filesystem::path {"/run/user"} / std::to_string(::getuid()) / "hermes" / (plugin + ".js"), ec);
     }
 #else
-    static void place_windows(const std::string &, const std::vector<std::string> &) {}
+    static void place_windows(const std::string &, const std::vector<std::string> &, const std::vector<std::uint32_t> &) {}
     static void unplace_windows(const std::string &) {}
 #endif
   }  // namespace kscreen
@@ -7882,9 +7858,9 @@ namespace VDISPLAY {
 #endif
   }
 
-  void placeWindowsOnVirtualDisplay(const std::string &displayName, const std::vector<std::string> &windowClasses) {
+  void placeWindowsOnVirtualDisplay(const std::string &displayName, const std::vector<std::string> &windowClasses, const std::vector<std::uint32_t> &gamescopePids) {
     if (kscreen::is_active(displayName)) {
-      kscreen::place_windows(displayName, windowClasses);
+      kscreen::place_windows(displayName, windowClasses, gamescopePids);
     }
   }
 
@@ -8874,3 +8850,4 @@ namespace VDISPLAY {
   }
 
 }  // namespace VDISPLAY
+

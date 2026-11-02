@@ -39,6 +39,7 @@
   #include <xf86drm.h>
 
   #include "platform/linux/gamescope_session.h"
+  #include "platform/linux/window_placement.h"
   // For the GBM allocation probe: picking the render node an isolated session
   // renders on is the same question the capture path answers, so it uses the
   // same answer rather than a second heuristic. Compiles to "yes" where Wayland
@@ -3801,58 +3802,22 @@ namespace proc {
     _env["APOLLO_APP_STATUS"] = "RUNNING";
 
 #ifdef __linux__
-    // Steam Big Picture switches the window of the Steam already running,
-    // on whichever monitor it was; a virtual display created for the stream
-    // would stay empty (#31). Have the compositor move it there.
-    if (!this->display_name.empty()) {
-      const auto names_program = [](const std::string &command, std::string_view program) {
-        std::istringstream words {command};
-        for (std::string word; words >> word;) {
-          if (std::filesystem::path {word}.filename() == program) {
-            return true;
-          }
-        }
-        return false;
-      };
-      // Only a Steam command that opens Big Picture. One that starts a game
-      // (steam://rungameid/<id>, -applaunch <id>) gets a new window, which
-      // KWin already opens on the virtual output, and the Steam client's own
-      // windows stay where they are.
-      const auto opens_big_picture = [&](const std::string &command) {
-        if (!names_program(command, "steam")) {
-          return false;
-        }
-        std::istringstream words {command};
-        for (std::string word; words >> word;) {
-          const auto first = word.find_first_not_of("\"'");
-          const auto last = word.find_last_not_of("\"'");
-          if (first == std::string::npos) {
-            continue;
-          }
-          word = word.substr(first, last - first + 1);
-          if (word.rfind("steam://open/bigpicture", 0) == 0 || word == "-gamepadui" || word == "-bigpicture" || word == "-tenfoot") {
-            return true;
-          }
-        }
-        return false;
-      };
-      std::vector<std::string> classes;
-      bool steam = opens_big_picture(_app.cmd);
-      bool gamescope = names_program(_app.cmd, "gamescope") || names_program(_app.cmd, "hermes-gamescope-launch") ||
-                       launch_session->launch_mode == "gamescope";
-      for (const auto &command : _app.detached) {
-        steam = steam || opens_big_picture(command);
-        gamescope = gamescope || names_program(command, "gamescope") || names_program(command, "hermes-gamescope-launch");
+    // Parse exactly as application commands are parsed elsewhere. Quoted
+    // executable paths and Flatpak Steam entries must not silently miss this.
+    const auto placement_arguments = [](const std::string &command) {
+      try {
+        return boost::program_options::split_unix(command);
+      } catch (const std::exception &error) {
+        BOOST_LOG(warning) << "[VDISPLAY] Could not parse window placement command: " << error.what();
+        return std::vector<std::string> {};
       }
-      if (gamescope) {
-        classes.emplace_back("gamescope");
-      } else if (steam) {
-        classes.emplace_back("steam");
-      }
-      if (!classes.empty()) {
-        VDISPLAY::placeWindowsOnVirtualDisplay(this->display_name, classes);
-      }
-    }
+    };
+    const auto app_arguments = placement_arguments(_app.cmd);
+    bool place_steam = platf::window_placement::opens_big_picture(app_arguments);
+    const bool app_gamescope = !gamescope_session &&
+                              (platf::window_placement::launches_gamescope(app_arguments) ||
+                               launch_session->launch_mode == "gamescope");
+    std::vector<std::uint32_t> gamescope_pids;
 #endif
 
     for (auto &cmd : _app.detached) {
@@ -3864,6 +3829,13 @@ namespace proc {
       if (ec) {
         BOOST_LOG(warning) << "Couldn't spawn ["sv << cmd << "]: System: "sv << ec.message();
       } else {
+#ifdef __linux__
+        const auto arguments = placement_arguments(cmd);
+        place_steam = place_steam || platf::window_placement::opens_big_picture(arguments);
+        if (!gamescope_session && platf::window_placement::launches_gamescope(arguments)) {
+          gamescope_pids.push_back(static_cast<std::uint32_t>(child.id()));
+        }
+#endif
         child.detach();
       }
     }
@@ -3924,6 +3896,21 @@ namespace proc {
         return -1;
       }
     }
+
+#ifdef __linux__
+    if (!this->display_name.empty()) {
+      if (app_gamescope && _process.valid()) {
+        gamescope_pids.push_back(static_cast<std::uint32_t>(_process.id()));
+      }
+      // Install after spawning: exact PIDs are now known. The script visits
+      // existing windows too, so a fast launch cannot miss its placement.
+      if (!gamescope_pids.empty()) {
+        VDISPLAY::placeWindowsOnVirtualDisplay(this->display_name, {"gamescope"}, gamescope_pids);
+      } else if (place_steam) {
+        VDISPLAY::placeWindowsOnVirtualDisplay(this->display_name, {"steam"});
+      }
+    }
+#endif
 
     _app_launch_time = std::chrono::steady_clock::now();
 
@@ -5280,3 +5267,4 @@ namespace proc {
 #endif
 
 }  // namespace proc
+

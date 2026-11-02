@@ -123,3 +123,44 @@ TEST(PyroWaveFrameBudget, KeepsAFloorForTinyBitrates) {
 TEST(PyroWaveFrameBudget, SurvivesAMissingFrameRateOrBitrate) {
   EXPECT_EQ(video::pyrowave_frame_budget(pyrowave_config(1280, 720, 0, 0)), 16u * 1024u);
 }
+
+/**
+ * A client can request HDR before the virtual display is configured. The
+ * readiness test must follow the display's actual color mode, not blindly
+ * encode an HDR/PQ scanout with an SDR/H.264 configuration (#103).
+ */
+TEST(CaptureReadinessMode, SdrClientUsesSdrH264) {
+  const auto mode = video::choose_capture_readiness_mode(false, false, true, true);
+  ASSERT_TRUE(mode.has_value());
+  EXPECT_EQ(mode->video_format, 0);
+  EXPECT_EQ(mode->dynamic_range, 0);
+}
+
+TEST(CaptureReadinessMode, HdrClientAndHdrOutputUseHevcMain10) {
+  const auto mode = video::choose_capture_readiness_mode(true, true, true, true);
+  ASSERT_TRUE(mode.has_value());
+  EXPECT_EQ(mode->video_format, 1);
+  EXPECT_EQ(mode->dynamic_range, 1);
+}
+
+TEST(CaptureReadinessMode, HdrClientAndHdrOutputCanUseAv1Main10) {
+  const auto mode = video::choose_capture_readiness_mode(true, true, false, true);
+  ASSERT_TRUE(mode.has_value());
+  EXPECT_EQ(mode->video_format, 2);
+  EXPECT_EQ(mode->dynamic_range, 1);
+}
+
+TEST(CaptureReadinessMode, HdrRequestWithSdrOnlyOutputUsesSdrFallback) {
+  const auto mode = video::choose_capture_readiness_mode(true, false, true, true);
+  ASSERT_TRUE(mode.has_value());
+  EXPECT_EQ(mode->video_format, 0);
+  EXPECT_EQ(mode->dynamic_range, 0);
+}
+
+TEST(CaptureReadinessMode, SdrClientMustNotEncodeHdrOutputAsSdr) {
+  EXPECT_FALSE(video::choose_capture_readiness_mode(false, true, true, true).has_value());
+}
+
+TEST(CaptureReadinessMode, HdrOutputRequiresAnHdrCodec) {
+  EXPECT_FALSE(video::choose_capture_readiness_mode(true, true, false, false).has_value());
+}

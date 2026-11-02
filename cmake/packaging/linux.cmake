@@ -105,7 +105,14 @@ else()
         install(FILES "${CMAKE_CURRENT_BINARY_DIR}/sunshine.service"
                 DESTINATION "${SYSTEMD_USER_UNIT_INSTALL_DIR}")
         install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-hermes.conf"
+                "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/61-hermes-evdi.conf"
                 DESTINATION "${SYSTEMD_MODULES_LOAD_DIR}")
+        # modprobe.d has no pkg-config variable. It sits beside modules-load.d
+        # (/usr/lib on every distribution, lib64 or not), where kmod reads it
+        # whatever prefix Hermes itself was built with.
+        get_filename_component(HERMES_MODULES_CONFIG_DIR "${SYSTEMD_MODULES_LOAD_DIR}" DIRECTORY)
+        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/hermes-evdi-modprobe.conf"
+                DESTINATION "${HERMES_MODULES_CONFIG_DIR}/modprobe.d" RENAME "hermes-evdi.conf")
         # A system unit, unlike sunshine.service: it runs as root because
         # configfs is root's, and is socket-activated so it is not running
         # while nobody is asking for a card.

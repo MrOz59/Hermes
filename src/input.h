@@ -27,12 +27,14 @@ namespace input {
    * @param session_tag Seat of an isolated session; empty for the host's.
    * @param launch_gamepads Gamepads to plug in now (the client's gcmap).
    * @param wayland_socket Private KWin desktop to drive instead; empty for none.
+   * @param client_id The paired client's id, which its virtual gamepads are identified by.
    */
   std::shared_ptr<input_t> alloc(
     safe::mail_t mail,
     const std::string &session_tag = {},
     int launch_gamepads = 0,
-    const std::string &wayland_socket = {}
+    const std::string &wayland_socket = {},
+    const std::string &client_id = {}
   );
 
 #ifdef SUNSHINE_TESTS

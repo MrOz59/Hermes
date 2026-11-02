@@ -109,6 +109,15 @@ const config = ref(props.config)
                             default="true"
                   ></Checkbox>
                 </template>
+                <!-- Switch Pro and PlayStation pads keep one MAC per client controller. -->
+                <template v-if="platform === 'linux' && ['ds4', 'ds5', 'switch', 'auto'].includes(config.gamepad)">
+                  <Checkbox class="mb-3"
+                            id="virtualhid_stable_mac"
+                            locale-prefix="config"
+                            v-model="config.virtualhid_stable_mac"
+                            default="true"
+                  ></Checkbox>
+                </template>
               </div>
             </div>
           </div>
@@ -201,6 +210,15 @@ const config = ref(props.config)
               locale-prefix="config"
               v-model="config.isolated_ignore_mouse_wiggle"
               default="true"
+    ></Checkbox>
+
+    <!-- Let isolated sessions see HID gamepads only through Steam Input -->
+    <Checkbox v-if="config.controller === 'enabled'"
+              class="mb-3"
+              id="isolated_hide_hid_gamepads"
+              locale-prefix="config"
+              v-model="config.isolated_hide_hid_gamepads"
+              default="false"
     ></Checkbox>
 
     <!-- Enable Input Only Mode -->

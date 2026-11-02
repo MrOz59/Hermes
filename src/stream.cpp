@@ -2452,7 +2452,8 @@ namespace stream {
           session.mail,
           session.isolated_session ? session.isolated_seat_id : std::string {},
           session.isolated_session ? session.config.gcmap.value_or(0) : 0,
-          monitor.kwin_wayland_socket
+          monitor.kwin_wayland_socket,
+          session.device_uuid
         );
       } catch (const std::exception &error) {
         BOOST_LOG(::error) << "Could not initialize session input: " << error.what();

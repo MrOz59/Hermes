@@ -312,6 +312,7 @@ namespace platf {
     std::uint8_t type;
     std::uint16_t capabilities;
     std::uint32_t supportedButtons;
+    std::string client_id;  ///< The paired client's id; with the controller number, a stable identity.
   };
 
   struct gamepad_touch_t {

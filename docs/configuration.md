@@ -656,6 +656,33 @@ editing the `conf` file in a text editor. Use the examples as reference.
 The former `ds5_inputtino_randomize_mac` key is accepted as a compatibility
 alias; new configurations should use the key above.
 
+### virtualhid_stable_mac
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Give a virtual Switch Pro, DualShock 4 or DualSense controller on Linux a MAC address derived from the
+            paired client and its controller number, the same in every session, seat and reconnection. Steam keeps
+            per-controller layouts by that address (the controller's serial), so they stay applied. When enabled it
+            takes precedence over virtualhid_randomize_mac; when disabled, the Switch Pro address is scoped to the
+            session and PlayStation addresses follow virtualhid_randomize_mac.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            virtualhid_stable_mac = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### back_button_timeout
 
 <table>
@@ -901,6 +928,33 @@ alias; new configurations should use the key above.
         <td>Example</td>
         <td colspan="2">@code{}
             isolated_ignore_mouse_wiggle = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### isolated_hide_hid_gamepads
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Switch Pro, DualShock 4 and DualSense emulation are HID devices that a kernel driver (`hid-nintendo`,
+            `hid-playstation`) turns into a gamepad. Steam reads them through hidraw and does not grab that gamepad, so a
+            game that reads it too gets every press twice: raw, and through Steam Input. When enabled, an isolated
+            session (Gamescope or detached desktop) gets only their hidraw nodes, and games see Steam Input's controller
+            alone. A game run without Steam Input then has no controller.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            isolated_hide_hid_gamepads = enabled
             @endcode</td>
     </tr>
 </table>

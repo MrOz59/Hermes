@@ -227,6 +227,7 @@ namespace input {
 
     std::vector<gamepad_t> gamepads;
     std::unique_ptr<platf::client_input_t> client_context;
+    std::string client_id;
 
     safe::mail_raw_t::event_t<input::touch_port_t> touch_port_event;
     platf::feedback_queue_t feedback_queue;
@@ -942,6 +943,7 @@ namespace input {
       packet->type,
       util::endian::little(packet->capabilities),
       util::endian::little(packet->supportedButtonFlags),
+      input->client_id,
     };
 
     auto id = alloc_id(gamepadMask);
@@ -1203,7 +1205,7 @@ namespace input {
         return;
       }
 
-      if (platf::alloc_gamepad(*input->platform_input, {id, (uint8_t) packet->controllerNumber}, {}, input->feedback_queue)) {
+      if (platf::alloc_gamepad(*input->platform_input, {id, (uint8_t) packet->controllerNumber}, {.client_id = input->client_id}, input->feedback_queue)) {
         free_id(gamepadMask, id);
         return;
       }
@@ -1840,7 +1842,7 @@ namespace input {
         return;
       }
 
-      if (platf::alloc_gamepad(*input->platform_input, {id, (uint8_t) nr}, {}, input->feedback_queue)) {
+      if (platf::alloc_gamepad(*input->platform_input, {id, (uint8_t) nr}, {.client_id = input->client_id}, input->feedback_queue)) {
         free_id(gamepadMask, id);
         return;
       }
@@ -1853,7 +1855,8 @@ namespace input {
     safe::mail_t mail,
     const std::string &session_tag,
     int launch_gamepads,
-    const std::string &wayland_socket
+    const std::string &wayland_socket,
+    const std::string &client_id
   ) {
     auto input = std::make_shared<input_t>(
       mail->event<input::touch_port_t>(mail::touch_port),
@@ -1861,6 +1864,7 @@ namespace input {
       session_tag,
       wayland_socket
     );
+    input->client_id = client_id;
 
     if (launch_gamepads) {
       task_pool.push([input, launch_gamepads]() mutable {

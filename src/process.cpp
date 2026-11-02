@@ -2155,7 +2155,7 @@ namespace proc {
         std::ofstream {runtime->isolated_seat_flag}
           << std::filesystem::read_symlink("/proc/" + std::to_string(runtime->namespace_pid) + "/ns/mnt", flag_ec).string()
           << ' ' << ::getpid() << '\n';
-        runtime->device_mirror = platf::session_devices::mirror(runtime->namespace_pid, tag);
+        runtime->device_mirror = platf::session_devices::mirror(runtime->namespace_pid, tag, config::input.isolated_hide_hid_gamepads);
         if (runtime->device_mirror) {
           runtime->seat_id = tag;
         } else {
@@ -2698,7 +2698,7 @@ namespace proc {
         std::ofstream {runtime->isolated_seat_flag}
           << std::filesystem::read_symlink("/proc/" + std::to_string(runtime->namespace_pid) + "/ns/mnt", flag_ec).string()
           << ' ' << ::getpid() << '\n';
-        runtime->device_mirror = platf::session_devices::mirror(runtime->namespace_pid, runtime->seat_id);
+        runtime->device_mirror = platf::session_devices::mirror(runtime->namespace_pid, runtime->seat_id, config::input.isolated_hide_hid_gamepads);
         if (!runtime->device_mirror) {
           return -1;
         }

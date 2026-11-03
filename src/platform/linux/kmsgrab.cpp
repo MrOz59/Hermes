@@ -1325,6 +1325,10 @@ namespace platf {
         }
       }
 
+      bool requires_hdr_for_hdr_output() const override {
+        return true;
+      }
+
       bool get_hdr_metadata(SS_HDR_METADATA &metadata) {
         // This performs all the metadata validation
         if (!is_hdr()) {

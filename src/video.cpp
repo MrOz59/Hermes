@@ -3411,7 +3411,9 @@ namespace video {
     }
 
     const bool display_hdr = disp->is_hdr();
-    if (stream.dynamicRange || display_hdr) {
+    const bool requires_hdr = disp->requires_hdr_for_hdr_output();
+    const bool validate_hdr = stream.dynamicRange || (display_hdr && requires_hdr);
+    if (validate_hdr) {
       const auto mode = choose_capture_readiness_mode(
         true, display_hdr,
         encoder.hevc[encoder_t::DYNAMIC_RANGE],
@@ -3434,7 +3436,7 @@ namespace video {
     disp = platf::display(encoder.platform_formats->dev_type, name, config);
     if (!disp) {
       failure = "Capture could not open " + label +
-                (display_hdr ? " in HDR mode" : "");
+                (validate_hdr && display_hdr ? " in HDR mode" : "");
       return -1;
     }
     if (disp->is_hdr() != display_hdr) {

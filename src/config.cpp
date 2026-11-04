@@ -503,6 +503,7 @@ namespace config {
     false,  // hermes_kms_isolated_sessions
     "auto"s,  // gamescope_backend
     "plasma"s,  // hermes_kms_session_compositor
+    "gamescope"s,  // isolation_method
 
     {
       video_t::dd_t::config_option_e::disabled,  // configuration_option
@@ -1272,6 +1273,7 @@ namespace config {
     // labwc are the profiles Hermes ships as opt-in fallbacks, and any other
     // name is a profile the administrator dropped in themselves.
     string_f(vars, "hermes_kms_session_compositor", video.hermes_kms_session_compositor);
+    string_restricted_f(vars, "isolation_method", video.isolation_method, {"gamescope"sv, "kwin_virtual"sv});
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);
     generic_f(vars, "dd_resolution_option", video.dd.resolution_option, dd::resolution_option_from_view);

@@ -529,6 +529,11 @@ namespace platf::prelogin {
       if (facts.sddm && !facts.sddm->autologin_user.empty()) {
         add("autologin", state_e::note, "Autologin", "SDDM logs " + facts.sddm->autologin_user + " in by itself, so the login screen is never shown and none of this is used while that stays on.");
       }
+    } else if (facts.display_manager == "plasmalogin") {
+      // Plasma Login Manager's greeter is KWin on Wayland. Seen on CachyOS:
+      // Hermes started before login, made a Hermes-KMS virtual display, and
+      // the greeter drew the login screen on it.
+      ready &= add("greeter", state_e::ready, "Login screen", "Plasma Login Manager's greeter runs on KWin Wayland, which lights a new output by itself.");
     } else if (facts.display_manager == "gdm") {
       ready &= add("greeter", state_e::unknown, "Login screen", "GDM's greeter is a Wayland session and should light a new output, but it has not been run with Hermes.");
     } else {

@@ -2282,6 +2282,16 @@ namespace confighttp {
         add("virtual_display", "warn",
             "GNOME/Mutter session: Hermes can only verify (not configure) the virtual output. "
             "Isolated virtual display is unavailable.");
+      } else if (!VDISPLAY::windowSystemAttached()) {
+        // Started before login, the unit carries XDG_SESSION_TYPE but no
+        // display server, so no backend can be found. That is not missing
+        // software: Hermes joins the desktop once someone logs in.
+        add("virtual_display", "warn",
+            VDISPLAY::graphicalSessionPresent().value_or(false) ?
+              "A desktop session has started; Hermes joins it as soon as no client is connected. Until then the "
+              "virtual-display layout cannot be managed." :
+              "Nobody is logged in to a desktop yet, so the virtual-display layout cannot be managed. Hermes joins "
+              "the desktop after login.");
       } else {
         add("virtual_display", "warn",
             "No output-management backend (kscreen/wlr/mutter) detected; virtual-display activation may fail.");

@@ -25,6 +25,7 @@ GAMESCOPE_SOURCE_PREFIX="/opt/hermes-gamescope"
 ASSUME_YES=0
 DRY_RUN=0
 CHANNEL="release"
+MODE="install"
 
 # What was decided, for the summary and for steps that depend on each other.
 did_kms=0
@@ -39,6 +40,10 @@ need_reboot=0
 config_changed=0
 config_backed_up=0
 service_was_active=0
+updated_hermes=0
+updated_kms=0
+updated_gamescope=0
+updated_evdi=0
 kms_source_dir=""
 notes=()
 
@@ -112,9 +117,10 @@ usage() {
   cat <<EOF
 Usage: install.sh [options]
 
-Installs Hermes from its GitHub releases and asks about each optional piece.
+Installs or updates Hermes and its existing ecosystem components.
 
 Options:
+  --update    update installed Hermes and existing components only
   --nightly   install the rolling nightly build of main instead of the
               latest release (KMS remains pinned to v0.4.1 for Hermes 0.7.0)
   --yes       take the default answer to every question (optional pieces
@@ -318,6 +324,115 @@ kms_runtime_diagnostics() {
   fi
 }
 
+
+# The package manager is authoritative; the digest cache avoids repeated
+# installation of rolling assets which may keep the same version string.
+installer_state_dir() {
+  printf '%s\n' "${XDG_STATE_HOME:-$HOME/.local/state}/hermes/installer"
+}
+
+installed_package_version() {
+  local pkg=$1
+  case "$distro" in
+    arch) command -v pacman >/dev/null 2>&1 || return 1
+      pacman -Q "$pkg" 2>/dev/null | awk 'NR == 1 { print $2 }' ;;
+    ubuntu) command -v dpkg-query >/dev/null 2>&1 || return 1
+      dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null ;;
+    fedora) command -v rpm >/dev/null 2>&1 || return 1
+      rpm -q --qf '%{VERSION}-%{RELEASE}\n' "$pkg" 2>/dev/null ;;
+  esac
+}
+
+hermes_package_name() {
+  case "$distro" in arch) echo hermes-streaming ;; *) echo hermes ;; esac
+}
+kms_core_package_name() {
+  case "$distro" in arch) echo hermes-kms-dkms-git ;; *) echo hermes-kms-dkms ;; esac
+}
+kms_broker_package_name() {
+  case "$distro" in arch) echo hermes-kms-seatd-git ;; *) echo hermes-kms-seatd ;; esac
+}
+
+gamescope_package_name() { echo gamescope-hermes; }
+
+hermes_asset_version() {
+  local name=${1##*/}
+  case "$distro" in
+    arch) [[ "$name" == hermes-streaming-*-x86_64.pkg.tar.zst ]] || return 1
+      name=${name#hermes-streaming-}
+      echo "${name%-x86_64.pkg.tar.zst}" ;;
+    ubuntu) [[ "$name" == hermes_*_ubuntu${distro_version}_amd64.deb ]] || return 1
+      name=${name#hermes_}
+      echo "${name%_ubuntu${distro_version}_amd64.deb}" ;;
+    fedora) [[ "$name" == hermes-*.fc${distro_version}.x86_64.rpm ]] || return 1
+      name=${name#hermes-}
+      echo "${name%.x86_64.rpm}" ;;
+  esac
+}
+
+# Prints newer, older or same for candidate relative to installed version.
+candidate_relation() {
+  local installed=$1 candidate=$2 result first
+  if [ "$installed" = "$candidate" ]; then echo same
+  elif [ "$distro" = ubuntu ] && command -v dpkg >/dev/null 2>&1; then
+    if dpkg --compare-versions "$candidate" gt "$installed"; then echo newer; else echo older; fi
+  elif [ "$distro" = arch ] && command -v vercmp >/dev/null 2>&1; then
+    result=$(vercmp "$candidate" "$installed")
+    if [ "$result" -gt 0 ]; then echo newer
+    elif [ "$result" -lt 0 ]; then echo older
+    else echo same; fi
+  else
+    first=$(printf '%s\n%s\n' "$installed" "$candidate" | LC_ALL=C sort -V | head -n1)
+    if [ "$first" = "$candidate" ]; then echo older; else echo newer; fi
+  fi
+}
+
+cached_asset_matches() {
+  local component=$1 digest=$2 file
+  [ "$DRY_RUN" = 0 ] || return 1
+  file="$(installer_state_dir)/${component}.sha256"
+  [ -f "$file" ] && [ "$(cat "$file")" = "$digest" ]
+}
+
+remember_asset() {
+  [ "$DRY_RUN" = 0 ] || return 0
+  local component=$1 digest=$2 path
+  path="$(installer_state_dir)/${component}.sha256"
+  mkdir -p "$(dirname "$path")"
+  [ ! -L "$path" ] || { warn "Refusing symlinked installer cache: $path"; return 1; }
+  printf '%s\n' "$digest" >"$path"
+}
+
+backup_config_for_update() {
+  [ "$DRY_RUN" = 0 ] || return 0
+  [ "$config_backed_up" = 0 ] || return 0
+  local file backup
+  file=$(config_file)
+  [ -f "$file" ] || return 0
+  [ ! -L "$file" ] || { warn "Refusing symlinked Hermes configuration: $file"; return 1; }
+  backup=$(mktemp "${file}.bak.XXXXXXXX")
+  cp -p -- "$file" "$backup"
+  config_backed_up=1
+  ok "Preserved Hermes configuration at $backup"
+}
+
+kms_installed_version() {
+  local version
+  version=$(installed_package_version "$(kms_core_package_name)" || true)
+  if [ -n "$version" ]; then echo "$version"; return 0; fi
+  command -v dkms >/dev/null 2>&1 || return 1
+  dkms status -m hermes-kms 2>/dev/null |
+    awk -F '[/,:]' '$1 == "hermes-kms" && $2 != "" { print $2; exit }'
+}
+
+kms_base_version() {
+  local version=$1
+  if [[ "$version" =~ ^([0-9]+[.][0-9]+[.][0-9]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+  else
+    echo "$version"
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # Steps

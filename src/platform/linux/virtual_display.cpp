@@ -1390,7 +1390,8 @@ namespace VDISPLAY {
 
       if (devices.empty() && log_failures) {
         BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] No accessible Hermes-KMS render node found. "
-                            "Load hermes_kms and run hermes-kms-setup for this user.";
+                            "Load hermes_kms and run `sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto` "
+                            "(hermes-kms-seatd package) for this user.";
       }
       return devices;
     }

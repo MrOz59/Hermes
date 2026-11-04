@@ -550,7 +550,7 @@ namespace platf::prelogin {
     } else if (*facts.hermes_kms_without_session) {
       ready &= add("virtual_display", state_e::ready, "Virtual display", "The Hermes-KMS device opens with no session.");
     } else {
-      ready &= add("virtual_display", state_e::missing, "Virtual display", "The Hermes-KMS device belongs to root until someone is on the seat.", "Run `sudo hermes-kms-setup configure --user auto`.");
+      ready &= add("virtual_display", state_e::missing, "Virtual display", "The Hermes-KMS device belongs to root until someone is on the seat.", "Run `sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto`, from the hermes-kms-seatd package (hermes-kms-seatd-git on Arch).");
     }
 
     report.ready = ready;

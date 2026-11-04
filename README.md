@@ -411,7 +411,20 @@ These checks **do not certify real GPU streaming**; reboot when prompted,
 then use the Audio/Video diagnostics in the Web UI and test a real client.
 
 The installer leaves optional independent sessions and pre-login streaming
-**disabled by default**. Run as your normal user, not root. Use `--nightly`
+**disabled by default**. If neither Hermes-KMS nor EVDI is available, it offers
+an optional EVDI installation (AUR via an existing helper on Arch/CachyOS,
+`evdi-dkms` from configured APT repositories on Ubuntu). Fedora requires
+manually selecting a trustworthy EVDI package. Existing physical-display capture
+does not require either virtual-display driver.
+
+The installer backs up an existing Hermes configuration before changing it.
+If Hermes was already running, a restart is offered but never forced (it would
+disconnect active streams). A missing stable package is **not silently replaced
+by nightly**; the installer asks before switching channels, and `--yes` refuses
+that experimental fallback. Secure Boot may require signing/MOK enrollment
+before the DKMS module can load.
+
+Run as your normal user, not root. Use `--nightly`
 for a rolling Hermes build (the driver stays pinned to 0.4.1), `--dry-run`
 to preview actions, or `--help` to review options. To install manually:
 

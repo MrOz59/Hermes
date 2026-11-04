@@ -321,4 +321,64 @@ grep -q 'systemctl --user restart hermes' "$workdir/service-commands"
 )
 [ ! -e "$workdir/unexpected-service-restart" ]
 
+
+# Gamescope filename parsing includes the full distro-specific version.
+(
+  distro=arch
+  [ "$(gamescope_asset_version 'https://example.invalid/gamescope-hermes-0.7.0-3-x86_64.pkg.tar.zst')" = 0.7.0-3 ]
+  distro=ubuntu
+  distro_version=24.04
+  [ "$(gamescope_asset_version 'https://example.invalid/gamescope-hermes_0.7.0_ubuntu24.04_amd64.deb')" = 0.7.0 ]
+  distro=fedora
+  distro_version=44
+  [ "$(gamescope_asset_version 'https://example.invalid/gamescope-hermes-0.7.0-3.fc44.x86_64.rpm')" = 0.7.0-3.fc44 ]
+)
+
+# KMS repair is opt-in and never mutates DKMS under --yes.
+(
+  distro=ubuntu
+  ASSUME_YES=1
+  kms_installed_version() { echo 0.4.1; }
+  has_kms_installed() { return 1; }
+  pkg_install() { touch "$workdir/unexpected-kms-repair"; }
+  update_kms >/dev/null
+)
+[ ! -e "$workdir/unexpected-kms-repair" ]
+
+# No automatic Gamescope downgrade even if the URL is an explicit rolling
+# release selected by the updater.
+(
+  distro=ubuntu
+  distro_version=24.04
+  ASSUME_YES=1
+  installed_package_version() { echo 0.9.0; }
+  gamescope_binary() { echo /usr/lib/hermes-gamescope/bin/gamescope; }
+  release_assets() { echo 'https://example.invalid/gamescope-hermes_0.7.0_ubuntu24.04_amd64.deb'; }
+  download() { touch "$workdir/unexpected-gamescope-downgrade"; }
+  update_gamescope >/dev/null
+)
+[ ! -e "$workdir/unexpected-gamescope-downgrade" ]
+
+# A newer Gamescope package must use an upgrade transaction rather than
+# a same-version reinstall operation.
+(
+  distro=ubuntu
+  distro_version=24.04
+  updated_gamescope=0
+  installed_package_version() { echo 0.6.0; }
+  gamescope_binary() { echo /usr/lib/hermes-gamescope/bin/gamescope; }
+  release_assets() { echo 'https://example.invalid/gamescope-hermes_0.7.0_ubuntu24.04_amd64.deb'; }
+  download() { printf 'new Gamescope package' > "$2"; }
+  ask() { return 0; }
+  cached_asset_matches() { return 1; }
+  verify_gamescope_binary() { return 0; }
+  install_local_update_package() { touch "$workdir/unexpected-gamescope-reinstall-newer"; }
+  install_local_package() { touch "$workdir/gamescope-upgrade"; }
+  remember_asset() { :; }
+  update_gamescope >/dev/null
+  [ "$updated_gamescope" = 1 ]
+)
+[ -e "$workdir/gamescope-upgrade" ]
+[ ! -e "$workdir/unexpected-gamescope-reinstall-newer" ]
+
 echo "Installer offline helper tests passed."

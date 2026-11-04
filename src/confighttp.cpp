@@ -2282,10 +2282,16 @@ namespace confighttp {
         add("virtual_display", "warn",
             "GNOME/Mutter session: Hermes can only verify (not configure) the virtual output. "
             "Isolated virtual display is unavailable.");
-      } else if (!VDISPLAY::windowSystemAttached()) {
+      } else if (const auto env = [](const char *name) {
+                   const char *value = std::getenv(name);
+                   return std::string {value ? value : ""};
+                 };
+                 !VDISPLAY::displayServerReachable(env("WAYLAND_DISPLAY"), env("DISPLAY"), env("XDG_RUNTIME_DIR"))) {
         // Started before login, the unit carries XDG_SESSION_TYPE but no
         // display server, so no backend can be found. That is not missing
-        // software: Hermes joins the desktop once someone logs in.
+        // software: Hermes joins the desktop once someone logs in. A session
+        // that has ended can leave WAYLAND_DISPLAY empty or DISPLAY pointing
+        // at nothing, so ask whether a display server actually answers.
         add("virtual_display", "warn",
             VDISPLAY::graphicalSessionPresent().value_or(false) ?
               "A desktop session has started; Hermes joins it as soon as no client is connected. Until then the "

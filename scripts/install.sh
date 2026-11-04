@@ -346,6 +346,27 @@ installed_package_version() {
 hermes_package_name() {
   case "$distro" in arch) echo hermes-streaming ;; *) echo hermes ;; esac
 }
+gamescope_asset_version() {
+  local name=${1##*/}
+  case "$distro" in
+    arch)
+      [[ "$name" == gamescope-hermes-*-x86_64.pkg.tar.zst ]] || return 1
+      name=${name#gamescope-hermes-}
+      echo "${name%-x86_64.pkg.tar.zst}"
+      ;;
+    ubuntu)
+      [[ "$name" == gamescope-hermes_*_ubuntu${distro_version}_amd64.deb ]] || return 1
+      name=${name#gamescope-hermes_}
+      echo "${name%_ubuntu${distro_version}_amd64.deb}"
+      ;;
+    fedora)
+      [[ "$name" == gamescope-hermes-*.fc${distro_version}.x86_64.rpm ]] || return 1
+      name=${name#gamescope-hermes-}
+      echo "${name%.x86_64.rpm}"
+      ;;
+  esac
+}
+
 kms_core_package_name() {
   case "$distro" in arch) echo hermes-kms-dkms-git ;; *) echo hermes-kms-dkms ;; esac
 }
@@ -1039,7 +1060,11 @@ post_install_checks() {
 summary() {
   step "Done"
   if [ "$MODE" = update ]; then
-    info "Update summary (1=updated; 0=unchanged/skipped): Hermes=$updated_hermes KMS=$updated_kms Gamescope=$updated_gamescope EVDI=$updated_evdi"
+    if [ "$DRY_RUN" = 1 ]; then
+      info "Dry-run completed; no packages or configuration were changed."
+    else
+      info "Update summary (1=updated; 0=unchanged/skipped): Hermes=$updated_hermes KMS=$updated_kms Gamescope=$updated_gamescope EVDI=$updated_evdi"
+    fi
   fi
   info "Web UI: https://localhost:47990 (create a username and password on first visit)."
   [ "$kms_ready" = 1 ] && info "Hermes-KMS: available for this kernel."
@@ -1212,6 +1237,10 @@ update_kms() {
       as_root make -C "$src" install-broker-configs
     fi
   fi
+  if [ "$DRY_RUN" = 1 ]; then
+    info "Dry-run: planned Hermes-KMS upgrade; no package or driver was changed."
+    return 0
+  fi
   if verify_kms_installed; then
     kms_ready=1
     updated_kms=1
@@ -1224,7 +1253,7 @@ update_kms() {
 
 update_gamescope() {
   step "Update existing Hermes Gamescope"
-  local installed binary pattern assets url file digest
+  local installed binary pattern assets url file digest candidate relation
   installed=$(installed_package_version "$(gamescope_package_name)" || true)
   binary=$(gamescope_binary || true)
   if [ -z "$installed" ] && [ -z "$binary" ]; then
@@ -1253,7 +1282,17 @@ update_gamescope() {
     warn "No matching patched Gamescope asset for $distro $distro_version."
     return 0
   fi
-  ask "Check/update existing patched Gamescope ($installed)?" y || return 0
+  candidate=$(gamescope_asset_version "$url") || {
+    warn "Could not parse Gamescope package version. Update skipped."
+    return 0
+  }
+  relation=$(candidate_relation "$installed" "$candidate")
+  if [ "$relation" = older ]; then
+    warn "The rolling Gamescope asset ($candidate) is older than installed $installed."
+    ask "Explicitly downgrade Gamescope?" n || return 0
+  else
+    ask "Check/update patched Gamescope ($installed -> $candidate)?" y || return 0
+  fi
   file="${workdir}/${url##*/}"
   download "$url" "$file"
   if [ "$DRY_RUN" = 1 ]; then
@@ -1267,7 +1306,11 @@ update_gamescope() {
     ok "Gamescope rolling artifact unchanged."
     return 0
   fi
-  install_local_update_package "$file"
+  if [ "$relation" = same ]; then
+    install_local_update_package "$file"
+  else
+    install_local_package "$file"
+  fi
   if verify_gamescope_binary; then
     did_gamescope=1
     updated_gamescope=1
@@ -1298,8 +1341,10 @@ update_evdi() {
     warn "Cannot update AUR EVDI without a configured AUR helper."
     return 0
   fi
-  updated_evdi=1
-  need_reboot=1
+  if [ "$DRY_RUN" = 0 ]; then
+    updated_evdi=1
+    need_reboot=1
+  fi
 }
 
 finish_update_service() {

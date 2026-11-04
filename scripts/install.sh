@@ -268,13 +268,18 @@ has_kms_installed() {
   [ "$DRY_RUN" = 0 ] || return 1
   command -v dkms >/dev/null 2>&1 || return 1
   dkms status -m hermes-kms 2>/dev/null | awk -F '[/,:]' \
-    -v expected_version="${KMS_RELEASE#v}" -v expected_kernel="$(uname -r)" '
-    $1 == "hermes-kms" && $2 == expected_version {
+    -v expected_version="${KMS_RELEASE#v}" -v expected_kernel="$(uname -r)" -v family="$distro" '
+    $1 == "hermes-kms" {
+      # Arch -git packages use 0.4.1.rN.gSHA; other packages use 0.4.1.
+      expected_prefix = expected_version
+      gsub(/[.]/, "[.]", expected_prefix)
+      version_ok = $2 == expected_version ||
+                   (family == "arch" && $2 ~ ("^" expected_prefix "[.]r[0-9]+[.]g[0-9a-fA-F]+$"))
       kernel = $3
       state = $NF
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", kernel)
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", state)
-      if (kernel == expected_kernel && state ~ /^installed([[:space:]]|$)/) found = 1
+      if (version_ok && kernel == expected_kernel && state ~ /^installed([[:space:]]|$)/) found = 1
     }
     END { exit !found }'
 }

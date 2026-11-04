@@ -175,4 +175,15 @@ fi
 )
 grep -q 'systemctl --user restart hermes' "$workdir/service-commands"
 
+# --yes must not install an AUR package when Hermes-KMS is declined.
+(
+  kms_ready=0
+  ASSUME_YES=1
+  distro=arch
+  has_evdi_installed() { return 1; }
+  run() { touch "$workdir/unexpected-evdi-install"; }
+  install_evdi_if_needed >/dev/null
+)
+[ ! -e "$workdir/unexpected-evdi-install" ]
+
 echo "Installer offline helper tests passed."

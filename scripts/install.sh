@@ -507,6 +507,33 @@ install_kms_broker() {
   return 0
 }
 
+# Private DRM application sessions need the fork's DRM device-selection flag.
+gamescope_binary() {
+  local candidate
+  for candidate in /usr/lib/hermes-gamescope/bin/gamescope /opt/hermes-gamescope/bin/gamescope; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+verify_gamescope_binary() {
+  [ "$DRY_RUN" = 1 ] && return 0
+  local binary help_text
+  binary=$(gamescope_binary) || { warn "Patched Gamescope executable not found."; return 1; }
+  if ! help_text=$("$binary" --help 2>&1); then
+    warn "Gamescope --help failed for $binary; check its runtime dependencies."
+    return 1
+  fi
+  if ! grep -Eq -- '--prefer-drm|--drm-device' <<<"$help_text"; then
+    warn "Gamescope at $binary lacks the required private DRM override option."
+    return 1
+  fi
+  ok "Verified Gamescope DRM option: $binary"
+}
+
 install_gamescope() {
   explain <<EOF
 Isolated application sessions run the game in Gamescope, on the session's own
@@ -536,6 +563,10 @@ EOF
     file="${workdir}/${url##*/}"
     download "$url" "$file"
     install_local_package "$file"
+    if ! verify_gamescope_binary; then
+      notes+=("Gamescope was installed but its private DRM interface could not be verified.")
+      return 0
+    fi
     did_gamescope=1
     ok "Gamescope for Hermes installed in /usr/lib/hermes-gamescope."
     return 0
@@ -550,6 +581,10 @@ EOF
       (cd "$src/packaging/hermes" && run makepkg -si --noconfirm --needed)
     else
       run makepkg -si --noconfirm --needed
+    fi
+    if ! verify_gamescope_binary; then
+      notes+=("Gamescope was installed but its private DRM interface could not be verified.")
+      return 0
     fi
     did_gamescope=1
     ok "Gamescope for Hermes installed in /usr/lib/hermes-gamescope."
@@ -599,6 +634,10 @@ EOF
     -Denable_openvr_support=false -Denable_tests=false -Denable_gamescope_wsi_layer=false
   run ninja -C "$src/build"
   as_root meson install -C "$src/build" --skip-subprojects
+  if ! verify_gamescope_binary; then
+    notes+=("Built Gamescope, but its private DRM interface could not be verified.")
+    return 0
+  fi
   did_gamescope=1
   ok "Gamescope for Hermes installed in ${GAMESCOPE_SOURCE_PREFIX}."
 }
@@ -637,8 +676,13 @@ EOF
 
   set_config virtual_display_backend hermes_kms
   set_config hermes_kms_isolated_sessions enabled
-  did_detached=1
-  ok "Independent-session capability enabled; shared streaming remains available."
+  if [ "$DRY_RUN" = 1 ] || [ -x /usr/bin/hermes-detached-session ]; then
+    did_detached=1
+    ok "Independent-session capability enabled; shared streaming remains available."
+  else
+    warn "Detached Desktop/Steam helper is absent; check the Hermes package's KWin build."
+    notes+=("Detached Desktop/Steam requires /usr/bin/hermes-detached-session and KDE Plasma 6 Wayland.")
+  fi
   info "Use Detached Desktop or Detached Steam in the app list, or choose session-type per app."
 
   if gamescope_unavailable; then
@@ -668,11 +712,8 @@ EOF
     notes+=("Private-seat broker could not be configured; Gamescope application isolation is not ready.")
     return 0
   fi
-  if [ "$DRY_RUN" = 0 ] &&
-     [ ! -x /usr/lib/hermes-gamescope/bin/gamescope ] &&
-     [ ! -x /opt/hermes-gamescope/bin/gamescope ]; then
-    warn "Patched Gamescope executable was not found after install."
-    notes+=("Gamescope application isolation not ready: verify the installed Gamescope binary.")
+  if ! verify_gamescope_binary; then
+    notes+=("Gamescope isolation is not ready: the patched Gamescope binary did not pass verification.")
     return 0
   fi
 
@@ -799,11 +840,13 @@ post_install_checks() {
     kms_runtime_diagnostics
   fi
   if [ "$did_gamescope" = 1 ]; then
-    if [ -x /usr/lib/hermes-gamescope/bin/gamescope ] || [ -x /opt/hermes-gamescope/bin/gamescope ]; then
-      ok "Patched Gamescope executable found."
-    else
-      warn "Patched Gamescope not found in its expected prefix."
-    fi
+    verify_gamescope_binary || true
+  fi
+  if [ "$did_detached" = 1 ] && [ ! -x /usr/bin/hermes-detached-session ]; then
+    warn "Detached Desktop helper is missing."
+  fi
+  if [ ! -e /dev/uinput ] || [ ! -e /dev/uhid ]; then
+    warn "/dev/uinput or /dev/uhid is missing; controllers may need module/udev setup."
   fi
   info "Package checks cannot verify real GPU capture, input or private sessions."
   info "After a reboot, use the Hermes Audio/Video diagnostics and test a stream."

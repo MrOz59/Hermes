@@ -129,7 +129,9 @@ chmod +x "$workdir/gamescope-patched" "$workdir/gamescope-stock"
 )
 
 # Never fall back from a missing stable release to nightly under --yes.
-(
+# die() exits the executing shell, so the expected failure must be tested
+# around the entire subshell rather than inside it.
+if (
   ASSUME_YES=1
   CHANNEL=release
   distro=fedora
@@ -140,11 +142,11 @@ chmod +x "$workdir/gamescope-patched" "$workdir/gamescope-stock"
     fi
     return 0
   }
-  if install_hermes >/dev/null 2>&1; then
-    echo "FAIL: stable package failure silently installed nightly" >&2
-    exit 1
-  fi
-)
+  install_hermes >/dev/null 2>&1
+); then
+  echo "FAIL: stable package failure silently installed nightly" >&2
+  exit 1
+fi
 [ ! -e "$workdir/nightly-was-queried" ]
 
 if declare -f install_kms | grep -q 'INSTALL_BROKER=1'; then

@@ -72,6 +72,43 @@ test('Steam can reuse an existing process and keeps its fullscreen state', () =>
   assert.equal(bigPicture.fullScreen, true);
 });
 
+test('Big Picture that moves itself back and goes fullscreen is placed again', () => {
+  // Recorded on KDE Plasma 6.8 with a 2560x1440 primary monitor lit: Steam
+  // adds "Steam Big Picture Mode" on the primary monitor, the script moves it
+  // to Virtual-1, Steam moves it straight back and makes it fullscreen there.
+  const handlers = [];
+  let fullScreen = false;
+  const bigPicture = {
+    pid: 4538,
+    resourceClass: 'steam',
+    normalWindow: true,
+    output: { name: 'HDMI-A-1' },
+    fullScreenChanged: { connect: fn => handlers.push(fn) },
+    get fullScreen() { return fullScreen; },
+    set fullScreen(value) {
+      if (value !== fullScreen) {
+        fullScreen = value;
+        handlers.forEach(fn => fn());
+      }
+    },
+  };
+  const { moves, target, add } = desktop([], 'steam');
+  add(bigPicture);
+  assert.deepEqual(moves, [bigPicture]);
+  assert.equal(bigPicture.output, target);
+  assert.equal(bigPicture.fullScreen, false, 'a window that was not fullscreen stays that way');
+
+  bigPicture.output = { name: 'HDMI-A-1' };  // Steam moves it back...
+  bigPicture.fullScreen = true;              // ...and goes fullscreen there.
+  assert.deepEqual(moves, [bigPicture, bigPicture]);
+  assert.equal(bigPicture.output, target);
+  assert.equal(bigPicture.fullScreen, true);
+
+  bigPicture.fullScreen = false;  // Leaving fullscreen on the target is left alone.
+  bigPicture.fullScreen = true;
+  assert.equal(moves.length, 2, 'already on the target: no further move');
+});
+
 test('missing outputs and non-normal windows are left alone', () => {
   const hidden = window(42);
   hidden.normalWindow = false;

@@ -83,7 +83,20 @@ namespace platf::window_placement {
            "    window.fullScreen = true;\n"
            "  }\n"
            "}\n"
-           "workspace.windowList().forEach(place);\n"
-           "workspace.windowAdded.connect(place);\n";
+           "// A client can still pick its own output when it goes fullscreen. Steam\n"
+           "// opens Big Picture, is moved here, moves itself back to the primary\n"
+           "// monitor and goes fullscreen there; place it again once it has.\n"
+           "function watch(window) {\n"
+           "  place(window);\n"
+           "  if (window.fullScreenChanged) {\n"
+           "    window.fullScreenChanged.connect(() => {\n"
+           "      if (window.fullScreen) {\n"
+           "        place(window);\n"
+           "      }\n"
+           "    });\n"
+           "  }\n"
+           "}\n"
+           "workspace.windowList().forEach(watch);\n"
+           "workspace.windowAdded.connect(watch);\n";
   }
 }  // namespace platf::window_placement

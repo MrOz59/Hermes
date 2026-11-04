@@ -1167,9 +1167,39 @@ update_kms() {
     if has_kms_installed; then
       kms_ready=1
       ok "Hermes-KMS $current is already installed for this kernel."
-    else
-      warn "Hermes-KMS exists, but its DKMS build is missing for $(uname -r)."
-      notes+=("Run DKMS repair for Hermes-KMS after installing matching kernel headers.")
+      return 0
+    fi
+    warn "Hermes-KMS exists, but its DKMS build is missing for $(uname -r)."
+    if ! ask "Repair the installed Hermes-KMS DKMS build for this kernel?" n; then
+      notes+=("Hermes-KMS is registered but not installed for $(uname -r).")
+      return 0
+    fi
+    pkg_install "$(kernel_headers_package)"
+    if [ "$DRY_RUN" = 1 ]; then
+      info "Dry-run: would rebuild and install the registered Hermes-KMS DKMS module."
+      return 0
+    fi
+    if [ ! -f "/lib/modules/$(uname -r)/build/Makefile" ]; then
+      warn "Missing exact kernel headers; cannot repair DKMS."
+      return 0
+    fi
+    local registered
+    registered=$(dkms status -m hermes-kms 2>/dev/null |
+      awk -F '[/,:]' '$1 == "hermes-kms" && $2 != "" { print $2; exit }')
+    if [ -z "$registered" ]; then
+      warn "No registered DKMS source version; cannot repair without a source package."
+      return 0
+    fi
+    if ! as_root dkms build -m hermes-kms -v "$registered" -k "$(uname -r)" ||
+       ! as_root dkms install -m hermes-kms -v "$registered" -k "$(uname -r)"; then
+      warn "DKMS repair failed; check the build log and matching kernel headers."
+      return 0
+    fi
+    if verify_kms_installed; then
+      kms_ready=1
+      updated_kms=1
+      need_reboot=1
+      ok "Hermes-KMS repaired. Reboot before testing the driver."
     fi
     return 0
   fi

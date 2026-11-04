@@ -382,6 +382,44 @@ The quickest way is the installer, run as the user Hermes will stream for:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.sh | bash
 ```
+### Updating an existing installation
+
+The same script is also the ecosystem updater. Run it as the normal user
+who owns the Hermes service, **not** as root:
+
+```bash
+# Update installed Hermes and already-present ecosystem components.
+curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.sh | bash -s -- --update
+
+# Follow the rolling Hermes nightly rather than the latest stable release.
+curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.sh | bash -s -- --update --nightly
+
+# Preview without changing packages or service configuration.
+curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.sh | bash -s -- --update --dry-run
+```
+
+The updater detects the **installed package version** before comparing it to
+the requested release. The normal channel stays stable; the nightly channel
+must be chosen explicitly. A newer local version is never downgraded without
+confirmation. Rolling Hermes/Gamescope assets are tracked by SHA-256 so a
+repeated update can skip unchanged packages even when their filenames stay
+the same. `--yes` approves normal existing-component upgrades but never
+authorizes a downgrade or service interruption.
+
+Only components that were already installed are considered: the Hermes host,
+Hermes-KMS (pinned to its compatible v0.4.1 release), the patched Gamescope,
+and optionally EVDI. If Hermes-KMS is present but DKMS is missing for the
+current kernel, the updater offers an **opt-in repair** using the registered
+driver source. It never enables new independent-session modes, modifies the
+chosen virtual-display backend or configures pre-login streaming.
+
+An existing Hermes configuration is backed up before a package update. A
+running service is restarted only with approval, since restarting disconnects
+clients. A previously stopped service remains stopped. Hermes-KMS updates
+require a reboot; Secure Boot may require DKMS module signing/MOK enrollment.
+Image-based/immutable distributions still need their separate installation
+method.
+
 
 It installs Hermes for Arch/CachyOS, Ubuntu 24.04/26.04 or Fedora 43/44,
 then offers the matching [Hermes-KMS](#installing-the-hermes-kms-driver)

@@ -647,6 +647,66 @@ EOF
   ok "Gamescope for Hermes installed in ${GAMESCOPE_SOURCE_PREFIX}."
 }
 
+# EVDI remains the default Hermes backend when Hermes-KMS is not selected.
+# Do not silently install an AUR or third-party Fedora package.
+has_evdi_installed() {
+  [ -d /sys/module/evdi ] ||
+    { command -v modinfo >/dev/null 2>&1 && modinfo evdi >/dev/null 2>&1; }
+}
+
+install_evdi_if_needed() {
+  [ "$kms_ready" = 0 ] || return 0
+  step "Alternative virtual display backend: EVDI"
+  if has_evdi_installed; then
+    ok "EVDI is already available; ordinary virtual-display streaming can use it."
+    return 0
+  fi
+  explain <<'EOF'
+Hermes-KMS was not selected, and no EVDI module was detected. Existing physical
+desktop capture may still work, but virtual-display streaming needs a backend.
+EVDI is the default, stable virtual-display backend; it does not support the
+independent-session features offered by Hermes-KMS.
+EOF
+  if ! ask "Install EVDI for ordinary virtual displays?" n; then
+    notes+=("No EVDI or Hermes-KMS module detected; install a virtual-display backend if needed.")
+    return 0
+  fi
+  case "$distro" in
+    arch)
+      if command -v paru >/dev/null 2>&1; then
+        run paru -S --needed --noconfirm evdi
+      elif command -v yay >/dev/null 2>&1; then
+        run yay -S --needed --noconfirm evdi
+      else
+        warn "An AUR helper (paru or yay) is required for the Arch evdi package."
+        notes+=("Install EVDI from the AUR manually, or rerun to install Hermes-KMS.")
+        return 0
+      fi
+      ;;
+    ubuntu)
+      if apt-cache show evdi-dkms >/dev/null 2>&1; then
+        pkg_install evdi-dkms
+      else
+        warn "evdi-dkms is not available from the configured APT repositories."
+        notes+=("See docs/getting_started.md for the available EVDI installation options.")
+        return 0
+      fi
+      ;;
+    fedora)
+      warn "EVDI is not provided by the default Fedora repositories."
+      notes+=("Use a trusted EVDI package for this Fedora kernel, or choose Hermes-KMS.")
+      return 0
+      ;;
+  esac
+  if [ "$DRY_RUN" = 0 ] && ! has_evdi_installed; then
+    warn "EVDI was installed but a module for the running kernel was not found."
+    notes+=("Check EVDI DKMS build logs and matching kernel headers.")
+    return 0
+  fi
+  need_reboot=1
+  ok "EVDI package installed. Reboot before using a virtual display."
+}
+
 install_isolated() {
   step "Independent sessions — Hermes 0.7.0 (experimental)"
   explain <<'EOF'
@@ -850,9 +910,13 @@ post_install_checks() {
   if [ "$did_detached" = 1 ] && [ ! -x /usr/bin/hermes-detached-session ]; then
     warn "Detached Desktop helper is missing."
   fi
-  if [ ! -e /dev/uinput ] || [ ! -e /dev/uhid ]; then
-    warn "/dev/uinput or /dev/uhid is missing; controllers may need module/udev setup."
-  fi
+  for input_node in /dev/uinput /dev/uhid; do
+    if [ ! -c "$input_node" ]; then
+      warn "$input_node is missing; virtual input may need kernel/udev setup."
+    elif [ ! -r "$input_node" ] || [ ! -w "$input_node" ]; then
+      warn "$input_node is not readable/writable by this user; check input udev rules and ACLs."
+    fi
+  done
   info "Package checks cannot verify real GPU capture, input or private sessions."
   info "After a reboot, use the Hermes Audio/Video diagnostics and test a stream."
 }
@@ -898,6 +962,7 @@ main() {
   preflight
   install_hermes
   install_kms
+  install_evdi_if_needed
   install_isolated
   setup_prelogin
   enable_service

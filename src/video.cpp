@@ -3387,9 +3387,9 @@ namespace video {
                            (config::video.capture.empty() ? ""s : " via "s + config::video.capture);
     result.capture = label;
 
-    // Keep the inexpensive SDR/H.264 check for SDR launches. For an HDR launch,
-    // first open a probe-only display to learn the *effective* output mode;
-    // virtual displays may legitimately fall back to SDR despite an HDR request.
+    // First open a probe-only display to learn the effective output mode;
+    // virtual displays may legitimately fall back to SDR despite an HDR request,
+    // and standard Moonlight clients do not pass hdrMode on HTTP /launch.
     config_t config = stream;
     config.width = 1920;
     config.height = 1080;
@@ -3403,15 +3403,17 @@ namespace video {
     config.chromaSamplingType = 0;
     config.enableIntraRefresh = 0;
     config.input_only = false;
-    config.encoder_probe = stream.dynamicRange != 0;
+    config.encoder_probe = true;
     auto disp = platf::display(encoder.platform_formats->dev_type, name, config);
     if (!disp) {
       failure = "Capture could not open " + label;
       return -1;
     }
 
-    if (stream.dynamicRange) {
-      const bool display_hdr = disp->is_hdr();
+    const bool display_hdr = disp->is_hdr();
+    const bool requires_hdr = disp->requires_hdr_for_hdr_output();
+    const bool validate_hdr = stream.dynamicRange || (display_hdr && requires_hdr);
+    if (validate_hdr) {
       const auto mode = choose_capture_readiness_mode(
         true, display_hdr,
         encoder.hevc[encoder_t::DYNAMIC_RANGE],
@@ -3425,20 +3427,21 @@ namespace video {
 
       config.videoFormat = mode->video_format;
       config.dynamicRange = mode->dynamic_range;
-      config.encoder_probe = false;
-      // Do not validate the relaxed encoder probe: reopen with real stream
-      // restrictions and test capture, conversion and encoding on that path.
-      disp.reset();
-      disp = platf::display(encoder.platform_formats->dev_type, name, config);
-      if (!disp) {
-        failure = "Capture could not open " + label +
-                  (display_hdr ? " in HDR mode" : " after HDR-to-SDR fallback");
-        return -1;
-      }
-      if (disp->is_hdr() != display_hdr) {
-        failure = "Capture color mode changed while checking " + label;
-        return -1;
-      }
+    }
+
+    // Do not validate the relaxed encoder probe: reopen with real stream
+    // restrictions and test capture, conversion and encoding on that path.
+    config.encoder_probe = false;
+    disp.reset();
+    disp = platf::display(encoder.platform_formats->dev_type, name, config);
+    if (!disp) {
+      failure = "Capture could not open " + label +
+                (validate_hdr && display_hdr ? " in HDR mode" : "");
+      return -1;
+    }
+    if (disp->is_hdr() != display_hdr) {
+      failure = "Capture color mode changed while checking " + label;
+      return -1;
     }
 
     config.width = disp->width;

@@ -1038,6 +1038,9 @@ post_install_checks() {
 
 summary() {
   step "Done"
+  if [ "$MODE" = update ]; then
+    info "Update pass complete: Hermes=$updated_hermes, KMS=$updated_kms, Gamescope=$updated_gamescope, EVDI=$updated_evdi (1=updated, 0=unchanged/skipped)."
+  fi
   info "Web UI: https://localhost:47990 (create a username and password on first visit)."
   [ "$kms_ready" = 1 ] && info "Hermes-KMS: available for this kernel."
   [ "$did_detached" = 1 ] && info "Detached Desktop/Steam: enabled (needs KDE Plasma 6 Wayland)."
@@ -1052,6 +1055,500 @@ summary() {
   if [ "$need_reboot" = 1 ]; then
     printf '\n    %sReboot before testing the new driver or private DRM seats.%s\n' "$bold" "$reset"
   fi
+}
+
+# Updates operate on existing components only. In particular, they do not
+# enable Detached/Gamescope sessions, alter pre-login, or overwrite the backend.
+install_local_update_package() {
+  case "$distro" in
+    arch) as_root pacman -U --noconfirm "$@" ;;
+    ubuntu) as_root apt-get install --reinstall -y "$@" ;;
+    fedora) as_root dnf reinstall -y "$@" ;;
+  esac
+}
+
+update_hermes() {
+  step "Update Hermes host"
+  local installed tag pattern assets url candidate relation file digest
+  installed=$(installed_package_version "$(hermes_package_name)" || true)
+  [ -n "$installed" ] || die "--update requires a package-managed Hermes installation. Run the installer without --update for a new installation."
+  tag=latest
+  [ "$CHANNEL" = nightly ] && tag=nightly
+  case "$distro" in
+    arch) pattern='hermes-streaming-.*-x86_64[.]pkg[.]tar[.]zst
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --update | --upgrade) MODE=update ;;
+      --nightly) CHANNEL=nightly ;;
+      --yes | -y) ASSUME_YES=1 ;;
+      --dry-run) DRY_RUN=1 ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+
+  printf '%sHermes installer / updater%s\n' "$bold" "$reset"
+  [ "$DRY_RUN" = 1 ] && warn "Dry run: commands are shown, not run."
+  preflight
+  if [ "$MODE" = update ]; then
+    run_updater
+    return 0
+  fi
+  install_hermes
+  install_kms
+  install_evdi_if_needed
+  install_isolated
+  setup_prelogin
+  enable_service
+  post_install_checks
+  summary
+}
+
+main "$@"
+ ;;
+    ubuntu) pattern="hermes_.*_ubuntu${distro_version}_amd64[.]deb$" ;;
+    fedora) pattern="hermes-.*[.]fc${distro_version}[.]x86_64[.]rpm$" ;;
+  esac
+  info "Installed Hermes package: $installed; checking $CHANNEL..."
+  assets=$(release_assets "$HERMES_REPO" "$tag") ||
+    die "Unable to read the requested Hermes $CHANNEL release."
+  url=$(release_asset_url "$assets" "$pattern")
+  [ -n "$url" ] || die "No $CHANNEL Hermes package found for $distro $distro_version; keeping $installed."
+  candidate=$(hermes_asset_version "$url") || die "Could not parse candidate Hermes package version."
+  relation=$(candidate_relation "$installed" "$candidate")
+  if [ "$relation" = older ]; then
+    warn "Selected $CHANNEL package ($candidate) is older than installed Hermes ($installed)."
+    if ! ask "Explicitly downgrade Hermes to $candidate?" n; then
+      info "Skipping Hermes downgrade."
+      return 0
+    fi
+  elif [ "$relation" = same ] && [ "$CHANNEL" = release ]; then
+    ok "Hermes $installed is already at the latest stable release."
+    return 0
+  elif ! ask "Update Hermes $installed -> $candidate ($CHANNEL)?" y; then
+    info "Hermes update skipped."
+    return 0
+  fi
+
+  file="${workdir}/${url##*/}"
+  download "$url" "$file"
+  if [ "$DRY_RUN" = 1 ]; then
+    info "Dry-run: would install the Hermes $CHANNEL asset."
+    return 0
+  fi
+  digest=$(sha256sum "$file")
+  digest=${digest%% *}
+  if [ "$relation" = same ] && cached_asset_matches "hermes-$CHANNEL" "$digest"; then
+    ok "Hermes $CHANNEL asset unchanged; no reinstall necessary."
+    return 0
+  fi
+  backup_config_for_update
+  if [ "$relation" = same ]; then
+    install_local_update_package "$file"
+  else
+    install_local_package "$file"
+  fi
+  updated_hermes=1
+  remember_asset "hermes-$CHANNEL" "$digest"
+  ok "Hermes package updated. Configuration and service state preserved."
+}
+
+update_kms() {
+  step "Update existing Hermes-KMS driver"
+  local installed base relation pattern broker_pattern assets url broker_url core_file broker_file
+  local broker_installed src headers version
+  installed=$(kms_installed_version || true)
+  if [ -z "$installed" ]; then
+    info "No installed Hermes-KMS driver detected; not adding one in update mode."
+    return 0
+  fi
+  base=$(kms_base_version "$installed")
+  relation=$(candidate_relation "$base" "${KMS_RELEASE#v}")
+  if [ "$relation" = older ]; then
+    warn "Installed Hermes-KMS $installed is newer than pinned ${KMS_RELEASE#v}; no downgrade will be made."
+    return 0
+  fi
+  if [ "$relation" = same ]; then
+    if has_kms_installed; then
+      kms_ready=1
+      ok "Hermes-KMS $installed is installed for this kernel."
+      return 0
+    fi
+    warn "Hermes-KMS $installed exists but is not installed for the running kernel."
+    if ! ask "Repair DKMS for $(uname -r) using the existing driver source?" n; then
+      notes+=("Hermes-KMS needs a DKMS rebuild for $(uname -r).")
+      return 0
+    fi
+    pkg_install "$(kernel_headers_package)"
+    [ "$DRY_RUN" = 1 ] || [ -f "/lib/modules/$(uname -r)/build/Makefile" ] ||
+      { warn "Exact kernel headers are unavailable."; return 0; }
+    # On Arch the DKMS source version includes the commit suffix, so use the
+    # installed source metadata instead of the bare upstream tag.
+    version=$(dkms status -m hermes-kms 2>/dev/null |
+      awk -F '[/,:]' '$1 == "hermes-kms" && $2 != "" { print $2; exit }')
+    [ -n "$version" ] || { warn "No DKMS version registered for Hermes-KMS."; return 0; }
+    as_root dkms build -m hermes-kms -v "$version" -k "$(uname -r)"
+    as_root dkms install -m hermes-kms -v "$version" -k "$(uname -r)"
+    if verify_kms_installed; then
+      kms_ready=1
+      updated_kms=1
+      need_reboot=1
+    fi
+    return 0
+  fi
+  if ! ask "Update Hermes-KMS $installed -> ${KMS_RELEASE#v}?" y; then
+    info "Hermes-KMS update skipped."
+    return 0
+  fi
+  headers=$(kernel_headers_package)
+  case "$distro" in
+    arch)
+      pkg_install base-devel dkms "$headers"
+      pattern='/hermes-kms-dkms-git-.*-any[.]pkg[.]tar[.]zst
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --nightly) CHANNEL=nightly ;;
+      --yes | -y) ASSUME_YES=1 ;;
+      --dry-run) DRY_RUN=1 ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+
+  printf '%sHermes installer%s\n' "$bold" "$reset"
+  [ "$DRY_RUN" = 1 ] && warn "Dry run: commands are shown, not run."
+  preflight
+  install_hermes
+  install_kms
+  install_evdi_if_needed
+  install_isolated
+  setup_prelogin
+  enable_service
+  post_install_checks
+  summary
+}
+
+main "$@"
+
+      broker_pattern='/hermes-kms-seatd-git-.*-any[.]pkg[.]tar[.]zst
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --nightly) CHANNEL=nightly ;;
+      --yes | -y) ASSUME_YES=1 ;;
+      --dry-run) DRY_RUN=1 ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+
+  printf '%sHermes installer%s\n' "$bold" "$reset"
+  [ "$DRY_RUN" = 1 ] && warn "Dry run: commands are shown, not run."
+  preflight
+  install_hermes
+  install_kms
+  install_evdi_if_needed
+  install_isolated
+  setup_prelogin
+  enable_service
+  post_install_checks
+  summary
+}
+
+main "$@"
+
+      ;;
+    ubuntu)
+      pkg_install build-essential dkms "$headers"
+      pattern='/hermes-kms-dkms_.*_all[.]deb
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --nightly) CHANNEL=nightly ;;
+      --yes | -y) ASSUME_YES=1 ;;
+      --dry-run) DRY_RUN=1 ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+
+  printf '%sHermes installer%s\n' "$bold" "$reset"
+  [ "$DRY_RUN" = 1 ] && warn "Dry run: commands are shown, not run."
+  preflight
+  install_hermes
+  install_kms
+  install_evdi_if_needed
+  install_isolated
+  setup_prelogin
+  enable_service
+  post_install_checks
+  summary
+}
+
+main "$@"
+
+      broker_pattern='/hermes-kms-seatd_.*_all[.]deb
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --nightly) CHANNEL=nightly ;;
+      --yes | -y) ASSUME_YES=1 ;;
+      --dry-run) DRY_RUN=1 ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+
+  printf '%sHermes installer%s\n' "$bold" "$reset"
+  [ "$DRY_RUN" = 1 ] && warn "Dry run: commands are shown, not run."
+  preflight
+  install_hermes
+  install_kms
+  install_evdi_if_needed
+  install_isolated
+  setup_prelogin
+  enable_service
+  post_install_checks
+  summary
+}
+
+main "$@"
+
+      ;;
+    fedora)
+      pkg_install make gcc dkms "$headers"
+      pattern="/hermes-kms-dkms-.*[.]fc${distro_version}[.]noarch[.]rpm$"
+      broker_pattern="/hermes-kms-seatd-.*[.]fc${distro_version}[.]noarch[.]rpm$"
+      ;;
+  esac
+  if [ "$DRY_RUN" = 0 ] && [ ! -f "/lib/modules/$(uname -r)/build/Makefile" ]; then
+    warn "Missing headers for $(uname -r); keeping existing Hermes-KMS."
+    return 0
+  fi
+  broker_installed=$(installed_package_version "$(kms_broker_package_name)" || true)
+  assets=$(release_assets "$KMS_REPO" "$KMS_RELEASE") ||
+    die "Unable to fetch pinned Hermes-KMS $KMS_RELEASE metadata."
+  url=$(release_asset_url "$assets" "$pattern")
+  if [ -n "$url" ]; then
+    # Core and broker packages share an exact version dependency. When a
+    # broker is installed, upgrade BOTH in one package manager transaction.
+    broker_url=''
+    if [ -n "$broker_installed" ]; then
+      broker_url=$(release_asset_url "$assets" "$broker_pattern")
+      [ -n "$broker_url" ] || {
+        warn "Matching broker asset missing; not replacing the core package alone."
+        return 0
+      }
+    fi
+    core_file="${workdir}/${url##*/}"
+    download_checked_kms "$assets" "$url" "$core_file"
+    if [ -n "$broker_url" ]; then
+      broker_file="${workdir}/${broker_url##*/}"
+      download_checked_kms "$assets" "$broker_url" "$broker_file"
+    fi
+    if [ -n "$broker_url" ]; then
+      install_local_package "$core_file" "$broker_file"
+      did_broker=1
+    else
+      install_local_package "$core_file"
+    fi
+  else
+    warn "Native Hermes-KMS package not available for $distro $distro_version."
+    if ! ask "Upgrade the pinned driver from source instead?" n; then return 0; fi
+    pkg_install git
+    src="$workdir/Hermes-KMS"
+    run git clone --depth 1 --branch "$KMS_RELEASE" "https://github.com/${KMS_REPO}.git" "$src"
+    # The source target removes old DKMS registrations: only run after consent.
+    as_root make -C "$src" dkms-install
+    if [ -x /usr/lib/hermes-kms/hermes-kms-setup ]; then
+      as_root make -C "$src" install-broker-configs
+    fi
+  fi
+  if verify_kms_installed; then
+    kms_ready=1
+    updated_kms=1
+    need_reboot=1
+    ok "Hermes-KMS update installed. Reboot before streaming with the new module."
+  else
+    notes+=("Hermes-KMS update incomplete. Check DKMS output and kernel headers.")
+  fi
+}
+
+update_gamescope() {
+  step "Update existing Hermes Gamescope"
+  local installed binary pattern assets url file digest
+  installed=$(installed_package_version "$(gamescope_package_name)" || true)
+  binary=$(gamescope_binary || true)
+  if [ -z "$installed" ] && [ -z "$binary" ]; then
+    info "Patched Gamescope not installed; skipping optional component."
+    return 0
+  fi
+  if [ -z "$installed" ]; then
+    warn "Patched Gamescope is a source installation, not a managed package."
+    if ask "Rebuild/migrate the existing Gamescope to the current Hermes fork?" n; then
+      install_gamescope
+      [ "$did_gamescope" = 1 ] && updated_gamescope=1
+    fi
+    return 0
+  fi
+  case "$distro" in
+    arch) pattern='gamescope-hermes-.*-x86_64[.]pkg[.]tar[.]zst
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --nightly) CHANNEL=nightly ;;
+      --yes | -y) ASSUME_YES=1 ;;
+      --dry-run) DRY_RUN=1 ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+
+  printf '%sHermes installer%s\n' "$bold" "$reset"
+  [ "$DRY_RUN" = 1 ] && warn "Dry run: commands are shown, not run."
+  preflight
+  install_hermes
+  install_kms
+  install_evdi_if_needed
+  install_isolated
+  setup_prelogin
+  enable_service
+  post_install_checks
+  summary
+}
+
+main "$@"
+ ;;
+    ubuntu) pattern="gamescope-hermes_.*_ubuntu${distro_version}_amd64[.]deb$" ;;
+    fedora) pattern="gamescope-hermes-.*[.]fc${distro_version}[.]x86_64[.]rpm$" ;;
+  esac
+  if ! assets=$(release_assets "$GAMESCOPE_REPO" "$GAMESCOPE_RELEASE"); then
+    warn "Cannot reach the Hermes Gamescope rolling release; leaving the installed package intact."
+    return 0
+  fi
+  url=$(release_asset_url "$assets" "$pattern")
+  if [ -z "$url" ]; then
+    warn "No matching patched Gamescope package for $distro $distro_version; leaving current build."
+    return 0
+  fi
+  if ! ask "Check/update installed Hermes Gamescope ($installed)?" y; then return 0; fi
+  file="${workdir}/${url##*/}"
+  download "$url" "$file"
+  if [ "$DRY_RUN" = 1 ]; then info "Dry-run: would check Gamescope asset digest."; return 0; fi
+  digest=$(sha256sum "$file")
+  digest=${digest%% *}
+  if cached_asset_matches gamescope "$digest"; then
+    did_gamescope=1
+    ok "Gamescope rolling artifact unchanged; no reinstall required."
+    return 0
+  fi
+  install_local_update_package "$file"
+  if verify_gamescope_binary; then
+    did_gamescope=1
+    updated_gamescope=1
+    remember_asset gamescope "$digest"
+    ok "Updated the Hermes Gamescope fork."
+  else
+    notes+=("Gamescope package was updated but its patched DRM interface did not verify.")
+  fi
+}
+
+update_evdi() {
+  local package
+  case "$distro" in
+    arch) package=evdi ;;
+    ubuntu) package=evdi-dkms ;;
+    fedora) return 0 ;;
+  esac
+  [ -n "$(installed_package_version "$package" || true)" ] || return 0
+  step "Optional system EVDI update"
+  if ! ask "Ask the package manager to update existing EVDI?" n; then return 0; fi
+  case "$distro" in
+    arch)
+      if command -v paru >/dev/null 2>&1; then
+        run paru -S --noconfirm evdi
+      elif command -v yay >/dev/null 2>&1; then
+        run yay -S --noconfirm evdi
+      else
+        warn "No AUR helper available; leaving EVDI unchanged."
+        return 0
+      fi
+      ;;
+    ubuntu) pkg_install evdi-dkms ;;
+  esac
+  updated_evdi=1
+  need_reboot=1
+}
+
+finish_update_service() {
+  [ "$updated_hermes" = 1 ] || return 0
+  step "Hermes service after update"
+  if [ "$service_was_active" = 0 ]; then
+    info "Hermes was not running; preserving its previous disabled/stopped state."
+    return 0
+  fi
+  explain <<'EOF'
+The host package changed. Restarting Hermes applies its new executable but
+disconnects any active clients. The updater never forces a restart.
+EOF
+  if ask "Restart the running Hermes service now?" n; then
+    run systemctl --user daemon-reload
+    if run systemctl --user restart hermes; then
+      ok "Hermes restarted with updated binaries."
+    else
+      warn "Hermes failed to restart; check systemctl --user status hermes."
+    fi
+  else
+    notes+=("Hermes was updated without restarting an active service. Restart manually when sessions end.")
+  fi
+}
+
+run_updater() {
+  update_hermes
+  update_kms
+  update_gamescope
+  update_evdi
+  finish_update_service
+  post_install_checks
+  summary
 }
 
 main() {

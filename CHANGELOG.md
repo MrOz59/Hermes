@@ -12,6 +12,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- `isolation_method`: pick Gamescope with a virtual display or KWin's virtual
+  backend for launches that request a virtual display, next to the virtual
+  display backend in the Web UI.
 - Hermes checks the Hermes-KMS driver against itself and says what works
   without it ([#99], from PunkUnity). Three cases it reported wrongly or not
   at all: a driver whose render node Hermes may not open (`no_access`, until
@@ -32,6 +35,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Input then has no controller.
 
 ### Changed
+- The per-app `session-type` is now `isolation-method` (`default`, `gamescope`,
+  `kwin_virtual`), and `shared` is the `host-session` flag; `apps.json` is
+  migrated on start. The Detached Desktop and Detached Steam entries are renamed
+  unless you renamed them.
+- With independent sessions enabled, a requested virtual display is now isolated
+  unless the app's layout is explicitly `extend`, `mirror` or `exclusive`, or the
+  app sets `host-session`. It used to need the `detached` layout.
 - Emulated Switch Pro, DualShock 4 and DualSense pads keep one MAC address per
   paired client and controller number, the same in every session, seat and
   reconnection, so Steam's per-controller layouts stay applied

@@ -29,7 +29,8 @@ only.
 3. `cap_sys_admin,cap_mknod,cap_sys_chroot+p` on `/usr/bin/hermes` for a
    private `/dev` (the packages in this branch set them).
 4. `hermes_kms_isolated_sessions = enabled` and
-   `virtual_display_backend = hermes_kms`.
+   `virtual_display_backend = hermes_kms`, with `isolation_method = gamescope`
+   or the app's `isolation-method`.
 
 ## Gamescope
 

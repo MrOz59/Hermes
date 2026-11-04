@@ -1038,6 +1038,9 @@ post_install_checks() {
 
 summary() {
   step "Done"
+  if [ "$MODE" = update ]; then
+    info "Update summary (1=updated; 0=unchanged/skipped): Hermes=$updated_hermes KMS=$updated_kms Gamescope=$updated_gamescope EVDI=$updated_evdi"
+  fi
   info "Web UI: https://localhost:47990 (create a username and password on first visit)."
   [ "$kms_ready" = 1 ] && info "Hermes-KMS: available for this kernel."
   [ "$did_detached" = 1 ] && info "Detached Desktop/Steam: enabled (needs KDE Plasma 6 Wayland)."
@@ -1219,9 +1222,123 @@ update_kms() {
   fi
 }
 
+update_gamescope() {
+  step "Update existing Hermes Gamescope"
+  local installed binary pattern assets url file digest
+  installed=$(installed_package_version "$(gamescope_package_name)" || true)
+  binary=$(gamescope_binary || true)
+  if [ -z "$installed" ] && [ -z "$binary" ]; then
+    info "Patched Gamescope is not installed; skipping optional component."
+    return 0
+  fi
+  if [ -z "$installed" ]; then
+    warn "The Gamescope installation is source-built rather than package-managed."
+    if ask "Rebuild/migrate the existing Gamescope to the current Hermes fork?" n; then
+      install_gamescope
+      [ "$did_gamescope" = 1 ] && updated_gamescope=1
+    fi
+    return 0
+  fi
+  case "$distro" in
+    arch) pattern='gamescope-hermes-.*-x86_64[.]pkg[.]tar[.]zst$' ;;
+    ubuntu) pattern="gamescope-hermes_.*_ubuntu${distro_version}_amd64[.]deb$" ;;
+    fedora) pattern="gamescope-hermes-.*[.]fc${distro_version}[.]x86_64[.]rpm$" ;;
+  esac
+  if ! assets=$(release_assets "$GAMESCOPE_REPO" "$GAMESCOPE_RELEASE"); then
+    warn "Gamescope release unavailable. Existing package left intact."
+    return 0
+  fi
+  url=$(release_asset_url "$assets" "$pattern")
+  if [ -z "$url" ]; then
+    warn "No matching patched Gamescope asset for $distro $distro_version."
+    return 0
+  fi
+  ask "Check/update existing patched Gamescope ($installed)?" y || return 0
+  file="${workdir}/${url##*/}"
+  download "$url" "$file"
+  if [ "$DRY_RUN" = 1 ]; then
+    info "Dry-run: would compare Gamescope asset checksum."
+    return 0
+  fi
+  digest=$(sha256sum "$file")
+  digest=${digest%% *}
+  if cached_asset_matches gamescope "$digest"; then
+    did_gamescope=1
+    ok "Gamescope rolling artifact unchanged."
+    return 0
+  fi
+  install_local_update_package "$file"
+  if verify_gamescope_binary; then
+    did_gamescope=1
+    updated_gamescope=1
+    remember_asset gamescope "$digest"
+    ok "Hermes Gamescope updated."
+  else
+    notes+=("Gamescope was updated, but the patched DRM interface could not be verified.")
+  fi
+}
+
+update_evdi() {
+  local package
+  case "$distro" in
+    arch) package=evdi ;;
+    ubuntu) package=evdi-dkms ;;
+    fedora) return 0 ;;
+  esac
+  [ -n "$(installed_package_version "$package" || true)" ] || return 0
+  step "Optional EVDI update"
+  ask "Update the already installed EVDI package?" n || return 0
+  if [ "$distro" = ubuntu ]; then
+    pkg_install evdi-dkms
+  elif command -v paru >/dev/null 2>&1; then
+    run paru -S --noconfirm evdi
+  elif command -v yay >/dev/null 2>&1; then
+    run yay -S --noconfirm evdi
+  else
+    warn "Cannot update AUR EVDI without a configured AUR helper."
+    return 0
+  fi
+  updated_evdi=1
+  need_reboot=1
+}
+
+finish_update_service() {
+  [ "$updated_hermes" = 1 ] || return 0
+  step "Hermes service after update"
+  if [ "$service_was_active" = 0 ]; then
+    info "Hermes was stopped; preserving its stopped/disabled state."
+    return 0
+  fi
+  explain <<'EOF'
+Hermes was updated but is still running its old executable.
+Restarting disconnects clients, so it requires confirmation.
+EOF
+  if ask "Restart the existing Hermes service now?" n; then
+    run systemctl --user daemon-reload
+    if run systemctl --user restart hermes; then
+      ok "Hermes restarted with the new executable."
+    else
+      warn "Hermes service could not be restarted; check its status."
+    fi
+  else
+    notes+=("Hermes was updated but not restarted; restart it when no sessions are active.")
+  fi
+}
+
+run_updater() {
+  update_hermes
+  update_kms
+  update_gamescope
+  update_evdi
+  finish_update_service
+  post_install_checks
+  summary
+}
+
 main() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --update | --upgrade) MODE=update ;;
       --nightly) CHANNEL=nightly ;;
       --yes | -y) ASSUME_YES=1 ;;
       --dry-run) DRY_RUN=1 ;;
@@ -1237,9 +1354,13 @@ main() {
     shift
   done
 
-  printf '%sHermes installer%s\n' "$bold" "$reset"
+  printf '%sHermes installer / updater%s\n' "$bold" "$reset"
   [ "$DRY_RUN" = 1 ] && warn "Dry run: commands are shown, not run."
   preflight
+  if [ "$MODE" = update ]; then
+    run_updater
+    return 0
+  fi
   install_hermes
   install_kms
   install_evdi_if_needed

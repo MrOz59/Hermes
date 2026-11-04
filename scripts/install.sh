@@ -1331,9 +1331,9 @@ update_gamescope() {
   fi
   digest=$(sha256sum "$file")
   digest=${digest%% *}
-  if cached_asset_matches gamescope "$digest"; then
+  if cached_asset_matches gamescope "$digest" && verify_gamescope_binary; then
     did_gamescope=1
-    ok "Gamescope rolling artifact unchanged."
+    ok "Gamescope rolling artifact unchanged and the patched binary is usable."
     return 0
   fi
   if [ "$relation" = same ]; then

@@ -186,4 +186,139 @@ grep -q 'systemctl --user restart hermes' "$workdir/service-commands"
 )
 [ ! -e "$workdir/unexpected-evdi-install" ]
 
+
+# Version parsing must agree with the package managers, not just GitHub tags.
+(
+  distro=arch
+  [ "$(hermes_asset_version 'https://example.invalid/hermes-streaming-0.7.0-1-x86_64.pkg.tar.zst')" = '0.7.0-1' ]
+  distro=ubuntu
+  distro_version=26.04
+  [ "$(hermes_asset_version 'https://example.invalid/hermes_0.7.0_ubuntu26.04_amd64.deb')" = '0.7.0' ]
+  distro=fedora
+  distro_version=44
+  [ "$(hermes_asset_version 'https://example.invalid/hermes-0.7.0-1.fc44.x86_64.rpm')" = '0.7.0-1.fc44' ]
+)
+
+# An installed stable release must not be reinstalled on every update run.
+(
+  MODE=update
+  distro=ubuntu
+  distro_version=24.04
+  CHANNEL=release
+  installed_package_version() { echo 0.7.0; }
+  release_assets() { echo 'https://example.invalid/hermes_0.7.0_ubuntu24.04_amd64.deb'; }
+  download() { touch "$workdir/unexpected-stable-download"; }
+  install_local_package() { touch "$workdir/unexpected-stable-install"; }
+  update_hermes >/dev/null
+)
+[ ! -e "$workdir/unexpected-stable-download" ]
+[ ! -e "$workdir/unexpected-stable-install" ]
+
+# Even --yes must not downgrade a newer installed host to stable packages.
+(
+  distro=ubuntu
+  distro_version=24.04
+  CHANNEL=release
+  ASSUME_YES=1
+  installed_package_version() { echo 0.8.0; }
+  release_assets() { echo 'https://example.invalid/hermes_0.7.0_ubuntu24.04_amd64.deb'; }
+  download() { touch "$workdir/unexpected-downgrade"; }
+  update_hermes >/dev/null
+)
+[ ! -e "$workdir/unexpected-downgrade" ]
+
+# A newer package is installed and a record of the artifact is made.
+(
+  distro=ubuntu
+  distro_version=24.04
+  CHANNEL=release
+  updated_hermes=0
+  installed_package_version() { echo 0.6.0; }
+  release_assets() { echo 'https://example.invalid/hermes_0.7.0_ubuntu24.04_amd64.deb'; }
+  ask() { return 0; }
+  download() { printf 'new hermes package' > "$2"; }
+  backup_config_for_update() { touch "$workdir/update-backup"; }
+  install_local_package() { printf '%s\n' "$1" > "$workdir/update-installed"; }
+  remember_asset() { printf '%s' "$2" > "$workdir/update-digest"; }
+  update_hermes >/dev/null
+  [ "$updated_hermes" = 1 ]
+)
+[ -f "$workdir/update-installed" ]
+[ -s "$workdir/update-digest" ]
+[ -f "$workdir/update-backup" ]
+
+# The KMS updater must never add a missing optional driver or Gamescope.
+(
+  kms_installed_version() { return 1; }
+  installed_package_version() { return 1; }
+  gamescope_binary() { return 1; }
+  release_assets() { touch "$workdir/unexpected-optional-download"; }
+  update_kms >/dev/null
+  update_gamescope >/dev/null
+)
+[ ! -e "$workdir/unexpected-optional-download" ]
+
+# When KMS + its broker are already installed, both upgrade atomically as
+# one native package manager transaction to avoid broken exact dependencies.
+(
+  distro=ubuntu
+  distro_version=24.04
+  DRY_RUN=1
+  kms_installed_version() { echo 0.4.0; }
+  installed_package_version() { echo 0.4.0; }
+  pkg_install() { :; }
+  ask() { return 0; }
+  release_assets() {
+    printf '%s\n' \
+      'https://example.invalid/hermes-kms-dkms_0.4.1-1_all.deb' \
+      'https://example.invalid/hermes-kms-seatd_0.4.1-1_all.deb'
+  }
+  download_checked_kms() { :; }
+  install_local_package() { printf '%s\n' "$#" > "$workdir/kms-atomic-argc"; }
+  update_kms >/dev/null
+)
+[ "$(cat "$workdir/kms-atomic-argc")" = 2 ]
+
+# A fixed release must not be used to replace a newer pinned driver.
+(
+  distro=ubuntu
+  kms_installed_version() { echo 0.5.0; }
+  pkg_install() { touch "$workdir/unexpected-kms-downgrade"; }
+  update_kms >/dev/null
+)
+[ ! -e "$workdir/unexpected-kms-downgrade" ]
+
+# Gamescope rolling releases can reuse a version string. Compare artifact
+# digests and skip installing when the package is unchanged.
+(
+  distro=ubuntu
+  distro_version=24.04
+  installed_package_version() { echo 0.7.0; }
+  gamescope_binary() { echo /opt/hermes-gamescope/bin/gamescope; }
+  release_assets() { echo 'https://example.invalid/gamescope-hermes_0.7.0_ubuntu24.04_amd64.deb'; }
+  ask() { return 0; }
+  download() { printf 'rolling package' > "$2"; }
+  cached_asset_matches() { return 0; }
+  install_local_update_package() { touch "$workdir/unexpected-gamescope-reinstall"; }
+  update_gamescope >/dev/null
+)
+[ ! -e "$workdir/unexpected-gamescope-reinstall" ]
+
+# Updating a stopped service must not enable or start it.
+(
+  updated_hermes=1
+  service_was_active=0
+  run() { touch "$workdir/unexpected-service-change"; }
+  finish_update_service >/dev/null
+)
+[ ! -e "$workdir/unexpected-service-change" ]
+(
+  updated_hermes=1
+  service_was_active=1
+  ASSUME_YES=1
+  run() { touch "$workdir/unexpected-service-restart"; }
+  finish_update_service >/dev/null
+)
+[ ! -e "$workdir/unexpected-service-restart" ]
+
 echo "Installer offline helper tests passed."

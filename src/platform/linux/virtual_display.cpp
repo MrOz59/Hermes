@@ -205,7 +205,18 @@ namespace VDISPLAY {
     if (status < 0) {
       return std::nullopt;
     }
-    return session && *session;
+    if (!session || !*session) {
+      return false;
+    }
+    // With no desktop, logind names whatever session the user has as its
+    // display, an SSH login included. Only a Wayland or X11 one is graphical.
+    char *type_raw = nullptr;
+    if (sd_session_get_type(session.get(), &type_raw) < 0) {
+      return std::nullopt;
+    }
+    const std::unique_ptr<char, decltype(&std::free)> type {type_raw, &std::free};
+    const std::string_view kind {type.get() ? type.get() : ""};
+    return kind == "wayland" || kind == "x11" || kind == "mir";
 #else
     return std::nullopt;
 #endif

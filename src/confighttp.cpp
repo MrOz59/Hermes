@@ -2274,7 +2274,25 @@ namespace confighttp {
 #ifdef __linux__
     // Virtual-display backend readiness (Linux only).
     const auto evdi = VDISPLAY::getEvdiStatus();
-    if (evdi.session_type == "wayland" || evdi.session_type == "x11") {
+    const auto env = [](const char *name) {
+      const char *value = std::getenv(name);
+      return std::string {value ? value : ""};
+    };
+    // Started before anyone logged in, or left behind by a session that has
+    // ended, Hermes has no desktop to talk to: the variables can be missing,
+    // empty, or point at nothing. Say so, rather than blaming the session type
+    // or a missing layout backend. Only when logind can tell; a deliberately
+    // headless host keeps the checks below.
+    const auto session_present = VDISPLAY::graphicalSessionPresent();
+    if (session_present.has_value() &&
+        !VDISPLAY::displayServerReachable(env("WAYLAND_DISPLAY"), env("DISPLAY"), env("XDG_RUNTIME_DIR"))) {
+      add("virtual_display", "warn",
+          *session_present ?
+            "A desktop session has started; Hermes joins it as soon as no client is connected. Until then the "
+            "virtual-display layout cannot be managed." :
+            "Nobody is logged in to a desktop yet, so the virtual-display layout cannot be managed. Hermes joins "
+            "the desktop after login.");
+    } else if (evdi.session_type == "wayland" || evdi.session_type == "x11") {
       if (evdi.exclusive_layout_supported) {
         add("virtual_display", "ok",
             "Virtual-display layout management available via " + evdi.output_layout_backend + ".");

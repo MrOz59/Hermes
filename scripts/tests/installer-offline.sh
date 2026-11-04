@@ -299,6 +299,7 @@ grep -q 'systemctl --user restart hermes' "$workdir/service-commands"
   ask() { return 0; }
   download() { printf 'rolling package' > "$2"; }
   cached_asset_matches() { return 0; }
+  verify_gamescope_binary() { return 0; }
   install_local_update_package() { touch "$workdir/unexpected-gamescope-reinstall"; }
   update_gamescope >/dev/null
 )

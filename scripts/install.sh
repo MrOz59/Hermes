@@ -1054,6 +1054,171 @@ summary() {
   fi
 }
 
+# Update mode only touches components already installed. It never changes the
+# current virtual display backend, enables experimental modes or reconfigures
+# pre-login streaming as part of a package update.
+install_local_update_package() {
+  case "$distro" in
+    arch) as_root pacman -U --noconfirm "$@" ;;
+    ubuntu) as_root apt-get install --reinstall -y "$@" ;;
+    fedora) as_root dnf reinstall -y "$@" ;;
+  esac
+}
+
+update_hermes() {
+  step "Update Hermes host"
+  local installed tag=latest pattern assets url candidate relation file digest
+  installed=$(installed_package_version "$(hermes_package_name)" || true)
+  [ -n "$installed" ] ||
+    die "--update requires a package-managed Hermes installation; run without --update for initial setup."
+  [ "$CHANNEL" = nightly ] && tag=nightly
+  case "$distro" in
+    arch) pattern='hermes-streaming-.*-x86_64[.]pkg[.]tar[.]zst$' ;;
+    ubuntu) pattern="hermes_.*_ubuntu${distro_version}_amd64[.]deb$" ;;
+    fedora) pattern="hermes-.*[.]fc${distro_version}[.]x86_64[.]rpm$" ;;
+  esac
+  assets=$(release_assets "$HERMES_REPO" "$tag") ||
+    die "Cannot fetch Hermes $CHANNEL release metadata; installed package was preserved."
+  url=$(release_asset_url "$assets" "$pattern")
+  [ -n "$url" ] ||
+    die "No $CHANNEL package for $distro $distro_version; leaving Hermes $installed installed."
+  candidate=$(hermes_asset_version "$url") || die "Could not parse candidate Hermes version."
+  relation=$(candidate_relation "$installed" "$candidate")
+  info "Installed Hermes $installed; selected $CHANNEL candidate $candidate."
+  if [ "$relation" = same ] && [ "$CHANNEL" = release ]; then
+    ok "Already on the latest stable Hermes package."
+    return 0
+  fi
+  if [ "$relation" = older ]; then
+    warn "The selected $CHANNEL build is older than the installed package."
+    ask "Explicitly downgrade Hermes $installed to $candidate?" n || return 0
+  else
+    ask "Update Hermes to $candidate ($CHANNEL)?" y || return 0
+  fi
+  file="${workdir}/${url##*/}"
+  download "$url" "$file"
+  if [ "$DRY_RUN" = 1 ]; then
+    info "Dry-run: would inspect the asset and update Hermes if needed."
+    return 0
+  fi
+  digest=$(sha256sum "$file")
+  digest=${digest%% *}
+  if [ "$relation" = same ] && cached_asset_matches "hermes-$CHANNEL" "$digest"; then
+    ok "Hermes $CHANNEL artifact unchanged; no reinstall needed."
+    return 0
+  fi
+  backup_config_for_update
+  if [ "$relation" = same ]; then
+    install_local_update_package "$file"
+  else
+    install_local_package "$file"
+  fi
+  updated_hermes=1
+  remember_asset "hermes-$CHANNEL" "$digest"
+  ok "Hermes updated. Existing user configuration was preserved."
+}
+
+# No KMS package is added during updates. A pinned 0.4.1 is never used to
+# downgrade a newer driver just because Hermes itself was updated.
+update_kms() {
+  step "Update existing Hermes-KMS"
+  local current core_version relation headers pattern broker_pattern assets url broker_url
+  local core_file broker_file broker_version native_version src
+  current=$(kms_installed_version || true)
+  if [ -z "$current" ]; then
+    info "Hermes-KMS is not installed; skipping optional driver."
+    return 0
+  fi
+  core_version=$(kms_base_version "$current")
+  relation=$(candidate_relation "$core_version" "${KMS_RELEASE#v}")
+  if [ "$relation" = older ]; then
+    warn "Hermes-KMS $current is newer than pinned ${KMS_RELEASE#v}; not downgrading."
+    return 0
+  fi
+  if [ "$relation" = same ]; then
+    if has_kms_installed; then
+      kms_ready=1
+      ok "Hermes-KMS $current is already installed for this kernel."
+    else
+      warn "Hermes-KMS exists, but its DKMS build is missing for $(uname -r)."
+      notes+=("Run DKMS repair for Hermes-KMS after installing matching kernel headers.")
+    fi
+    return 0
+  fi
+  ask "Update installed Hermes-KMS $current to ${KMS_RELEASE#v}?" y || return 0
+  native_version=$(installed_package_version "$(kms_core_package_name)" || true)
+  broker_version=$(installed_package_version "$(kms_broker_package_name)" || true)
+  headers=$(kernel_headers_package)
+  case "$distro" in
+    arch)
+      pattern='/hermes-kms-dkms-git-.*-any[.]pkg[.]tar[.]zst$'
+      broker_pattern='/hermes-kms-seatd-git-.*-any[.]pkg[.]tar[.]zst$'
+      ;;
+    ubuntu)
+      pattern='/hermes-kms-dkms_.*_all[.]deb$'
+      broker_pattern='/hermes-kms-seatd_.*_all[.]deb$'
+      ;;
+    fedora)
+      pattern="/hermes-kms-dkms-.*[.]fc${distro_version}[.]noarch[.]rpm$"
+      broker_pattern="/hermes-kms-seatd-.*[.]fc${distro_version}[.]noarch[.]rpm$"
+      ;;
+  esac
+  assets=$(release_assets "$KMS_REPO" "$KMS_RELEASE") ||
+    die "Cannot fetch pinned Hermes-KMS release metadata; old driver remains."
+  url=$(release_asset_url "$assets" "$pattern")
+  if [ -z "$url" ] && [ -n "$native_version" ]; then
+    warn "No matching native KMS package. Refusing to overwrite a package-managed driver with a source install."
+    return 0
+  fi
+  if [ -z "$url" ]; then
+    warn "No matching native Hermes-KMS package for this distribution."
+    ask "Replace the existing source-installed DKMS driver from pinned tag?" n || return 0
+  fi
+  if [ "$distro" = arch ]; then pkg_install base-devel dkms "$headers"
+  elif [ "$distro" = ubuntu ]; then pkg_install build-essential dkms "$headers"
+  else pkg_install make gcc dkms "$headers"; fi
+  if [ "$DRY_RUN" = 0 ] && [ ! -f "/lib/modules/$(uname -r)/build/Makefile" ]; then
+    warn "Matching headers for $(uname -r) unavailable; not replacing driver."
+    return 0
+  fi
+  if [ -n "$url" ]; then
+    broker_url=''
+    if [ -n "$broker_version" ]; then
+      broker_url=$(release_asset_url "$assets" "$broker_pattern")
+      if [ -z "$broker_url" ]; then
+        warn "Broker package for this OS missing; cannot safely update just the core."
+        return 0
+      fi
+    fi
+    core_file="${workdir}/${url##*/}"
+    download_checked_kms "$assets" "$url" "$core_file"
+    if [ -n "$broker_url" ]; then
+      broker_file="${workdir}/${broker_url##*/}"
+      download_checked_kms "$assets" "$broker_url" "$broker_file"
+      install_local_package "$core_file" "$broker_file"
+      did_broker=1
+    else
+      install_local_package "$core_file"
+    fi
+  else
+    pkg_install git
+    src="$workdir/Hermes-KMS"
+    run git clone --depth 1 --branch "$KMS_RELEASE" "https://github.com/${KMS_REPO}.git" "$src"
+    as_root make -C "$src" dkms-install
+    if [ -x /usr/lib/hermes-kms/hermes-kms-setup ]; then
+      as_root make -C "$src" install-broker-configs
+    fi
+  fi
+  if verify_kms_installed; then
+    kms_ready=1
+    updated_kms=1
+    need_reboot=1
+    ok "Hermes-KMS updated; reboot before testing the module."
+  else
+    notes+=("Hermes-KMS update incomplete; inspect dkms status and kernel headers.")
+  fi
+}
+
 main() {
   while [ "$#" -gt 0 ]; do
     case "$1" in

@@ -36,6 +36,10 @@ did_isolated=0
 did_gamescope=0
 did_prelogin=0
 need_reboot=0
+config_changed=0
+config_backed_up=0
+service_was_active=0
+kms_source_dir=""
 notes=()
 
 # ---------------------------------------------------------------------------
@@ -209,19 +213,35 @@ config_file() {
 }
 
 # Set key = value in Hermes' config, replacing an existing line for the key.
+# Preserve user configuration, avoid repeated writes, and back up once.
 set_config() {
-  local key=$1 value=$2 file
+  local key=$1 value=$2 file backup
   file=$(config_file)
   printf '    %s%s: %s = %s%s\n' "$dim" "$file" "$key" "$value" "$reset"
-  [ "$DRY_RUN" = 1 ] && return
+  [ "$DRY_RUN" = 1 ] && return 0
+  if [ -L "$file" ]; then
+    warn "Refusing to edit symlinked configuration: $file"
+    return 1
+  fi
   mkdir -p "$(dirname "$file")"
+  if [ -f "$file" ] && grep -Eq "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*${value}[[:space:]]*$" "$file"; then
+    return 0
+  fi
+  if [ -f "$file" ] && [ "$config_backed_up" = 0 ]; then
+    backup=$(mktemp "${file}.bak.XXXXXXXX")
+    cp -p -- "$file" "$backup"
+    ok "Backed up Hermes configuration to $backup"
+    config_backed_up=1
+  fi
   touch "$file"
   if grep -Eq "^[[:space:]]*${key}[[:space:]]*=" "$file"; then
     sed -i -E "s|^[[:space:]]*${key}[[:space:]]*=.*|${key} = ${value}|" "$file"
   else
     printf '%s = %s\n' "$key" "$value" >>"$file"
   fi
+  config_changed=1
 }
+
 
 release_asset_url() {
   local assets=$1 pattern=$2
@@ -243,21 +263,56 @@ download_checked_kms() {
   ok "Verified ${dest##*/} against the release checksums."
 }
 
+# DKMS checks must match the complete version and running kernel.
 has_kms_installed() {
   [ "$DRY_RUN" = 0 ] || return 1
   command -v dkms >/dev/null 2>&1 || return 1
-  dkms status -m hermes-kms 2>/dev/null | grep -F "hermes-kms/0.4.1" | grep -F "$(uname -r)" | grep -q installed
+  dkms status -m hermes-kms 2>/dev/null | awk -F '[/,:]' \
+    -v expected_version="${KMS_RELEASE#v}" -v expected_kernel="$(uname -r)" '
+    $1 == "hermes-kms" && $2 == expected_version {
+      kernel = $3
+      state = $NF
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", kernel)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", state)
+      if (kernel == expected_kernel && state ~ /^installed([[:space:]]|$)/) found = 1
+    }
+    END { exit !found }'
 }
 
 verify_kms_installed() {
   [ "$DRY_RUN" = 1 ] && return 0
   if ! has_kms_installed; then
-    warn "DKMS does not report hermes-kms installed for $(uname -r)."
+    warn "DKMS does not report hermes-kms ${KMS_RELEASE#v} installed for $(uname -r)."
     warn "Inspect: dkms status -m hermes-kms"
     return 1
   fi
-  ok "Hermes-KMS DKMS installed for $(uname -r)."
+  ok "Hermes-KMS DKMS ${KMS_RELEASE#v} installed for $(uname -r)."
 }
+
+kms_runtime_diagnostics() {
+  [ "$DRY_RUN" = 1 ] && return 0
+  if [ -d /sys/module/hermes_kms ]; then
+    ok "Hermes-KMS module is loaded."
+  elif [ "$need_reboot" = 1 ]; then
+    warn "Hermes-KMS is installed but not loaded. Reboot before testing."
+  else
+    warn "Hermes-KMS is installed but not loaded; inspect modprobe hermes_kms and journalctl -k."
+  fi
+  if command -v modinfo >/dev/null 2>&1; then
+    local mod_version
+    mod_version=$(modinfo -F version hermes_kms 2>/dev/null || true)
+    if [ -n "$mod_version" ] && [ "$mod_version" != "${KMS_RELEASE#v}" ]; then
+      warn "Module on disk reports $mod_version (expected ${KMS_RELEASE#v})."
+    fi
+  fi
+  if command -v mokutil >/dev/null 2>&1 &&
+     mokutil --sb-state 2>/dev/null | grep -qi 'secureboot enabled' &&
+     [ ! -d /sys/module/hermes_kms ]; then
+    warn "Secure Boot is enabled. DKMS may require signing and MOK enrollment."
+    notes+=("Check distribution MOK enrollment; this installer will not disable Secure Boot.")
+  fi
+}
+
 
 # ---------------------------------------------------------------------------
 # Steps
@@ -277,6 +332,9 @@ preflight() {
   fi
   detect_distro
   info "Distribution: ${distro} ${distro_version}, kernel $(uname -r), user ${USER}."
+  if systemctl --user is-active --quiet hermes; then
+    service_was_active=1
+  fi
   if [ "$DRY_RUN" = 0 ]; then
     info "sudo will ask for your password once."
     sudo -v || die "sudo is needed to install packages."
@@ -304,9 +362,12 @@ install_hermes() {
   url=$(printf '%s\n' "$assets" | grep -E "$pattern" | head -n1 || true)
   if [ -z "$url" ]; then
     if [ "$CHANNEL" = release ]; then
-      warn "No release package for ${distro} ${distro_version}; trying nightly."
-      assets=$(release_assets "$HERMES_REPO" nightly) || die "could not read the nightly release from GitHub."
-      url=$(printf '%s\n' "$assets" | grep -E "$pattern" | head -n1 || true)
+      warn "No stable release package for ${distro} ${distro_version}."
+      if ask "Use the rolling nightly build instead (experimental)?" n; then
+        assets=$(release_assets "$HERMES_REPO" nightly) || die "could not read the nightly release from GitHub."
+        url=$(printf '%s\n' "$assets" | grep -E "$pattern" | head -n1 || true)
+        CHANNEL=nightly
+      fi
     fi
     [ -n "$url" ] || die "no Hermes package for ${distro} ${distro_version} in the releases at https://github.com/${HERMES_REPO}/releases."
   fi
@@ -373,8 +434,9 @@ EOF
     pkg_install git
     src="${workdir}/Hermes-KMS"
     run git clone --depth 1 --branch "$KMS_RELEASE" "https://github.com/${KMS_REPO}.git" "$src"
-    as_root make -C "$src" INSTALL_BROKER=1 dkms-install
-    as_root make -C "$src" install-configs
+    # Install only core module/udev files; brokers stay explicitly optional.
+    as_root make -C "$src" dkms-install
+    kms_source_dir="$src"
     broker_from_source=1
   fi
 
@@ -402,7 +464,13 @@ EOF
 install_kms_broker() {
   step "Private DRM card/seat broker for Gamescope sessions"
   local assets url pattern file rc
-  if [ "$broker_from_source" = 0 ]; then
+  pkg_install acl seatd
+  if [ "$broker_from_source" = 1 ]; then
+    [ -n "$kms_source_dir" ] || { warn "Missing pinned Hermes-KMS source for broker setup."; return 1; }
+    as_root make -C "$kms_source_dir" install-broker-configs
+    as_root systemctl daemon-reload
+    as_root udevadm control --reload-rules
+  else
     assets=$(release_assets "$KMS_REPO" "$KMS_RELEASE") || die "Cannot read Hermes-KMS broker release."
     case "$distro" in
       arch) pattern='/hermes-kms-seatd-git-.*-any\.pkg\.tar\.zst$' ;;
@@ -689,9 +757,26 @@ enable_service() {
   if run systemctl --user enable --now hermes; then
     ok "hermes.service is enabled."
   else
-    warn "Could not start hermes.service now; it starts with your next login. Check: systemctl --user status hermes"
+    warn "Could not start hermes.service now; check systemctl --user status hermes."
+    return 0
+  fi
+  if [ "$service_was_active" = 1 ] && [ "$DRY_RUN" = 0 ]; then
+    explain <<'EOF'
+Hermes was running before installation. The package or configuration may
+have changed. Restarting Hermes disconnects active streams.
+EOF
+    if ask "Restart the existing Hermes service to apply changes?" n; then
+      if run systemctl --user restart hermes; then
+        ok "Hermes restarted with the installed binary and configuration."
+      else
+        warn "Hermes failed to restart; inspect systemctl --user status hermes."
+      fi
+    else
+      notes+=("Hermes was active and was not restarted; restart it manually when no clients are connected.")
+    fi
   fi
 }
+
 
 post_install_checks() {
   step "Post-install checks"
@@ -711,9 +796,7 @@ post_install_checks() {
   fi
   if [ "$kms_ready" = 1 ]; then
     verify_kms_installed || true
-    if command -v modinfo >/dev/null 2>&1; then
-      info "Hermes-KMS installed module version: $(modinfo -F version hermes_kms 2>/dev/null || echo unknown)."
-    fi
+    kms_runtime_diagnostics
   fi
   if [ "$did_gamescope" = 1 ]; then
     if [ -x /usr/lib/hermes-gamescope/bin/gamescope ] || [ -x /opt/hermes-gamescope/bin/gamescope ]; then

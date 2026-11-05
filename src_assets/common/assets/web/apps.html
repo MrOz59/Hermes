@@ -398,6 +398,16 @@
           </select>
           <div class="form-text">{{ $t('apps.virtual_display_layout_desc') }}</div>
         </div>
+        <!-- what this app runs in; overrides the global isolation method -->
+        <div class="mb-3" v-if="platform === 'linux'">
+          <label for="isolationMethod" class="form-label">{{ $t('apps.isolation_method') }}</label>
+          <select id="isolationMethod" class="form-select" v-model="editForm['isolation-method']">
+            <option value="default">{{ $t('apps.isolation_method_default') }}</option>
+            <option value="gamescope">{{ $t('apps.isolation_method_gamescope') }}</option>
+            <option value="kwin_virtual">{{ $t('apps.isolation_method_kwin_virtual') }}</option>
+          </select>
+          <div class="form-text">{{ $t('apps.isolation_method_desc') }}</div>
+        </div>
         <!-- optionally unlock the existing host desktop session -->
         <Checkbox v-if="platform === 'linux'"
                   class="mb-3"
@@ -407,18 +417,8 @@
                   v-model="editForm['unlock-host-session']"
                   default="false"
         ></Checkbox>
-        <!-- experimental isolated session profile -->
-        <div class="mb-3" v-if="platform === 'linux'">
-          <label for="sessionType" class="form-label">{{ $t('apps.session_type') }}</label>
-          <select id="sessionType" class="form-select" v-model="editForm['session-type']">
-            <option value="auto">{{ $t('apps.session_type_auto') }}</option>
-            <option value="application">{{ $t('apps.session_type_application') }}</option>
-            <option value="desktop">{{ $t('apps.session_type_desktop') }}</option>
-          </select>
-          <div class="form-text">{{ $t('apps.session_type_desc') }}</div>
-        </div>
-        <!-- gamescope flags for isolated application sessions -->
-        <div class="mb-3" v-if="platform === 'linux' && editForm['session-type'] !== 'desktop'">
+        <!-- gamescope flags for sessions isolated with gamescope -->
+        <div class="mb-3" v-if="platform === 'linux' && editForm['isolation-method'] !== 'kwin_virtual'">
           <label for="gamescopeSteamMode" class="form-label">{{ $t('apps.gamescope_steam_mode') }}</label>
           <select id="gamescopeSteamMode" class="form-select" v-model="editForm['gamescope-steam-mode']">
             <option value="auto">{{ $t('apps.gamescope_steam_mode_auto') }}</option>
@@ -427,7 +427,7 @@
           </select>
           <div class="form-text">{{ $t('apps.gamescope_steam_mode_desc') }}</div>
         </div>
-        <div class="mb-3" v-if="platform === 'linux' && editForm['session-type'] !== 'desktop'">
+        <div class="mb-3" v-if="platform === 'linux' && editForm['isolation-method'] !== 'kwin_virtual'">
           <label for="gamescopeArgs" class="form-label">{{ $t('apps.gamescope_args') }}</label>
           <input type="text" class="form-control monospace" id="gamescopeArgs" v-model="editForm['gamescope-args']"
                  placeholder="--expose-wayland --force-windows-fullscreen" />
@@ -624,7 +624,7 @@
     "virtual-display": false,
     "virtual-display-layout": "auto",
     "unlock-host-session": false,
-    "session-type": "auto",
+    "isolation-method": "default",
     "gamescope-steam-mode": "auto",
     "gamescope-args": "",
     "first-frame-timeout": 0,

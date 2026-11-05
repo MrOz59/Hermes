@@ -1364,15 +1364,16 @@ namespace nvhttp {
     // BOOST_LOG(verbose) << "QS: " << request->query_string;
 
     // Before Hestia one-shot state is consumed, only relax launch permission
-    // when this profile cannot become isolated. Detached auto is treated
-    // conservatively because Hestia may still request its virtual display.
+    // when this app cannot become isolated. Assume a virtual display, because
+    // Hestia may still request one.
     bool permission_isolated = false;
     if (requested_app) {
       permission_isolated =
         proc::resolve_session_route(
           *requested_app,
           isolated_sessions,
-          true
+          true,
+          config::video.isolation_method
         ) != proc::session_route_e::shared;
     }
 
@@ -1477,7 +1478,8 @@ namespace nvhttp {
       session_route = proc::resolve_session_route(
         *requested_app,
         isolated_sessions,
-        virtual_display_requested
+        virtual_display_requested,
+        config::video.isolation_method
       );
     }
 

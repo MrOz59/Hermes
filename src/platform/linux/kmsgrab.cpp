@@ -2788,6 +2788,14 @@ namespace platf {
           // interop to synchronize on every frame.
           return cuda::make_avcodec_encode_device(width, height, false, hermes_cuda_layout(source_fourcc));
         }
+#else
+        if (mem_type == mem_type_e::cuda) {
+          BOOST_LOG(warning) << "Hermes was built without its CUDA capture/conversion backend. "sv
+                            << "NVENC can still encode through FFmpeg, but HERMES_CUDA_ASYNC_UPLOAD and "sv
+                            << "the experimental NVIDIA DMA-BUF consumer are unavailable. Rebuild with "sv
+                            << "SUNSHINE_ENABLE_CUDA=ON and CUDA_FAIL_ON_MISSING=ON; "sv
+                            << "see docs/experimental-nvidia.md."sv;
+        }
 #endif
 #ifdef SUNSHINE_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
@@ -3426,3 +3434,4 @@ namespace platf {
   }
 
 }  // namespace platf
+

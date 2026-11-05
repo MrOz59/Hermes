@@ -2329,7 +2329,17 @@ namespace VDISPLAY {
 
     // --- zero-copy capture ---------------------------------------------------
     if (facts.hermes_kms_present) {
-      add(feature_e::zero_copy_capture, readiness_e::ready, "Captured as DMA-BUF over the Hermes-KMS render node.");
+      // Export capability alone does not establish the consumer's route.
+      // NVENC defaults to a CPU copy, and auto mode depends on a scanout that
+      // may not exist yet. Only the per-stream capture log names that route.
+      add(
+        feature_e::zero_copy_capture,
+        readiness_e::unknown,
+        "Hermes-KMS DMA-BUF export is available; the active capture path is selected when a stream starts. "
+        "NVENC uses a CPU copy by default.",
+        "Check the stream's CPU-copy or zero-copy capture-path log. For experimental NVIDIA DMA-BUF import, "
+        "see docs/experimental-nvidia.md and HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto."
+      );
     } else if (facts.x11) {
       add(feature_e::zero_copy_capture, readiness_e::degraded, "X11 capture goes through a CPU copy.");
     } else if (facts.linux_dmabuf && (facts.screencopy || facts.image_copy_capture)) {
@@ -6563,7 +6573,7 @@ namespace VDISPLAY {
 
       driver_status = DRIVER_STATUS::OK;
       device_open = true;
-      BOOST_LOG(info) << "[VDISPLAY/Hermes-KMS] Hermes-KMS available - experimental zero-copy virtual display supported"
+      BOOST_LOG(info) << "[VDISPLAY/Hermes-KMS] Hermes-KMS available - DMA-BUF export supported; the stream selects the capture path"
                       << (hermes_kms::multi_output_requested() ? " with session-scoped multi-output enabled." : ".");
       return driver_status;
     }
@@ -8577,3 +8587,4 @@ namespace VDISPLAY {
   }
 
 }  // namespace VDISPLAY
+

@@ -3,6 +3,168 @@
 Branch: `experimental/nvidia-zero-copy`. This is development work, without a
 claim of validated end-to-end zero-copy on NVIDIA hardware.
 
+## Quick start for testers
+
+Installing this branch does **not** enable NVIDIA DMA-BUF capture by itself.
+There are separate improvements:
+
+| Improvement | Default on this branch | How to confirm |
+| --- | --- | --- |
+| Asynchronous host upload on the CPU-copy path | Enabled when Hermes' CUDA backend was compiled | `CUDA host upload: asynchronous (frame lease + completion event)` |
+| EGL import cache and render-node importer | Enabled when a GL->CUDA capture consumer is used; not used by CPU-copy capture | `GL->CUDA DMA-BUF import cache: up to 4 buffers` |
+| Experimental Hermes-KMS DMA-BUF capture with NVENC | Disabled until opted in | `Hermes-KMS NVENC auto route: scanout ... -> DMA-BUF import` during a real stream |
+
+The `hermes.conf` settings remain:
+
+```ini
+capture = kms
+encoder = nvenc
+virtual_display_backend = hermes_kms
+```
+
+Keep your other settings, including the real GPU's `adapter_name`. The
+`HERMES_*` switches below are **environment variables for the Hermes process**,
+not settings to add to `hermes.conf`, the application launch command, or the
+kernel module options.
+
+### 1. Build the matching experimental packages
+
+On Arch/CachyOS, install the kernel headers matching the running kernel and
+the normal build dependencies first. From fresh checkouts:
+
+```bash
+git clone --branch experimental/nvidia-zero-copy --recurse-submodules https://github.com/MrOz59/Hermes.git Hermes-nvidia
+cd Hermes-nvidia
+makepkg -sfi
+```
+
+This branch's root PKGBUILD requires the CUDA toolkit and explicitly enables
+Hermes' CUDA backend, failing the build if it is unavailable. A successful
+`h264_nvenc`/`hevc_nvenc` probe alone does not prove that backend was compiled:
+FFmpeg can encode with NVENC while Hermes converts/uploads frames through its
+software fallback. Installing CUDA after building does not add the missing
+code to an existing binary. Rebuild the package; custom CMake builds must use
+`-DSUNSHINE_ENABLE_CUDA=ON -DCUDA_FAIL_ON_MISSING=ON` too.
+
+Build the driver in a separate terminal or directory:
+
+```bash
+git clone --branch experimental/nvidia-zero-copy https://github.com/MrOz59/Hermes-KMS.git Hermes-KMS-nvidia
+cd Hermes-KMS-nvidia
+makepkg -sf
+sudo pacman -U ./hermes-kms-dkms-git-*.pkg.tar.zst
+make tools/hermes-kmsctl/hermes-kmsctl
+```
+
+This experimental driver's PKGBUILD now explicitly fetches
+`experimental/nvidia-zero-copy`. Older copies fetched `main` even when the
+outer checkout was experimental. Pull the updated PKGBUILD before rebuilding.
+Outside Arch, use `sudo make dkms-install` from the experimental driver
+checkout, with DKMS and matching kernel headers installed.
+
+**Reboot after replacing an already loaded module.** Installing a new DKMS
+package does not replace the module currently in use by the compositor. After
+rebooting, from the driver checkout, verify the **loaded** interface:
+
+```bash
+./tools/hermes-kmsctl/hermes-kmsctl version
+```
+
+Expect `uapi_version=15` for this experimental driver. UAPI 15 is needed for
+`auto` to recognise NVIDIA-exported **linear** buffers. Older interfaces can
+still route NVIDIA-tiled buffers by modifier, but keep an unknown linear
+buffer on the CPU copy. The NVIDIA graphics driver and Hermes-KMS are separate
+drivers; please include the NVIDIA version from `nvidia-smi` in reports.
+
+Run the matching driver's full-frame and import-cache validation tools before
+opting into the DMA-BUF consumer; see [GPU-origin producer now available](#gpu-origin-producer-now-available)
+and the [companion PR's hardware steps](https://github.com/MrOz59/Hermes-KMS/pull/15).
+The startup session assessment only reports export capability. It does not
+establish which capture path a future stream will select.
+
+### 2. Enable the experiment in the systemd user service
+
+Run these commands as the desktop user, **without sudo**:
+
+```bash
+systemctl --user edit hermes.service
+```
+
+Add this override, save and close the editor:
+
+```ini
+[Service]
+Environment="HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto"
+```
+
+Then restart Hermes and inspect its configured environment:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart hermes.service
+systemctl --user show hermes.service -p Environment
+journalctl --user -u hermes.service -b -f
+```
+
+An `export` in your terminal does not change a service systemd already starts
+independently. If `HERMES_KMS_FORCE_CPU_COPY=1` appears in a service override,
+environment file or manager environment, remove it or set it to `0`: it wins
+over `auto`. `systemctl --user cat hermes.service` shows service overrides.
+
+For a manual launch instead, stop the service first so two hosts do not bind
+the same ports:
+
+```bash
+systemctl --user stop hermes.service
+env HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto HERMES_KMS_FORCE_CPU_COPY=0 /usr/bin/hermes
+```
+
+### 3. Check a real streaming session
+
+Connect a client and inspect the log **after `CLIENT CONNECTED`**. Encoder
+availability probes use dummy images and are not evidence of the active route.
+
+| Log during the stream | Meaning |
+| --- | --- |
+| `auto route: scanout ... -> DMA-BUF import`, followed by `Hermes-KMS zero-copy capture ready` | The experimental import path was selected; still check moving content across the whole image and memory use |
+| `auto route: scanout ... -> CPU copy` | `auto` is enabled, but this scanout does not prove NVIDIA origin; this fallback is intentional |
+| `(origin not reported; Hermes-KMS predates UAPI 15)` with a linear modifier | Verify/rebuild the experimental driver and reboot |
+| `(Hermes-KMS dumb buffer) -> CPU copy` | The compositor supplied system-memory storage; enabling the switch cannot change its allocation |
+| `Hermes-KMS CPU-copy capture path selected` with no auto-route line | Expected during probes; during the real stream, check the variable, force-copy override and installed binary |
+| `Hermes was built without its CUDA capture/conversion backend` | Rebuild Hermes with CUDA enabled; NVENC encoding alone is insufficient |
+
+Start with the default module modifiers. UAPI 15 can recognise a linear buffer
+exported by NVIDIA; tiled modifiers are not required for that case. If KWin
+keeps choosing a dumb buffer, use the GPU producer's `--list-modifiers` and
+validation procedure below before changing `scanout_modifiers=`. Do not use
+`HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=1` just to bypass a CPU-copy result: it
+also imports the system-memory buffers associated with the corruption.
+
+The `[capture-metric/hermes-kms-cpu]` values measure frame acquisition/export,
+not the later CPU copy, CUDA upload or complete encode latency. They cannot
+establish an end-to-end performance gain by themselves.
+
+For a report, include the updated Hermes commit, loaded Hermes-KMS UAPI,
+NVIDIA and KWin versions, auto-route/capture-path lines, checker verdicts and
+whether moving content, resize and reconnect work. Keep subjective smoothness
+separate from measured latency, CPU usage and VRAM over time.
+
+### 4. Disable or compare one improvement at a time
+
+Edit the same service override to set
+`Environment="HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=0"`, then daemon-reload
+and restart as above. This disables this consumer experiment without removing
+your other service customisations. Keep the default linear module modifiers
+for a CPU-copy baseline; a CPU copy cannot detile an NVIDIA-tiled scanout.
+
+For upload A/B testing, keep DMA-BUF mode at `0` and add
+`Environment="HERMES_CUDA_ASYNC_UPLOAD=0"` to compare synchronous uploads;
+remove that entry or set it to `1` to restore asynchronous uploads. For cache
+A/B testing while DMA-BUF import is active, add
+`Environment="HERMES_CUDA_EGL_IMPORT_CACHE=0"`; remove it or set it to `4`
+to restore the default. Reload/restart after each change. If the import-cache
+checker reports stale content while fresh imports pass, keep the cache at `0`.
+
 ## First implementation
 
 Host frames now upload with `cudaMemcpy2DToArrayAsync` on the conversion's
@@ -255,3 +417,4 @@ shift frame age independently of anything Hermes changes.
   26:27 for Blackwell 8/16-bpp surfaces).
 - KWin `drm_egl_layer_surface.cpp`: multi-GPU import modes Egl, Dmabuf,
   LinearDmabuf, DumbBuffer, tried in that order.
+

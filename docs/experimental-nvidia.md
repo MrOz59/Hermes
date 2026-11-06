@@ -10,7 +10,7 @@ There are separate improvements:
 
 | Improvement | Default on this branch | How to confirm |
 | --- | --- | --- |
-| Asynchronous host upload on the CPU-copy path | Enabled when Hermes' CUDA backend was compiled | `CUDA host upload: asynchronous (frame lease + completion event)` |
+| Asynchronous host upload on Hermes-KMS NVENC CPU-copy | Disabled by default after Blackwell regression testing; opt in with `HERMES_CUDA_ASYNC_UPLOAD=1` | `CUDA host upload: synchronous (HERMES_CUDA_ASYNC_UPLOAD=0)` |
 | EGL import cache and render-node importer | Enabled when a GL->CUDA capture consumer is used; not used by CPU-copy capture | `GL->CUDA DMA-BUF import cache: up to 4 buffers` |
 | Experimental Hermes-KMS DMA-BUF capture with NVENC | Disabled until opted in | `Hermes-KMS NVENC auto route: scanout ... -> DMA-BUF import` during a real stream |
 
@@ -157,13 +157,55 @@ and restart as above. This disables this consumer experiment without removing
 your other service customisations. Keep the default linear module modifiers
 for a CPU-copy baseline; a CPU copy cannot detile an NVIDIA-tiled scanout.
 
-For upload A/B testing, keep DMA-BUF mode at `0` and add
-`Environment="HERMES_CUDA_ASYNC_UPLOAD=0"` to compare synchronous uploads;
-remove that entry or set it to `1` to restore asynchronous uploads. For cache
+For upload A/B testing, keep DMA-BUF mode at `0`. Hermes-KMS NVENC
+CPU-copy now defaults to synchronous uploads; set
+`Environment="HERMES_CUDA_ASYNC_UPLOAD=1"` to opt in to async and `0`
+to explicitly force synchronous uploads. Without the variable the backend
+default is used. For cache
 A/B testing while DMA-BUF import is active, add
 `Environment="HERMES_CUDA_EGL_IMPORT_CACHE=0"`; remove it or set it to `4`
 to restore the default. Reload/restart after each change. If the import-cache
 checker reports stale content while fresh imports pass, keep the cache at `0`.
+
+## Hardware findings and fallback fixes (2026-11-06)
+
+RTX 5060 Ti (GB206), open NVIDIA driver 615.78.08, KWin 6.8.2:
+whole-frame GPU-origin DMA-BUF import, GL/CUDA processing, teardown and
+117 cached-image coherence checks passed. **These tests do not establish
+end-to-end zero-copy in a live stream.** KWin still chose a Hermes-KMS
+dumb buffer even with all 12 NVIDIA tiled modifiers advertised. KWin's
+multi-GPU scanout copy path requires a compatible destination rendering
+device, while Hermes-KMS exposes a capture/control render node, not EGL/GBM
+rendering. Investigate compositor-side passthrough separately.
+
+During 2266x1488@60 streaming, async CUDA host uploads used 78.5% of a
+CPU core versus 33.8% for sync, with roughly 399k versus 201k minor
+faults/s. Most faults were in DMA-BUF `copy_rows`, outside the
+ACQUIRE_FRAME capture metric. Restore synchronous upload as the
+Hermes-KMS NVENC fallback default, retaining `HERMES_CUDA_ASYNC_UPLOAD=1`
+for controlled tests. Other CUDA backends retain their existing default.
+
+The matching experimental Hermes-KMS driver now caches four recent
+DMA-BUF exports per plane. Previously only the most recently exported
+BO was retained, so alternating A/B/C scanout buffers could continually
+change DMA-BUF identities, defeating Hermes's persistent mmap cache.
+This is a likely factor in the observed faults, not a hardware-confirmed
+performance improvement yet.
+
+For evidence, set `Environment="HERMES_KMS_CPU_COPY_DIAGNOSTICS=1"`
+in `hermes.service` and restart the user service. Every 120 frames,
+`[capture-metric/hermes-kms-cpu-copy]` now reports average and peak memcpy
+duration, thread minor faults *during memcpy* (where RUSAGE_THREAD is
+available), and mmap-cache hits/misses. This excludes fence waits,
+DMA_BUF_IOCTL_SYNC, CUDA upload and encoding. Compare with
+`frame_export_hits`, `frame_export_misses`, `framebuffer_id` and
+`framebuffer_generation` in driver `hermes_kms_stats` debugfs. If both
+caches hit but faults persist, investigate page-table invalidation
+before changing the kernel's page-pinning behavior.
+
+GPU-origin passthrough and NVIDIA import of **system-memory** buffers
+remain unvalidated in a live stream. Do not force
+`HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=1` as a workaround.
 
 ## First implementation
 
@@ -177,9 +219,12 @@ The existing pinned allocations and mapping/copy caches are preserved. This
 change removes the synchronous upload API from pooled frames; it does not
 remove the CPU copy or promise overlap on pageable-memory fallbacks.
 
-For an A/B comparison, launch Hermes with `HERMES_CUDA_ASYNC_UPLOAD=0` to use
-the previous synchronous upload. Otherwise this branch uses asynchronous
-uploads. Compare capture-to-bitstream latency and frame age, not just FPS.
+For an A/B comparison, launch Hermes with `HERMES_CUDA_ASYNC_UPLOAD=1`
+to opt in to asynchronous uploads, or `0` to force synchronous.
+Without an override Hermes-KMS NVENC CPU-copy defaults to synchronous;
+other CUDA capture backends are unchanged. Compare total process CPU,
+per-thread minor faults and capture-to-bitstream latency, not just FPS
+or the ACQUIRE_FRAME-only capture metric.
 
 ## Opt-in DMA-BUF experiment
 

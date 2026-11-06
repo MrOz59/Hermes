@@ -167,6 +167,82 @@ A/B testing while DMA-BUF import is active, add
 to restore the default. Reload/restart after each change. If the import-cache
 checker reports stale content while fresh imports pass, keep the cache at `0`.
 
+## Updated Blackwell retest: the LRU eliminated CPU-copy faults (2026-11-06)
+
+The same RTX 5060 Ti / NVIDIA Open 615.78.08 tester retested Hermes
+`a5ef038f` with Hermes-KMS `dd9f96a`, UAPI 15, 2266x1488@60,
+same fullscreen scene for 60 seconds per mode. The compositor still
+selected a KWin dumb buffer and the NVENC auto route remained CPU-copy.
+
+| | Original sync | New sync | Original async | New async |
+| --- | ---: | ---: | ---: | ---: |
+| Hermes CPU (% of one core) | 33.8% | **10.5%** | 78.5% | 49.5% |
+| Capture-thread minor faults/s | ~201k | **0** | ~399k | ~198k |
+| Faults during DMA-BUF memcpy | not measured | **0** | not measured | **0** |
+
+The new driver LRU delivered 30,927 export hits vs 6 misses; Hermes's
+persistent mmap cache got 120 hits / 0 misses per diagnostic window.
+The sync CPU copy now takes ~1.16 ms/frame with 0 reported stalls.
+The measured sync process CPU reduction is ~69%. This **validates the
+LRU fix on this hardware**, not GPU-origin streaming zero-copy.
+
+The async-only ~198k minor faults/s are nearly exactly
+`ceil(2266*1488*4 / 4096) * 60 = 197,580`: one page per host
+upload frame per refresh. No faults occurred inside `copy_rows`,
+despite faults accumulating on the thread. Kernel-side mapping or
+pinning by the CUDA driver is a plausible explanation, **not yet
+confirmed**; the tester could not attribute them to a kernel symbol.
+This is not a second DMA-BUF read fault. We must not change memory
+pinning or buffer lifetime on that assumption alone.
+
+### New CUDA upload telemetry
+
+Set the following environment variables in the **Hermes user service**
+for a repeatable two-pass test (default is off, no production overhead):
+
+```ini
+[Service]
+Environment="HERMES_KMS_CPU_COPY_DIAGNOSTICS=1"
+Environment="HERMES_CUDA_UPLOAD_DIAGNOSTICS=1"
+Environment="HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto"
+```
+
+First run with `HERMES_CUDA_ASYNC_UPLOAD` **unset** for the proven
+synchronous path, then explicitly set it to `1` to enable async.
+Restart Hermes between runs. Look for
+`[cuda-upload-metric]` every 120 upload frames:
+
+- `avg_submit_us` / `peak_submit_us`: host-side duration of
+  `sws.load_ram`, which calls the CUDA transfer API. This is
+  **submission time**, not total completion time for async DMA.
+- `submit_minor_faults_per_frame`: faults attributed to the
+  upload-calling thread *during submission* (if `RUSAGE_THREAD`
+  is supported), not the full thread's per-frame fault total.
+- `avg_previous_upload_wait_us`: time spent waiting for an earlier
+  async transfer to complete. This is divided by the number of
+  submitted frames (includes frames with no pending wait).
+- `host_alloc_delta` / `host_free_delta` and totals: successful
+  `cuMemHostAlloc` / `cuMemFreeHost` operations. These counts tell
+  whether the capture pool is churning; they do **not** establish the
+  cause of faults inside the NVIDIA driver.
+
+Correlate with `/proc/<pid>/task/<tid>/stat` and a kernel-symbol
+profile if available. Faults outside `sws.load_ram` remain outside
+these per-submission counters.
+
+### System-memory DMA-BUF import remains unsafe
+
+`hermes-sysmem-import-check --verify` on 615.78.08/Blackwell reported
+wrong GPU readback after byte 64 with both 4 KiB pages and THP;
+`eglDestroyImage` then crashed inside NVIDIA EGL. Earlier failures
+started beyond ~2 MiB, so the byte pattern changed but the route is
+**still not valid**. Do not force import of Hermes-KMS dumb buffers
+with `HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=1`.
+
+For the compositor-side root cause and a proposed direct PRIME
+scanout design, see the companion driver's
+[experimental KWin 6.8 research](https://github.com/MrOz59/Hermes-KMS/blob/experimental/nvidia-zero-copy/docs/kwin-nvidia-prime-scanout.md).
+
 ## Hardware findings and fallback fixes (2026-11-06)
 
 RTX 5060 Ti (GB206), open NVIDIA driver 615.78.08, KWin 6.8.2:

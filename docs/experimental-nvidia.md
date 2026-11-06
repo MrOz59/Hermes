@@ -265,8 +265,9 @@ The matching experimental Hermes-KMS driver now caches four recent
 DMA-BUF exports per plane. Previously only the most recently exported
 BO was retained, so alternating A/B/C scanout buffers could continually
 change DMA-BUF identities, defeating Hermes's persistent mmap cache.
-This is a likely factor in the observed faults, not a hardware-confirmed
-performance improvement yet.
+The follow-up RTX 5060 Ti test above confirmed that the new cache removed
+the copy-path faults and reduced synchronous CPU usage substantially on
+that system.
 
 For evidence, set `Environment="HERMES_KMS_CPU_COPY_DIAGNOSTICS=1"`
 in `hermes.service` and restart the user service. Every 120 frames,
@@ -279,9 +280,10 @@ DMA_BUF_IOCTL_SYNC, CUDA upload and encoding. Compare with
 caches hit but faults persist, investigate page-table invalidation
 before changing the kernel's page-pinning behavior.
 
-GPU-origin passthrough and NVIDIA import of **system-memory** buffers
-remain unvalidated in a live stream. Do not force
-`HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=1` as a workaround.
+GPU-origin passthrough remains unvalidated in a live stream, while NVIDIA
+import of **system-memory** buffers has been confirmed corrupt on
+615.78.08 / RTX 5060 Ti, including a driver-side teardown crash.
+Do not force `HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=1` as a workaround.
 
 ## First implementation
 

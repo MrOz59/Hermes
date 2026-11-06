@@ -392,7 +392,7 @@ namespace cuda {
       tex = std::move(*tex_opt);
 
       const char *async_setting = std::getenv("HERMES_CUDA_ASYNC_UPLOAD");
-      async_upload = !async_setting || std::string_view {async_setting} != "0"sv;
+      async_upload = async_setting ? std::string_view {async_setting} != "0"sv : async_upload_default;
       if (async_upload) {
         CUevent event;
         CU_CHECK(cdf->cuEventCreate(&event, CU_EVENT_DISABLE_TIMING), "Couldn't create upload completion event");
@@ -407,6 +407,7 @@ namespace cuda {
     upload_event_t upload_done;
     upload_lifetime_t<platf::img_t> pending_upload;
     bool async_upload {true};
+    bool async_upload_default {true};
     bool upload_event_recorded {false};
   };
 
@@ -818,7 +819,7 @@ namespace cuda {
     int offset_x, offset_y;
   };
 
-  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram, pixel::layout_e layout) {
+  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram, pixel::layout_e layout, bool prefer_async_upload) {
     if (init()) {
       return nullptr;
     }
@@ -828,8 +829,10 @@ namespace cuda {
     if (vram) {
       cuda = std::make_unique<cuda_vram_t>();
     } else {
-      cuda = std::make_unique<cuda_ram_t>();
-      cuda->layout = layout;
+      auto ram = std::make_unique<cuda_ram_t>();
+      ram->layout = layout;
+      ram->async_upload_default = prefer_async_upload;
+      cuda = std::move(ram);
     }
 
     if (cuda->init(width, height)) {

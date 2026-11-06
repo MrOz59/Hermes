@@ -22,6 +22,7 @@
 #include <poll.h>
 #include <sys/capability.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -2696,6 +2697,11 @@ namespace platf {
           BOOST_LOG(error) << "Hermes-KMS: cannot acquire initial colour state: " << strerror(errno);
           return -1;
         }
+        const char *diagnostics = std::getenv("HERMES_KMS_CPU_COPY_DIAGNOSTICS");
+        cpu_copy_diagnostics = diagnostics && std::strcmp(diagnostics, "1") == 0 && !probe_only;
+        if (cpu_copy_diagnostics) {
+          BOOST_LOG(info) << "Hermes-KMS CPU-copy diagnostics enabled (120-frame windows)."sv;
+        }
         origin_known = VDISPLAY::hermesKmsReportsFrameOrigin(hermes_fd);
         if (source_color.pq() && !config.dynamicRange && !config.encoder_probe) {
           BOOST_LOG(error) << "Hermes-KMS output is HDR but the client requested SDR. Disable HDR on this KDE output or enable HDR in the client.";
@@ -2786,7 +2792,9 @@ namespace platf {
           // One CUDA kernel decodes the frame's layout and writes NV12 or
           // P010 from pinned memory; no OpenGL context, and no GL-CUDA
           // interop to synchronize on every frame.
-          return cuda::make_avcodec_encode_device(width, height, false, hermes_cuda_layout(source_fourcc));
+          // RTX 5060 Ti/615.78.08: async increased CPU and DMA-BUF minor faults.
+// Keep the proven sync path as default; HERMES_CUDA_ASYNC_UPLOAD=1 opts in.
+          return cuda::make_avcodec_encode_device(width, height, false, hermes_cuda_layout(source_fourcc), false);
         }
 #else
         if (mem_type == mem_type_e::cuda) {
@@ -3007,6 +3015,15 @@ namespace platf {
           return platf::capture_e::error;
         }
 
+        // The ACQUIRE_FRAME metric excludes this memcpy. Opt-in diagnostics
+        // measure it and report thread faults separately from mmap churn.
+#ifdef RUSAGE_THREAD
+        struct rusage usage_before {};
+        const bool have_usage = cpu_copy_diagnostics &&
+          ::getrusage(RUSAGE_THREAD, &usage_before) == 0;
+#endif
+        const auto copy_started = cpu_copy_diagnostics ?
+          std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point {};
         platf::dmabuf::copy_rows(
           img_out->data,
           static_cast<std::size_t>(img_out->row_pitch),
@@ -3015,6 +3032,37 @@ namespace platf {
           row_bytes,
           frame_height
         );
+        if (cpu_copy_diagnostics) {
+          const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - copy_started).count();
+          copy_total_ns += elapsed;
+          copy_peak_ns = std::max(copy_peak_ns, elapsed);
+#ifdef RUSAGE_THREAD
+          struct rusage usage_after {};
+          if (have_usage && ::getrusage(RUSAGE_THREAD, &usage_after) == 0 &&
+              usage_after.ru_minflt >= usage_before.ru_minflt) {
+            copy_minor_faults += static_cast<std::uint64_t>(usage_after.ru_minflt - usage_before.ru_minflt);
+            ++copy_fault_samples;
+          }
+#endif
+          if (++copy_samples == 120) {
+            BOOST_LOG(info) << "[capture-metric/hermes-kms-cpu-copy] avg="
+                            << copy_total_ns / (1000.0 * copy_samples)
+                            << "us peak=" << copy_peak_ns / 1000.0
+                            << "us minor_faults_per_copy="
+                            << (copy_fault_samples ? copy_minor_faults / static_cast<double>(copy_fault_samples) : -1.0)
+                            << " mmap_hits=" << (mappings.hits() - previous_map_hits)
+                            << " mmap_misses=" << (mappings.misses() - previous_map_misses)
+                            << " over " << copy_samples << " frames";
+            previous_map_hits = mappings.hits();
+            previous_map_misses = mappings.misses();
+            copy_samples = 0;
+            copy_total_ns = 0;
+            copy_peak_ns = 0;
+            copy_minor_faults = 0;
+            copy_fault_samples = 0;
+          }
+        }
 
         if (hermes_dma_buf_sync(frame.dma_buf_fd[0], DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ) < 0) {
           const int sync_errno = errno;
@@ -3079,6 +3127,14 @@ namespace platf {
       std::optional<bool> last_cursor_requested;
       /// CPU mappings of the scanout buffers the compositor rotates through.
       platf::dmabuf::mapping_cache_t mappings;
+      bool cpu_copy_diagnostics {false};
+      std::uint64_t copy_samples {0};
+      std::int64_t copy_total_ns {0};
+      std::int64_t copy_peak_ns {0};
+      std::uint64_t copy_minor_faults {0};
+      std::uint64_t copy_fault_samples {0};
+      std::uint64_t previous_map_hits {0};
+      std::uint64_t previous_map_misses {0};
       bool warned_pageable {false};
       bool warned_gpu_tiled {false};
       /// NVENC routing this display was selected under (kms_display()).

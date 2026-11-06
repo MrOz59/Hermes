@@ -10,7 +10,7 @@ There are separate improvements:
 
 | Improvement | Default on this branch | How to confirm |
 | --- | --- | --- |
-| Asynchronous host upload on Hermes-KMS NVENC CPU-copy | Disabled by default after Blackwell regression testing; opt in with `HERMES_CUDA_ASYNC_UPLOAD=1` | `CUDA host upload: synchronous (HERMES_CUDA_ASYNC_UPLOAD=0)` |
+| Asynchronous host upload on Hermes-KMS NVENC CPU-copy | Disabled by default after Blackwell regression testing; opt in with `HERMES_CUDA_ASYNC_UPLOAD=1` | `CUDA host upload: synchronous (backend default)` |
 | EGL import cache and render-node importer | Enabled when a GL->CUDA capture consumer is used; not used by CPU-copy capture | `GL->CUDA DMA-BUF import cache: up to 4 buffers` |
 | Experimental Hermes-KMS DMA-BUF capture with NVENC | Disabled until opted in | `Hermes-KMS NVENC auto route: scanout ... -> DMA-BUF import` during a real stream |
 

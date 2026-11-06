@@ -177,6 +177,11 @@ read-only and pulls each frame as a DMA-BUF:
   wrong pages, so NVENC sessions take one CPU copy of the scanout per frame.
   Experimental work on a faster NVIDIA path is in
   [#66](https://github.com/MrOz59/Hermes/pull/66).
+  On that experimental branch, follow the
+  [NVIDIA tester quick start](docs/experimental-nvidia.md#quick-start-for-testers)
+  for CUDA-enabled builds, the matching driver, systemd activation and the
+  capture log that confirms the route. Installing the branch alone does not
+  enable DMA-BUF capture with NVENC.
 
 The read-only open is intentional: with the driver's current access policy,
 Chromium/Electron's `O_RDWR` GPU probe skips this capture-only node instead of
@@ -563,3 +568,4 @@ Report issues for the host at
 three things a report needs to be actionable: the Hermes version, one
 copy-paste block of host information, and a debug-level log. See
 [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md) for what each form is for.
+

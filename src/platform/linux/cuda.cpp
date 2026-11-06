@@ -392,13 +392,21 @@ namespace cuda {
       tex = std::move(*tex_opt);
 
       const char *async_setting = std::getenv("HERMES_CUDA_ASYNC_UPLOAD");
-      async_upload = async_setting ? std::string_view {async_setting} != "0"sv : async_upload_default;
+      const bool valid_async_override = async_setting &&
+        (std::string_view {async_setting} == "0"sv || std::string_view {async_setting} == "1"sv);
+      if (async_setting && !valid_async_override) {
+        BOOST_LOG(warning) << "Invalid HERMES_CUDA_ASYNC_UPLOAD="sv << async_setting
+                           << "; expected 0 or 1. Using the backend default."sv;
+      }
+      async_upload = valid_async_override ? std::string_view {async_setting} == "1"sv : async_upload_default;
       if (async_upload) {
         CUevent event;
         CU_CHECK(cdf->cuEventCreate(&event, CU_EVENT_DISABLE_TIMING), "Couldn't create upload completion event");
         upload_done.reset(event);
       }
-      BOOST_LOG(info) << "CUDA host upload: "sv << (async_upload ? "asynchronous (frame lease + completion event)"sv : "synchronous (HERMES_CUDA_ASYNC_UPLOAD=0)"sv);
+      BOOST_LOG(info) << "CUDA host upload: "sv
+                      << (async_upload ? "asynchronous (frame lease + completion event)"sv : "synchronous"sv)
+                      << (valid_async_override ? " (HERMES_CUDA_ASYNC_UPLOAD override)"sv : " (backend default)"sv);
 
       return 0;
     }

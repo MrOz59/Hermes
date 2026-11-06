@@ -3,13 +3,17 @@
  * @brief Definitions for CUDA encoding.
  */
 // standard includes
+#include <atomic>
 #include <bitset>
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <filesystem>
 #include <mutex>
 #include <optional>
+#include <sys/resource.h>
 #include <thread>
 
 // lib includes
@@ -117,6 +121,12 @@ namespace cuda {
   // Not in the ffnvcodec headers.
   constexpr unsigned int cuMemHostAllocPortable = 0x01;
 
+  // Debug-only aggregate counters. Capture threads may allocate/free pinned
+  // host frames concurrently; relaxed atomics avoid introducing a hot lock.
+  // Successful allocations are counted once, not once per CUDA upload.
+  static std::atomic<std::uint64_t> pinned_host_allocations {0};
+  static std::atomic<std::uint64_t> pinned_host_frees {0};
+
   /**
    * cuMemHostAlloc and cuMemFreeHost, taken from the libcuda ffnvcodec opened:
    * the ffnvcodec headers release builds compile against predate both.
@@ -188,6 +198,8 @@ namespace cuda {
     // A live allocation keeps its retain on the context; see free_host().
     if (!ptr) {
       CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxRelease(device), "Couldn't release the primary CUDA context");
+    } else {
+      pinned_host_allocations.fetch_add(1, std::memory_order_relaxed);
     }
     return ptr;
   }
@@ -207,7 +219,11 @@ namespace cuda {
       return;
     }
     if (!CU_CHECK_IGNORE(cdf->cuCtxPushCurrent(context), "Couldn't make the primary CUDA context current")) {
-      CU_CHECK_IGNORE(host_memory->free(ptr), "Couldn't free a page-locked frame");
+      const auto status = host_memory->free(ptr);
+      CU_CHECK_IGNORE(status, "Couldn't free a page-locked frame");
+      if (status == CUDA_SUCCESS) {
+        pinned_host_frees.fetch_add(1, std::memory_order_relaxed);
+      }
       CUcontext popped;
       CU_CHECK_IGNORE(cdf->cuCtxPopCurrent(&popped), "Couldn't restore the CUDA context");
     }
@@ -333,15 +349,72 @@ namespace cuda {
       pending_upload.finish([] { return true; });
     }
 
+    int upload_frame(platf::img_t &img, stream_t::pointer upload_stream) {
+      if (!upload_diagnostics) {
+        return sws.load_ram(img, tex.array, upload_stream);
+      }
+
+#ifdef RUSAGE_THREAD
+      struct rusage before {};
+      const bool have_before = ::getrusage(RUSAGE_THREAD, &before) == 0;
+#endif
+      const auto start = std::chrono::steady_clock::now();
+      const int result = sws.load_ram(img, tex.array, upload_stream);
+      const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - start).count();
+
+      upload_submit_ns += elapsed;
+      upload_submit_peak_ns = std::max(upload_submit_peak_ns, elapsed);
+#ifdef RUSAGE_THREAD
+      struct rusage after {};
+      if (have_before && ::getrusage(RUSAGE_THREAD, &after) == 0 &&
+          after.ru_minflt >= before.ru_minflt) {
+        upload_submit_minor_faults += static_cast<std::uint64_t>(after.ru_minflt - before.ru_minflt);
+        ++upload_fault_samples;
+      }
+#endif
+
+      if (++upload_samples == 120) {
+        const auto allocs = pinned_host_allocations.load(std::memory_order_relaxed);
+        const auto frees = pinned_host_frees.load(std::memory_order_relaxed);
+        BOOST_LOG(info) << "[cuda-upload-metric] mode="sv << (async_upload ? "async"sv : "sync"sv)
+                        << " avg_submit_us="sv << upload_submit_ns / (1000.0 * upload_samples)
+                        << " peak_submit_us="sv << upload_submit_peak_ns / 1000.0
+                        << " submit_minor_faults_per_frame="sv
+                        << (upload_fault_samples ? upload_submit_minor_faults / static_cast<double>(upload_fault_samples) : -1.0)
+                        << " avg_previous_upload_wait_us="sv << upload_wait_ns / (1000.0 * upload_samples)
+                        << " host_alloc_delta="sv << (allocs - last_host_allocations)
+                        << " host_free_delta="sv << (frees - last_host_frees)
+                        << " host_alloc_total="sv << allocs
+                        << " host_free_total="sv << frees
+                        << " frames="sv << upload_samples;
+        last_host_allocations = allocs;
+        last_host_frees = frees;
+        upload_samples = 0;
+        upload_submit_ns = 0;
+        upload_submit_peak_ns = 0;
+        upload_submit_minor_faults = 0;
+        upload_fault_samples = 0;
+        upload_wait_ns = 0;
+      }
+      return result;
+    }
+
     int convert(platf::img_t &img) override {
       // The next upload uses the same event and texture. Retire the previous
       // source first; its upload normally completed while NVENC was encoding.
       auto wait = [&] {
         // An upload whose event could not be recorded must never be retired
         // against a stale, already-signalled event from an older frame.
+        const auto start = upload_diagnostics ?
+          std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point {};
         const auto result = upload_event_recorded ?
                               cdf->cuEventSynchronize(upload_done.get()) :
                               cdf->cuStreamSynchronize(stream.get());
+        if (upload_diagnostics) {
+          upload_wait_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        }
         return !check(result, "Couldn't wait for CUDA upload: "sv);
       };
       if (!pending_upload.finish(wait)) {
@@ -352,7 +425,7 @@ namespace cuda {
       if (!async_upload || !source) {
         // Probes/dummy images can live on the stack. Without a shared owner
         // they cannot outlive this call, so keep the synchronous upload.
-        return sws.load_ram(img, tex.array) || sws.convert(frame->data[0], frame->data[1], frame->linesize[0], frame->linesize[1], tex_obj(tex), stream.get());
+        return upload_frame(img, nullptr) || sws.convert(frame->data[0], frame->data[1], frame->linesize[0], frame->linesize[1], tex_obj(tex), stream.get());
       }
 
       if (!pending_upload.begin(std::move(source), wait)) {
@@ -367,7 +440,7 @@ namespace cuda {
         });
         return -1;
       };
-      if (sws.load_ram(img, tex.array, stream.get())) {
+      if (upload_frame(img, stream.get())) {
         return drain_failed_submission();
       }
       if (check(cdf->cuEventRecord(upload_done.get(), stream.get()), "Couldn't record CUDA upload completion: "sv)) {
@@ -399,6 +472,13 @@ namespace cuda {
                            << "; expected 0 or 1. Using the backend default."sv;
       }
       async_upload = valid_async_override ? std::string_view {async_setting} == "1"sv : async_upload_default;
+      const char *diagnostics = std::getenv("HERMES_CUDA_UPLOAD_DIAGNOSTICS");
+      upload_diagnostics = diagnostics && std::string_view {diagnostics} == "1"sv;
+      if (upload_diagnostics) {
+        last_host_allocations = pinned_host_allocations.load(std::memory_order_relaxed);
+        last_host_frees = pinned_host_frees.load(std::memory_order_relaxed);
+        BOOST_LOG(info) << "CUDA upload diagnostics enabled (120-frame windows)."sv;
+      }
       if (async_upload) {
         CUevent event;
         CU_CHECK(cdf->cuEventCreate(&event, CU_EVENT_DISABLE_TIMING), "Couldn't create upload completion event");
@@ -417,6 +497,15 @@ namespace cuda {
     bool async_upload {true};
     bool async_upload_default {true};
     bool upload_event_recorded {false};
+    bool upload_diagnostics {false};
+    std::uint64_t upload_samples {0};
+    std::uint64_t upload_fault_samples {0};
+    std::uint64_t upload_submit_minor_faults {0};
+    std::uint64_t last_host_allocations {0};
+    std::uint64_t last_host_frees {0};
+    std::int64_t upload_submit_ns {0};
+    std::int64_t upload_submit_peak_ns {0};
+    std::int64_t upload_wait_ns {0};
   };
 
   class cuda_vram_t: public cuda_t {

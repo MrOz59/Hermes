@@ -49,6 +49,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   precedence over `virtualhid_randomize_mac`; turn it off for the previous
   per-session addresses.
 
+### Fixed
+- An EVDI virtual display no longer stalls the desktop. When the driver already
+  had a frame waiting, `evdi_request_update()` returned true and sent no event
+  for it, but Hermes discarded that answer and waited for an event, so the frame
+  was never grabbed and its page flip never completed. On GNOME under X11 the
+  whole desktop froze for seconds at a time with `flip_done timed out` in the
+  kernel log. Hermes now grabs such a frame at once, and no longer repeats a
+  request the driver is still answering, which logged an `Update was already
+  requested` kernel warning hundreds of times a second.
+
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99
 

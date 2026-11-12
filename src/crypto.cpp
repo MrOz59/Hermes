@@ -415,7 +415,12 @@ namespace crypto {
     const ASN1_BIT_STRING *asn1 = nullptr;
     X509_get0_signature(&asn1, nullptr, x.get());
 
-    return {(const char *) ASN1_STRING_get0_data(asn1), (std::size_t) ASN1_STRING_length(asn1)};
+#if OPENSSL_VERSION_NUMBER >= 0x40100000L
+    const auto length = ASN1_STRING_get_length(asn1);
+#else
+    const auto length = (std::size_t) ASN1_STRING_length(asn1);
+#endif
+    return {(const char *) ASN1_STRING_get0_data(asn1), length};
   }
 
   std::string rand(std::size_t bytes) {

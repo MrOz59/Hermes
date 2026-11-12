@@ -6692,6 +6692,8 @@ namespace VDISPLAY {
     constexpr auto max_grab_interval = std::chrono::microseconds {16667};
     evdi_rect rects[max_rects];
     std::map<evdi_handle, std::chrono::steady_clock::time_point> next_grab_by_handle;
+    constexpr auto max_pending = std::chrono::seconds {1};
+    std::map<evdi_handle, std::chrono::steady_clock::time_point> pending_since;
 
     while (evdi_events_running) {
       {
@@ -6713,18 +6715,35 @@ namespace VDISPLAY {
           pollfd poll_fd {};
           poll_fd.fd = evdi.get_event_ready(display.handle);
           poll_fd.events = POLLIN;
-          if (poll_fd.fd < 0 || ::poll(&poll_fd, 1, 0) <= 0 || !(poll_fd.revents & POLLIN)) {
-            evdi.request_update(display.handle, display.evdi_buffer_id);
-            continue;
+          if (poll_fd.fd >= 0 && ::poll(&poll_fd, 1, 0) > 0 && (poll_fd.revents & POLLIN)) {
+            evdi.handle_events(display.handle, &event_context);
+            pending_since.erase(display.handle);
+          } else {
+            // While a request is pending the driver answers it with an event,
+            // and logs a warning for every repeated request, so ask again only
+            // if the answer seems lost.
+            const auto pending = pending_since.find(display.handle);
+            if (pending != pending_since.end() && now - pending->second < max_pending) {
+              continue;
+            }
+            if (!evdi.request_update(display.handle, display.evdi_buffer_id)) {
+              pending_since[display.handle] = now;
+              continue;
+            }
+            pending_since.erase(display.handle);
           }
+          // A true return means a frame is already waiting. The driver sends no
+          // event for it, so it has to be grabbed now: otherwise its pageflip is
+          // never acknowledged and the display server stalls on every commit.
 
-          evdi.handle_events(display.handle, &event_context);
           int rect_count = max_rects;
           display.evdi_buffer->begin_write();
           evdi.grab_pixels(display.handle, rects, &rect_count);
           display.evdi_buffer->end_write();
           display.evdi_buffer->mark_updated();
-          evdi.request_update(display.handle, display.evdi_buffer_id);
+          if (!evdi.request_update(display.handle, display.evdi_buffer_id)) {
+            pending_since[display.handle] = now;
+          }
           const auto refresh_rate = std::max<uint32_t>(display.fps, 1);
           const auto session_interval = std::chrono::microseconds {1000000 / refresh_rate};
           next_grab_by_handle[display.handle] = now + std::clamp(session_interval, min_grab_interval, max_grab_interval);
@@ -6737,6 +6756,9 @@ namespace VDISPLAY {
             ++it;
           }
         }
+        std::erase_if(pending_since, [&](const auto &entry) {
+          return !active_handles.contains(entry.first);
+        });
       }
 
       // A 1 ms pump keeps pageflip-to-capture wakeup below one millisecond

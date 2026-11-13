@@ -1,0 +1,43 @@
+name: Hermes installer validation
+
+on:
+  push:
+    paths:
+      - 'scripts/install.sh'
+      - 'scripts/tests/installer-offline.sh'
+      - 'README.md'
+      - '.github/workflows/installer-check.yml'
+  pull_request:
+    paths:
+      - 'scripts/install.sh'
+      - 'scripts/tests/installer-offline.sh'
+      - 'README.md'
+      - '.github/workflows/installer-check.yml'
+
+jobs:
+  installer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check bash syntax and CLI entrypoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/install.sh
+          bash scripts/install.sh --help > /tmp/hermes-installer-help.txt
+          grep -q -- '--dry-run' /tmp/hermes-installer-help.txt
+          grep -q -- '--nightly' /tmp/hermes-installer-help.txt
+          grep -q -- '--update' /tmp/hermes-installer-help.txt
+          grep -q 'run_updater()' scripts/install.sh
+          grep -q 'Hermes-KMS' scripts/install.sh
+          grep -q 'DETACHED DESKTOP / DETACHED STEAM' scripts/install.sh
+          grep -q 'install_kms_broker()' scripts/install.sh
+          grep -q 'post_install_checks()' scripts/install.sh
+      - name: Offline installer helper tests
+        shell: bash
+        run: bash scripts/tests/installer-offline.sh
+      - name: ShellCheck errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          shellcheck --severity=error scripts/install.sh

@@ -385,12 +385,50 @@ The quickest way is the installer, run as the user Hermes will stream for:
 curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.sh | bash
 ```
 
-It installs the Hermes package for your distribution (Arch, CachyOS, Ubuntu
-24.04/26.04 or Fedora 43/44) and then asks, one at a time, about the
-[Hermes-KMS](#installing-the-hermes-kms-driver) driver, experimental isolated
-sessions (with Hermes' own Gamescope build) and streaming the login screen.
-Add `--nightly` for the rolling build of `main`, `--dry-run` to see the
-commands without running them. To install by hand instead:
+It installs Hermes for Arch/CachyOS, Ubuntu 24.04/26.04 or Fedora 43/44,
+then offers the matching [Hermes-KMS](#installing-the-hermes-kms-driver)
+v0.4.1 driver from its published release assets, verified against SHA-256
+checksums. Where no native driver package is available, it offers a
+**separate, opt-in** source build from the pinned release tag. Kernel headers
+must match the running kernel. Immutable ostree systems (such as Bazzite)
+require the documented image-based driver setup instead.
+
+The installer explains **two distinct independent-session options** in
+Hermes 0.7.0, both experimental:
+
+- **Detached Desktop / Detached Steam (KDE Plasma 6 Wayland):** the user's
+  own Plasma desktop and Steam library on a separate virtual display, without
+  disturbing the physical desktop. This requires Hermes-KMS, but **does not
+  require Gamescope, seatd or the private DRM seat broker**.
+- **Isolated Gamescope applications:** a game on its own DRM card/input seat,
+  with private audio and optional device isolation. This additionally
+  requires Hermes' patched Gamescope, seatd, PipeWire and the Hermes-KMS
+  seat broker. The setup is offered only when requested; the distribution's
+  regular Gamescope remains untouched. Patched Gamescope is unavailable on
+  Ubuntu 24.04.
+
+After the installer enables the user service, it checks for the Hermes
+binary, the service status, DKMS and, if selected, patched Gamescope.
+These checks **do not certify real GPU streaming**; reboot when prompted,
+then use the Audio/Video diagnostics in the Web UI and test a real client.
+
+The installer leaves optional independent sessions and pre-login streaming
+**disabled by default**. If neither Hermes-KMS nor EVDI is available, it offers
+an optional EVDI installation (AUR via an existing helper on Arch/CachyOS,
+`evdi-dkms` from configured APT repositories on Ubuntu). Fedora requires
+manually selecting a trustworthy EVDI package. Existing physical-display capture
+does not require either virtual-display driver.
+
+The installer backs up an existing Hermes configuration before changing it.
+If Hermes was already running, a restart is offered but never forced (it would
+disconnect active streams). A missing stable package is **not silently replaced
+by nightly**; the installer asks before switching channels, and `--yes` refuses
+that experimental fallback. Secure Boot may require signing/MOK enrollment
+before the DKMS module can load.
+
+Run as your normal user, not root. Use `--nightly`
+for a rolling Hermes build (the driver stays pinned to 0.4.1), `--dry-run`
+to preview actions, or `--help` to review options. To install manually:
 
 Every push to `main` refreshes the rolling **nightly** prerelease, and a tagged
 version publishes a normal release, both at
@@ -422,6 +460,45 @@ A Hermes-KMS virtual display also needs the
 [Hermes-KMS](https://github.com/MrOz59/Hermes-KMS) kernel module, which is
 installed separately and has to match the Hermes build — see
 [Installing the Hermes-KMS driver](#installing-the-hermes-kms-driver) above.
+
+### Updating an existing installation
+
+The same script is also the ecosystem updater. Run it as the normal user
+who owns the Hermes service, **not** as root:
+
+```bash
+# Update installed Hermes and already-present ecosystem components.
+curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.sh | bash -s -- --update
+
+# Follow the rolling Hermes nightly rather than the latest stable release.
+curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.sh | bash -s -- --update --nightly
+
+# Preview without changing packages or service configuration.
+curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.sh | bash -s -- --update --dry-run
+```
+
+The updater detects the **installed package version** before comparing it to
+the requested release. The normal channel stays stable; the nightly channel
+must be chosen explicitly. A newer local version is never downgraded without
+confirmation. Rolling Hermes/Gamescope assets are tracked by SHA-256 so a
+repeated update can skip unchanged packages even when their filenames stay
+the same. `--yes` approves normal existing-component upgrades but never
+authorizes a downgrade or service interruption.
+
+Only components that were already installed are considered: the Hermes host,
+Hermes-KMS (pinned to its compatible v0.4.1 release), the patched Gamescope,
+and optionally EVDI. If Hermes-KMS is present but DKMS is missing for the
+current kernel, the updater offers an **opt-in repair** using the registered
+driver source. It never enables new independent-session modes, modifies the
+chosen virtual-display backend or configures pre-login streaming.
+
+An existing Hermes configuration is backed up before a package update. A
+running service is restarted only with approval, since restarting disconnects
+clients. A previously stopped service remains stopped. Hermes-KMS updates
+require a reboot; Secure Boot may require DKMS module signing/MOK enrollment.
+Image-based/immutable distributions still need their separate installation
+method.
+
 
 ## CachyOS/Arch package build
 

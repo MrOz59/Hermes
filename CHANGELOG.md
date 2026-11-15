@@ -50,6 +50,7 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 
 ### Fixed
+- Use `hermes` as the suggested username on the initial setup page.
 - An EVDI virtual display no longer stalls the desktop. When the driver already
   had a frame waiting, `evdi_request_update()` returned true and sent no event
   for it, but Hermes discarded that answer and waited for an event, so the frame

@@ -2364,7 +2364,7 @@ seed `upnp = enabled` only when creating a configuration without that key.
 This can avoid manual forwarding on both a personal router and an ISP router, allowing direct remote
 streaming without a VPN relay. Both routers must offer reachable UPnP services. It does not bypass ISP
 CGNAT; if the outer IGD cannot be discovered, manual forwarding or another connectivity method is needed.
-Router selection uses an IPv4 prefix heuristic, not a complete routing-table topology discovery.
+Router selection uses an IPv4 prefix heuristic, not a complete routing-table topology discovery. When two outer IGDs are equally plausible, Hermes skips the external mapping instead of arbitrarily choosing one.
 
 Mappings to other destinations are left untouched. Existing manual mappings to the correct destination
 are reused without renewal or removal, even if their description resembles a Hermes-created rule.

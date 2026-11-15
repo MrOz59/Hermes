@@ -206,18 +206,25 @@ namespace upnp {
     constexpr int min_shared_bits = 16;
     std::optional<std::size_t> best;
     int best_bits = min_shared_bits - 1;
+    bool ambiguous = false;
     for (std::size_t i = 0; i < igd_hosts.size(); ++i) {
       if (i == inner) {
         continue;
       }
 
-      if (const auto bits = shared_prefix_length(igd_hosts[i], inner_external_addr); bits > best_bits) {
+      const auto bits = shared_prefix_length(igd_hosts[i], inner_external_addr);
+      if (bits > best_bits) {
         best = i;
         best_bits = bits;
+        ambiguous = false;
+      } else if (best.has_value() && bits == best_bits) {
+        // Two equally plausible gateways: never forward public traffic to an
+        // arbitrary device when the IPv4-prefix heuristic cannot distinguish them.
+        ambiguous = true;
       }
     }
 
-    return best;
+    return ambiguous ? std::nullopt : best;
   }
 
   /**

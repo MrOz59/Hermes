@@ -11,12 +11,6 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
-### Changed
-- Use Hermes names for web/tray icon assets, stylesheet, restart/quit translation
-  keys, remaining translated product text, and resource links. Preserve external
-  protocol identifiers, existing configuration keys, and upstream credits.
-
-
 ### Added
 - `isolation_method`: pick Gamescope with a virtual display or KWin's virtual
   backend for launches that request a virtual display, next to the virtual
@@ -41,6 +35,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Input then has no controller.
 
 ### Changed
+- Use Hermes names for web/tray icon assets, stylesheet, restart/quit translation
+  keys, remaining translated product text, and resource links. Preserve external
+  protocol identifiers, existing configuration keys, and upstream credits.
 - The per-app `session-type` is now `isolation-method` (`default`, `gamescope`,
   `kwin_virtual`), and `shared` is the `host-session` flag; `apps.json` is
   migrated on start. The Detached Desktop and Detached Steam entries are renamed
@@ -67,6 +64,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   kernel log. Hermes now grabs such a frame at once, and no longer repeats a
   request the driver is still answering, which logged an `Update was already
   requested` kernel warning hundreds of times a second.
+- Hermes finds the connector of an EVDI virtual display again. It looked for
+  the `evdi` driver under `/sys/class/drm/cardN-<connector>/device/driver`, but
+  a connector's `device` link points to its card, which has no driver link, so
+  the lookup always came back empty. Activating the output and exclusive mode
+  then stopped with "DRM connector was not found". The driver is now read from
+  the card's own device.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

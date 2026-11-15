@@ -96,6 +96,11 @@ TEST(UpnpSelectOuterIgdTest, IgnoresInnerGatewayAndUnrelatedIgds) {
   EXPECT_EQ(upnp::select_outer_igd({"10.0.0.1"}, 0, "10.0.0.86"), std::nullopt);
 }
 
+TEST(UpnpSelectOuterIgdTest, RejectsAmbiguousOuterGateways) {
+  EXPECT_EQ(upnp::select_outer_igd({"192.168.1.1", "10.0.0.1", "10.0.0.2"}, 0, "10.0.0.86"), std::nullopt);
+  EXPECT_EQ(upnp::select_outer_igd({"192.168.1.1", "10.0.0.1", "10.0.5.2"}, 0, "10.0.0.86"), 1U);
+}
+
 TEST(UpnpSelectOuterIgdTest, PrefersClosestIgd) {
   EXPECT_EQ(upnp::select_outer_igd({"192.168.1.100", "10.0.5.1", "10.0.0.1"}, 0, "10.0.0.86"), 2U);
 }

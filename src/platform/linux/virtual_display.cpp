@@ -7620,8 +7620,12 @@ namespace VDISPLAY {
         if (name.rfind(prefix, 0) != 0) {
           continue;
         }
+        // A connector's "device" link points to its card, which is a DRM class
+        // device with no driver of its own; the driver belongs to the card's
+        // parent device.
         std::error_code ec;
-        const auto module = fs::canonical(entry.path() / "device/driver/module", ec).filename().string();
+        const auto card = entry.path().parent_path() / ("card" + std::to_string(card_index));
+        const auto module = fs::canonical(card / "device/driver/module", ec).filename().string();
         if (!ec && module == "evdi") {
           return name.substr(prefix.size());
         }

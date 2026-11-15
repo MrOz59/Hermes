@@ -20,7 +20,9 @@ jobs:
             dnf install -y git gcc cmake binutils libcap util-linux shadow-utils
           else
             apt-get update
-            apt-get install -y git gcc cmake binutils libcap2-bin util-linux passwd
+            # libc6-dev is only a Recommends of gcc, and the ubuntu:26.04 image
+            # no longer installs those; without it the linker misses crti.o.
+            apt-get install -y git gcc libc6-dev cmake binutils libcap2-bin util-linux passwd
           fi
       - uses: actions/checkout@v4
       - name: Test the production install rule with capabilities

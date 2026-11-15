@@ -2,7 +2,7 @@
   <nav class="navbar navbar-dark navbar-expand-lg navbar-background header">
     <div class="container">
       <a class="navbar-brand" href="./" title="Hermes">
-        <img src="/images/logo-apollo-45.png" height="45" alt="Hermes">
+        <img src="/images/logo-hermes-45.png" height="45" alt="Hermes">
       </a>
       <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent"
               aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">

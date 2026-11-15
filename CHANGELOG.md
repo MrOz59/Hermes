@@ -11,6 +11,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ## [Unreleased]
 
+### Changed
+- Use Hermes names for web/tray icon assets, stylesheet, restart/quit translation
+  keys, remaining translated product text, and resource links. Preserve external
+  protocol identifiers, existing configuration keys, and upstream credits.
+
+
 ### Added
 - `isolation_method`: pick Gamescope with a virtual display or KWin's virtual
   backend for launches that request a virtual display, next to the virtual

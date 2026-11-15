@@ -35,7 +35,7 @@ include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include"
 
 # apollo icon
 if(NOT DEFINED PROJECT_ICON_PATH)
-    set(PROJECT_ICON_PATH "${CMAKE_SOURCE_DIR}/apollo.ico")
+    set(PROJECT_ICON_PATH "${CMAKE_SOURCE_DIR}/hermes.ico")
 endif()
 
 # Create a separate object library for the RC file with minimal includes

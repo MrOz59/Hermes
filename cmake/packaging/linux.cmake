@@ -223,14 +223,14 @@ if(SUNSHINE_BUILD_SESSION_BROKER)
 endif()
 
 # application icon
-# Installed as hermes.svg rather than apollo.svg so the package does not claim a
+# Installed as hermes.svg rather than hermes.svg so the package does not claim a
 # path already owned by the apollo package.
 if(NOT ${SUNSHINE_BUILD_FLATPAK})
-    install(FILES "${CMAKE_SOURCE_DIR}/apollo.svg"
+    install(FILES "${CMAKE_SOURCE_DIR}/hermes.svg"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps"
             RENAME "hermes.svg")
 else()
-    install(FILES "${CMAKE_SOURCE_DIR}/apollo.svg"
+    install(FILES "${CMAKE_SOURCE_DIR}/hermes.svg"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps"
             RENAME "${PROJECT_FQDN}.svg")
 endif()
@@ -238,30 +238,30 @@ endif()
 # tray icon
 if(${SUNSHINE_TRAY} STREQUAL 1)
     if(NOT ${SUNSHINE_BUILD_FLATPAK})
-        install(FILES "${CMAKE_SOURCE_DIR}/apollo.svg"
+        install(FILES "${CMAKE_SOURCE_DIR}/hermes.svg"
                 DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
                 RENAME "hermes-tray.svg")
-        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/apollo-playing.svg"
+        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/hermes-playing.svg"
                 DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
                 RENAME "hermes-playing.svg")
-        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/apollo-pausing.svg"
+        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/hermes-pausing.svg"
                 DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
                 RENAME "hermes-pausing.svg")
-        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/apollo-locked.svg"
+        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/hermes-locked.svg"
                 DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
                 RENAME "hermes-locked.svg")
     else()
         # flatpak icons must be prefixed with the app id or they will not be included in the flatpak
-        install(FILES "${CMAKE_SOURCE_DIR}/apollo.svg"
+        install(FILES "${CMAKE_SOURCE_DIR}/hermes.svg"
                 DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
                 RENAME "${PROJECT_FQDN}-tray.svg")
-        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/apollo-playing.svg"
+        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/hermes-playing.svg"
                 DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
                 RENAME "${PROJECT_FQDN}-playing.svg")
-        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/apollo-pausing.svg"
+        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/hermes-pausing.svg"
                 DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
                 RENAME "${PROJECT_FQDN}-pausing.svg")
-        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/apollo-locked.svg"
+        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/hermes-locked.svg"
                 DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
                 RENAME "${PROJECT_FQDN}-locked.svg")
     endif()

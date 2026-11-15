@@ -2367,8 +2367,11 @@ CGNAT; if the outer IGD cannot be discovered, manual forwarding or another conne
 Router selection uses an IPv4 prefix heuristic, not a complete routing-table topology discovery.
 
 Mappings to other destinations are left untouched. Existing manual mappings to the correct destination
-are reused without renewal or removal. Hermes tracks its own rules separately for each router and checks
-ownership before cleanup. Routers supporting only permanent leases are used only after recovery intent
+are reused without renewal or removal, even if their description resembles a Hermes-created rule.
+Hermes manages a mapping only after creating it successfully or recovering its journal record. Routers
+that rewrite descriptions may prevent automatic cleanup: ambiguous permanent mappings remain in the
+journal for inspection rather than being assumed removed. Hermes tracks its own rules separately for
+each router and checks ownership before cleanup. Routers supporting only permanent leases are used only after recovery intent
 has been written to `upnp_mappings.journal` in the configuration directory. On the next start Hermes
 attempts cleanup even if UPnP was disabled; unreachable rules remain recorded for retry.
 

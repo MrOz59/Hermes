@@ -58,6 +58,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   kernel log. Hermes now grabs such a frame at once, and no longer repeats a
   request the driver is still answering, which logged an `Update was already
   requested` kernel warning hundreds of times a second.
+- Hermes finds the connector of an EVDI virtual display again. It looked for
+  the `evdi` driver under `/sys/class/drm/cardN-<connector>/device/driver`, but
+  a connector's `device` link points to its card, which has no driver link, so
+  the lookup always came back empty. Activating the output and exclusive mode
+  then stopped with "DRM connector was not found". The driver is now read from
+  the card's own device.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

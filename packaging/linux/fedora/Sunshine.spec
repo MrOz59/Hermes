@@ -273,7 +273,7 @@ fi
 
 # Icons
 %{_datadir}/icons/hicolor/scalable/apps/hermes.svg
-%{_datadir}/icons/hicolor/scalable/status/apollo*.svg
+%{_datadir}/icons/hicolor/scalable/status/hermes-*.svg
 
 # Metainfo
 %{_datadir}/metainfo/*.metainfo.xml

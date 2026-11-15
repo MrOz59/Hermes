@@ -56,12 +56,9 @@ if(NOT Boost_FOUND)
     set(BOOST_INCLUDE_LIBRARIES ${BOOST_COMPONENTS})
     set(BOOST_URL "https://github.com/boostorg/boost/releases/download/boost-${BOOST_VERSION}/boost-${BOOST_VERSION}-cmake.tar.xz")  # cmake-lint: disable=C0301
     set(BOOST_HASH "SHA256=67acec02d0d118b5de9eb441f5fb707b3a1cdd884be00ca24b9a73c995511f74")
-
-    # Boost 1.89's Locale header group excludes its top-level locale.hpp.
-    # Patch the fetched sources before their CMakeLists.txt is evaluated.
-    set(BOOST_PATCH_COMMAND "${CMAKE_COMMAND}"
-            "-DBOOST_SOURCE_DIR=<SOURCE_DIR>"
-            -P "${CMAKE_CURRENT_LIST_DIR}/patch-boost-locale.cmake")
+    # CMake 4.5 rejects Boost.Locale's source_group(TREE); see the script for details.
+    set(BOOST_PATCH_COMMAND
+            "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_LIST_DIR}/../patches/boost-locale-source-group.cmake")
 
     if(CMAKE_VERSION VERSION_LESS "3.24.0")
         FetchContent_Declare(

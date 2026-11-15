@@ -87,6 +87,22 @@ namespace upnp {
   }
 
   /**
+   * @brief Require a local ownership record as well as a matching router response.
+   * @details A pre-existing manual mapping may use the same Hermes description.
+   */
+  inline bool may_manage_mapping(mapping_state_e state, bool recorded) {
+    return recorded && state == mapping_state_e::ours;
+  }
+
+  /**
+   * @brief Keep permanent recovery records when router ownership is ambiguous.
+   * @details A gateway may rewrite descriptions without removing the forwarding rule.
+   */
+  inline bool should_retain_recovery_record(mapping_state_e state, bool permanent) {
+    return permanent && (state == mapping_state_e::existing || state == mapping_state_e::conflict || state == mapping_state_e::unknown);
+  }
+
+  /**
    * @brief Encode one append-only recovery event before adding or after removing a permanent rule.
    * @param mapping Rule being recorded.
    * @param added Whether this records creation intent rather than completed removal.

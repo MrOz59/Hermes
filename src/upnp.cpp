@@ -9,6 +9,14 @@
 #include <fstream>
 #include <set>
 #include <sstream>
+
+// Synchronize the recovery journal before installing permanent router rules.
+#include <fcntl.h>
+#ifdef _WIN32
+  #include <io.h>
+#else
+  #include <unistd.h>
+#endif
 #include <stddef.h>  // workaround for type_t error in miniupnpc 2.3.3, see https://github.com/miniupnp/miniupnp/commit/e263ab6f56c382e10fed31347ec68095d691a0e8
 
 // lib includes
@@ -330,12 +338,37 @@ namespace upnp {
         BOOST_LOG(warning) << "Invalid UPnP recovery identity; refusing an unrecorded permanent mapping"sv;
         return false;
       }
-      std::ofstream out {journal_path(), std::ios::app};
+      const auto path = journal_path();
+      std::ofstream out {path, std::ios::app};
       out << event;
       out.flush();
       out.close();
       if (!out) {
         BOOST_LOG(warning) << "Could not update UPnP recovery journal; refusing an unrecorded permanent mapping"sv;
+        return false;
+      }
+
+      // Closing an ofstream does not promise that the record survives a power failure.
+      // Flush file contents to stable storage before asking the router for a permanent lease.
+#ifdef _WIN32
+      const int fd = ::_wopen(path.c_str(), _O_RDONLY | _O_BINARY);
+      if (fd < 0) {
+        BOOST_LOG(warning) << "Could not reopen UPnP recovery journal for syncing"sv;
+        return false;
+      }
+      const bool durable = ::_commit(fd) == 0;
+      ::_close(fd);
+#else
+      const int fd = ::open(path.c_str(), O_RDONLY);
+      if (fd < 0) {
+        BOOST_LOG(warning) << "Could not reopen UPnP recovery journal for syncing"sv;
+        return false;
+      }
+      const bool durable = ::fsync(fd) == 0;
+      ::close(fd);
+#endif
+      if (!durable) {
+        BOOST_LOG(warning) << "Could not sync UPnP recovery journal; refusing an unrecorded permanent mapping"sv;
         return false;
       }
       return true;
@@ -346,9 +379,9 @@ namespace upnp {
      * @param mapping Rule owned by Hermes.
      * @return Whether the rule can safely be managed.
      */
-    bool remember_mapping(owned_mapping_t mapping) {
+    bool remember_mapping(owned_mapping_t mapping, bool recovery_intent_already_written = false) {
       auto found = std::find(owned_mappings.begin(), owned_mappings.end(), mapping);
-      if (mapping.permanent && (found == owned_mappings.end() || !found->permanent) && !journal_mapping(mapping, true)) {
+      if (mapping.permanent && !recovery_intent_already_written && (found == owned_mappings.end() || !found->permanent) && !journal_mapping(mapping, true)) {
         return false;
       }
       if (found == owned_mappings.end()) {
@@ -370,11 +403,14 @@ namespace upnp {
      */
     bool map_upnp_port(const IGDdatas &data, const urls_t &urls, const std::string &lan_addr, const mapping_t &mapping) {
       owned_mapping_t wanted {urls->controlURL, data.first.servicetype, lan_addr, mapping.port.wan, mapping.port.lan, mapping.port.proto, mapping.description, false, generation};
-      // A failed refresh must not forget a rule that was successfully added earlier.
-      for (auto &owned : owned_mappings) {
-        if (owned == wanted) {
-          owned.generation = generation;
-        }
+      // A matching description alone is not proof that Hermes created the rule.
+      // Only mappings already recorded by this process (or recovered from its journal)
+      // are eligible for renewal and deletion.
+      auto recorded = std::find(owned_mappings.begin(), owned_mappings.end(), wanted);
+      const bool previously_owned = recorded != owned_mappings.end();
+      if (previously_owned) {
+        // A failed refresh must not forget a rule that was successfully added earlier.
+        recorded->generation = generation;
       }
       std::array<char, 16> client {};
       std::array<char, 6> port {};
@@ -393,6 +429,10 @@ namespace upnp {
           BOOST_LOG(warning) << "UPnP mapping ownership could not be checked: "sv << err;
           return false;
         case mapping_state_e::ours:
+          if (!may_manage_mapping(mapping_state_e::ours, previously_owned)) {
+            BOOST_LOG(debug) << "UPnP mapping resembles Hermes but has no ownership record; preserving it"sv;
+            return std::string_view {enabled.data()} == "1"sv;
+          }
           wanted.permanent = std::string_view {lease.data()} == "0"sv;
           if (!remember_mapping(wanted)) {
             return false;
@@ -417,33 +457,42 @@ namespace upnp {
       }
       const auto period = std::to_string(PORT_MAPPING_LIFETIME.count());
       err = UPNP_AddPortMapping(urls->controlURL, data.first.servicetype, mapping.port.wan.c_str(), mapping.port.lan.c_str(), lan_addr.c_str(), mapping.description.c_str(), mapping.port.proto.c_str(), nullptr, period.c_str());
+      bool permanent_intent_written = false;
       if (err == 725 && !shutdown_event->peek()) {  // OnlyPermanentLeasesSupported
         wanted.permanent = true;
-        // Persist intent first: a process crash immediately after AddPortMapping must be recoverable.
-        if (!remember_mapping(wanted)) {
+        // Write and sync recovery intent BEFORE the permanent AddPortMapping.
+        // Do not claim ownership in memory until the router actually accepts the rule.
+        if (!journal_mapping(wanted, true)) {
           return false;
         }
+        permanent_intent_written = true;
         err = UPNP_AddPortMapping(urls->controlURL, data.first.servicetype, mapping.port.wan.c_str(), mapping.port.lan.c_str(), lan_addr.c_str(), mapping.description.c_str(), mapping.port.proto.c_str(), nullptr, "0");
       }
       if (err == 718) {
-        // Some IGDs reject even an identical repeated AddPortMapping. Recheck rather than taking over the rule.
+        // A conflict is not evidence that the new rule was installed. Clear any
+        // provisional intent rather than adopting a pre-existing manual rule.
+        if (permanent_intent_written && !journal_mapping(wanted, false)) {
+          BOOST_LOG(warning) << "Could not retire unused UPnP recovery intent"sv;
+        }
         const auto lookup = UPNP_GetSpecificPortMappingEntry(urls->controlURL, data.first.servicetype, mapping.port.wan.c_str(), mapping.port.proto.c_str(), nullptr, client.data(), port.data(), description.data(), enabled.data(), lease.data());
         const auto state = classify_mapping(lookup, client.data(), port.data(), description.data(), wanted);
         if (std::string_view {enabled.data()} == "1"sv) {
-          if (state == mapping_state_e::existing) {
-            return true;
+          if (state == mapping_state_e::existing || (state == mapping_state_e::ours && !previously_owned)) {
+            return true;  // The destination is usable, but that mapping is not ours to manage.
           }
-          if (state == mapping_state_e::ours) {
+          if (may_manage_mapping(state, previously_owned)) {
             wanted.permanent = std::string_view {lease.data()} == "0"sv;
             return remember_mapping(std::move(wanted));
           }
         }
       }
       if (err != UPNPCOMMAND_SUCCESS) {
+        // If the response was lost, the permanent mapping might exist despite
+        // the reported error. Keep the on-disk intent for crash recovery.
         BOOST_LOG(warning) << "Failed to map "sv << mapping.port.proto << ' ' << mapping.port.wan << ": "sv << err;
         return false;
       }
-      return remember_mapping(std::move(wanted));
+      return remember_mapping(std::move(wanted), permanent_intent_written);
     }
 
     /**
@@ -466,6 +515,17 @@ namespace upnp {
           BOOST_LOG(warning) << "Could not check UPnP rule for cleanup: "sv << owned.control_url << ' ' << owned.external_port;
           return false;
         }
+        if (state == mapping_state_e::existing || state == mapping_state_e::conflict) {
+          // Another rule now occupies this port. Do not delete it. If our old
+          // rule was permanent, keep the recovery record for later inspection
+          // instead of silently declaring the potentially exposed port cleaned.
+          if (should_retain_recovery_record(state, owned.permanent)) {
+            BOOST_LOG(warning) << "UPnP permanent rule no longer matches its recovery record: "
+                               << owned.control_url << ' ' << owned.external_port << "; retaining journal entry"sv;
+            return false;
+          }
+          return true;
+        }
         if (state == mapping_state_e::ours) {
           const auto removed = UPNP_DeletePortMapping(owned.control_url.c_str(), owned.service.c_str(), owned.external_port.c_str(), owned.protocol.c_str(), nullptr);
           if (removed != UPNPCOMMAND_SUCCESS && removed != 714) {
@@ -473,7 +533,7 @@ namespace upnp {
             return false;
           }
         }
-        // Missing or replaced rules are forgotten without deleting the replacement.
+        // Missing or successfully removed rules can be forgotten.
         return !owned.permanent || journal_mapping(owned, false);
       });
       if (std::none_of(owned_mappings.begin(), owned_mappings.end(), [](const auto &mapping) {

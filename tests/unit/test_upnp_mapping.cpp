@@ -34,6 +34,24 @@ namespace {
     }
   }
 
+  TEST(UpnpMappingOwnershipTest, NeverAdoptsIdenticalUnrecordedMapping) {
+    const auto sample = sample_mapping();
+    const auto matching = upnp::classify_mapping(0, sample.target, sample.internal_port, sample.description, sample);
+    ASSERT_EQ(matching, upnp::mapping_state_e::ours);
+    EXPECT_FALSE(upnp::may_manage_mapping(matching, false));
+    EXPECT_TRUE(upnp::may_manage_mapping(matching, true));
+    EXPECT_FALSE(upnp::may_manage_mapping(upnp::mapping_state_e::existing, true));
+  }
+
+  TEST(UpnpMappingOwnershipTest, RetainsAmbiguousPermanentRulesForRecovery) {
+    for (const auto state : {upnp::mapping_state_e::existing, upnp::mapping_state_e::conflict, upnp::mapping_state_e::unknown}) {
+      EXPECT_TRUE(upnp::should_retain_recovery_record(state, true));
+      EXPECT_FALSE(upnp::should_retain_recovery_record(state, false));
+    }
+    EXPECT_FALSE(upnp::should_retain_recovery_record(upnp::mapping_state_e::missing, true));
+    EXPECT_FALSE(upnp::should_retain_recovery_record(upnp::mapping_state_e::ours, true));
+  }
+
   TEST(UpnpMappingJournalTest, RecoversCreationIntentWithoutNeedingTheLastDiscoveryResult) {
     const auto mapping = sample_mapping();
     const auto recovered = upnp::read_mapping_journal(upnp::mapping_journal_event(mapping, true));

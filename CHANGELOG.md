@@ -12,6 +12,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- Double-NAT UPnP forwarding using the existing `upnp` setting, with ownership-aware
+  cleanup on both routers and recovery of permanent rules after a restart (#126).
+  Flatpak includes the MiniUPnPc XML bounds fixes for CVE-2026-110655 and CVE-2026-110656.
 - `isolation_method`: pick Gamescope with a virtual display or KWin's virtual
   backend for launches that request a virtual display, next to the virtual
   display backend in the Web UI.

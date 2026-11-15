@@ -1,0 +1,28 @@
+miniupnpc: stop the XML parser at the end of the buffer after '=' and after a namespace ':'
+
+A router's reply that ends right after an attribute's '=' or right after a namespace ':' in an element name made parseatt()
+and parseelt() read one byte past the buffer (CVE-2026-110655, CVE-2026-110656). The two checks are the functional hunks of
+upstream commits 3cfb4fb78d5a and 64ef08a12aab, released after miniupnpc 2.3.3.
+Backported from Darkatek7/ProsperoSunshine patches/miniupnpc/0001-minixml-bounds.patch.
+
+--- a/miniupnpc/src/minixml.c
++++ b/miniupnpc/src/minixml.c
+@@ -63,6 +63,9 @@
+ 				if(p->xml >= p->xmlend)
+ 					return -1;
+ 			}
++			/* p->xml points now to the character right after the '=' */
++			if(p->xml >= p->xmlend)
++				return -1;
+ 			while(IS_WHITE_SPACE(*p->xml))
+ 			{
+ 				p->xml++;
+@@ -142,6 +145,8 @@
+ 				{
+ 					i = 0;
+ 					elementname = ++p->xml;
++					if (p->xml >= p->xmlend)
++						return;
+ 				}
+ 			}
+ 			if(i>0)

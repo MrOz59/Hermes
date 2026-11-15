@@ -22,6 +22,10 @@
         "stable-only": true,
         "tag-template": "miniupnpc_${version0}_${version1}_${version2}"
       }
+    },
+    {
+      "type": "patch",
+      "path": "miniupnpc-minixml-bounds.patch"
     }
   ],
   "cleanup": [

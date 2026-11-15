@@ -56,6 +56,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 
 ### Fixed
+- Fix configuration of fetched Boost 1.89 Locale headers with newer CMake,
+  and install libc development files for the Ubuntu package-loader CI fixture.
 - Use `hermes` as the suggested username on the initial setup page.
 - An EVDI virtual display no longer stalls the desktop. When the driver already
   had a frame waiting, `evdi_request_update()` returned true and sent no event

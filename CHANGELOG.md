@@ -38,6 +38,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Input then has no controller.
 
 ### Changed
+- Record the modularization dependency/lifecycle baseline and enable existing
+  host/package checks for the dedicated modularization workstream.
 - Use Hermes names for web/tray icon assets, stylesheet, restart/quit translation
   keys, remaining translated product text, and resource links. Preserve external
   protocol identifiers, existing configuration keys, and upstream credits.

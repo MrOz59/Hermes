@@ -89,13 +89,18 @@ reducing coupling.
 
 ### Phase 0 — Baseline and inventory
 
-- [ ] Record the build/test baseline for the branch, including known failures.
-- [ ] Map the current compilation units, major shared state, and dependency
+- [x] Record the build/test baseline for the branch, including known failures.
+- [x] Map the current compilation units, major shared state, and dependency
       edges between the areas above.
-- [ ] Identify cross-subsystem initialization and teardown dependencies.
-- [ ] Document which paths require physical AMD, Intel, or NVIDIA hardware,
+- [x] Identify cross-subsystem initialization and teardown dependencies.
+- [x] Document which paths require physical AMD, Intel, or NVIDIA hardware,
       Hermes-KMS, EVDI, or a particular compositor.
-- [ ] Choose an initial extraction that is small, testable, and low risk.
+- [x] Choose an initial extraction that is small, testable, and low risk.
+
+The [baseline and dependency inventory](docs/modularization/baseline.md)
+records the source evidence, initialization/cleanup handoffs, missing local
+build prerequisites and the first selected component: session routing policy.
+Recording a blocked build does **not** mean the full host passed validation.
 
 **Exit condition:** a concrete dependency map and an agreed first component;
 no mandatory build-tool upgrades.

@@ -7979,6 +7979,25 @@ namespace VDISPLAY {
     }
   }
 
+  bool wakeSleepingPhysicalOutputs() {
+    if (window_system != window_system_e::WAYLAND || !kscreen::available()) {
+      return false;
+    }
+    std::string sleeping;
+    for (const auto &output : kscreen::outputs()) {
+      if (output.connected && output.enabled && output.name.rfind("Virtual", 0) != 0) {
+        sleeping = output.name;
+        break;
+      }
+    }
+    if (sleeping.empty()) {
+      return false;
+    }
+    BOOST_LOG(info) << "[VDISPLAY/KScreen] " << sleeping
+                    << " is enabled but dark (power saving); waking the screens instead of creating a virtual display.";
+    return kscreen::run_layout_command("kscreen-doctor --dpms on");
+  }
+
   bool activateVirtualDisplayOutput(const std::string &displayName) {
     // KWin is configured when the display is created - enabled, placed and
     // driven at the requested mode in one kscreen-doctor transaction - so

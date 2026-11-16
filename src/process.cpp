@@ -3397,10 +3397,25 @@ namespace proc {
       config::video.headless_mode         // Headless mode
       || launch_session->virtual_display  // User requested virtual display
       || _app.virtual_display;            // App is configured to use virtual display
+    bool display_present = virtual_display_requested || gamescope_session || video::display_present();
+#ifdef __linux__
+    // A monitor the compositor has put to sleep reads as dark, the same as no
+    // monitor. If the desktop still has it enabled, wake it and stream it
+    // rather than handing the session an empty virtual display.
+    if (!display_present && VDISPLAY::wakeSleepingPhysicalOutputs()) {
+      for (int i = 0; i < 30 && !display_present; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        display_present = video::display_present();
+      }
+      if (!display_present) {
+        BOOST_LOG(warning) << "The monitor did not wake within 3 seconds; using a virtual display for this session.";
+      }
+    }
+#endif
     const bool needs_virtual_display =
       !gamescope_session &&                 // Not in a standalone Gamescope session
       (virtual_display_requested ||
-       !video::display_present()            // No active display presents
+       !display_present                     // No active display presents
       );
 
     if (needs_virtual_display && !virtual_display_requested) {

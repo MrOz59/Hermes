@@ -7949,9 +7949,11 @@ namespace VDISPLAY {
     void simulate_user_activity() {
 #ifdef SUNSHINE_BUILD_SDBUS
       sd_bus *bus = nullptr;
-      if (open_user_bus(&bus) < 0) {
+      if (platf::open_user_bus(&bus) < 0 || !bus) {
         return;
       }
+      // A wedged screensaver must not hold up starting a stream.
+      sd_bus_set_method_call_timeout(bus, 2'000'000);
       sd_bus_call_method(bus, "org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver", "SimulateUserActivity", nullptr, nullptr, "");
       sd_bus_flush_close_unref(bus);
 #endif

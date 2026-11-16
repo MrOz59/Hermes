@@ -3397,35 +3397,16 @@ namespace proc {
       config::video.headless_mode         // Headless mode
       || launch_session->virtual_display  // User requested virtual display
       || _app.virtual_display;            // App is configured to use virtual display
-    bool display_present = virtual_display_requested || gamescope_session || video::display_present();
 #ifdef __linux__
-    // A monitor the compositor has put to sleep reads as dark, the same as no
-    // monitor. If the desktop still has it enabled, wake it and stream it
-    // rather than handing the session an empty virtual display.
-    if (!display_present) {
-      // Wait for the output the desktop is laid out around, not just any: the
-      // screens come back one at a time, and a display list built before the
-      // primary one is back would stream whichever woke first.
-      if (const auto target = VDISPLAY::wakeSleepingPhysicalOutputs(); !target.empty()) {
-        // Enabled is not enough: capture can only open the output once the
-        // compositor has put a frame on it.
-        bool lit = false;
-        for (int i = 0; i < 50 && !lit; ++i) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-          lit = VDISPLAY::physicalConnectorShowing(target);
-        }
-        display_present = video::display_present();
-        if (!lit) {
-          BOOST_LOG(warning) << target << " did not wake within 5 seconds"
-                             << (display_present ? "; streaming the outputs that did." : "; using a virtual display for this session.");
-        }
-      }
+    // Screens put to sleep read as unlit, the same as no monitor at all.
+    if (!virtual_display_requested && !gamescope_session && !video::display_present()) {
+      VDISPLAY::wakeSleepingMonitor();
     }
 #endif
     const bool needs_virtual_display =
       !gamescope_session &&                 // Not in a standalone Gamescope session
       (virtual_display_requested ||
-       !display_present                     // No active display presents
+       !video::display_present()            // No active display presents
       );
 
     if (needs_virtual_display && !virtual_display_requested) {

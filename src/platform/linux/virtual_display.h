@@ -1030,23 +1030,15 @@ namespace VDISPLAY {
   void notePhysicalCaptureOutput(const std::string &connector_name);
 
   /**
-   * @brief Wake physical monitors the compositor has only put to sleep.
-   * @details KWin on Wayland only. A monitor in power saving reads as dark to
-   * the kernel, so it looks the same as no monitor at all. When KScreen still
-   * lists a connected, enabled physical output, ask KWin to turn the screens
-   * back on and return the output to wait for: the primary one (KScreen
-   * priority 1) if it is physical, else the first enabled physical output.
-   * Otherwise do nothing and return an empty string.
+   * @brief Wake a monitor the compositor has put to sleep.
+   * @details KWin on Wayland only. Screens in power saving read as unlit, the
+   * same as no monitor at all. If KScreen still lists a connected, enabled
+   * physical output, turn the screens back on and wait up to 5 seconds for the
+   * primary one to show a frame.
+   * @return True once that output is scanning out; false if there was nothing
+   * to wake or it did not come back.
    */
-  std::string wakeSleepingPhysicalOutputs();
-
-  /**
-   * @brief Whether connector @p name (e.g. "DP-2") is showing a frame: driven by
-   * a CRTC with a valid mode and a framebuffer attached. A woken monitor reads
-   * as enabled before the compositor has put a frame on it, and capture can't
-   * open it until then.
-   */
-  bool physicalConnectorShowing(const std::string &name);
+  bool wakeSleepingMonitor();
 
   /**
    * Put windows of these classes on the session's virtual output, now and as

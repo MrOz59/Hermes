@@ -15,7 +15,9 @@
 #include <cerrno>
 #include <csignal>
 #include <cstring>
+#include <condition_variable>
 #include <mutex>
+#include <thread>
 #include <string_view>
 #include <utility>
 
@@ -534,24 +536,17 @@ std::string get_local_ip_for_gateway() {
     constexpr auto screen_saver_path = "/org/freedesktop/ScreenSaver"sv;
     constexpr auto screen_saver_interface = "org.freedesktop.ScreenSaver"sv;
 
-    /**
-     * @brief The session-bus connection that holds our screen-lock inhibition.
-     *
-     * org.freedesktop.ScreenSaver drops an inhibition when its caller leaves
-     * the bus, so the connection has to stay open for as long as the inhibition
-     * is wanted. A one-shot helper such as `gdbus call` cannot hold one.
-     */
-    struct screen_lock_t {
-      std::mutex mutex;
+    // All sd-bus operations belong to the worker. Stream hooks only update the
+    // desired state, so a slow/unresponsive screensaver cannot block session
+    // transitions while running_sessions_mutex is held.
+    struct screen_lock_bus_t {
       sd_bus *bus {nullptr};
+      sd_bus_slot *owner_watch {nullptr};
       std::uint32_t cookie {0};
+      bool inhibited {false};
       bool failure_logged {false};
+      std::chrono::steady_clock::time_point retry_at {};
     };
-
-    screen_lock_t &screen_lock() {
-      static screen_lock_t lock;
-      return lock;
-    }
 
     std::string bus_error_message(const sd_bus_error &error, int status) {
       if (error.message) {
@@ -560,109 +555,236 @@ std::string get_local_ip_for_gateway() {
       return std::strerror(-status);
     }
 
-    void inhibit_screen_lock() {
-      std::lock_guard<std::mutex> lock {screen_lock().mutex};
-      if (screen_lock().bus) {
-        return;
-      }
-
-      sd_bus *bus = nullptr;
-      if (open_user_bus(&bus) < 0 || !bus) {
-        if (!screen_lock().failure_logged) {
-          BOOST_LOG(warning) << "Could not connect to the D-Bus session bus to inhibit screen locking."sv;
-          screen_lock().failure_logged = true;
-        }
-        return;
-      }
-
-      // A wedged or missing screensaver must not hold up starting a stream.
-      sd_bus_set_method_call_timeout(bus, 2'000'000);
-
-      sd_bus_error error = SD_BUS_ERROR_NULL;
-      sd_bus_message *reply = nullptr;
-      const int status = sd_bus_call_method(
-        bus,
-        screen_saver_service.data(),
-        screen_saver_path.data(),
-        screen_saver_interface.data(),
-        "Inhibit",
-        &error,
-        &reply,
-        "ss",
-        "Hermes",
-        "Streaming a client"
-      );
-
-      std::uint32_t cookie = 0;
-      const int read_status = status >= 0 ? sd_bus_message_read(reply, "u", &cookie) : status;
-      if (read_status < 0) {
-        if (!screen_lock().failure_logged) {
-          if (status < 0) {
-            BOOST_LOG(warning) << "Could not inhibit screen locking through "sv << screen_saver_service
-                               << ": "sv << bus_error_message(error, status)
-                               << " (is a screensaver service running?)"sv;
-          } else {
-            BOOST_LOG(warning) << "Could not inhibit screen locking through "sv << screen_saver_service
-                               << ": the screensaver returned an unexpected reply."sv;
+    class screen_lock_inhibitor_t {
+    public:
+      void set_streaming(bool streaming) {
+        {
+          std::lock_guard lock {mutex_};
+          streaming_ = streaming;
+          if (streaming && !worker_.joinable()) {
+            worker_ = std::jthread {[this](std::stop_token stop) {
+              run(stop);
+            }};
           }
-          screen_lock().failure_logged = true;
         }
+        changed_.notify_all();
+      }
+
+      ~screen_lock_inhibitor_t() {
+        worker_.request_stop();
+        changed_.notify_all();
+        // jthread joins before mutex_ and changed_ are destroyed.
+      }
+
+    private:
+      static constexpr auto retry_delay = std::chrono::seconds {2};
+
+      std::mutex mutex_;
+      std::condition_variable changed_;
+      // Declared after synchronization members so its destructor joins first.
+      std::jthread worker_;
+      bool streaming_ {false};
+
+      bool wants_inhibition() {
+        std::lock_guard lock {mutex_};
+        return streaming_;
+      }
+
+      void wait_for_retry(std::stop_token stop) {
+        std::unique_lock lock {mutex_};
+        changed_.wait_for(lock, retry_delay, [this, &stop] {
+          return !streaming_ || stop.stop_requested();
+        });
+      }
+
+      static void warn_once(screen_lock_bus_t &state, const std::string &message) {
+        if (!state.failure_logged) {
+          BOOST_LOG(warning) << message;
+          state.failure_logged = true;
+        }
+      }
+
+      static int on_owner_changed(sd_bus_message *message, void *userdata, sd_bus_error *) {
+        auto *state = static_cast<screen_lock_bus_t *>(userdata);
+        const char *name = nullptr;
+        const char *old_owner = nullptr;
+        const char *new_owner = nullptr;
+        if (sd_bus_message_read(message, "sss", &name, &old_owner, &new_owner) < 0) {
+          return 0;
+        }
+        if (std::strcmp(name, screen_saver_service.data()) == 0 && std::strcmp(old_owner, new_owner) != 0) {
+          // Cookies belong to the old service instance. Even though our user
+          // bus remains open, the replacement service has no inhibition.
+          state->inhibited = false;
+          state->cookie = 0;
+          state->retry_at = std::chrono::steady_clock::now();
+        }
+        return 0;
+      }
+
+      static void close_bus(screen_lock_bus_t &state, bool release_inhibition) {
+        if (!state.bus) {
+          return;
+        }
+        if (release_inhibition && state.inhibited) {
+          sd_bus_error error = SD_BUS_ERROR_NULL;
+          const int status = sd_bus_call_method(
+            state.bus,
+            screen_saver_service.data(),
+            screen_saver_path.data(),
+            screen_saver_interface.data(),
+            "UnInhibit",
+            &error,
+            nullptr,
+            "u",
+            state.cookie
+          );
+          if (status < 0) {
+            BOOST_LOG(warning) << "Could not release screen-lock inhibition: "sv
+                               << bus_error_message(error, status);
+          } else {
+            BOOST_LOG(info) << "Released screen-lock inhibition."sv;
+          }
+          sd_bus_error_free(&error);
+        }
+        // Closing the caller's bus connection also releases the inhibition
+        // if UnInhibit failed or the screensaver has disappeared.
+        sd_bus_slot_unref(state.owner_watch);
+        state.owner_watch = nullptr;
+        sd_bus_unref(state.bus);
+        state.bus = nullptr;
+        state.inhibited = false;
+        state.cookie = 0;
+        state.retry_at = {};
+      }
+
+      static bool connect_bus(screen_lock_bus_t &state) {
+        sd_bus *bus = nullptr;
+        const int opened = open_user_bus(&bus);
+        if (opened < 0 || !bus) {
+          warn_once(state, "Could not connect to the D-Bus session bus to inhibit screen locking.");
+          return false;
+        }
+
+        state.bus = bus;
+        sd_bus_set_method_call_timeout(bus, 2'000'000);
+
+        // Watch the owner, not merely the connection. Desktop components can
+        // restart without disconnecting Hermes from the user bus.
+        constexpr auto match =
+          "type='signal',sender='org.freedesktop.DBus',"
+          "interface='org.freedesktop.DBus',member='NameOwnerChanged',"
+          "arg0='org.freedesktop.ScreenSaver'";
+        const int matched = sd_bus_add_match(bus, &state.owner_watch, match, on_owner_changed, &state);
+        if (matched < 0) {
+          warn_once(state, "Could not watch org.freedesktop.ScreenSaver ownership changes.");
+          close_bus(state, false);
+          return false;
+        }
+
+        state.retry_at = std::chrono::steady_clock::now();
+        return true;
+      }
+
+      static void acquire_inhibition(screen_lock_bus_t &state) {
+        sd_bus_error error = SD_BUS_ERROR_NULL;
+        sd_bus_message *reply = nullptr;
+        const int status = sd_bus_call_method(
+          state.bus,
+          screen_saver_service.data(),
+          screen_saver_path.data(),
+          screen_saver_interface.data(),
+          "Inhibit",
+          &error,
+          &reply,
+          "ss",
+          "Hermes",
+          "Streaming a client"
+        );
+
+        std::uint32_t cookie = 0;
+        const int read_status = status < 0 ? status : (reply ? sd_bus_message_read(reply, "u", &cookie) : -EIO);
+        if (read_status < 0) {
+          if (status < 0) {
+            warn_once(state, "Could not inhibit screen locking through org.freedesktop.ScreenSaver: " +
+                       bus_error_message(error, status));
+          } else {
+            warn_once(state, "The screensaver returned an unexpected Inhibit reply.");
+          }
+          state.retry_at = std::chrono::steady_clock::now() + retry_delay;
+        } else {
+          state.cookie = cookie;
+          state.inhibited = true;
+          state.failure_logged = false;
+          BOOST_LOG(info) << "Inhibited screen locking while a client is connected."sv;
+        }
+
         sd_bus_error_free(&error);
         sd_bus_message_unref(reply);
-        sd_bus_unref(bus);
-        return;
       }
 
-      sd_bus_error_free(&error);
-      sd_bus_message_unref(reply);
+      void run(std::stop_token stop) {
+        screen_lock_bus_t state;
+        while (!stop.stop_requested()) {
+          if (!wants_inhibition()) {
+            close_bus(state, true);
+            std::unique_lock lock {mutex_};
+            changed_.wait(lock, [this, &stop] {
+              return streaming_ || stop.stop_requested();
+            });
+            continue;
+          }
 
-      screen_lock().bus = bus;
-      screen_lock().cookie = cookie;
-      screen_lock().failure_logged = false;
-      BOOST_LOG(info) << "Inhibited screen locking while a client is connected."sv;
+          if (!state.bus && !connect_bus(state)) {
+            wait_for_retry(stop);
+            continue;
+          }
+
+          if (!state.inhibited && std::chrono::steady_clock::now() >= state.retry_at) {
+            acquire_inhibition(state);
+          }
+
+          int processed = 0;
+          while ((processed = sd_bus_process(state.bus, nullptr)) > 0) {
+          }
+          if (processed < 0) {
+            warn_once(state, "Lost D-Bus connection while inhibiting screen locking.");
+            close_bus(state, false);
+            wait_for_retry(stop);
+            continue;
+          }
+
+          // Bound the time before reacting to a disconnect/config change.
+          // Incoming NameOwnerChanged signals also wake sd_bus_wait.
+          if (sd_bus_wait(state.bus, 100'000) < 0) {
+            warn_once(state, "D-Bus stopped responding while inhibiting screen locking.");
+            close_bus(state, false);
+            wait_for_retry(stop);
+          }
+        }
+        close_bus(state, true);
+      }
+    };
+
+    screen_lock_inhibitor_t &screen_lock() {
+      static screen_lock_inhibitor_t inhibitor;
+      return inhibitor;
+    }
+
+    void inhibit_screen_lock() {
+      screen_lock().set_streaming(true);
     }
 
     void uninhibit_screen_lock() {
-      std::lock_guard<std::mutex> lock {screen_lock().mutex};
-      if (!screen_lock().bus) {
-        return;
-      }
-
-      sd_bus_error error = SD_BUS_ERROR_NULL;
-      const int status = sd_bus_call_method(
-        screen_lock().bus,
-        screen_saver_service.data(),
-        screen_saver_path.data(),
-        screen_saver_interface.data(),
-        "UnInhibit",
-        &error,
-        nullptr,
-        "u",
-        screen_lock().cookie
-      );
-
-      if (status < 0) {
-        BOOST_LOG(warning) << "Could not release screen-lock inhibition: "sv
-                           << bus_error_message(error, status);
-      } else {
-        BOOST_LOG(info) << "Released screen-lock inhibition."sv;
-      }
-
-      sd_bus_error_free(&error);
-      // Dropping the connection also releases any inhibition the call above
-      // could not, because the bus drops the caller's requests with it.
-      sd_bus_unref(screen_lock().bus);
-      screen_lock().bus = nullptr;
-      screen_lock().cookie = 0;
+      screen_lock().set_streaming(false);
     }
 #else
     void inhibit_screen_lock() {
-      static bool warned = false;
-      if (!warned) {
+      static std::once_flag warned;
+      std::call_once(warned, [] {
         BOOST_LOG(warning) << "inhibit_screen_lock is enabled, but this build has no libsystemd "
                               "support for org.freedesktop.ScreenSaver."sv;
-        warned = true;
-      }
+      });
     }
 
     void uninhibit_screen_lock() {}

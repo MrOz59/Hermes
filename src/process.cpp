@@ -3402,13 +3402,26 @@ namespace proc {
     // A monitor the compositor has put to sleep reads as dark, the same as no
     // monitor. If the desktop still has it enabled, wake it and stream it
     // rather than handing the session an empty virtual display.
-    if (!display_present && VDISPLAY::wakeSleepingPhysicalOutputs()) {
-      for (int i = 0; i < 30 && !display_present; ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (!display_present) {
+      // Wait for the output the desktop is laid out around, not just any: the
+      // screens come back one at a time, and a display list built before the
+      // primary one is back would stream whichever woke first.
+      if (const auto target = VDISPLAY::wakeSleepingPhysicalOutputs(); !target.empty()) {
+        bool lit = false;
+        for (int i = 0; i < 50 && !lit; ++i) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          lit = VDISPLAY::physicalConnectorLit(target);
+        }
+        if (lit) {
+          // Give the compositor a moment to put a frame on it before capture
+          // enumerates the planes.
+          std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
         display_present = video::display_present();
-      }
-      if (!display_present) {
-        BOOST_LOG(warning) << "The monitor did not wake within 3 seconds; using a virtual display for this session.";
+        if (!lit) {
+          BOOST_LOG(warning) << target << " did not wake within 5 seconds"
+                             << (display_present ? "; streaming the outputs that did." : "; using a virtual display for this session.");
+        }
       }
     }
 #endif

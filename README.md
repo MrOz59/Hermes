@@ -8,6 +8,15 @@
 > For installation, features, and user documentation, see the
 > [main branch](https://github.com/MrOz59/Hermes/blob/main/README.md).
 
+## Instructions for AI coding agents
+
+**AI-assisted implementation is welcome.** Before analysing, editing, or
+submitting changes in this workstream, read **[AGENTS.md](AGENTS.md)** in full.
+It defines scope boundaries, required source verification, architectural and
+performance invariants, validation expectations, and reporting requirements.
+These apply alongside the project's
+[contribution guidelines](.github/CONTRIBUTING.md).
+
 ## Why modularize Hermes?
 
 Hermes has evolved from the Sunshine/Apollo codebase while gaining its own
@@ -204,15 +213,24 @@ Suggested PR checklist:
 
 ## Working style
 
-This effort is **human-led**: contributors propose the boundaries, write and
-review the implementation, and make the architectural decisions. AI tools can
-assist with researching existing code, exploring alternatives, debugging,
-and repetitive tasks, but generated changes still require human ownership,
-review, and testing.
+This effort welcomes **human-written and AI-assisted code**, including
+AI-authored refactoring, tests, and documentation. Contributors may use coding
+agents for substantial implementation, not only background research. What
+matters is that changes are scoped, understood, reviewable, validated, and
+aligned with the architecture. AI output is not automatically correct and
+must never be presented as tested without evidence.
 
-No phase is considered complete merely because code was moved into new
-directories or converted to `export module`. The measure of progress is
-**lower coupling, clearer ownership, testability, and preserved behavior**.
+**[AGENTS.md](AGENTS.md) is the operational guide for AI agents** on this
+branch. Human maintainers remain responsible for decisions and merges, and
+contributors must follow the existing
+[AI-generated code policy](.github/CONTRIBUTING.md#ai-generated-code-policy).
+Agents should report assumptions, real test results, unverified behavior,
+and decisions that need human input rather than improvising unsupported
+solutions.
+
+No phase is complete merely because code was moved into new directories or
+converted to `export module`. Progress means **lower coupling, clearer
+ownership, testability, and preserved behavior**.
 
 ---
 This document is specific to the modularization branch. For the project's

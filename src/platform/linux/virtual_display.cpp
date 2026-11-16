@@ -8055,33 +8055,15 @@ namespace VDISPLAY {
       return false;
     }
 
-    // Outputs come back one at a time and read as enabled before the
-    // compositor has drawn on them, and some DisplayPort monitors drop off the
-    // link and reconnect while waking, tens of seconds later. Capture needs
-    // the output to stay up, so wait until it has scanned out for a while.
-    constexpr auto settle = 2s;
-    constexpr auto patience = 40s;
-    const auto deadline = std::chrono::steady_clock::now() + patience;
-    std::optional<std::chrono::steady_clock::time_point> up_since;
-    bool dropped = false;
-    while (std::chrono::steady_clock::now() < deadline) {
-      const auto now = std::chrono::steady_clock::now();
-      if (output_scanning_out(monitor)) {
-        if (!up_since) {
-          up_since = now;
-        } else if (now - *up_since >= settle) {
-          return true;
-        }
-      } else if (up_since) {
-        up_since.reset();
-        if (!dropped) {
-          dropped = true;
-          BOOST_LOG(info) << "[VDISPLAY/KScreen] " << monitor << " dropped off while waking; waiting for it to reconnect.";
-        }
-      }
+    // The screens come back one at a time, and each reads as enabled before
+    // the compositor has drawn on it. Capture can only open it once it does.
+    for (int i = 0; i < 30; ++i) {
       std::this_thread::sleep_for(100ms);
+      if (output_scanning_out(monitor)) {
+        return true;
+      }
     }
-    BOOST_LOG(warning) << "[VDISPLAY/KScreen] " << monitor << " did not stay on within " << patience.count() << " seconds.";
+    BOOST_LOG(warning) << "[VDISPLAY/KScreen] " << monitor << " did not show a frame within 3 seconds.";
     return false;
   }
 

@@ -8003,21 +8003,45 @@ namespace VDISPLAY {
     return target;
   }
 
-  bool physicalConnectorLit(const std::string &name) {
+  bool physicalConnectorShowing(const std::string &name) {
     if (name.empty()) {
       return false;
     }
-    const auto suffix = "-" + name;
     std::error_code ec;
-    for (const auto &entry : std::filesystem::directory_iterator {"/sys/class/drm", ec}) {
+    for (const auto &entry : std::filesystem::directory_iterator {"/dev/dri", ec}) {
       const auto file = entry.path().filename().string();
-      if (!file.starts_with("card") || !file.ends_with(suffix)) {
+      if (!file.starts_with("card")) {
         continue;
       }
-      std::ifstream in {entry.path() / "enabled"};
-      std::string value;
-      std::getline(in, value);
-      if (value == "enabled") {
+      const int fd = ::open(entry.path().c_str(), O_RDWR | O_CLOEXEC);
+      if (fd < 0) {
+        continue;
+      }
+      bool showing = false;
+      if (drmModeRes *res = drmModeGetResources(fd)) {
+        for (int i = 0; i < res->count_connectors && !showing; ++i) {
+          drmModeConnector *conn = drmModeGetConnector(fd, res->connectors[i]);
+          if (!conn) {
+            continue;
+          }
+          const char *type = drmModeGetConnectorTypeName(conn->connector_type);
+          if (type && conn->encoder_id && name == std::string {type} + '-' + std::to_string(conn->connector_type_id)) {
+            if (drmModeEncoder *enc = drmModeGetEncoder(fd, conn->encoder_id)) {
+              if (enc->crtc_id) {
+                if (drmModeCrtc *crtc = drmModeGetCrtc(fd, enc->crtc_id)) {
+                  showing = crtc->buffer_id != 0 && crtc->mode_valid;
+                  drmModeFreeCrtc(crtc);
+                }
+              }
+              drmModeFreeEncoder(enc);
+            }
+          }
+          drmModeFreeConnector(conn);
+        }
+        drmModeFreeResources(res);
+      }
+      ::close(fd);
+      if (showing) {
         return true;
       }
     }

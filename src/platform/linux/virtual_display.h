@@ -1040,8 +1040,13 @@ namespace VDISPLAY {
    */
   std::string wakeSleepingPhysicalOutputs();
 
-  /** Whether the kernel reports connector @p name (e.g. "DP-2") as enabled. */
-  bool physicalConnectorLit(const std::string &name);
+  /**
+   * @brief Whether connector @p name (e.g. "DP-2") is showing a frame: driven by
+   * a CRTC with a valid mode and a framebuffer attached. A woken monitor reads
+   * as enabled before the compositor has put a frame on it, and capture can't
+   * open it until then.
+   */
+  bool physicalConnectorShowing(const std::string &name);
 
   /**
    * Put windows of these classes on the session's virtual output, now and as

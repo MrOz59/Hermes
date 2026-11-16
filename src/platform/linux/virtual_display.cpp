@@ -7991,7 +7991,7 @@ namespace VDISPLAY {
       }
       bool scanning_out = false;
       for (int i = 0; i < res->count_connectors && !scanning_out; ++i) {
-        drmModeConnector *conn = drmModeGetConnector(fd, res->connectors[i]);
+        drmModeConnector *conn = drmModeGetConnectorCurrent(fd, res->connectors[i]);
         if (!conn) {
           continue;
         }

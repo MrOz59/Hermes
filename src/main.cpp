@@ -328,7 +328,7 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(info) << "Interrupt handler called"sv;
 
     auto task = []() {
-      BOOST_LOG(fatal) << "10 seconds passed, yet Sunshine's still running: Forcing shutdown"sv;
+      BOOST_LOG(fatal) << "10 seconds passed, yet Hermes is still running: Forcing shutdown"sv;
       logging::log_flush();
       lifetime::debug_trap();
     };
@@ -345,7 +345,7 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(info) << "Terminate handler called"sv;
 
     auto task = []() {
-      BOOST_LOG(fatal) << "10 seconds passed, yet Sunshine's still running: Forcing shutdown"sv;
+      BOOST_LOG(fatal) << "10 seconds passed, yet Hermes is still running: Forcing shutdown"sv;
       logging::log_flush();
       lifetime::debug_trap();
     };

@@ -25,8 +25,8 @@
 DOCSET_BUNDLE_ID = io.github.mroz59.Hermes
 DOCSET_PUBLISHER_ID = io.github.mroz59.Hermes.documentation
 PROJECT_BRIEF = "Self-hosted game stream host for Hestia and Artemis."
-PROJECT_ICON = ../apollo.ico
-PROJECT_LOGO = ../apollo.png
+PROJECT_ICON = ../hermes.ico
+PROJECT_LOGO = ../hermes.png
 PROJECT_NAME = Hermes
 
 # project specific settings

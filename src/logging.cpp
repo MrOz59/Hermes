@@ -133,7 +133,7 @@ namespace logging {
         android_priority = ANDROID_LOG_UNKNOWN;
         break;
     }
-    __android_log_print(android_priority, "Sunshine", "%s", message.c_str());
+    __android_log_print(android_priority, "Hermes", "%s", message.c_str());
   }
 
   // custom sink backend for android
@@ -272,7 +272,7 @@ namespace logging {
       << std::endl
       << "    --help                    | print help"sv << std::endl
       << "    --creds username password | set user credentials for the Web manager"sv << std::endl
-      << "    --version                 | print the version of sunshine"sv << std::endl
+      << "    --version                 | print the version of Hermes"sv << std::endl
 #ifdef __linux__
       << "    --prelogin status|enable|disable"sv << std::endl
       << "                              | check or set up being reachable before anyone logs in"sv << std::endl

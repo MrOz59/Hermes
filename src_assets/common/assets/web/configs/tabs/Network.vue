@@ -47,7 +47,7 @@ const effectivePort = computed(() => +config.value?.port ?? defaultMoonlightPort
       <div class="alert alert-danger" v-if="(+effectivePort + 21) > 65535">
         <i class="fa-solid fa-xl fa-triangle-exclamation"></i> {{ $t('config.port_alert_2') }}
       </div>
-      <!-- Create a port table for the various ports needed by Apollo -->
+      <!-- Create a port table for the various ports needed by Hermes -->
       <table class="table">
         <thead>
         <tr>

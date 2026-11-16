@@ -35,6 +35,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Input then has no controller.
 
 ### Changed
+- Use Hermes names for web/tray icon assets, stylesheet, restart/quit translation
+  keys, remaining translated product text, and resource links. Preserve external
+  protocol identifiers, existing configuration keys, and upstream credits.
 - The per-app `session-type` is now `isolation-method` (`default`, `gamescope`,
   `kwin_virtual`), and `shared` is the `host-session` flag; `apps.json` is
   migrated on start. The Detached Desktop and Detached Steam entries are renamed
@@ -50,6 +53,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 
 ### Fixed
+- Fix configuration of fetched Boost 1.89 Locale headers with newer CMake,
+  and install libc development files for the Ubuntu package-loader CI fixture.
 - Use `hermes` as the suggested username on the initial setup page.
 - An EVDI virtual display no longer stalls the desktop. When the driver already
   had a frame waiting, `evdi_request_update()` returned true and sent no event

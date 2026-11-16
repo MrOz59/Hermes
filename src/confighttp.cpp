@@ -1033,7 +1033,7 @@ namespace confighttp {
   void getFaviconImage(resp_https_t response, req_https_t request) {
     print_req(request);
 
-    std::ifstream in(WEB_DIR "images/apollo.ico", std::ios::binary);
+    std::ifstream in(WEB_DIR "images/hermes.ico", std::ios::binary);
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "image/x-icon");
     headers.emplace("X-Frame-Options", "DENY");
@@ -1042,17 +1042,17 @@ namespace confighttp {
   }
 
   /**
-   * @brief Get the Apollo logo image.
+   * @brief Get the Hermes logo image.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    *
    * @todo combine function with getFaviconImage and possibly getNodeModules
    * @todo use mime_types map
    */
-  void getApolloLogoImage(resp_https_t response, req_https_t request) {
+  void getHermesLogoImage(resp_https_t response, req_https_t request) {
     print_req(request);
 
-    std::ifstream in(WEB_DIR "images/logo-apollo-45.png", std::ios::binary);
+    std::ifstream in(WEB_DIR "images/logo-hermes-45.png", std::ios::binary);
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "image/png");
     headers.emplace("X-Frame-Options", "DENY");
@@ -3327,7 +3327,7 @@ namespace confighttp {
 
   /**
    * Start EVDI installation only after the user explicitly confirms it in the UI.
-   * pkexec owns the privilege prompt, so Apollo never handles an admin password.
+   * pkexec owns the privilege prompt, so Hermes never handles an admin password.
    */
   void installEvdi(resp_https_t response, req_https_t request) {
     if (!validateContentType(response, request, "application/json") || !authenticate(response, request)) {
@@ -3976,7 +3976,7 @@ fi')CLIP";
   }
 
   /**
-   * @brief Restart Apollo.
+   * @brief Restart Hermes.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    *
@@ -3996,7 +3996,7 @@ fi')CLIP";
   }
 
   /**
-   * @brief Quit Apollo.
+   * @brief Quit Hermes.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    *
@@ -4265,8 +4265,11 @@ fi')CLIP";
     server.resource["^/api/sessions/list$"]["GET"] = getSessions;
     server.resource["^/api/sessions/terminate$"]["POST"] = terminateSession;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
+    // Cached pages from earlier releases may still request these URLs.
     server.resource["^/images/apollo.ico$"]["GET"] = getFaviconImage;
-    server.resource["^/images/logo-apollo-45.png$"]["GET"] = getApolloLogoImage;
+    server.resource["^/images/logo-apollo-45.png$"]["GET"] = getHermesLogoImage;
+    server.resource["^/images/hermes.ico$"]["GET"] = getFaviconImage;
+    server.resource["^/images/logo-hermes-45.png$"]["GET"] = getHermesLogoImage;
     server.resource["^/assets\\/.+$"]["GET"] = getNodeModules;
     server.config.reuse_address = true;
     server.config.address = net::af_to_any_address_string(address_family);

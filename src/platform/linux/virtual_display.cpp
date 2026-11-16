@@ -41,6 +41,7 @@
 // platform includes
 #include <csignal>
 #include <fcntl.h>
+#include <linux/i2c-dev.h>
 #include <poll.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
@@ -7980,27 +7981,96 @@ namespace VDISPLAY {
     }
   }  // namespace
 
+  namespace {
+    /**
+     * Ask the monitor behind DRM connector @p connector (a /sys/class/drm
+     * entry) for the first byte of its EDID. A DisplayPort monitor in deep
+     * sleep does not answer, but the request on its AUX channel wakes it, and
+     * it reconnects once it is ready to train the link.
+     */
+    void nudge_monitor(const std::filesystem::path &connector) {
+      std::error_code ec;
+      const auto adapter = std::filesystem::read_symlink(connector / "ddc", ec).filename().string();
+      if (ec || !adapter.starts_with("i2c-")) {
+        return;
+      }
+      const int fd = ::open(("/dev/" + adapter).c_str(), O_RDWR | O_CLOEXEC);
+      if (fd < 0) {
+        return;
+      }
+      constexpr long edid_address = 0x50;
+      if (::ioctl(fd, I2C_SLAVE, edid_address) == 0) {
+        // A sleeping monitor does not answer; the request is what wakes it.
+        unsigned char byte = 0;
+        (void) !::write(fd, &byte, 1);
+        (void) !::read(fd, &byte, 1);
+      }
+      ::close(fd);
+    }
+
+    /** Nudge every DisplayPort monitor that is not showing a frame. */
+    bool nudge_sleeping_displayport_monitors() {
+      bool nudged = false;
+      std::error_code ec;
+      for (const auto &entry : std::filesystem::directory_iterator {"/sys/class/drm", ec}) {
+        const auto name = entry.path().filename().string();  // "card1-DP-2"
+        const auto dash = name.find('-');
+        if (!name.starts_with("card") || dash == std::string::npos) {
+          continue;
+        }
+        const auto connector = name.substr(dash + 1);
+        if (!connector.starts_with("DP-") || output_scanning_out(connector)) {
+          continue;
+        }
+        nudge_monitor(entry.path());
+        nudged = true;
+      }
+      return nudged;
+    }
+
+    struct physical_output_t {
+      std::string name;
+      bool primary = false;
+    };
+
+    /** The primary physical output, or failing that any enabled physical output. */
+    physical_output_t enabled_physical_output() {
+      physical_output_t result;
+      for (const auto &output : kscreen::outputs()) {
+        if (!output.connected || !output.enabled || output.name.starts_with("Virtual")) {
+          continue;
+        }
+        if (result.name.empty() || output.priority == 1) {
+          result = {output.name, output.priority == 1};
+        }
+      }
+      return result;
+    }
+  }  // namespace
+
   bool wakeSleepingMonitor() {
     if (window_system != window_system_e::WAYLAND || !kscreen::available()) {
       return false;
     }
 
-    // The primary output, or failing that any physical output the desktop
-    // still has enabled. If there is none, the screens are off by choice.
-    std::string monitor;
-    for (const auto &output : kscreen::outputs()) {
-      if (!output.connected || !output.enabled || output.name.starts_with("Virtual")) {
-        continue;
-      }
-      if (monitor.empty() || output.priority == 1) {
-        monitor = output.name;
-      }
+    // Woken by a modeset, a DisplayPort monitor in deep sleep fails link
+    // training (its AUX channel is not answering yet), drops off and comes
+    // back seconds later. Woken over AUX first, it reconnects by itself once
+    // it is ready, and the link comes up in one go.
+    const bool nudged = nudge_sleeping_displayport_monitors();
+
+    // In deep sleep the primary may have left the desktop's layout entirely;
+    // give it a moment to reconnect before settling for another output.
+    auto monitor = enabled_physical_output();
+    for (int i = 0; nudged && !monitor.primary && i < 12; ++i) {
+      std::this_thread::sleep_for(250ms);
+      monitor = enabled_physical_output();
     }
-    if (monitor.empty()) {
+    if (monitor.name.empty()) {
       return false;
     }
 
-    BOOST_LOG(info) << "[VDISPLAY/KScreen] " << monitor
+    BOOST_LOG(info) << "[VDISPLAY/KScreen] " << monitor.name
                     << " is enabled but dark (power saving); waking it instead of creating a virtual display.";
     // Count as user activity first, so the idle timer that put the screens to
     // sleep doesn't turn them off again before capture starts.
@@ -8013,11 +8083,11 @@ namespace VDISPLAY {
     // the compositor has drawn on it. Capture can only open it once it does.
     for (int i = 0; i < 30; ++i) {
       std::this_thread::sleep_for(100ms);
-      if (output_scanning_out(monitor)) {
+      if (output_scanning_out(monitor.name)) {
         return true;
       }
     }
-    BOOST_LOG(warning) << "[VDISPLAY/KScreen] " << monitor << " did not show a frame within 3 seconds.";
+    BOOST_LOG(warning) << "[VDISPLAY/KScreen] " << monitor.name << " did not show a frame within 3 seconds.";
     return false;
   }
 

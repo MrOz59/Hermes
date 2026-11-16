@@ -23,6 +23,7 @@
   #include <mutex>
   #include <string>
   #include <thread>
+  #include <vector>
 
   // lib includes
   #include <systemd/sd-bus.h>
@@ -31,6 +32,7 @@
   // local includes
   #include "src/config.h"
   #include "src/platform/linux/misc.h"
+  #include "src/session_activity_counter.h"
 
 namespace {
 
@@ -330,6 +332,57 @@ TEST_F(ScreenLockInhibitTest, StopDoesNotWaitForSlowInhibitCall) {
   std::lock_guard lock {mutex_};
   EXPECT_EQ(inhibit_count_, 1);
   EXPECT_EQ(last_uninhibited_cookie_, last_cookie_);
+}
+
+
+TEST_F(ScreenLockInhibitTest, TwoClientsKeepTheLeaseUntilBothDisconnect) {
+  config::sunshine.inhibit_screen_lock = true;
+  stream::session_activity_counter_t sessions;
+
+  sessions.started([] { platf::streaming_will_start(); });
+  sessions.started([] { platf::streaming_will_start(); });
+  ASSERT_TRUE(wait_for_count(1));
+
+  sessions.stopped([] { platf::streaming_will_stop(); });
+  EXPECT_EQ(sessions.count(), 1u);
+  {
+    std::lock_guard lock {mutex_};
+    EXPECT_EQ(inhibit_count_, 1);
+    EXPECT_TRUE(inhibited_) << "the first disconnect released the remaining client's lease";
+  }
+
+  sessions.stopped([] { platf::streaming_will_stop(); });
+  EXPECT_EQ(sessions.count(), 0u);
+  ASSERT_TRUE(wait_for_inhibition(false));
+  std::lock_guard lock {mutex_};
+  EXPECT_EQ(inhibit_count_, 1);
+  EXPECT_EQ(last_uninhibited_cookie_, last_cookie_);
+}
+
+TEST(SessionActivityCounterTest, ConcurrentClientHandoffsKeepCallbacksBalanced) {
+  stream::session_activity_counter_t sessions;
+  int first_starts = 0;
+  int last_stops = 0;
+  constexpr int thread_count = 8;
+  constexpr int iterations = 200;
+
+  std::vector<std::thread> workers;
+  workers.reserve(thread_count);
+  for (int i = 0; i < thread_count; ++i) {
+    workers.emplace_back([&] {
+      for (int iteration = 0; iteration < iterations; ++iteration) {
+        sessions.started([&] { ++first_starts; });
+        std::this_thread::yield();
+        sessions.stopped([&] { ++last_stops; });
+      }
+    });
+  }
+  for (auto &worker : workers) {
+    worker.join();
+  }
+  EXPECT_EQ(sessions.count(), 0u);
+  EXPECT_GT(first_starts, 0);
+  EXPECT_EQ(first_starts, last_stops);
 }
 
 #endif

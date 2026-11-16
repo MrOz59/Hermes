@@ -78,6 +78,97 @@ independent sessions are deprioritized until hardware rendering inside an
 isolated compositor is solved. Gamescope stays optional: Hermes uses it only
 when an app configuration, a setting, or an explicit Hestia request asks for it.
 
+## Modularization and modernization plan (development branch)
+
+> **Status: planning / incremental development.** This section documents the
+> direction of the `refactor/modularization-modernization` branch. It is not a
+> claim that Hermes already uses C++ Modules or requires C++26. The goal is to
+> improve maintainability without sacrificing streaming reliability or platform
+> compatibility. The main branch remains the stable development baseline.
+
+Hermes has grown beyond its Sunshine/Apollo foundations with virtual display
+backends, isolated sessions, additional hardware-specific capture and encoding
+paths, and Hermes/Hestia integrations. Before importing more changes from other
+forks, we want clearer subsystem boundaries, smaller and more reviewable
+changes, and explicit contracts between components.
+
+### Principles
+
+- **Architecture before syntax:** separating responsibilities and dependencies
+  is the main objective. C++ Modules are a possible implementation tool, not
+  the definition of modular architecture or a prerequisite for it.
+- **Incremental and reversible:** avoid a big-bang rewrite. Each change should
+  compile, remain reviewable, and preserve behavior; migrate one subsystem at a
+  time.
+- **Keep compatibility:** preserve GameStream/Moonlight/Hestia protocol behavior,
+  existing configurations, supported capture and encoding paths, packaging,
+  and the normal header-based build during the transition.
+- **Measure rather than assume:** validate cold/incremental build times,
+  runtime overhead, latency, memory use, and regressions before promoting a
+  new approach.
+- **Human-led development:** contributors drive architectural decisions and
+  write and review the code. AI may assist with research, comprehension,
+  repetitive tasks, and debugging, but does not replace human review or tests.
+
+### Proposed milestones
+
+1. **Map the current architecture.** Document key dependencies and ownership
+   of session lifecycle, display/topology management, capture backends,
+   GPU-frame transfer, encoders, networking/protocol, input, configuration,
+   and platform integrations. Identify test seams and dependency cycles.
+2. **Introduce clear internal boundaries.** Extract narrow interfaces and
+   implementation units where needed, reduce shared/global state, and keep
+   platform-specific code behind explicit abstractions. Prefer small PRs with
+   behavior-preserving changes and focused tests.
+3. **Pilot C++ Modules.** Evaluate a small, low-risk, mostly self-contained
+   component using a C++20/23 module interface, while retaining a viable
+   header-based path if toolchain or packaging constraints require it. Assess
+   build-system dependency scanning, tooling, compiler support, and developer
+   experience before expanding.
+4. **Modernize selectively.** Hermes currently builds its main executable as
+   **C++23**. Consider useful C++26 features only once their compiler/library
+   support, maintenance cost, and benefit are demonstrated; a project-wide
+   C++26 requirement is **not** an initial milestone.
+5. **Port improvements from related forks.** Inventory candidate features
+   from Sunshine, Apollo, and other relevant forks; check provenance,
+   licensing, active maintenance, and overlap with Hermes. Integrate each
+   selected improvement independently with tests, rather than mixing feature
+   ports into broad mechanical refactors.
+
+### Toolchain and CI considerations
+
+- The current top-level CMake minimum is **3.20**. The standard CMake
+  `FILE_SET CXX_MODULES` workflow requires newer CMake (at least 3.28);
+  evaluate generator, scanner, compiler, IDE, and distribution support in a
+  dedicated experimental configuration before changing project requirements.
+- C++ Modules were introduced in **C++20**; they do **not** require C++26.
+  Headers, third-party dependencies, and implementation files can coexist with
+  module interfaces during migration.
+- CUDA compatibility is a separate concern. Hermes currently uses CUDA 12.9
+  with a GCC 14 host compiler for NVCC, and explicitly configures CUDA C++17.
+  Do not raise the CUDA language standard or host-toolchain requirements as a
+  side effect of modernizing ordinary C++ targets.
+- Keep Linux builds and packaging across the supported distribution matrix
+  working. Windows/macOS paths should be evaluated explicitly rather than
+  presumed tested merely because they exist in the build system.
+- Gate further adoption on clean/rebuild CI, unit and integration tests, and
+  real-device validation of display initialization, capture, DMA-BUF/GPU
+  import, encoding, session recovery, and client connectivity. Do not merge a
+  refactor that silently changes streaming behavior.
+
+### Definition of progress
+
+A subsystem is a good candidate for graduation when its public responsibility
+is documented, dependencies are explicit, tests cover relevant behavior, and
+the existing build remains functional across supported environments. A C++
+module pilot succeeds only if it brings a demonstrable maintenance or build
+benefit without making contributors or supported packages depend on brittle
+experimental toolchains.
+
+This is a direction of travel, not a fixed migration schedule. Contributions,
+counterexamples, and toolchain testing reports are welcome; major compatibility
+changes should be discussed in their own issues or PRs before implementation.
+
 ## Clients
 
 - **Android:** [Artemis](https://github.com/ClassicOldSong/moonlight-android)

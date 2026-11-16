@@ -309,6 +309,22 @@ namespace platf {
 
     static std::vector<card_descriptor_t> card_descriptors;
 
+    /**
+     * The kernel's name for a connector, as KWin and kscreen-doctor use it:
+     * "DP-2", "HDMI-A-3", "eDP-1". Built from the connector's type and its
+     * kernel type id, not from a per-card count.
+     */
+    static std::string kernel_connector_name(std::uint32_t type, std::uint32_t type_id) {
+      static constexpr std::array<const char *, 21> names {
+        "Unknown", "VGA", "DVI-I", "DVI-D", "DVI-A", "Composite", "SVIDEO", "LVDS", "Component", "DIN",
+        "DP", "HDMI-A", "HDMI-B", "TV", "eDP", "Virtual", "DSI", "DPI", "Writeback", "SPI", "USB",
+      };
+      if (type >= names.size() || type_id == 0) {
+        return {};
+      }
+      return std::string {names[type]} + '-' + std::to_string(type_id);
+    }
+
     static std::uint32_t from_view(const std::string_view &string) {
 #define _CONVERT(x, y) \
   if (string == x) \
@@ -1229,6 +1245,18 @@ namespace platf {
                 BOOST_LOG(info) << "Found connector ID ["sv << connector.connector_id << ']';
 
                 connector_id = connector.connector_id;
+
+                // A physical monitor: report its connector so touch and pen can be
+                // bound to the output this session streams.
+                if (virtual_card.empty()) {
+                  auto conn = card.connector(connector.connector_id);
+                  if (conn) {
+                    const auto name = kernel_connector_name(conn->connector_type, conn->connector_type_id);
+                    if (!name.empty()) {
+                      VDISPLAY::notePhysicalCaptureOutput(name);
+                    }
+                  }
+                }
 
                 auto connector_props = card.connector_props(*connector_id);
                 hdr_metadata_blob_id = card.prop_value_by_name(connector_props, "HDR_OUTPUT_METADATA"sv);

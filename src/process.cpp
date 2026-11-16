@@ -3440,6 +3440,11 @@ namespace proc {
                            "use one, or headless mode. 'virtual_display_backend' and "
                            "'hermes_kms_multi_output' pick which backend serves the request, never "
                            "whether one is made.";
+#ifndef _WIN32
+        // Bind touch and pen to the monitor this session streams once the capture
+        // reports it, instead of wherever KWin puts an unbound touchscreen.
+        VDISPLAY::beginPhysicalOutputSession();
+#endif
       }
     }
 
@@ -4143,6 +4148,11 @@ namespace proc {
   void proc_t::terminate(bool immediate, bool needs_refresh) {
     std::error_code ec;
     placebo = false;
+
+#ifndef _WIN32
+    // Put back the touch and pen binding a physical-monitor session made.
+    VDISPLAY::endPhysicalOutputSession();
+#endif
 
     if (!immediate) {
       terminate_process_group(_process, _process_group, _app.exit_timeout);

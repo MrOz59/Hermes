@@ -544,6 +544,10 @@ std::string get_local_ip_for_gateway() {
       sd_bus *bus {nullptr};
       sd_bus_slot *owner_watch {nullptr};
       std::uint32_t cookie {0};
+      // Unique bus name of the service instance which issued the cookie.
+      // NameOwnerChanged signals from *older* instances must not invalidate
+      // an inhibition already re-established on a replacement instance.
+      std::string cookie_owner;
       bool inhibited {false};
       bool failure_logged {false};
       std::chrono::steady_clock::time_point retry_at {};
@@ -613,11 +617,21 @@ std::string get_local_ip_for_gateway() {
         if (sd_bus_message_read(message, "sss", &name, &old_owner, &new_owner) < 0) {
           return 0;
         }
-        if (std::strcmp(name, screen_saver_service.data()) == 0 && std::strcmp(old_owner, new_owner) != 0) {
-          // Cookies belong to the old service instance. Even though our user
-          // bus remains open, the replacement service has no inhibition.
+        if (std::strcmp(name, screen_saver_service.data()) != 0 ||
+            std::strcmp(old_owner, new_owner) == 0) {
+          return 0;
+        }
+
+        // A late NameOwnerChanged for the PREVIOUS screensaver may be queued
+        // after an Inhibit reply from the NEW screensaver. Only invalidate
+        // cookies issued by the owner which actually disappeared.
+        if (state->inhibited && state->cookie_owner == old_owner) {
           state->inhibited = false;
           state->cookie = 0;
+          state->cookie_owner.clear();
+          state->retry_at = std::chrono::steady_clock::now();
+        } else if (!state->inhibited && new_owner[0] != '\0') {
+          // A service just appeared after a failed attempt: retry promptly.
           state->retry_at = std::chrono::steady_clock::now();
         }
         return 0;
@@ -656,6 +670,7 @@ std::string get_local_ip_for_gateway() {
         state.bus = nullptr;
         state.inhibited = false;
         state.cookie = 0;
+        state.cookie_owner.clear();
         state.retry_at = {};
       }
 
@@ -705,6 +720,7 @@ std::string get_local_ip_for_gateway() {
 
         std::uint32_t cookie = 0;
         const int read_status = status < 0 ? status : (reply ? sd_bus_message_read(reply, "u", &cookie) : -EIO);
+        const char *reply_owner = read_status >= 0 ? sd_bus_message_get_sender(reply) : nullptr;
         if (read_status < 0) {
           if (status < 0) {
             warn_once(state, "Could not inhibit screen locking through org.freedesktop.ScreenSaver: " +
@@ -713,8 +729,12 @@ std::string get_local_ip_for_gateway() {
             warn_once(state, "The screensaver returned an unexpected Inhibit reply.");
           }
           state.retry_at = std::chrono::steady_clock::now() + retry_delay;
+        } else if (!reply_owner || !*reply_owner) {
+          warn_once(state, "The screensaver did not identify the owner of its inhibition cookie.");
+          state.retry_at = std::chrono::steady_clock::now() + retry_delay;
         } else {
           state.cookie = cookie;
+          state.cookie_owner = reply_owner;
           state.inhibited = true;
           state.failure_logged = false;
           BOOST_LOG(info) << "Inhibited screen locking while a client is connected."sv;
@@ -741,10 +761,8 @@ std::string get_local_ip_for_gateway() {
             continue;
           }
 
-          if (!state.inhibited && std::chrono::steady_clock::now() >= state.retry_at) {
-            acquire_inhibition(state);
-          }
-
+          // Drain pending owner-change signals BEFORE acquiring a new cookie:
+          // otherwise an older queued signal could invalidate it afterwards.
           int processed = 0;
           while ((processed = sd_bus_process(state.bus, nullptr)) > 0) {
           }
@@ -753,6 +771,10 @@ std::string get_local_ip_for_gateway() {
             close_bus(state, false);
             wait_for_retry(stop);
             continue;
+          }
+
+          if (!state.inhibited && std::chrono::steady_clock::now() >= state.retry_at) {
+            acquire_inhibition(state);
           }
 
           // Bound the time before reacting to a disconnect/config change.

@@ -3684,6 +3684,8 @@ namespace VDISPLAY {
      * Best effort by design: a failure costs the session its touch placement,
      * not its stream, so it is logged and the stream goes on.
      */
+    static void map_input_devices_to(const std::string &owner, const std::string &output);
+
     static void map_input_devices(const std::string &display_name) {
       std::string output;
       {
@@ -3694,6 +3696,15 @@ namespace VDISPLAY {
         }
         output = it->second.virtual_output;
       }
+      map_input_devices_to(display_name, output);
+    }
+
+    /**
+     * Bind the touch and pen devices to @p output on behalf of @p owner: a
+     * virtual display's name, or the physical-output session key. The owner is
+     * what unmap_input_devices() matches when the session ends.
+     */
+    static void map_input_devices_to(const std::string &owner, const std::string &output) {
       if (!safe_output_name(output)) {
         return;
       }
@@ -3706,7 +3717,7 @@ namespace VDISPLAY {
           std::lock_guard<std::mutex> output_lock(input_binding->output_mutex);
           input_binding->output = output;
         }
-        input_binding->owner = display_name;
+        input_binding->owner = owner;
         BOOST_LOG(info) << "[VDISPLAY/KScreen] Touch and pen input from new clients now goes to " << output << '.';
         return;
       }
@@ -3762,7 +3773,7 @@ namespace VDISPLAY {
         sd_bus_unref(started->bus);
         return;
       }
-      started->owner = display_name;
+      started->owner = owner;
       started->output = output;
 
       // sd-bus permits an object to move between threads, but only one thread
@@ -3856,6 +3867,11 @@ namespace VDISPLAY {
     }
 
     static void unmap_input_devices(const std::string & /* display_name */) {}
+
+    static void map_input_devices_to(const std::string & /* owner */, const std::string & /* output */) {
+      BOOST_LOG(warning) << "[VDISPLAY/KScreen] Built without sd-bus, so touch and pen input cannot be bound to "
+                            "the streamed output; KWin will guess where it lands.";
+    }
 #endif
 
 #ifdef SUNSHINE_BUILD_SDBUS
@@ -3981,6 +3997,12 @@ namespace VDISPLAY {
     static void place_windows(const std::string &, const std::vector<std::string> &, const std::vector<std::uint32_t> &) {}
     static void unplace_windows(const std::string &) {}
 #endif
+
+    /** Whether any virtual display session currently has a KWin layout. */
+    static bool any_layout_active() {
+      std::lock_guard<std::mutex> lock(layouts_mutex);
+      return !layouts.empty();
+    }
   }  // namespace kscreen
 
   // GNOME / Mutter output management. Mutter does not speak kscreen-doctor or
@@ -7899,6 +7921,61 @@ namespace VDISPLAY {
   void placeWindowsOnVirtualDisplay(const std::string &displayName, const std::vector<std::string> &windowClasses, const std::vector<std::uint32_t> &gamescopePids) {
     if (kscreen::is_active(displayName)) {
       kscreen::place_windows(displayName, windowClasses, gamescopePids);
+    }
+  }
+
+  namespace {
+    // A session that streams an existing (physical) monitor rather than a
+    // virtual display. KWin binds an unbound touchscreen to an output of its own
+    // choosing - with more than one monitor, often not the one being streamed -
+    // so touch and pen land somewhere the client never sees. Bind them to the
+    // captured output for the duration of the session, as virtual displays do.
+    std::mutex physical_input_mutex;
+    bool physical_session_active = false;
+    std::string physical_capture_output;  ///< Connector the capture reported, e.g. "DP-2".
+    std::string physical_bound_output;    ///< Output the binding currently targets.
+    constexpr const char *physical_binding_owner = "hermes-physical-output";
+
+    void apply_physical_binding_locked() {
+      if (!physical_session_active || physical_capture_output.empty() ||
+          physical_bound_output == physical_capture_output) {
+        return;
+      }
+      if (window_system != window_system_e::WAYLAND || !kscreen::available()) {
+        return;
+      }
+      // A virtual display session owns the binding while it runs.
+      if (kscreen::any_layout_active()) {
+        return;
+      }
+      kscreen::map_input_devices_to(physical_binding_owner, physical_capture_output);
+      physical_bound_output = physical_capture_output;
+    }
+  }  // namespace
+
+  void notePhysicalCaptureOutput(const std::string &connector_name) {
+    std::lock_guard<std::mutex> lock(physical_input_mutex);
+    physical_capture_output = connector_name;
+    apply_physical_binding_locked();
+  }
+
+  void beginPhysicalOutputSession() {
+    std::lock_guard<std::mutex> lock(physical_input_mutex);
+    physical_session_active = true;
+    physical_bound_output.clear();
+    apply_physical_binding_locked();
+  }
+
+  void endPhysicalOutputSession() {
+    std::lock_guard<std::mutex> lock(physical_input_mutex);
+    if (!physical_session_active) {
+      return;
+    }
+    physical_session_active = false;
+    if (!physical_bound_output.empty()) {
+      // No-op if a virtual display took the binding over meanwhile.
+      kscreen::unmap_input_devices(physical_binding_owner);
+      physical_bound_output.clear();
     }
   }
 

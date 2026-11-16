@@ -1020,6 +1020,16 @@ namespace VDISPLAY {
   bool activateVirtualDisplayOutput(const std::string &displayName);
 
   /**
+   * Touch and pen binding for sessions that stream an existing monitor rather
+   * than a virtual display. begin/end bracket the session; the KMS capture
+   * reports the connector it streams (e.g. "DP-2"), and on KWin the touch and
+   * pen devices are bound to that output until the session ends.
+   */
+  void beginPhysicalOutputSession();
+  void endPhysicalOutputSession();
+  void notePhysicalCaptureOutput(const std::string &connector_name);
+
+  /**
    * Put windows of these classes on the session's virtual output, now and as
    * they appear, until the display is removed. KWin only; elsewhere nothing
    * happens. For an application that reuses a window already open on a

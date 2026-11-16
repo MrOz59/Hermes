@@ -8008,6 +8008,18 @@ namespace VDISPLAY {
       return scanning_out;
     }
 
+    /** Tell the desktop's screen saver that the user is active. */
+    void simulate_user_activity() {
+#ifdef SUNSHINE_BUILD_SDBUS
+      sd_bus *bus = nullptr;
+      if (open_user_bus(&bus) < 0) {
+        return;
+      }
+      sd_bus_call_method(bus, "org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver", "SimulateUserActivity", nullptr, nullptr, "");
+      sd_bus_flush_close_unref(bus);
+#endif
+    }
+
     /** Whether any DRM card scans out connector @p name. */
     bool output_scanning_out(const std::string &name) {
       std::error_code ec;
@@ -8051,6 +8063,9 @@ namespace VDISPLAY {
 
     BOOST_LOG(info) << "[VDISPLAY/KScreen] " << monitor
                     << " is enabled but dark (power saving); waking it instead of creating a virtual display.";
+    // Count as user activity first, so the idle timer that put the screens to
+    // sleep doesn't turn them off again before capture starts.
+    simulate_user_activity();
     if (!kscreen::run_layout_command("kscreen-doctor --dpms on")) {
       return false;
     }

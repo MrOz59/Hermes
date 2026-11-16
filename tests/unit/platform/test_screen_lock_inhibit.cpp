@@ -57,6 +57,17 @@ namespace {
 
       service_thread_ = std::thread([this] {
         while (!stop_.load()) {
+          if (restart_service_.exchange(false)) {
+            // A new owner invalidates the old inhibition cookie, without
+            // disconnecting Hermes from its session bus.
+            sd_bus_release_name(service_bus_, screen_saver_service);
+            {
+              std::lock_guard lock {mutex_};
+              inhibited_ = false;
+            }
+            inhibited_changed_.notify_all();
+            sd_bus_request_name(service_bus_, screen_saver_service, 0);
+          }
           sd_bus_process(service_bus_, nullptr);
           sd_bus_wait(service_bus_, 50'000);
         }
@@ -65,9 +76,10 @@ namespace {
 
     void TearDown() override {
       config::sunshine.inhibit_screen_lock = false;
-      // Release anything a failing test left behind; this also waits for the
-      // fake service's reply, so the state below is settled.
+      // The platform hook is asynchronous. The fake service must remain alive
+      // until Hermes has observed the stop and released its inhibition.
       platf::streaming_will_stop();
+      wait_for_inhibition(false);
 
       stop_.store(true);
       if (service_thread_.joinable()) {
@@ -93,11 +105,26 @@ namespace {
       }
     }
 
-    bool wait_for_inhibit(std::chrono::milliseconds timeout = std::chrono::seconds {5}) {
+    bool wait_for_inhibition(bool expected, std::chrono::milliseconds timeout = std::chrono::seconds {5}) {
       std::unique_lock lock {mutex_};
-      return inhibited_changed_.wait_for(lock, timeout, [this] {
-        return inhibited_;
+      return inhibited_changed_.wait_for(lock, timeout, [this, expected] {
+        return inhibited_ == expected;
       });
+    }
+
+    bool wait_for_count(int count, std::chrono::milliseconds timeout = std::chrono::seconds {5}) {
+      std::unique_lock lock {mutex_};
+      return inhibited_changed_.wait_for(lock, timeout, [this, count] {
+        return inhibit_count_ >= count;
+      });
+    }
+
+    void restart_fake_service() {
+      restart_service_.store(true);
+    }
+
+    void delay_inhibit_reply(std::chrono::milliseconds duration) {
+      inhibit_reply_delay_ms_.store(static_cast<int>(duration.count()));
     }
 
     std::mutex mutex_;
@@ -184,6 +211,10 @@ namespace {
         cookie = self->last_cookie_;
       }
       self->inhibited_changed_.notify_all();
+      const int delay_ms = self->inhibit_reply_delay_ms_.load();
+      if (delay_ms > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds {delay_ms});
+      }
       return sd_bus_reply_method_return(message, "u", cookie);
     }
 
@@ -198,13 +229,17 @@ namespace {
         self->inhibited_ = false;
         self->last_uninhibited_cookie_ = cookie;
       }
-      return sd_bus_reply_method_return(message, nullptr);
+      const int result = sd_bus_reply_method_return(message, nullptr);
+      self->inhibited_changed_.notify_all();
+      return result;
     }
 
     sd_bus *service_bus_ {nullptr};
     sd_bus_slot *slot_ {nullptr};
     std::thread service_thread_;
     std::atomic<bool> stop_ {false};
+    std::atomic<bool> restart_service_ {false};
+    std::atomic<int> inhibit_reply_delay_ms_ {0};
     pid_t daemon_pid_ {0};
     bool had_previous_address_ {false};
     std::string previous_address_;
@@ -216,7 +251,7 @@ TEST_F(ScreenLockInhibitTest, HoldsTheInhibitionWhileAClientIsConnected) {
   config::sunshine.inhibit_screen_lock = true;
 
   platf::streaming_will_start();
-  ASSERT_TRUE(wait_for_inhibit()) << "the fake screensaver never received Inhibit";
+  ASSERT_TRUE(wait_for_inhibition(true)) << "the fake screensaver never received Inhibit";
   {
     std::lock_guard lock {mutex_};
     EXPECT_EQ(inhibit_count_, 1);
@@ -224,19 +259,13 @@ TEST_F(ScreenLockInhibitTest, HoldsTheInhibitionWhileAClientIsConnected) {
     EXPECT_FALSE(reason_.empty());
   }
 
-  // A second platform start (another client) must reuse the same inhibition
-  // rather than dropping the first one.
-  platf::streaming_will_start();
-
   platf::streaming_will_stop();
+  ASSERT_TRUE(wait_for_inhibition(false)) << "the fake screensaver never received UnInhibit";
   {
     std::lock_guard lock {mutex_};
-    EXPECT_FALSE(inhibited_);
     EXPECT_EQ(inhibit_count_, 1);
     EXPECT_EQ(last_uninhibited_cookie_, last_cookie_);
   }
-
-  config::sunshine.inhibit_screen_lock = false;
 }
 
 TEST_F(ScreenLockInhibitTest, LeavesTheScreensaverAloneWhenDisabled) {
@@ -253,16 +282,54 @@ TEST_F(ScreenLockInhibitTest, CanInhibitAgainForANewClient) {
   config::sunshine.inhibit_screen_lock = true;
 
   platf::streaming_will_start();
-  ASSERT_TRUE(wait_for_inhibit());
+  ASSERT_TRUE(wait_for_count(1));
   platf::streaming_will_stop();
+  ASSERT_TRUE(wait_for_inhibition(false));
 
   platf::streaming_will_start();
-  ASSERT_TRUE(wait_for_inhibit());
+  ASSERT_TRUE(wait_for_count(2));
   platf::streaming_will_stop();
+  ASSERT_TRUE(wait_for_inhibition(false));
 
   std::lock_guard lock {mutex_};
   EXPECT_EQ(inhibit_count_, 2);
   EXPECT_FALSE(inhibited_);
+}
+
+TEST_F(ScreenLockInhibitTest, RestoresInhibitionAfterScreensaverRestart) {
+  config::sunshine.inhibit_screen_lock = true;
+  platf::streaming_will_start();
+  ASSERT_TRUE(wait_for_count(1));
+
+  restart_fake_service();
+  ASSERT_TRUE(wait_for_count(2)) << "Hermes did not reinhibit after the screensaver changed owner";
+  EXPECT_TRUE(wait_for_inhibition(true));
+
+  platf::streaming_will_stop();
+  ASSERT_TRUE(wait_for_inhibition(false));
+}
+
+TEST_F(ScreenLockInhibitTest, StopDoesNotWaitForSlowInhibitCall) {
+  config::sunshine.inhibit_screen_lock = true;
+  delay_inhibit_reply(std::chrono::milliseconds {900});
+
+  const auto start_time = std::chrono::steady_clock::now();
+  platf::streaming_will_start();
+  const auto start_elapsed = std::chrono::steady_clock::now() - start_time;
+  EXPECT_LT(start_elapsed, std::chrono::milliseconds {600});
+
+  ASSERT_TRUE(wait_for_count(1));
+  const auto stop_time = std::chrono::steady_clock::now();
+  platf::streaming_will_stop();
+  const auto stop_elapsed = std::chrono::steady_clock::now() - stop_time;
+  EXPECT_LT(stop_elapsed, std::chrono::milliseconds {600});
+
+  // The in-flight Inhibit may finish after the stop was requested. The worker
+  // must then UnInhibit with the returned cookie and not leave a stale lease.
+  ASSERT_TRUE(wait_for_inhibition(false));
+  std::lock_guard lock {mutex_};
+  EXPECT_EQ(inhibit_count_, 1);
+  EXPECT_EQ(last_uninhibited_cookie_, last_cookie_);
 }
 
 #endif

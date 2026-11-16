@@ -7998,10 +7998,21 @@ namespace VDISPLAY {
     }
 
     /**
-     * Read the first byte of the monitor's EDID over the DDC adapter @p fd.
-     * A DisplayPort monitor in deep sleep does not answer, but the request
-     * on its AUX channel wakes it; once it is up, the read succeeds.
+     * Send the monitor a DDC/CI "Get VCP Feature" request for its power mode
+     * (0xD6) over the DDC adapter @p fd. A DisplayPort monitor in deep sleep
+     * does not answer, but the request wakes it.
      */
+    void ddc_ci_request_power_mode(int fd) {
+      constexpr long ddc_ci_address = 0x37;
+      // Source address, length, Get VCP Feature, power mode, and the XOR
+      // checksum over the destination address (0x6E) and those four bytes.
+      const unsigned char request[] = {0x51, 0x82, 0x01, 0xD6, 0x6E ^ 0x51 ^ 0x82 ^ 0x01 ^ 0xD6};
+      if (::ioctl(fd, I2C_SLAVE, ddc_ci_address) == 0) {
+        (void) !::write(fd, request, sizeof(request));
+      }
+    }
+
+    /** Whether the monitor answers a read of the first byte of its EDID: it is up. */
     bool edid_answers(int fd) {
       constexpr long edid_address = 0x50;
       unsigned char byte = 0;
@@ -8014,9 +8025,9 @@ namespace VDISPLAY {
      *
      * Woken by a modeset, a monitor in deep sleep fails link training (its
      * AUX channel is not answering yet), drops off and returns seconds later.
-     * Asked for its EDID instead, it wakes, drops its hot-plug signal while
-     * it starts and answers once it is ready, after which the link trains in
-     * one go. A monitor that answers at once was not in deep sleep, and
+     * Sent a DDC/CI request instead, it wakes, drops its hot-plug signal
+     * while it starts and answers once it is ready, after which the link
+     * trains in one go. A monitor that answers at once was not in deep sleep, and
      * nothing waits for it.
      * @return Whether any monitor was asked.
      */
@@ -8052,6 +8063,7 @@ namespace VDISPLAY {
         // disconnected may be empty, and is asked once without waiting. Read
         // the state first; the monitor may drop it as soon as it is asked.
         const bool connected = connector_status(entry.path()) == "connected";
+        ddc_ci_request_power_mode(fd);
         if (!edid_answers(fd) && connected) {
           sleeping.push_back({entry.path(), fd});
         } else {
@@ -8119,7 +8131,7 @@ namespace VDISPLAY {
     // In deep sleep the primary may have left the desktop's layout entirely;
     // give it a moment to reconnect before settling for another output.
     auto monitor = enabled_physical_output();
-    for (int i = 0; nudged && !monitor.primary && i < 12; ++i) {
+    for (int i = 0; nudged && !monitor.primary && i < 20; ++i) {
       std::this_thread::sleep_for(250ms);
       monitor = enabled_physical_output();
     }

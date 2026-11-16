@@ -2355,6 +2355,40 @@ alias; new configurations should use the key above.
     </tr>
 </table>
 
+When enabled, UPnP also attempts forwarding through two routers (double NAT). Hermes selects the discovered
+IGD closest to the host's IPv4 address. If that router has a private WAN address and a suitable outer IGD is
+also discoverable, it maps the same ports there to the inner router's WAN address. Both hops follow `upnp`;
+there is no separate double-NAT switch. The application default remains disabled. Container installations
+seed `upnp = enabled` only when creating a configuration without that key.
+
+This can avoid manual forwarding on both a personal router and an ISP router, allowing direct remote
+streaming without a VPN relay. Both routers must offer reachable UPnP services. It does not bypass ISP
+CGNAT; if the outer IGD cannot be discovered, manual forwarding or another connectivity method is needed.
+Router selection uses an IPv4 prefix heuristic, not a complete routing-table topology discovery. When two outer IGDs are equally plausible, Hermes skips the external mapping instead of arbitrarily choosing one.
+
+Mappings to other destinations are left untouched. Existing manual mappings to the correct destination
+are reused without renewal or removal, even if their description resembles a Hermes-created rule.
+Hermes manages a mapping only after creating it successfully or recovering its journal record. Routers
+that rewrite descriptions may prevent automatic cleanup: ambiguous permanent mappings remain in the
+journal for inspection rather than being assumed removed. Hermes tracks its own rules separately for
+each router and checks ownership before cleanup. Routers supporting only permanent leases are used only after recovery intent
+has been written to `upnp_mappings.journal` in the configuration directory. On the next start Hermes
+attempts cleanup even if UPnP was disabled; unreachable rules remain recorded for retry.
+
+Some ISP routers report internal port `0` in a specific mapping query. For a locally recorded rule only,
+Hermes corroborates the port and destination using a bounded generic enumeration, then repeats the
+specific query to verify the exact description and destination before renewal or removal. Generic
+descriptions are not used as ownership evidence because these routers may append stale data to them.
+Incomplete enumeration, duplicate wildcard entries, changed destinations, or inconsistent leases leave
+the rule untouched. This compatibility check never adopts a pre-existing mapping.
+
+UPnP makes the configured streaming ports reachable from outside the LAN. The existing
+`origin_web_ui_allowed` policy still controls whether the Web UI port is mapped. Keep MiniUPnPc updated:
+the bundled Flatpak source includes upstream XML bounds fixes for CVE-2026-110655 and CVE-2026-110656;
+native packages must obtain the corresponding fixes from their distribution. The patches are derived
+from upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
+`64ef08a12aabab57be0bf7e40f047c8f14dedf9c`, also backported by ProsperoSunshine.
+
 ### address_family
 
 <table>

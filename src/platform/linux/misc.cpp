@@ -15,6 +15,7 @@
 #include <cerrno>
 #include <csignal>
 #include <cstring>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -581,9 +582,9 @@ std::string get_local_ip_for_gateway() {
 
       std::mutex mutex_;
       std::condition_variable changed_;
-      // Declared after synchronization members so its destructor joins first.
-      std::jthread worker_;
       bool streaming_ {false};
+      // Destroy/join the worker before its state and synchronization members.
+      std::jthread worker_;
 
       bool wants_inhibition() {
         std::lock_guard lock {mutex_};

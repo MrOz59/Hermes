@@ -5,6 +5,7 @@
 // standard includes
 #include <array>
 #include <bit>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -400,6 +401,35 @@ namespace upnp {
       return true;
     }
 
+    /** @brief Query one rule, corroborating a broken zero-port response only for recorded mappings. */
+    static mapping_lookup_t lookup_mapping(const owned_mapping_t &wanted, bool recorded) {
+      const auto specific = [&]() {
+        std::array<char, 16> client {}, lease {};
+        std::array<char, 6> port {};
+        std::array<char, 80> description {};
+        std::array<char, 4> enabled {};
+        const auto result = UPNP_GetSpecificPortMappingEntry(wanted.control_url.c_str(), wanted.service.c_str(), wanted.external_port.c_str(), wanted.protocol.c_str(), nullptr, client.data(), port.data(), description.data(), enabled.data(), lease.data());
+        return mapping_reply_t {result, client.data(), port.data(), description.data(), enabled.data(), lease.data()};
+      };
+      auto deadline = std::chrono::steady_clock::time_point {};
+      const auto generic = [&](std::size_t index) {
+        if (index == 0) {
+          deadline = std::chrono::steady_clock::now() + 5s;
+        } else if (std::chrono::steady_clock::now() >= deadline) {
+          return mapping_reply_t {};
+        }
+        std::array<char, 16> client {}, lease {};
+        std::array<char, 6> port {}, external_port {};
+        std::array<char, 80> description {};
+        std::array<char, 4> enabled {}, protocol {};
+        std::array<char, 64> remote_host {};
+        const auto number = std::to_string(index);
+        const auto result = UPNP_GetGenericPortMappingEntry(wanted.control_url.c_str(), wanted.service.c_str(), number.c_str(), external_port.data(), client.data(), port.data(), protocol.data(), description.data(), enabled.data(), remote_host.data(), lease.data());
+        return mapping_reply_t {result, client.data(), port.data(), description.data(), enabled.data(), lease.data(), external_port.data(), protocol.data(), remote_host.data()};
+      };
+      return verify_mapping_lookup(wanted, recorded, specific, generic);
+    }
+
     /**
      * @brief Maps one port without deleting or adopting a rule belonging to another application.
      * @param data Gateway's WAN connection service.
@@ -419,36 +449,31 @@ namespace upnp {
         // A failed refresh must not forget a rule that was successfully added earlier.
         recorded->generation = generation;
       }
-      std::array<char, 16> client {};
-      std::array<char, 6> port {};
-      std::array<char, 80> description {};
-      std::array<char, 4> enabled {};
-      std::array<char, 16> lease {};
-      auto err = UPNP_GetSpecificPortMappingEntry(urls->controlURL, data.first.servicetype, mapping.port.wan.c_str(), mapping.port.proto.c_str(), nullptr, client.data(), port.data(), description.data(), enabled.data(), lease.data());
-      switch (classify_mapping(err, client.data(), port.data(), description.data(), wanted)) {
+      const auto lookup = lookup_mapping(wanted, previously_owned);
+      switch (lookup.state) {
         case mapping_state_e::conflict:
           BOOST_LOG(warning) << "UPnP port "sv << mapping.port.wan << " already forwards elsewhere; leaving it unchanged"sv;
           return false;
         case mapping_state_e::existing:
           // A manual rule already does what we need. Never renew or remove it.
-          return std::string_view {enabled.data()} == "1"sv;
+          return lookup.enabled == "1"sv;
         case mapping_state_e::unknown:
-          BOOST_LOG(warning) << "UPnP mapping ownership could not be checked: "sv << err;
+          BOOST_LOG(warning) << "UPnP mapping ownership could not be verified for "sv << wanted.control_url << ' ' << wanted.protocol << ' ' << wanted.external_port;
           return false;
         case mapping_state_e::ours:
           if (!may_manage_mapping(mapping_state_e::ours, previously_owned)) {
             BOOST_LOG(debug) << "UPnP mapping resembles Hermes but has no ownership record; preserving it"sv;
-            return std::string_view {enabled.data()} == "1"sv;
+            return lookup.enabled == "1"sv;
           }
-          wanted.permanent = std::string_view {lease.data()} == "0"sv;
+          wanted.permanent = lookup.lease == "0"sv;
           if (!remember_mapping(wanted)) {
             return false;
           }
           if (wanted.permanent) {
-            return std::string_view {enabled.data()} == "1"sv;
+            return lookup.enabled == "1"sv;
           }
           // Some IGDs accept repeated adds without resetting the lease. Only replace our own expiring rule.
-          if (lease_needs_refresh(lease.data())) {
+          if (lease_needs_refresh(lookup.lease)) {
             const auto removed = UPNP_DeletePortMapping(urls->controlURL, data.first.servicetype, mapping.port.wan.c_str(), mapping.port.proto.c_str(), nullptr);
             if (removed != UPNPCOMMAND_SUCCESS && removed != 714) {
               return false;
@@ -463,7 +488,7 @@ namespace upnp {
         return false;
       }
       const auto period = std::to_string(PORT_MAPPING_LIFETIME.count());
-      err = UPNP_AddPortMapping(urls->controlURL, data.first.servicetype, mapping.port.wan.c_str(), mapping.port.lan.c_str(), lan_addr.c_str(), mapping.description.c_str(), mapping.port.proto.c_str(), nullptr, period.c_str());
+      auto err = UPNP_AddPortMapping(urls->controlURL, data.first.servicetype, mapping.port.wan.c_str(), mapping.port.lan.c_str(), lan_addr.c_str(), mapping.description.c_str(), mapping.port.proto.c_str(), nullptr, period.c_str());
       bool permanent_intent_written = false;
       if (err == 725 && !shutdown_event->peek()) {  // OnlyPermanentLeasesSupported
         wanted.permanent = true;
@@ -481,14 +506,13 @@ namespace upnp {
         if (permanent_intent_written && !journal_mapping(wanted, false)) {
           BOOST_LOG(warning) << "Could not retire unused UPnP recovery intent"sv;
         }
-        const auto lookup = UPNP_GetSpecificPortMappingEntry(urls->controlURL, data.first.servicetype, mapping.port.wan.c_str(), mapping.port.proto.c_str(), nullptr, client.data(), port.data(), description.data(), enabled.data(), lease.data());
-        const auto state = classify_mapping(lookup, client.data(), port.data(), description.data(), wanted);
-        if (std::string_view {enabled.data()} == "1"sv) {
-          if (state == mapping_state_e::existing || (state == mapping_state_e::ours && !previously_owned)) {
+        const auto conflict = lookup_mapping(wanted, previously_owned);
+        if (conflict.enabled == "1"sv) {
+          if (conflict.state == mapping_state_e::existing || (conflict.state == mapping_state_e::ours && !previously_owned)) {
             return true;  // The destination is usable, but that mapping is not ours to manage.
           }
-          if (may_manage_mapping(state, previously_owned)) {
-            wanted.permanent = std::string_view {lease.data()} == "0"sv;
+          if (may_manage_mapping(conflict.state, previously_owned)) {
+            wanted.permanent = conflict.lease == "0"sv;
             return remember_mapping(std::move(wanted));
           }
         }
@@ -511,13 +535,7 @@ namespace upnp {
         if (stale_only && owned.generation == generation) {
           return false;
         }
-        std::array<char, 16> client {};
-        std::array<char, 6> port {};
-        std::array<char, 80> description {};
-        std::array<char, 4> enabled {};
-        std::array<char, 16> lease {};
-        const auto lookup = UPNP_GetSpecificPortMappingEntry(owned.control_url.c_str(), owned.service.c_str(), owned.external_port.c_str(), owned.protocol.c_str(), nullptr, client.data(), port.data(), description.data(), enabled.data(), lease.data());
-        const auto state = classify_mapping(lookup, client.data(), port.data(), description.data(), owned);
+        const auto state = lookup_mapping(owned, true).state;
         if (state == mapping_state_e::unknown) {
           BOOST_LOG(warning) << "Could not check UPnP rule for cleanup: "sv << owned.control_url << ' ' << owned.external_port;
           return false;

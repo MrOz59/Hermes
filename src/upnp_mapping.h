@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <charconv>
 #include <cstddef>
+#include <cstdint>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -92,6 +94,115 @@ namespace upnp {
    */
   inline bool may_manage_mapping(mapping_state_e state, bool recorded) {
     return recorded && state == mapping_state_e::ours;
+  }
+
+  /** @brief Fields returned by a specific or generic mapping query. */
+  struct mapping_reply_t {
+    int result = -1;  ///< MiniUPnPc result; a default reply cannot authorize a mutation.
+    std::string client {};  ///< Internal destination address.
+    std::string internal_port {};  ///< Internal destination port, possibly the defective zero.
+    std::string description {};  ///< Specific query's ownership marker; generic descriptions are unreliable.
+    std::string enabled {};  ///< Router's enabled flag.
+    std::string lease {};  ///< Remaining lifetime in seconds, or zero for permanent rules.
+    std::string external_port {};  ///< Generic entry's external port.
+    std::string protocol {};  ///< Generic entry's transport protocol.
+    std::string remote_host {};  ///< Generic entry's remote restriction; empty or 0.0.0.0 means wildcard.
+  };
+
+  /** @brief Verified ownership and lease information for one mapping. */
+  struct mapping_lookup_t {
+    mapping_state_e state = mapping_state_e::unknown;  ///< Defaults to preserving the router rule and ownership record.
+    std::string enabled {};  ///< Verified enabled flag.
+    std::string lease {};  ///< Verified remaining lifetime.
+  };
+
+  /**
+   * @brief Verify an owned rule even when GetSpecificPortMappingEntry reports port zero.
+   * @details Some IGDs report the correct port only through GetGenericPortMappingEntry,
+   * but append garbage to its description. Never use that description as ownership
+   * evidence: require the exact description in specific queries both before and after
+   * a complete, bounded enumeration. An unrecorded rule cannot use this fallback.
+   * @param wanted Rule on this exact gateway/service and wildcard remote host.
+   * @param recorded Whether Hermes has a local ownership record for this identity.
+   * @param specific Query the wildcard mapping by external port and protocol.
+   * @param generic Query a mapping by table index, returning 713 at the end.
+   */
+  template<class Specific, class Generic>
+  mapping_lookup_t verify_mapping_lookup(const owned_mapping_t &wanted, bool recorded, Specific specific, Generic generic) {
+    const auto first = specific();
+    const auto state = classify_mapping(first.result, first.client, first.internal_port, first.description, wanted);
+    if (!recorded || first.result != 0 || first.internal_port != "0" || first.client != wanted.target || first.description != wanted.description) {
+      return {state, first.enabled, first.lease};
+    }
+    if (first.enabled != "0" && first.enabled != "1") {
+      return {};
+    }
+    const auto parse_number = [](const std::string &text) -> std::optional<std::uint32_t> {
+      std::uint32_t number = 0;
+      const auto parsed = std::from_chars(text.data(), text.data() + text.size(), number);
+      if (parsed.ec != std::errc {} || parsed.ptr != text.data() + text.size()) {
+        return std::nullopt;
+      }
+      return number;
+    };
+
+    std::optional<mapping_reply_t> match;
+    std::size_t match_index = 0;
+    bool complete = false;
+    // A broken IGD must not make renewal or shutdown enumerate indefinitely.
+    for (std::size_t index = 0; index < 256; ++index) {
+      auto entry = generic(index);
+      if (entry.result == 713) {
+        complete = true;
+        break;
+      }
+      if (entry.result != 0) {
+        return {};
+      }
+      const auto external_port = parse_number(entry.external_port);
+      const auto internal_port = parse_number(entry.internal_port);
+      if (!external_port || *external_port == 0 || *external_port > 65535 || !internal_port || *internal_port == 0 || *internal_port > 65535 || entry.client.empty() || (entry.protocol != "TCP" && entry.protocol != "UDP") || (entry.enabled != "0" && entry.enabled != "1")) {
+        return {};
+      }
+      if (entry.external_port != wanted.external_port || entry.protocol != wanted.protocol || (!entry.remote_host.empty() && entry.remote_host != "0.0.0.0")) {
+        continue;
+      }
+      if (match || entry.client != wanted.target || entry.internal_port != wanted.internal_port || entry.enabled != first.enabled) {
+        return {};
+      }
+      match = std::move(entry);
+      match_index = index;
+    }
+    if (!complete || !match) {
+      return {};
+    }
+
+    // Enumeration is not atomic. Recheck the precise key and ownership marker;
+    // an error, disappearance or replacement is uncertainty, never permission to add.
+    const auto last = specific();
+    if (last.result != 0 || last.client != first.client || last.internal_port != first.internal_port || last.description != first.description || last.enabled != first.enabled) {
+      return {};
+    }
+    // Port zero in the specific recheck cannot reveal a changed internal port.
+    // Re-read the selected table row as well; a shifted index or replacement fails closed.
+    const auto current = generic(match_index);
+    if (current.result != 0 || current.external_port != wanted.external_port || current.protocol != wanted.protocol || (!current.remote_host.empty() && current.remote_host != "0.0.0.0") || current.client != wanted.target || current.internal_port != wanted.internal_port || current.enabled != first.enabled) {
+      return {};
+    }
+    auto duration = parse_number(first.lease);
+    if (!duration) {
+      return {};
+    }
+    for (const auto *reply : {&std::as_const(*match), &last, &current}) {
+      const auto seconds = parse_number(reply->lease);
+      if (!seconds || ((*duration == 0) != (*seconds == 0))) {
+        return {};
+      }
+      duration = std::min(*duration, *seconds);
+    }
+    // Prefer the smaller remaining lifetime; some IGDs report the original lease
+    // through one query. A permanent lease requires agreement from both queries.
+    return {mapping_state_e::ours, last.enabled, std::to_string(*duration)};
   }
 
   /**

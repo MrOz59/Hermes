@@ -2375,6 +2375,13 @@ each router and checks ownership before cleanup. Routers supporting only permane
 has been written to `upnp_mappings.journal` in the configuration directory. On the next start Hermes
 attempts cleanup even if UPnP was disabled; unreachable rules remain recorded for retry.
 
+Some ISP routers report internal port `0` in a specific mapping query. For a locally recorded rule only,
+Hermes corroborates the port and destination using a bounded generic enumeration, then repeats the
+specific query to verify the exact description and destination before renewal or removal. Generic
+descriptions are not used as ownership evidence because these routers may append stale data to them.
+Incomplete enumeration, duplicate wildcard entries, changed destinations, or inconsistent leases leave
+the rule untouched. This compatibility check never adopts a pre-existing mapping.
+
 UPnP makes the configured streaming ports reachable from outside the LAN. The existing
 `origin_web_ui_allowed` policy still controls whether the Web UI port is mapped. Keep MiniUPnPc updated:
 the bundled Flatpak source includes upstream XML bounds fixes for CVE-2026-110655 and CVE-2026-110656;

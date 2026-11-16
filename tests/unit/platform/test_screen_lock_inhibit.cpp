@@ -137,6 +137,10 @@ namespace {
       restart_service_.store(true);
     }
 
+    bool fake_service_restart_failed() const {
+      return restart_failed_.load();
+    }
+
     void delay_inhibit_reply(std::chrono::milliseconds duration) {
       inhibit_reply_delay_ms_.store(static_cast<int>(duration.count()));
     }
@@ -323,7 +327,7 @@ TEST_F(ScreenLockInhibitTest, RestoresInhibitionAfterScreensaverRestart) {
   for (int expected = 2; expected <= 4; ++expected) {
     restart_fake_service();
     ASSERT_TRUE(wait_for_count(expected)) << "Hermes did not reinhibit after screensaver restart " << expected;
-    ASSERT_FALSE(restart_failed_.load());
+    ASSERT_FALSE(fake_service_restart_failed());
     EXPECT_TRUE(wait_for_inhibition(true));
   }
 

@@ -643,9 +643,11 @@ std::string get_local_ip_for_gateway() {
         }
         if (release_inhibition && state.inhibited) {
           sd_bus_error error = SD_BUS_ERROR_NULL;
+          // Target the instance which issued this cookie, not the well-known
+          // name that may now belong to a different screensaver process.
           const int status = sd_bus_call_method(
             state.bus,
-            screen_saver_service.data(),
+            state.cookie_owner.c_str(),
             screen_saver_path.data(),
             screen_saver_interface.data(),
             "UnInhibit",

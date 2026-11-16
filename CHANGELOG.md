@@ -73,9 +73,17 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   the lookup always came back empty. Activating the output and exclusive mode
   then stopped with "DRM connector was not found". The driver is now read from
   the card's own device.
+- Starting a stream while the screens are asleep no longer opens an empty
+  virtual display beside the desktop ([#133], from PunkUnity). KWin's power
+  saving leaves every connector disabled, so Hermes found no lit monitor and
+  created one. When KScreen still lists a connected, enabled output, Hermes now
+  wakes the screens, waits up to 5 seconds for the primary output to show a
+  frame, and streams it. Outputs turned off in the display settings are left
+  alone, so a host without a monitor still gets a virtual display.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99
+[#133]: https://github.com/MrOz59/Hermes/pull/133
 
 ## [0.7.0] - 2026-11-02
 

@@ -14,6 +14,8 @@
 #include <cstdio>
 #include <cerrno>
 #include <csignal>
+#include <cstring>
+#include <mutex>
 #include <string_view>
 #include <utility>
 
@@ -61,6 +63,10 @@
 #endif
 
 #include <linux/rtnetlink.h>
+
+#ifdef SUNSHINE_BUILD_SDBUS
+  #include <systemd/sd-bus.h>
+#endif
 
 #ifdef __GNUC__
   #define SUNSHINE_GNUC_EXTENSION __extension__
@@ -117,6 +123,54 @@ namespace dyn {
 }  // namespace dyn
 
 namespace platf {
+
+#ifdef SUNSHINE_BUILD_SDBUS
+  int open_user_bus(sd_bus **result) {
+    if (!result) {
+      return -EINVAL;
+    }
+    *result = nullptr;
+
+    const int discovered = sd_bus_open_user(result);
+    if (discovered >= 0) {
+      return discovered;
+    }
+    if (*result) {
+      sd_bus_unref(*result);
+      *result = nullptr;
+    }
+    if (discovered != -ENOMEDIUM) {
+      return discovered;
+    }
+
+    sd_bus *bus = nullptr;
+    int status = sd_bus_new(&bus);
+    if (status < 0) {
+      return status;
+    }
+    const auto fail = [&bus](int error) {
+      sd_bus_unref(bus);
+      return error;
+    };
+
+    const auto address = VDISPLAY::systemdUserBusAddress(static_cast<uint32_t>(::getuid()));
+    status = sd_bus_set_address(bus, address.c_str());
+    if (status < 0) {
+      return fail(status);
+    }
+    status = sd_bus_set_bus_client(bus, 1);
+    if (status < 0) {
+      return fail(status);
+    }
+    status = sd_bus_start(bus);
+    if (status < 0) {
+      return fail(status);
+    }
+
+    *result = bus;
+    return 0;
+  }
+#endif
 
   bool touch_binds_to_output() {
     // KWin picks an output for every touchscreen and tablet (its own guess
@@ -474,12 +528,157 @@ std::string get_local_ip_for_gateway() {
     // Unimplemented
   }
 
+  namespace {
+#ifdef SUNSHINE_BUILD_SDBUS
+    constexpr auto screen_saver_service = "org.freedesktop.ScreenSaver"sv;
+    constexpr auto screen_saver_path = "/org/freedesktop/ScreenSaver"sv;
+    constexpr auto screen_saver_interface = "org.freedesktop.ScreenSaver"sv;
+
+    /**
+     * @brief The session-bus connection that holds our screen-lock inhibition.
+     *
+     * org.freedesktop.ScreenSaver drops an inhibition when its caller leaves
+     * the bus, so the connection has to stay open for as long as the inhibition
+     * is wanted. A one-shot helper such as `gdbus call` cannot hold one.
+     */
+    struct screen_lock_t {
+      std::mutex mutex;
+      sd_bus *bus {nullptr};
+      std::uint32_t cookie {0};
+      bool failure_logged {false};
+    };
+
+    screen_lock_t &screen_lock() {
+      static screen_lock_t lock;
+      return lock;
+    }
+
+    std::string bus_error_message(const sd_bus_error &error, int status) {
+      if (error.message) {
+        return error.message;
+      }
+      return std::strerror(-status);
+    }
+
+    void inhibit_screen_lock() {
+      std::lock_guard<std::mutex> lock {screen_lock().mutex};
+      if (screen_lock().bus) {
+        return;
+      }
+
+      sd_bus *bus = nullptr;
+      if (open_user_bus(&bus) < 0 || !bus) {
+        if (!screen_lock().failure_logged) {
+          BOOST_LOG(warning) << "Could not connect to the D-Bus session bus to inhibit screen locking."sv;
+          screen_lock().failure_logged = true;
+        }
+        return;
+      }
+
+      // A wedged or missing screensaver must not hold up starting a stream.
+      sd_bus_set_method_call_timeout(bus, 2'000'000);
+
+      sd_bus_error error = SD_BUS_ERROR_NULL;
+      sd_bus_message *reply = nullptr;
+      const int status = sd_bus_call_method(
+        bus,
+        screen_saver_service.data(),
+        screen_saver_path.data(),
+        screen_saver_interface.data(),
+        "Inhibit",
+        &error,
+        &reply,
+        "ss",
+        "Hermes",
+        "Streaming a client"
+      );
+
+      std::uint32_t cookie = 0;
+      const int read_status = status >= 0 ? sd_bus_message_read(reply, "u", &cookie) : status;
+      if (read_status < 0) {
+        if (!screen_lock().failure_logged) {
+          if (status < 0) {
+            BOOST_LOG(warning) << "Could not inhibit screen locking through "sv << screen_saver_service
+                               << ": "sv << bus_error_message(error, status)
+                               << " (is a screensaver service running?)"sv;
+          } else {
+            BOOST_LOG(warning) << "Could not inhibit screen locking through "sv << screen_saver_service
+                               << ": the screensaver returned an unexpected reply."sv;
+          }
+          screen_lock().failure_logged = true;
+        }
+        sd_bus_error_free(&error);
+        sd_bus_message_unref(reply);
+        sd_bus_unref(bus);
+        return;
+      }
+
+      sd_bus_error_free(&error);
+      sd_bus_message_unref(reply);
+
+      screen_lock().bus = bus;
+      screen_lock().cookie = cookie;
+      screen_lock().failure_logged = false;
+      BOOST_LOG(info) << "Inhibited screen locking while a client is connected."sv;
+    }
+
+    void uninhibit_screen_lock() {
+      std::lock_guard<std::mutex> lock {screen_lock().mutex};
+      if (!screen_lock().bus) {
+        return;
+      }
+
+      sd_bus_error error = SD_BUS_ERROR_NULL;
+      const int status = sd_bus_call_method(
+        screen_lock().bus,
+        screen_saver_service.data(),
+        screen_saver_path.data(),
+        screen_saver_interface.data(),
+        "UnInhibit",
+        &error,
+        nullptr,
+        "u",
+        screen_lock().cookie
+      );
+
+      if (status < 0) {
+        BOOST_LOG(warning) << "Could not release screen-lock inhibition: "sv
+                           << bus_error_message(error, status);
+      } else {
+        BOOST_LOG(info) << "Released screen-lock inhibition."sv;
+      }
+
+      sd_bus_error_free(&error);
+      // Dropping the connection also releases any inhibition the call above
+      // could not, because the bus drops the caller's requests with it.
+      sd_bus_unref(screen_lock().bus);
+      screen_lock().bus = nullptr;
+      screen_lock().cookie = 0;
+    }
+#else
+    void inhibit_screen_lock() {
+      static bool warned = false;
+      if (!warned) {
+        BOOST_LOG(warning) << "inhibit_screen_lock is enabled, but this build has no libsystemd "
+                              "support for org.freedesktop.ScreenSaver."sv;
+        warned = true;
+      }
+    }
+
+    void uninhibit_screen_lock() {}
+#endif
+  }  // namespace
+
   void streaming_will_start() {
-    // Nothing to do
+    if (config::sunshine.inhibit_screen_lock) {
+      inhibit_screen_lock();
+    }
   }
 
   void streaming_will_stop() {
-    // Nothing to do
+    // Uninhibit even when the setting was just turned off, so the bus
+    // connection cannot outlive the configuration that opened it.
+    uninhibit_screen_lock();
   }
 
   void restart_on_exit() {

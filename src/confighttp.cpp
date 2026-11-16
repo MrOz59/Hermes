@@ -13,6 +13,8 @@
 #include <set>
 #include <sstream>
 #include <thread>
+#include <condition_variable>
+#include <mutex>
 #include <numeric>
 #include <algorithm>
 #include <atomic>
@@ -3995,6 +3997,18 @@ fi')CLIP";
     platf::restart();
   }
 
+  // A quit request answers only if Hermes is still running 5 s later. The
+  // thread that waits for that must let go of the response before the server
+  // is destroyed: a response that outlives it crashes Hermes when the thread
+  // writes or releases it, which happens whenever shutting down takes longer
+  // than 5 s (closing an EVDI display can).
+  namespace {
+    std::mutex quit_mutex;
+    std::condition_variable quit_cv;
+    bool server_stopping = false;
+    int quit_waiters = 0;
+  }  // namespace
+
   /**
    * @brief Quit Hermes.
    * @param response The HTTP response object.
@@ -4022,9 +4036,21 @@ fi')CLIP";
       lifetime::exit_sunshine(0, true);
     }
     // If exit fails, write a response after 5 seconds.
-    std::thread write_resp([response]{
-      std::this_thread::sleep_for(5s);
-      response->write();
+    {
+      std::lock_guard<std::mutex> lock(quit_mutex);
+      if (server_stopping) {
+        return;
+      }
+      ++quit_waiters;
+    }
+    std::thread write_resp([response]() mutable {
+      std::unique_lock<std::mutex> lock(quit_mutex);
+      if (!quit_cv.wait_for(lock, 5s, [] { return server_stopping; })) {
+        response->write();
+      }
+      response.reset();
+      --quit_waiters;
+      quit_cv.notify_all();
     });
     write_resp.detach();
   }
@@ -4320,6 +4346,14 @@ fi')CLIP";
 
     // Wait for any event
     shutdown_event->view();
+
+    // Let a pending quit request drop its response while the server still exists.
+    {
+      std::unique_lock<std::mutex> lock(quit_mutex);
+      server_stopping = true;
+      quit_cv.notify_all();
+      quit_cv.wait(lock, [] { return quit_waiters == 0; });
+    }
 
     server.stop();
 

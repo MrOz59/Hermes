@@ -77,6 +77,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   the lookup always came back empty. Activating the output and exclusive mode
   then stopped with "DRM connector was not found". The driver is now read from
   the card's own device.
+- A stream no longer jumps to another screen when its monitor drops off for a
+  moment (from PunkUnity). A DisplayPort monitor coming out of deep sleep can
+  fail its first link training and reconnect a few seconds later; Hermes fell
+  back to the first display at once. It now gives a display that vanished
+  mid-stream up to 10 seconds to return before falling back. Displays that
+  stay connected are not affected.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

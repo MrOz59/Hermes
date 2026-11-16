@@ -1421,6 +1421,36 @@ namespace video {
     }
   }
 
+  /**
+   * @brief Give a display that vanished during a stream a moment to come back.
+   * @details Monitors can drop off the link and return a few seconds later: a
+   * DisplayPort monitor coming out of deep sleep may fail its first link
+   * training and reconnect. Falling back to the first display at once would
+   * move the stream to another screen. Only runs once @p name has actually
+   * gone missing, so a display that stays costs nothing.
+   * @param keep_waiting Returns false once nobody needs the display any more.
+   */
+  void wait_for_display(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &display_p, const std::string &name, const std::function<bool()> &keep_waiting) {
+    const auto present = [&]() {
+      return display_p >= 0 && display_p < (int) display_names.size() && display_names[display_p] == name;
+    };
+    if (name.empty() || present()) {
+      return;
+    }
+
+    BOOST_LOG(info) << "Display ["sv << name << "] went away; giving it up to 10 seconds to come back."sv;
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (keep_waiting() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(500ms);
+      std::string preferred = name;
+      refresh_displays(dev_type, display_names, display_p, preferred);
+      if (present()) {
+        BOOST_LOG(info) << "Display ["sv << name << "] is back."sv;
+        return;
+      }
+    }
+  }
+
   void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
     static std::string empty_str = "";
     refresh_displays(dev_type, display_names, current_display_index, empty_str);
@@ -1668,6 +1698,9 @@ namespace video {
               // Refresh display names since a display removal might have caused the reinitialization
               if (!session_scoped_display) {
                 refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, proc::proc.display_name);
+                wait_for_display(encoder.platform_formats->dev_type, display_names, display_p, proc::proc.display_name, [&]() {
+                  return capture_ctx_queue->running();
+                });
 
                 // Process any pending display switch with the new list of displays
                 if (switch_display_event->peek()) {
@@ -2785,7 +2818,11 @@ namespace video {
 
     while (encode_session_ctx_queue.running()) {
       // Refresh display names since a display removal might have caused the reinitialization
+      const auto streamed_display = display_p >= 0 && display_p < (int) display_names.size() ? display_names[display_p] : std::string {};
       refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+      wait_for_display(encoder.platform_formats->dev_type, display_names, display_p, streamed_display, [&]() {
+        return encode_session_ctx_queue.running();
+      });
 
       // Process any pending display switch with the new list of displays
       if (switch_display_event->peek()) {

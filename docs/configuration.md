@@ -442,6 +442,36 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### inhibit_screen_lock
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Keep the host's screensaver and screen lock from engaging while a
+            client is connected, by holding an inhibition through
+            <code>org.freedesktop.ScreenSaver</code> on the D-Bus session bus.
+            The inhibition is released when the last client disconnects.
+            @note{This option applies to Linux only. It needs a screensaver
+            service that implements <code>org.freedesktop.ScreenSaver</code>,
+            such as GNOME, KDE Plasma or Xfce; the desktop must be reachable on
+            the same user bus as Hermes.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            inhibit_screen_lock = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ## Input
 
 ### controller

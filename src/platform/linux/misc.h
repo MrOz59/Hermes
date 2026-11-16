@@ -25,6 +25,10 @@ enum class window_system_e {
 
 extern window_system_e window_system;
 
+#ifdef SUNSHINE_BUILD_SDBUS
+struct sd_bus;
+#endif
+
 namespace platf {
   /**
    * @brief Open the render node of the best GPU to encode a stream on.
@@ -67,6 +71,22 @@ namespace platf {
    * the capture-only Hermes-KMS node included and marked as such.
    */
   std::vector<std::string> render_node_descriptions();
+
+#ifdef SUNSHINE_BUILD_SDBUS
+  /**
+   * @brief Open the desktop's D-Bus user bus.
+   *
+   * Tries libsystemd's normal discovery first, then the standard systemd user
+   * bus socket. The fallback matters because Hermes may carry file
+   * capabilities, which make libsystemd hide DBUS_SESSION_BUS_ADDRESS and
+   * XDG_RUNTIME_DIR and leave discovery unable to find the bus.
+   *
+   * @param result Receives the connection; unref it with sd_bus_unref().
+   * @return 0 on success, or a negative errno.
+   */
+  int open_user_bus(sd_bus **result);
+#endif
+
 }  // namespace platf
 
 namespace dyn {

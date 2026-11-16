@@ -802,12 +802,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Both releases build their CUDA the same way; see the CUDA_VERSION
+          # Every release builds its CUDA the same way; see the CUDA_VERSION
           # comment at the top of the workflow. Fedora 43 still packages gcc14,
-          # Fedora 44 does not, and install_cuda_host_gcc.sh covers the second
-          # case by taking the compat compiler from the release that has it.
+          # Fedora 44 and 45 do not, and install_cuda_host_gcc.sh covers them by
+          # taking the compat compiler from the newest earlier release that has
+          # it. Keep the RPM count in the release-candidate job in step.
           - fedora: "43"
           - fedora: "44"
+          - fedora: "45"
     container:
       image: fedora:${{ matrix.fedora }}
     env:
@@ -970,7 +972,7 @@ jobs:
 
       # The release jobs collect artifacts/**/*, so each leg needs its own
       # artifact name; the packages themselves are already distinct, since
-      # %{?dist} stamps the release as .fc43 / .fc44.
+      # %{?dist} stamps the release as .fc43 / .fc44 / .fc45.
       - name: Install and test RPM with file capabilities
         shell: bash
         run: |
@@ -1140,7 +1142,8 @@ jobs:
           mkdir payload
           find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) -exec cp -t payload -- {} +
           test "$(find payload -name '*.deb' | wc -l)" -eq 2
-          test "$(find payload -name '*.rpm' | wc -l)" -eq 2
+          # One per build-rpm matrix row.
+          test "$(find payload -name '*.rpm' | wc -l)" -eq 3
           test "$(find payload -name 'hermes-streaming-*.pkg.tar.zst' | wc -l)" -ge 1
           notes="docs/${tag}-notes.md"
           test -s "$notes"
@@ -1156,7 +1159,7 @@ jobs:
               'source_commit': os.environ['GITHUB_SHA'],
               'build_version': os.environ['BUILD_VERSION'],
               'workflow_run': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-              'validation': ['host-tests', 'fedora-43-44-secure-loader', 'ubuntu-24.04-26.04-secure-loader', 'installed-rpm-deb-non-root-startup'],
+              'validation': ['host-tests', 'fedora-43-44-45-secure-loader', 'ubuntu-24.04-26.04-secure-loader', 'installed-rpm-deb-non-root-startup'],
               'payload_sha256': files,
           }
           (payload / 'RC_MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n')

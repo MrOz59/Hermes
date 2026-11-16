@@ -12,6 +12,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- Fedora 45 packages: CI now builds `hermes-<version>-1.fc45.x86_64.rpm`,
+  installs it and runs the secure-loader checks on Fedora 45 alongside 43
+  and 44.
 - `inhibit_screen_lock` (off by default) keeps the host's screensaver and
   screen lock from engaging while a client is connected. On Linux it holds an
   inhibition through `org.freedesktop.ScreenSaver` on the D-Bus session bus and

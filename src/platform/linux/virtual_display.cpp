@@ -80,69 +80,6 @@ namespace VDISPLAY {
     return "unix:path=/run/user/" + std::to_string(uid) + "/bus";
   }
 
-#ifdef SUNSHINE_BUILD_SDBUS
-  /**
-   * Open the desktop's user bus even when Hermes carries a file capability.
-   *
-   * libsystemd deliberately reads DBUS_SESSION_BUS_ADDRESS and XDG_RUNTIME_DIR
-   * with secure_getenv(). Linux sets AT_SECURE for a file-capability binary, so
-   * sd_bus_open_user() then sees neither variable and returns ENOMEDIUM. The
-   * packaged binary carries cap_sys_admin+p for legacy KMS capture, which made
-   * every sd-bus feature fail even though its child tools could reach the bus.
-   *
-   * Try libsystemd's normal discovery first for non-systemd/custom sessions.
-   * Its standard user-bus fallback is deterministic, so reproduce that path
-   * explicitly when discovery is unavailable. The address contains only the
-   * kernel-provided real uid; no environment value crosses the capability
-   * boundary.
-   */
-  static int open_user_bus(sd_bus **result) {
-    if (!result) {
-      return -EINVAL;
-    }
-    *result = nullptr;
-
-    const int discovered = sd_bus_open_user(result);
-    if (discovered >= 0) {
-      return discovered;
-    }
-    if (*result) {
-      sd_bus_unref(*result);
-      *result = nullptr;
-    }
-    if (discovered != -ENOMEDIUM) {
-      return discovered;
-    }
-
-    sd_bus *bus = nullptr;
-    int status = sd_bus_new(&bus);
-    if (status < 0) {
-      return status;
-    }
-    const auto fail = [&bus](int error) {
-      sd_bus_unref(bus);
-      return error;
-    };
-
-    const auto address = systemdUserBusAddress(static_cast<uint32_t>(::getuid()));
-    status = sd_bus_set_address(bus, address.c_str());
-    if (status < 0) {
-      return fail(status);
-    }
-    status = sd_bus_set_bus_client(bus, 1);
-    if (status < 0) {
-      return fail(status);
-    }
-    status = sd_bus_start(bus);
-    if (status < 0) {
-      return fail(status);
-    }
-
-    *result = bus;
-    return 0;
-  }
-#endif
-
   /** Whether something accepts connections on a Unix socket. */
   static bool unix_socket_answers(const std::string &path, bool abstract_namespace = false) {
     sockaddr_un address {};
@@ -236,7 +173,7 @@ namespace VDISPLAY {
   std::optional<std::vector<std::string>> userManagerEnvironment() {
 #ifdef SUNSHINE_BUILD_SDBUS
     sd_bus *bus = nullptr;
-    if (open_user_bus(&bus) < 0 || !bus) {
+    if (platf::open_user_bus(&bus) < 0 || !bus) {
       return std::nullopt;
     }
     const std::unique_ptr<sd_bus, decltype(&sd_bus_unref)> bus_guard {bus, &sd_bus_unref};
@@ -3746,7 +3683,7 @@ namespace VDISPLAY {
         started->previous_uuids[i] = std::move(previous);
       }
 
-      const int opened = open_user_bus(&started->bus);
+      const int opened = platf::open_user_bus(&started->bus);
       if (opened < 0 || !started->bus) {
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not connect to the user bus to bind touch input: "
                            << (opened < 0 ? std::strerror(-opened) : "no connection was returned")
@@ -3945,7 +3882,7 @@ namespace VDISPLAY {
       }
 
       sd_bus *bus = nullptr;
-      if (open_user_bus(&bus) < 0 || !bus) {
+      if (platf::open_user_bus(&bus) < 0 || !bus) {
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not reach KWin to place windows on " << output << '.';
         return;
       }
@@ -3986,7 +3923,7 @@ namespace VDISPLAY {
         placements.erase(it);
       }
       sd_bus *bus = nullptr;
-      if (open_user_bus(&bus) >= 0 && bus) {
+      if (platf::open_user_bus(&bus) >= 0 && bus) {
         call_kwin_scripting(bus, "/Scripting", "org.kde.kwin.Scripting", "unloadScript", nullptr, "s", plugin.c_str());
         sd_bus_unref(bus);
       }
@@ -5606,7 +5543,7 @@ namespace VDISPLAY {
       }
 
       auto started = std::make_unique<watcher_t>();
-      const int opened = open_user_bus(&started->bus);
+      const int opened = platf::open_user_bus(&started->bus);
       if (opened < 0 || !started->bus) {
         BOOST_LOG(debug) << "[VDISPLAY/Mutter] Could not connect to the user bus to watch for layout changes: "
                          << (opened < 0 ? std::strerror(-opened) : "no connection was returned") << '.';

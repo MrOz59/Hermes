@@ -1912,6 +1912,9 @@ namespace platf {
                         bool *) override {
         auto next_frame = std::chrono::steady_clock::now();
         auto last_frame = buffer->frame_number();
+        // The first frame is always copied, so a new session starts with a picture.
+        bool copied_any = false;
+        std::uint64_t copied_frame = 0;
 
         while (true) {
           const auto now = std::chrono::steady_clock::now();
@@ -1928,8 +1931,19 @@ namespace platf {
           if (!pull_free_image_cb(img_out)) {
             return capture_e::interrupted;
           }
+          // Nothing was drawn since the last copy: report no new frame, like
+          // the other backends do on a timeout. The encoder then repeats the
+          // previous frame at its minimum rate instead of encoding an
+          // identical frame at the full frame rate.
+          if (copied_any && buffer->frame_number() == copied_frame) {
+            if (!push_captured_image_cb(std::move(img_out), false)) {
+              return capture_e::ok;
+            }
+            continue;
+          }
           const auto t0 = std::chrono::steady_clock::now();
-          buffer->copy_to(img_out->data, img_out->row_pitch);
+          copied_frame = buffer->copy_to(img_out->data, img_out->row_pitch);
+          copied_any = true;
           const auto t1 = std::chrono::steady_clock::now();
           accumulate_capture_metric("evdi", std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
           img_out->frame_timestamp = std::chrono::steady_clock::now();

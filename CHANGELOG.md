@@ -12,6 +12,10 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- `inhibit_screen_lock` (off by default) keeps the host's screensaver and
+  screen lock from engaging while a client is connected. On Linux it holds an
+  inhibition through `org.freedesktop.ScreenSaver` on the D-Bus session bus and
+  releases it when the last client disconnects.
 - Double-NAT UPnP forwarding using the existing `upnp` setting, with ownership-aware
   cleanup on both routers and recovery of permanent rules after a restart (#126).
   Flatpak includes the MiniUPnPc XML bounds fixes for CVE-2026-110655 and CVE-2026-110656.

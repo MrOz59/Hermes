@@ -7990,53 +7990,44 @@ namespace VDISPLAY {
       return status;
     }
 
-    /**
-     * Ask the monitor behind DRM connector @p connector (a /sys/class/drm
-     * entry) for the first byte of its EDID. A DisplayPort monitor in deep
-     * sleep does not answer, but the request on its AUX channel wakes it.
-     * @return Whether the request was sent.
-     */
-    bool nudge_monitor(const std::filesystem::path &connector) {
+    /** The DDC adapter device of a /sys/class/drm connector, e.g. "/dev/i2c-9". */
+    std::string ddc_device(const std::filesystem::path &connector) {
       std::error_code ec;
       const auto adapter = std::filesystem::read_symlink(connector / "ddc", ec).filename().string();
-      if (ec || !adapter.starts_with("i2c-")) {
-        return false;
-      }
-      const auto device = "/dev/" + adapter;
-      const int fd = ::open(device.c_str(), O_RDWR | O_CLOEXEC);
-      if (fd < 0) {
-        BOOST_LOG(info) << "[VDISPLAY] Can't open " << device << " to wake " << connector.filename().string() << ": " << std::strerror(errno);
-        return false;
-      }
-      constexpr long edid_address = 0x50;
-      const bool sent = ::ioctl(fd, I2C_SLAVE, edid_address) == 0;
-      if (sent) {
-        // A sleeping monitor does not answer; the request is what wakes it.
-        unsigned char byte = 0;
-        (void) !::write(fd, &byte, 1);
-        (void) !::read(fd, &byte, 1);
-      }
-      ::close(fd);
-      return sent;
+      return ec || !adapter.starts_with("i2c-") ? std::string {} : "/dev/" + adapter;
     }
 
     /**
-     * Wake every DisplayPort monitor that is not showing a frame, and wait for
-     * the ones in deep sleep to come back.
+     * Read the first byte of the monitor's EDID over the DDC adapter @p fd.
+     * A DisplayPort monitor in deep sleep does not answer, but the request
+     * on its AUX channel wakes it; once it is up, the read succeeds.
+     */
+    bool edid_answers(int fd) {
+      constexpr long edid_address = 0x50;
+      unsigned char byte = 0;
+      return ::ioctl(fd, I2C_SLAVE, edid_address) == 0 && ::write(fd, &byte, 1) == 1 && ::read(fd, &byte, 1) == 1;
+    }
+
+    /**
+     * Wake every DisplayPort monitor that is not showing a frame, and wait
+     * for the ones in deep sleep to be ready.
      *
-     * Woken by a modeset, a monitor in deep sleep fails link training (its AUX
-     * channel is not answering yet), drops off and returns seconds later.
-     * Woken over AUX, it drops its hot-plug signal within a moment and raises
-     * it again once it is ready, after which the link trains in one go. A
-     * monitor that does not drop was not in deep sleep, and is not waited for.
-     * @return Whether any monitor was woken.
+     * Woken by a modeset, a monitor in deep sleep fails link training (its
+     * AUX channel is not answering yet), drops off and returns seconds later.
+     * Asked for its EDID instead, it wakes, drops its hot-plug signal while
+     * it starts and answers once it is ready, after which the link trains in
+     * one go. A monitor that answers at once was not in deep sleep, and
+     * nothing waits for it.
+     * @return Whether any monitor was asked.
      */
     bool wake_sleeping_displayport_monitors() {
-      // Monitors still connected are followed through their restart. A port
-      // already disconnected is nudged too: the monitor behind it may have
-      // dropped off in deep sleep, and the caller waits for it to return.
-      bool any = false;
-      std::vector<std::filesystem::path> nudged;
+      struct sleeping_t {
+        std::filesystem::path connector;
+        int fd;
+      };
+
+      bool asked = false;
+      std::vector<sleeping_t> sleeping;
       std::error_code ec;
       for (const auto &entry : std::filesystem::directory_iterator {"/sys/class/drm", ec}) {
         const auto name = entry.path().filename().string();  // "card1-DP-2"
@@ -8048,37 +8039,49 @@ namespace VDISPLAY {
         if (!connector.starts_with("DP-") || output_scanning_out(connector)) {
           continue;
         }
-        const bool was_connected = connector_status(entry.path()) == "connected";
-        if (nudge_monitor(entry.path())) {
-          any = true;
-          if (was_connected) {
-            nudged.push_back(entry.path());
+        const auto device = ddc_device(entry.path());
+        const int fd = device.empty() ? -1 : ::open(device.c_str(), O_RDWR | O_CLOEXEC);
+        if (fd < 0) {
+          if (!device.empty()) {
+            BOOST_LOG(info) << "[VDISPLAY] Can't open " << device << " to wake " << connector << ": " << std::strerror(errno);
           }
+          continue;
+        }
+        asked = true;
+        // Only a monitor the kernel still sees is followed: a port that reads
+        // disconnected may be empty, and is asked once without waiting. Read
+        // the state first; the monitor may drop it as soon as it is asked.
+        const bool connected = connector_status(entry.path()) == "connected";
+        if (!edid_answers(fd) && connected) {
+          sleeping.push_back({entry.path(), fd});
+        } else {
+          ::close(fd);
         }
       }
-      if (nudged.empty()) {
-        return any;
+      if (sleeping.empty()) {
+        return asked;
       }
 
-      const auto any_disconnected = [&nudged]() {
-        return std::ranges::any_of(nudged, [](const auto &connector) {
-          return connector_status(connector) == "disconnected";
-        });
-      };
       const auto start = std::chrono::steady_clock::now();
-      bool dropped = false;
-      while (!dropped && std::chrono::steady_clock::now() - start < 500ms) {
-        std::this_thread::sleep_for(50ms);
-        dropped = any_disconnected();
+      while (!sleeping.empty() && std::chrono::steady_clock::now() - start < 5s) {
+        std::this_thread::sleep_for(100ms);
+        std::erase_if(sleeping, [](const sleeping_t &monitor) {
+          const bool ready = connector_status(monitor.connector) == "connected" && edid_answers(monitor.fd);
+          if (ready) {
+            ::close(monitor.fd);
+          }
+          return ready;
+        });
       }
-      if (!dropped) {
-        return true;
+      const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+      if (sleeping.empty()) {
+        BOOST_LOG(info) << "[VDISPLAY] Woke DisplayPort monitor(s) from deep sleep; ready after " << waited << " ms.";
+      } else {
+        BOOST_LOG(warning) << "[VDISPLAY] A DisplayPort monitor did not answer within " << waited << " ms of being woken.";
+        for (const auto &monitor : sleeping) {
+          ::close(monitor.fd);
+        }
       }
-      while (any_disconnected() && std::chrono::steady_clock::now() - start < 4s) {
-        std::this_thread::sleep_for(50ms);
-      }
-      BOOST_LOG(info) << "[VDISPLAY] Woke DisplayPort monitor(s) from deep sleep over AUX; ready after "
-                      << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count() << " ms.";
       return true;
     }
 

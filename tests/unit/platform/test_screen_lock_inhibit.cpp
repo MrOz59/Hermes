@@ -56,31 +56,35 @@ namespace {
       if (const int status = sd_bus_add_object_vtable(service_bus_, &slot_, screen_saver_path, screen_saver_interface, screen_saver_vtable(), this); status < 0) {
         GTEST_SKIP() << "could not publish " << screen_saver_path << ": " << std::strerror(-status);
       }
+      service_online_.store(true);
 
       service_thread_ = std::thread([this] {
         while (!stop_.load()) {
-          if (restart_service_.exchange(false)) {
-            // Simulate a real process restart: disconnect the old D-Bus
-            // connection and register a fresh unique bus owner. Releasing
-            // and re-requesting the name on one connection does not model a
-            // new service instance and can reuse a stale owner identity.
-            sd_bus_slot_unref(slot_);
-            slot_ = nullptr;
-            sd_bus_unref(service_bus_);
-            service_bus_ = nullptr;
-            {
-              std::lock_guard lock {mutex_};
-              inhibited_ = false;
-              service_cookie_counter_ = 0;
-            }
-            inhibited_changed_.notify_all();
-            if (sd_bus_open_user(&service_bus_) < 0 ||
-                sd_bus_add_object_vtable(service_bus_, &slot_, screen_saver_path,
-                                         screen_saver_interface, screen_saver_vtable(), this) < 0 ||
-                sd_bus_request_name(service_bus_, screen_saver_service, 0) < 0) {
-              restart_failed_.store(true);
+          switch (service_command_.exchange(service_command_e::none)) {
+            case service_command_e::none:
               break;
-            }
+            case service_command_e::restart:
+              // Simulate a real process restart: disconnect the old D-Bus
+              // connection and register a fresh unique bus owner. Releasing
+              // and re-requesting the name on one connection does not model a
+              // new service instance and can reuse a stale owner identity.
+              disconnect_service();
+              if (!connect_service()) {
+                restart_failed_.store(true);
+              }
+              break;
+            case service_command_e::down:
+              disconnect_service();
+              break;
+            case service_command_e::up:
+              if (!service_bus_ && !connect_service()) {
+                restart_failed_.store(true);
+              }
+              break;
+          }
+          if (!service_bus_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds {10});
+            continue;
           }
           sd_bus_process(service_bus_, nullptr);
           sd_bus_wait(service_bus_, 50'000);
@@ -134,7 +138,27 @@ namespace {
     }
 
     void restart_fake_service() {
-      restart_service_.store(true);
+      service_command_.store(service_command_e::restart);
+    }
+
+    void stop_fake_service() {
+      service_command_.store(service_command_e::down);
+    }
+
+    void start_fake_service() {
+      service_command_.store(service_command_e::up);
+    }
+
+    // The commands above run on the service thread; wait until it applied one.
+    bool wait_for_service_online(bool expected) {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds {5};
+      while (service_online_.load() != expected) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+          return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds {5});
+      }
+      return true;
     }
 
     bool fake_service_restart_failed() const {
@@ -149,6 +173,8 @@ namespace {
     std::condition_variable inhibited_changed_;
     bool inhibited_ {false};
     int inhibit_count_ {0};
+    // Not reset when the fake restarts, so every instance issues distinct
+    // cookies and a stale cookie sent to a new instance is detectable.
     std::uint32_t service_cookie_counter_ {0};
     std::uint32_t last_cookie_ {0};
     std::uint32_t last_uninhibited_cookie_ {0};
@@ -156,6 +182,37 @@ namespace {
     std::string reason_;
 
   private:
+    enum class service_command_e {
+      none,
+      restart,
+      down,
+      up,
+    };
+
+    // Service-thread only. A fresh connection gets a fresh unique bus name.
+    bool connect_service() {
+      const bool online = sd_bus_open_user(&service_bus_) >= 0 &&
+                          sd_bus_add_object_vtable(service_bus_, &slot_, screen_saver_path, screen_saver_interface, screen_saver_vtable(), this) >= 0 &&
+                          sd_bus_request_name(service_bus_, screen_saver_service, 0) >= 0;
+      service_online_.store(online);
+      return online;
+    }
+
+    // Service-thread only. Dropping the connection drops every inhibition the
+    // old instance held, like a crashing or restarting screensaver would.
+    void disconnect_service() {
+      sd_bus_slot_unref(slot_);
+      slot_ = nullptr;
+      sd_bus_unref(service_bus_);
+      service_bus_ = nullptr;
+      service_online_.store(false);
+      {
+        std::lock_guard lock {mutex_};
+        inhibited_ = false;
+      }
+      inhibited_changed_.notify_all();
+    }
+
     bool start_private_session_bus() {
       FILE *pipe = ::popen("dbus-daemon --session --fork --print-address=1 --print-pid=1 2>/dev/null", "r");
       if (!pipe) {
@@ -257,8 +314,9 @@ namespace {
     sd_bus_slot *slot_ {nullptr};
     std::thread service_thread_;
     std::atomic<bool> stop_ {false};
-    std::atomic<bool> restart_service_ {false};
+    std::atomic<service_command_e> service_command_ {service_command_e::none};
     std::atomic<bool> restart_failed_ {false};
+    std::atomic<bool> service_online_ {false};
     std::atomic<int> inhibit_reply_delay_ms_ {0};
     pid_t daemon_pid_ {0};
     bool had_previous_address_ {false};
@@ -335,6 +393,31 @@ TEST_F(ScreenLockInhibitTest, RestoresInhibitionAfterScreensaverRestart) {
   ASSERT_TRUE(wait_for_inhibition(false)) << "the latest service did not receive UnInhibit";
   std::lock_guard lock {mutex_};
   EXPECT_EQ(inhibit_count_, 4) << "duplicate or missing inhibition after service replacement";
+  EXPECT_EQ(last_uninhibited_cookie_, last_cookie_);
+}
+
+TEST_F(ScreenLockInhibitTest, InhibitsWhenTheScreensaverAppearsMidStream) {
+  config::sunshine.inhibit_screen_lock = true;
+  stop_fake_service();
+  ASSERT_TRUE(wait_for_service_online(false));
+
+  // Without an owner, Inhibit fails with ServiceUnknown. The worker must then
+  // wait for NameOwnerChanged rather than give up for the rest of the stream.
+  platf::streaming_will_start();
+  std::this_thread::sleep_for(std::chrono::milliseconds {300});
+  {
+    std::lock_guard lock {mutex_};
+    EXPECT_EQ(inhibit_count_, 0);
+  }
+
+  start_fake_service();
+  ASSERT_TRUE(wait_for_service_online(true));
+  ASSERT_TRUE(wait_for_count(1)) << "Hermes did not inhibit once the screensaver appeared";
+
+  platf::streaming_will_stop();
+  ASSERT_TRUE(wait_for_inhibition(false));
+  std::lock_guard lock {mutex_};
+  EXPECT_EQ(inhibit_count_, 1);
   EXPECT_EQ(last_uninhibited_cookie_, last_cookie_);
 }
 

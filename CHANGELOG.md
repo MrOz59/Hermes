@@ -77,9 +77,20 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   the lookup always came back empty. Activating the output and exclusive mode
   then stopped with "DRM connector was not found". The driver is now read from
   the card's own device.
+- On KWin, touch and pen land on the monitor being streamed ([#131], from
+  PunkUnity). KWin bound new touch devices to an output of its own choosing,
+  so with more than one monitor a Multi touch client often did nothing. When
+  Hermes captures a physical output, the touch and pen devices are now bound
+  to it for the session and released afterwards.
+- With no display configured, Hermes streams the desktop's primary monitor
+  (from PunkUnity). Monitor numbers follow DRM plane order, not the desktop
+  layout, so monitor 0 could be a KVM capture input or a dummy plug. On KWin,
+  the output KScreen marks as primary is now listed first; a configured
+  display number still selects the same monitor as before.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99
+[#131]: https://github.com/MrOz59/Hermes/pull/131
 
 ## [0.7.0] - 2026-11-02
 

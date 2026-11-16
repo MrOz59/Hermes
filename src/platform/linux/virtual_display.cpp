@@ -7896,6 +7896,19 @@ namespace VDISPLAY {
     apply_physical_binding_locked();
   }
 
+  std::string primaryPhysicalOutputName() {
+    if (window_system != window_system_e::WAYLAND || !kscreen::available()) {
+      return {};
+    }
+    for (const auto &output : kscreen::outputs()) {
+      if (output.connected && output.enabled && output.priority == 1) {
+        // A virtual output made primary is not a monitor to prefer.
+        return output.name.starts_with("Virtual") ? std::string {} : output.name;
+      }
+    }
+    return {};
+  }
+
   void beginPhysicalOutputSession() {
     std::lock_guard<std::mutex> lock(physical_input_mutex);
     physical_session_active = true;

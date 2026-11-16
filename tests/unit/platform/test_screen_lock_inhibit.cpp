@@ -60,15 +60,27 @@ namespace {
       service_thread_ = std::thread([this] {
         while (!stop_.load()) {
           if (restart_service_.exchange(false)) {
-            // A new owner invalidates the old inhibition cookie, without
-            // disconnecting Hermes from its session bus.
-            sd_bus_release_name(service_bus_, screen_saver_service);
+            // Simulate a real process restart: disconnect the old D-Bus
+            // connection and register a fresh unique bus owner. Releasing
+            // and re-requesting the name on one connection does not model a
+            // new service instance and can reuse a stale owner identity.
+            sd_bus_slot_unref(slot_);
+            slot_ = nullptr;
+            sd_bus_unref(service_bus_);
+            service_bus_ = nullptr;
             {
               std::lock_guard lock {mutex_};
               inhibited_ = false;
+              service_cookie_counter_ = 0;
             }
             inhibited_changed_.notify_all();
-            sd_bus_request_name(service_bus_, screen_saver_service, 0);
+            if (sd_bus_open_user(&service_bus_) < 0 ||
+                sd_bus_add_object_vtable(service_bus_, &slot_, screen_saver_path,
+                                         screen_saver_interface, screen_saver_vtable(), this) < 0 ||
+                sd_bus_request_name(service_bus_, screen_saver_service, 0) < 0) {
+              restart_failed_.store(true);
+              break;
+            }
           }
           sd_bus_process(service_bus_, nullptr);
           sd_bus_wait(service_bus_, 50'000);
@@ -133,6 +145,7 @@ namespace {
     std::condition_variable inhibited_changed_;
     bool inhibited_ {false};
     int inhibit_count_ {0};
+    std::uint32_t service_cookie_counter_ {0};
     std::uint32_t last_cookie_ {0};
     std::uint32_t last_uninhibited_cookie_ {0};
     std::string application_;
@@ -207,7 +220,7 @@ namespace {
         std::lock_guard lock {self->mutex_};
         ++self->inhibit_count_;
         self->inhibited_ = true;
-        self->last_cookie_ = static_cast<std::uint32_t>(self->inhibit_count_);
+        self->last_cookie_ = ++self->service_cookie_counter_;
         self->application_ = application;
         self->reason_ = reason;
         cookie = self->last_cookie_;
@@ -241,6 +254,7 @@ namespace {
     std::thread service_thread_;
     std::atomic<bool> stop_ {false};
     std::atomic<bool> restart_service_ {false};
+    std::atomic<bool> restart_failed_ {false};
     std::atomic<int> inhibit_reply_delay_ms_ {0};
     pid_t daemon_pid_ {0};
     bool had_previous_address_ {false};
@@ -303,12 +317,21 @@ TEST_F(ScreenLockInhibitTest, RestoresInhibitionAfterScreensaverRestart) {
   platf::streaming_will_start();
   ASSERT_TRUE(wait_for_count(1));
 
-  restart_fake_service();
-  ASSERT_TRUE(wait_for_count(2)) << "Hermes did not reinhibit after the screensaver changed owner";
-  EXPECT_TRUE(wait_for_inhibition(true));
+  // Replacing the fake service must yield another *unique* D-Bus sender.
+  // Repeat to cover queued NameOwnerChanged signals that can arrive after
+  // the replacement service has already answered the next Inhibit call.
+  for (int expected = 2; expected <= 4; ++expected) {
+    restart_fake_service();
+    ASSERT_TRUE(wait_for_count(expected)) << "Hermes did not reinhibit after screensaver restart " << expected;
+    ASSERT_FALSE(restart_failed_.load());
+    EXPECT_TRUE(wait_for_inhibition(true));
+  }
 
   platf::streaming_will_stop();
-  ASSERT_TRUE(wait_for_inhibition(false));
+  ASSERT_TRUE(wait_for_inhibition(false)) << "the latest service did not receive UnInhibit";
+  std::lock_guard lock {mutex_};
+  EXPECT_EQ(inhibit_count_, 4) << "duplicate or missing inhibition after service replacement";
+  EXPECT_EQ(last_uninhibited_cookie_, last_cookie_);
 }
 
 TEST_F(ScreenLockInhibitTest, StopDoesNotWaitForSlowInhibitCall) {

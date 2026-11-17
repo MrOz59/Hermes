@@ -7990,55 +7990,56 @@ namespace VDISPLAY {
       return status;
     }
 
-    /** The DDC adapter device of a /sys/class/drm connector, e.g. "/dev/i2c-9". */
-    std::string ddc_device(const std::filesystem::path &connector) {
+    /**
+     * The I2C adapter that runs over a DisplayPort connector's AUX channel,
+     * e.g. "/dev/i2c-9". It is a child of the connector in sysfs. The
+     * connector's "ddc" link is not it: on amdgpu that names the hardware DDC
+     * bus, which a sleeping DisplayPort monitor does not listen on.
+     */
+    std::string aux_i2c_device(const std::filesystem::path &connector) {
       std::error_code ec;
-      const auto adapter = std::filesystem::read_symlink(connector / "ddc", ec).filename().string();
-      return ec || !adapter.starts_with("i2c-") ? std::string {} : "/dev/" + adapter;
+      for (const auto &entry : std::filesystem::directory_iterator {connector, ec}) {
+        const auto name = entry.path().filename().string();
+        if (name.starts_with("i2c-")) {
+          return "/dev/" + name;
+        }
+      }
+      return {};
     }
 
     /**
-     * Send the monitor a DDC/CI "Get VCP Feature" request for its power mode
-     * (0xD6) over the DDC adapter @p fd. A DisplayPort monitor in deep sleep
-     * does not answer, but the request wakes it.
+     * Read the first byte of the monitor's EDID over @p device.
+     * @return 1 if the monitor answered, 0 if it did not, -1 if the device
+     * could not be opened.
      */
-    void ddc_ci_request_power_mode(int fd) {
-      constexpr long ddc_ci_address = 0x37;
-      // Source address, length, Get VCP Feature, power mode, and the XOR
-      // checksum over the destination address (0x6E) and those four bytes.
-      const unsigned char request[] = {0x51, 0x82, 0x01, 0xD6, 0x6E ^ 0x51 ^ 0x82 ^ 0x01 ^ 0xD6};
-      if (::ioctl(fd, I2C_SLAVE, ddc_ci_address) == 0) {
-        (void) !::write(fd, request, sizeof(request));
+    int read_edid_byte(const std::string &device) {
+      const int fd = ::open(device.c_str(), O_RDWR | O_CLOEXEC);
+      if (fd < 0) {
+        return -1;
       }
-    }
-
-    /** Whether the monitor answers a read of the first byte of its EDID: it is up. */
-    bool edid_answers(int fd) {
       constexpr long edid_address = 0x50;
       unsigned char byte = 0;
-      return ::ioctl(fd, I2C_SLAVE, edid_address) == 0 && ::write(fd, &byte, 1) == 1 && ::read(fd, &byte, 1) == 1;
+      const bool answered = ::ioctl(fd, I2C_SLAVE, edid_address) == 0 && ::write(fd, &byte, 1) == 1 && ::read(fd, &byte, 1) == 1;
+      ::close(fd);
+      return answered ? 1 : 0;
     }
 
     /**
-     * Wake every DisplayPort monitor that is not showing a frame, and wait
-     * for the ones in deep sleep to be ready.
+     * Wake DisplayPort monitors from deep sleep, and wait for them.
      *
-     * Woken by a modeset, a monitor in deep sleep fails link training (its
-     * AUX channel is not answering yet), drops off and returns seconds later.
-     * Sent a DDC/CI request instead, it wakes, drops its hot-plug signal
-     * while it starts and answers once it is ready, after which the link
-     * trains in one go. A monitor that answers at once was not in deep sleep, and
-     * nothing waits for it.
-     * @return Whether any monitor was asked.
+     * Woken by a modeset, a monitor in deep sleep fails link training (its AUX
+     * channel is not answering yet), drops off and returns seconds later. One
+     * read on its AUX channel wakes it instead: the read times out, the
+     * monitor starts, and the compositor lights it by itself once it has
+     * reconnected, with no failed training. Measured on an ASUS VG32V on an
+     * RX 9070 XT: lit 6.2 to 6.5 seconds after the read, either way.
+     *
+     * A monitor that answers the read is not in deep sleep, and nothing waits
+     * for it. Nothing more is sent while a monitor wakes.
+     * @return Whether a monitor was woken and has come up.
      */
-    bool wake_sleeping_displayport_monitors() {
-      struct sleeping_t {
-        std::filesystem::path connector;
-        int fd;
-      };
-
-      bool asked = false;
-      std::vector<sleeping_t> sleeping;
+    bool wake_displayport_monitors_from_deep_sleep() {
+      std::vector<std::string> waking;
       std::error_code ec;
       for (const auto &entry : std::filesystem::directory_iterator {"/sys/class/drm", ec}) {
         const auto name = entry.path().filename().string();  // "card1-DP-2"
@@ -8047,54 +8048,40 @@ namespace VDISPLAY {
           continue;
         }
         const auto connector = name.substr(dash + 1);
-        if (!connector.starts_with("DP-") || output_scanning_out(connector)) {
+        // Read the state first: a waking monitor drops it at once.
+        if (!connector.starts_with("DP-") || connector_status(entry.path()) != "connected" || output_scanning_out(connector)) {
           continue;
         }
-        const auto device = ddc_device(entry.path());
-        const int fd = device.empty() ? -1 : ::open(device.c_str(), O_RDWR | O_CLOEXEC);
-        if (fd < 0) {
-          if (!device.empty()) {
-            BOOST_LOG(info) << "[VDISPLAY] Can't open " << device << " to wake " << connector << ": " << std::strerror(errno);
-          }
+        const auto device = aux_i2c_device(entry.path());
+        if (device.empty()) {
           continue;
         }
-        asked = true;
-        // Only a monitor the kernel still sees is followed: a port that reads
-        // disconnected may be empty, and is asked once without waiting. Read
-        // the state first; the monitor may drop it as soon as it is asked.
-        const bool connected = connector_status(entry.path()) == "connected";
-        ddc_ci_request_power_mode(fd);
-        if (!edid_answers(fd) && connected) {
-          sleeping.push_back({entry.path(), fd});
-        } else {
-          ::close(fd);
+        const int answered = read_edid_byte(device);
+        if (answered < 0) {
+          BOOST_LOG(info) << "[VDISPLAY] Can't open " << device << " to wake " << connector << ": " << std::strerror(errno);
+        } else if (answered == 0) {
+          waking.push_back(connector);
         }
       }
-      if (sleeping.empty()) {
-        return asked;
+      if (waking.empty()) {
+        return false;
       }
 
       const auto start = std::chrono::steady_clock::now();
-      while (!sleeping.empty() && std::chrono::steady_clock::now() - start < 5s) {
+      const auto all_lit = [&waking]() {
+        return std::ranges::all_of(waking, output_scanning_out);
+      };
+      bool lit = false;
+      while (!(lit = all_lit()) && std::chrono::steady_clock::now() - start < 8s) {
         std::this_thread::sleep_for(100ms);
-        std::erase_if(sleeping, [](const sleeping_t &monitor) {
-          const bool ready = connector_status(monitor.connector) == "connected" && edid_answers(monitor.fd);
-          if (ready) {
-            ::close(monitor.fd);
-          }
-          return ready;
-        });
       }
       const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-      if (sleeping.empty()) {
-        BOOST_LOG(info) << "[VDISPLAY] Woke DisplayPort monitor(s) from deep sleep; ready after " << waited << " ms.";
+      if (lit) {
+        BOOST_LOG(info) << "[VDISPLAY] Woke " << waking.front() << " from deep sleep over AUX; lit after " << waited << " ms.";
       } else {
-        BOOST_LOG(warning) << "[VDISPLAY] A DisplayPort monitor did not answer within " << waited << " ms of being woken.";
-        for (const auto &monitor : sleeping) {
-          ::close(monitor.fd);
-        }
+        BOOST_LOG(warning) << "[VDISPLAY] " << waking.front() << " was woken from deep sleep over AUX but is not lit after " << waited << " ms.";
       }
-      return true;
+      return lit;
     }
 
     struct physical_output_t {
@@ -8122,28 +8109,21 @@ namespace VDISPLAY {
       return false;
     }
 
-    // Woken by a modeset, a DisplayPort monitor in deep sleep fails link
-    // training (its AUX channel is not answering yet), drops off and comes
-    // back seconds later. Woken over AUX first, it reconnects by itself once
-    // it is ready, and the link comes up in one go.
-    const bool nudged = wake_sleeping_displayport_monitors();
+    const bool woken = wake_displayport_monitors_from_deep_sleep();
 
-    // In deep sleep the primary may have left the desktop's layout entirely;
-    // give it a moment to reconnect before settling for another output.
-    auto monitor = enabled_physical_output();
-    for (int i = 0; nudged && !monitor.primary && i < 20; ++i) {
-      std::this_thread::sleep_for(250ms);
-      monitor = enabled_physical_output();
-    }
+    const auto monitor = enabled_physical_output();
     if (monitor.name.empty()) {
       return false;
+    }
+    // Count as user activity, so the idle timer that put the screens to sleep
+    // doesn't turn them off again before capture starts.
+    simulate_user_activity();
+    if (woken && output_scanning_out(monitor.name)) {
+      return true;  // The compositor lit it when it reconnected.
     }
 
     BOOST_LOG(info) << "[VDISPLAY/KScreen] " << monitor.name
                     << " is enabled but dark (power saving); waking it instead of creating a virtual display.";
-    // Count as user activity first, so the idle timer that put the screens to
-    // sleep doesn't turn them off again before capture starts.
-    simulate_user_activity();
     if (!kscreen::run_layout_command("kscreen-doctor --dpms on")) {
       return false;
     }

@@ -1032,9 +1032,11 @@ namespace VDISPLAY {
   /**
    * @brief Wake a monitor the compositor has put to sleep.
    * @details KWin on Wayland only. Screens in power saving read as unlit, the
-   * same as no monitor at all. If KScreen still lists a connected, enabled
-   * physical output, turn the screens back on and wait, up to 3 seconds, for
-   * the primary one to show a frame.
+   * same as no monitor at all. A DisplayPort monitor in deep sleep is woken
+   * with one read on its AUX channel and waited for, at most 8 seconds, until
+   * the compositor has lit it. Otherwise, if KScreen still lists a connected,
+   * enabled physical output, the screens are turned back on and the primary
+   * one is waited for, at most 3 seconds, until it shows a frame.
    * @return True once that output is scanning out; false if there was nothing
    * to wake or it did not come back.
    */

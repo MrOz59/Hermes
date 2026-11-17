@@ -83,10 +83,10 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   created one. When KScreen still lists a connected, enabled output, Hermes now
   wakes the screens and streams the primary output as soon as it shows a
   picture, waiting at most 3 seconds. A DisplayPort monitor in deep sleep is
-  first sent a DDC/CI request over its AUX channel, which wakes it, and
-  Hermes waits until it answers: woken by a modeset instead, it failed link training
+  woken with one read on its AUX channel instead, and Hermes waits until the
+  compositor has lit it: woken by a modeset, it failed link training
   (`dpcd_set_link_settings ... failed` on amdgpu), dropped off and came back
-  seconds later. A monitor that answers at once is not waited for. Outputs
+  seconds later. A monitor that answers the read is not waited for. Outputs
   turned off in the display settings are left alone, so a host without a
   monitor still gets a virtual display.
 

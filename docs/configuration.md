@@ -452,10 +452,14 @@ editing the `conf` file in a text editor. Use the examples as reference.
             client is connected, by holding an inhibition through
             <code>org.freedesktop.ScreenSaver</code> on the D-Bus session bus.
             The inhibition is released when the last client disconnects.
-            @note{This option applies to Linux only. It needs a screensaver
-            service that implements <code>org.freedesktop.ScreenSaver</code>,
-            such as GNOME, KDE Plasma or Xfce; the desktop must be reachable on
-            the same user bus as Hermes.}
+            @note{This option applies to Linux only. It needs a desktop
+            screensaver service implementing <code>org.freedesktop.ScreenSaver</code>
+            on the same D-Bus user bus as Hermes. The desktop must honor the
+            request; a manual lock or administrator-enforced lock is not
+            overridden. If the service restarts, Hermes attempts to restore
+            the inhibition. Use Save and Apply in the web UI (which restarts
+            Hermes) after changing this setting; saving alone does not change
+            an already-running stream.}
         </td>
     </tr>
     <tr>

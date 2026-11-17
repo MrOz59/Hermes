@@ -3397,6 +3397,12 @@ namespace proc {
       config::video.headless_mode         // Headless mode
       || launch_session->virtual_display  // User requested virtual display
       || _app.virtual_display;            // App is configured to use virtual display
+#ifdef __linux__
+    // Screens put to sleep read as unlit, the same as no monitor at all.
+    if (!virtual_display_requested && !gamescope_session && !video::display_present()) {
+      VDISPLAY::wakeSleepingMonitor();
+    }
+#endif
     const bool needs_virtual_display =
       !gamescope_session &&                 // Not in a standalone Gamescope session
       (virtual_display_requested ||

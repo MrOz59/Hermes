@@ -12,6 +12,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- Fedora 45 packages: CI now builds `hermes-<version>-1.fc45.x86_64.rpm`,
+  installs it and runs the secure-loader checks on Fedora 45 alongside 43
+  and 44.
 - `inhibit_screen_lock` (off by default) keeps the host's screensaver and
   screen lock from engaging while a client is connected. On Linux it holds an
   inhibition through `org.freedesktop.ScreenSaver` on the D-Bus session bus and
@@ -77,15 +80,29 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   the lookup always came back empty. Activating the output and exclusive mode
   then stopped with "DRM connector was not found". The driver is now read from
   the card's own device.
+- Starting a stream while the screens are asleep no longer opens an empty
+  virtual display beside the desktop ([#133], from PunkUnity). KWin's power
+  saving leaves every connector disabled, so Hermes found no lit monitor and
+  created one. When KScreen still lists a connected, enabled output, Hermes now
+  wakes the screens and streams the primary output as soon as it shows a
+  picture, waiting at most 3 seconds. A DisplayPort monitor in deep sleep is
+  woken with one read on its AUX channel instead, and Hermes waits until the
+  compositor has lit it: woken by a modeset, it failed link training
+  (`dpcd_set_link_settings ... failed` on amdgpu), dropped off and came back
+  seconds later. A monitor that answers the read is not waited for. Outputs
+  turned off in the display settings are left alone, so a host without a
+  monitor still gets a virtual display.
 - A stream no longer jumps to another screen when its monitor drops off for a
-  moment (from PunkUnity). A DisplayPort monitor coming out of deep sleep can
-  fail its first link training and reconnect a few seconds later; Hermes fell
-  back to the first display at once. It now gives a display that vanished
-  mid-stream up to 10 seconds to return before falling back. Displays that
-  stay connected are not affected.
+  moment ([#139], from PunkUnity). A DisplayPort monitor coming out of deep
+  sleep can fail its first link training and reconnect a few seconds later;
+  Hermes fell back to the first display at once. It now gives a display that
+  vanished mid-stream up to 10 seconds to return before falling back.
+  Displays that stay connected are not affected.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99
+[#133]: https://github.com/MrOz59/Hermes/pull/133
+[#139]: https://github.com/MrOz59/Hermes/pull/139
 
 ## [0.7.0] - 2026-11-02
 

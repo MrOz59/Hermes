@@ -7980,7 +7980,7 @@ namespace VDISPLAY {
         if (!entry.path().filename().string().starts_with("card")) {
           continue;
         }
-        const int fd = ::open(entry.path().c_str(), O_RDONLY | O_CLOEXEC);
+        const int fd = platf::open_drm_node(entry.path().c_str(), O_RDONLY);
         if (fd < 0) {
           continue;
         }

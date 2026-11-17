@@ -31,6 +31,22 @@ struct sd_bus;
 
 namespace platf {
   /**
+   * @brief Open a DRM device node without becoming its DRM master.
+   * @details The kernel makes whoever opens a primary node (`/dev/dri/cardN`)
+   * while no one holds master that device's master. Hermes never sets modes,
+   * but a master it holds keeps logind from handing the device back to the
+   * compositor when its session becomes active again: switch to a text console
+   * during a stream and back, and the compositor is locked out of that GPU
+   * until the stream ends. So drop master straight away, as logind and KWin do
+   * for the fds they open. The fd is close-on-exec, so launched apps cannot
+   * inherit it.
+   * @param path The device node.
+   * @param flags open(2) flags; O_CLOEXEC is added.
+   * @return An owned file descriptor, or -1 with errno set.
+   */
+  int open_drm_node(const char *path, int flags);
+
+  /**
    * @brief Open the render node of the best GPU to encode a stream on.
    * @details adapter_name when it is set. Otherwise every real GPU is ranked
    * by the video it can encode - AV1, then HEVC Main10, HEVC, H.264 - with

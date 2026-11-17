@@ -382,4 +382,258 @@ grep -q 'systemctl --user restart hermes' "$workdir/service-commands"
 [ -e "$workdir/gamescope-upgrade" ]
 [ ! -e "$workdir/unexpected-gamescope-reinstall-newer" ]
 
+# Release asset digests: each digest is paired with its own download URL,
+# whatever the field order, and assets without a digest stay unverified.
+# The uploader object carries a url of its own that must not split an asset.
+release_json=$(cat <<'JSON'
+{
+  "url": "https://api.github.com/repos/MrOz59/Hermes/releases/1",
+  "assets": [
+    {
+      "url": "https://api.github.com/repos/MrOz59/Hermes/releases/assets/11",
+      "name": "hermes_0.7.0_ubuntu26.04_amd64.deb",
+      "digest": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "uploader": { "login": "MrOz59", "url": "https://api.github.com/users/MrOz59" },
+      "browser_download_url": "https://github.com/MrOz59/Hermes/releases/download/v0.7.0/hermes_0.7.0_ubuntu26.04_amd64.deb"
+    },
+    {
+      "url": "https://api.github.com/repos/MrOz59/Hermes/releases/assets/12",
+      "browser_download_url": "https://github.com/MrOz59/Hermes/releases/download/v0.7.0/hermes-streaming-0.7.0-1-x86_64.pkg.tar.zst",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "url": "https://api.github.com/repos/MrOz59/Hermes/releases/assets/13",
+      "digest": null,
+      "browser_download_url": "https://github.com/MrOz59/Hermes/releases/download/v0.7.0/hermes-0.7.0-1.fc44.x86_64.rpm"
+    }
+  ]
+}
+JSON
+)
+(
+  rm -f "$workdir/asset-digests"
+  record_asset_digests "$release_json"
+  [ "$(asset_digest 'https://github.com/MrOz59/Hermes/releases/download/v0.7.0/hermes_0.7.0_ubuntu26.04_amd64.deb')" = "$(printf 'a%.0s' {1..64})" ]
+  [ "$(asset_digest 'https://github.com/MrOz59/Hermes/releases/download/v0.7.0/hermes-streaming-0.7.0-1-x86_64.pkg.tar.zst')" = "$(printf 'b%.0s' {1..64})" ]
+  [ -z "$(asset_digest 'https://github.com/MrOz59/Hermes/releases/download/v0.7.0/hermes-0.7.0-1.fc44.x86_64.rpm')" ]
+  # The same pairing holds for a response on a single line.
+  rm -f "$workdir/asset-digests"
+  record_asset_digests "$(printf '%s' "$release_json" | tr -d '\n')"
+  [ "$(asset_digest 'https://github.com/MrOz59/Hermes/releases/download/v0.7.0/hermes-streaming-0.7.0-1-x86_64.pkg.tar.zst')" = "$(printf 'b%.0s' {1..64})" ]
+)
+
+# A download that does not match GitHub's digest is refused; a matching one
+# and one with no published digest are accepted.
+printf 'hermes package\n' > "$workdir/remote/hermes_0.7.0_ubuntu26.04_amd64.deb"
+good_digest=$(sha256sum "$workdir/remote/hermes_0.7.0_ubuntu26.04_amd64.deb")
+good_digest=${good_digest%% *}
+(
+  rm -f "$workdir/asset-digests"
+  printf 'file://%s %s\n' "$workdir/remote/hermes_0.7.0_ubuntu26.04_amd64.deb" "$good_digest" > "$workdir/asset-digests"
+  download_verified "file://$workdir/remote/hermes_0.7.0_ubuntu26.04_amd64.deb" "$workdir/downloaded/hermes.deb" >/dev/null
+  download_verified "file://$workdir/remote/$filename" "$workdir/downloaded/unlisted.deb" >/dev/null 2>&1
+)
+if (
+  printf 'file://%s %s\n' "$workdir/remote/hermes_0.7.0_ubuntu26.04_amd64.deb" "$(printf 'c%.0s' {1..64})" > "$workdir/asset-digests"
+  download_verified "file://$workdir/remote/hermes_0.7.0_ubuntu26.04_amd64.deb" "$workdir/downloaded/hermes.deb" >/dev/null 2>&1
+); then
+  echo "FAIL: a download that does not match GitHub's digest was accepted" >&2
+  exit 1
+fi
+rm -f "$workdir/asset-digests"
+
+# A GitHub token is sent as a header on stdin, never as a curl argument.
+(
+  GITHUB_TOKEN=secret-token
+  curl() {
+    printf '%s\n' "$*" > "$workdir/curl-args"
+    cat > "$workdir/curl-stdin"
+  }
+  github_api https://api.github.com/repos/MrOz59/Hermes/releases/latest
+)
+grep -q -- '-H @-' "$workdir/curl-args"
+if grep -q secret-token "$workdir/curl-args"; then
+  echo "FAIL: the GitHub token was passed on the command line" >&2
+  exit 1
+fi
+grep -qx 'Authorization: Bearer secret-token' "$workdir/curl-stdin"
+
+# Debug packages published beside the real ones are never selected.
+(
+  distro=arch
+  assets='https://example.invalid/hermes-streaming-debug-0.7.0-1-x86_64.pkg.tar.zst
+https://example.invalid/hermes-streaming-0.7.0-1-x86_64.pkg.tar.zst'
+  [ "$(release_asset_url "$assets" "$(hermes_package_pattern)")" = 'https://example.invalid/hermes-streaming-0.7.0-1-x86_64.pkg.tar.zst' ]
+  if hermes_asset_version 'https://example.invalid/hermes-streaming-debug-0.7.0-1-x86_64.pkg.tar.zst' >/dev/null; then
+    echo "FAIL: a debug package was parsed as Hermes" >&2
+    exit 1
+  fi
+  assets='https://example.invalid/gamescope-hermes-debug-3.17.0.r1.gabc1234-1-x86_64.pkg.tar.zst
+https://example.invalid/gamescope-hermes-3.17.0.r1.gabc1234-1-x86_64.pkg.tar.zst'
+  [ "$(release_asset_url "$assets" "$(gamescope_package_pattern)")" = 'https://example.invalid/gamescope-hermes-3.17.0.r1.gabc1234-1-x86_64.pkg.tar.zst' ]
+  distro=fedora
+  distro_version=44
+  assets='https://example.invalid/hermes-debuginfo-0.7.0-1.fc44.x86_64.rpm
+https://example.invalid/hermes-0.7.0-1.fc44.x86_64.rpm'
+  [ "$(release_asset_url "$assets" "$(hermes_package_pattern)")" = 'https://example.invalid/hermes-0.7.0-1.fc44.x86_64.rpm' ]
+)
+
+# Fedora's noarch Hermes-KMS packages: the exact release when published,
+# otherwise another Fedora build of the same version, never the other kind.
+kms_assets='https://example.invalid/hermes-kms-seatd-0.4.1-1.fc44.noarch.rpm
+https://example.invalid/hermes-kms-dkms-0.4.1-1.fc44.noarch.rpm
+https://example.invalid/hermes-kms-dkms_0.4.1-1_all.deb
+https://example.invalid/hermes-kms-seatd_0.4.1-1_all.deb
+https://example.invalid/hermes-kms-dkms-git-0.4.1.r284.gab12cd3-1-any.pkg.tar.zst
+https://example.invalid/hermes-kms-seatd-git-0.4.1.r284.gab12cd3-1-any.pkg.tar.zst
+https://example.invalid/SHA256SUMS'
+(
+  distro=fedora
+  distro_version=44
+  [ "$(kms_package_url "$kms_assets" core)" = 'https://example.invalid/hermes-kms-dkms-0.4.1-1.fc44.noarch.rpm' ]
+  [ "$(kms_package_url "$kms_assets" broker)" = 'https://example.invalid/hermes-kms-seatd-0.4.1-1.fc44.noarch.rpm' ]
+  distro_version=45
+  [ "$(kms_package_url "$kms_assets" core 2>/dev/null)" = 'https://example.invalid/hermes-kms-dkms-0.4.1-1.fc44.noarch.rpm' ]
+  [ "$(kms_package_url "$kms_assets" broker 2>/dev/null)" = 'https://example.invalid/hermes-kms-seatd-0.4.1-1.fc44.noarch.rpm' ]
+  distro=ubuntu
+  [ "$(kms_package_url "$kms_assets" core)" = 'https://example.invalid/hermes-kms-dkms_0.4.1-1_all.deb' ]
+  [ "$(kms_package_url "$kms_assets" broker)" = 'https://example.invalid/hermes-kms-seatd_0.4.1-1_all.deb' ]
+  distro=arch
+  [ "$(kms_package_url "$kms_assets" core)" = 'https://example.invalid/hermes-kms-dkms-git-0.4.1.r284.gab12cd3-1-any.pkg.tar.zst' ]
+  [ "$(kms_package_url "$kms_assets" broker)" = 'https://example.invalid/hermes-kms-seatd-git-0.4.1.r284.gab12cd3-1-any.pkg.tar.zst' ]
+)
+
+# Config reads follow Hermes: the last assignment wins, booleans as it parses.
+(
+  XDG_CONFIG_HOME="$workdir/config-read"
+  conf=$(config_file)
+  mkdir -p "$(dirname "$conf")"
+  printf 'isolation_method = gamescope\n  isolation_method =  kwin_virtual  \nhermes_kms_isolated_sessions = Enabled\n' > "$conf"
+  [ "$(config_value isolation_method)" = kwin_virtual ]
+  config_flag_enabled hermes_kms_isolated_sessions
+  printf 'hermes_kms_isolated_sessions = false\n' > "$conf"
+  if config_flag_enabled hermes_kms_isolated_sessions; then
+    echo "FAIL: a disabled flag was read as enabled" >&2
+    exit 1
+  fi
+  [ -z "$(config_value isolation_method)" ]
+)
+
+# Without a working Gamescope, a build that reads isolation_method gets
+# kwin_virtual; with one, the default is left alone; 0.7.0 gets neither.
+isolation_case() {
+  # $1 = supports isolation_method, $2 = Gamescope ready, $3 = existing value
+  (
+    supports=$1 ready=$2
+    XDG_CONFIG_HOME="$workdir/config-isolation-$1-$2-$3"
+    config_backed_up=0
+    conf=$(config_file)
+    mkdir -p "$(dirname "$conf")"
+    : > "$conf"
+    [ "$3" = none ] || printf 'isolation_method = %s\n' "$3" > "$conf"
+    hermes_supports_isolation_method() { [ "$supports" = yes ]; }
+    gamescope_isolation_ready() { [ "$ready" = yes ]; }
+    did_isolated=0
+    [ "$ready" = yes ] && did_isolated=1
+    ASSUME_YES=1
+    configure_isolation_method >/dev/null
+    config_value isolation_method
+  )
+}
+[ "$(isolation_case yes no none)" = kwin_virtual ]
+[ "$(isolation_case yes no gamescope)" = kwin_virtual ]
+[ "$(isolation_case yes yes none)" = "" ]
+[ "$(isolation_case yes no kwin_virtual)" = kwin_virtual ]
+[ "$(isolation_case yes yes kwin_virtual)" = gamescope ]
+[ "$(isolation_case no no none)" = "" ]
+
+# After an update, a broken gamescope method is reported but --yes does not
+# change the configuration.
+(
+  XDG_CONFIG_HOME="$workdir/config-update-isolation"
+  conf=$(config_file)
+  mkdir -p "$(dirname "$conf")"
+  printf 'hermes_kms_isolated_sessions = enabled\n' > "$conf"
+  hermes_supports_isolation_method() { return 0; }
+  gamescope_isolation_ready() { return 1; }
+  ASSUME_YES=1
+  notes=()
+  update_isolation_method >/dev/null
+  [ -z "$(config_value isolation_method)" ]
+  [ "${#notes[@]}" -eq 1 ]
+)
+(
+  XDG_CONFIG_HOME="$workdir/config-update-isolation-ok"
+  conf=$(config_file)
+  mkdir -p "$(dirname "$conf")"
+  printf 'hermes_kms_isolated_sessions = enabled\nisolation_method = kwin_virtual\n' > "$conf"
+  hermes_supports_isolation_method() { return 0; }
+  gamescope_isolation_ready() { return 1; }
+  if isolation_method_broken; then
+    echo "FAIL: kwin_virtual was reported as a broken isolation method" >&2
+    exit 1
+  fi
+)
+
+# Broker allow files keep their entries, gain the user once, stay root-owned.
+(
+  USER=streamer
+  mkdir -p "$workdir/etc"
+  existing="$workdir/etc/card-broker.allow"
+  printf '# comment\nother\n' > "$existing"
+  as_root() { printf '%s\n' "$*" > "$workdir/broker-install"; }
+  grant_broker_user "$existing" >/dev/null
+  grep -q -- '-m 0644 -o root -g root' "$workdir/broker-install"
+  grep -qx other "$workdir/card-broker.allow"
+  [ "$(tail -n1 "$workdir/card-broker.allow")" = streamer ]
+  printf 'other\n  streamer  # Hermes\n' > "$existing"
+  rm -f "$workdir/broker-install"
+  grant_broker_user "$existing" >/dev/null
+  [ ! -e "$workdir/broker-install" ]
+)
+
+# Both brokers stay off under --yes.
+(
+  ASSUME_YES=1
+  DRY_RUN=0
+  grant_broker_user() { touch "$workdir/unexpected-broker"; }
+  as_root() { touch "$workdir/unexpected-broker"; }
+  setup_optional_brokers >/dev/null
+)
+[ ! -e "$workdir/unexpected-broker" ]
+
+# GitHub writes the "+" of a nightly version as %2B in download URLs; the
+# installed package reports it with "+", and both must compare as the same.
+(
+  distro=fedora
+  distro_version=45
+  candidate=$(hermes_asset_version 'https://example.invalid/hermes-0.7.0%2B38c8825-1.fc45.x86_64.rpm')
+  [ "$candidate" = '0.7.0+38c8825-1.fc45' ]
+  [ "$(candidate_relation '0.7.0+38c8825-1.fc45' "$candidate")" = same ]
+  distro=ubuntu
+  distro_version=24.04
+  candidate=$(hermes_asset_version 'https://example.invalid/hermes_0.7.0%2B38c8825_ubuntu24.04_amd64.deb')
+  [ "$candidate" = '0.7.0+38c8825' ]
+  [ "$(url_basename 'https://example.invalid/hermes_0.7.0%2B38c8825_ubuntu24.04_amd64.deb')" = 'hermes_0.7.0+38c8825_ubuntu24.04_amd64.deb' ]
+)
+
+# A release lookup that fails (offline, rate limited) aborts; it is not a
+# missing package and never offers the nightly channel.
+if (
+  CHANNEL=release
+  distro=ubuntu
+  distro_version=24.04
+  release_assets() {
+    [ "$2" != nightly ] || touch "$workdir/nightly-after-api-failure"
+    return 1
+  }
+  ask() { touch "$workdir/asked-after-api-failure"; return 0; }
+  install_hermes >/dev/null 2>&1
+); then
+  echo "FAIL: a failed release lookup did not abort" >&2
+  exit 1
+fi
+[ ! -e "$workdir/nightly-after-api-failure" ]
+[ ! -e "$workdir/asked-after-api-failure" ]
+
 echo "Installer offline helper tests passed."

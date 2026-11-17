@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 
+#include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -138,6 +139,39 @@ TEST(SessionAttach, WhatHermesSetForItselfDoesNotReachTheRestart) {
 
   EXPECT_EQ(initial.count("HERMES_TEST_SET_AFTER_START"), 0u);
   EXPECT_FALSE(initial.empty());
+  ::unsetenv("HERMES_TEST_SET_AFTER_START");
+}
+
+TEST(SessionAttach, ANonDumpableHermesStillKnowsWhatItWasStartedWith) {
+  // The packaged binary has file capabilities, so the kernel starts it
+  // non-dumpable and its /proc/self/environ belongs to root. Read from there,
+  // the initial environment fell back to the live one, and the restart that
+  // joins the desktop carried the tray's QT_QPA_PLATFORM=minimal into it.
+  ASSERT_EQ(::prctl(PR_SET_DUMPABLE, 0L, 0L, 0L, 0L), 0);
+  ASSERT_EQ(::setenv("HERMES_TEST_SET_AFTER_START", "minimal", 1), 0);
+
+  const auto initial = platf::session_attach::initial_environment();
+
+  ::unsetenv("HERMES_TEST_SET_AFTER_START");
+  ASSERT_EQ(::prctl(PR_SET_DUMPABLE, 1L, 0L, 0L, 0L), 0);
+  EXPECT_EQ(initial.count("HERMES_TEST_SET_AFTER_START"), 0u);
+  EXPECT_FALSE(initial.empty());
+}
+
+TEST(SessionAttach, APlainRestartKeepsWhatHermesSetForItselfOut) {
+  // A restart from the Web UI or the tray before login re-executes Hermes
+  // without joining a session. Handed the live environment, the new process
+  // would start with the tray's QT_QPA_PLATFORM=minimal as part of its
+  // initial environment, keep it when it later joins the desktop, and every
+  // kscreen-doctor it runs would then see no outputs at all.
+  ASSERT_EQ(::setenv("HERMES_TEST_SET_AFTER_START", "minimal", 1), 0);
+
+  const auto restart = platf::session_attach::restart_environment();
+
+  EXPECT_FALSE(restart.empty());
+  for (const auto &assignment : restart) {
+    EXPECT_NE(assignment.rfind("HERMES_TEST_SET_AFTER_START=", 0), 0u) << assignment;
+  }
   ::unsetenv("HERMES_TEST_SET_AFTER_START");
 }
 

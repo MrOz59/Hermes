@@ -261,6 +261,19 @@ TEST(PreloginChecks, AGreeterNobodyHasRunIsNotCalledReady) {
   EXPECT_EQ(check(report, "greeter").state, state_e::unknown);
 }
 
+TEST(PreloginChecks, PlasmaLoginManagersGreeterIsReady) {
+  // #61: plasmalogin was reported as "has not been run with Hermes", though
+  // its KWin greeter draws on a Hermes-KMS virtual display started before login.
+  auto facts = ready_host();
+  facts.display_manager = "plasmalogin";
+  facts.sddm.reset();
+
+  const auto report = assess(facts);
+
+  EXPECT_TRUE(report.ready);
+  EXPECT_EQ(check(report, "greeter").state, state_e::ready);
+}
+
 TEST(PreloginChecks, AutologinIsANoteAndNotAnObstacle) {
   auto facts = ready_host();
   facts.sddm = sddm_settings_t {"wayland", "ana"};
@@ -280,7 +293,8 @@ TEST(PreloginChecks, DevicesTheSeatGrantCoversAreNotEnough) {
 
   EXPECT_FALSE(report.ready);
   EXPECT_NE(check(report, "input").fix.find("usermod -aG input ana"), std::string::npos);
-  EXPECT_NE(check(report, "virtual_display").fix.find("hermes-kms-setup"), std::string::npos);
+  // The script is not on PATH: the seatd package installs it here (#61).
+  EXPECT_NE(check(report, "virtual_display").fix.find("/usr/lib/hermes-kms/hermes-kms-setup configure"), std::string::npos);
 }
 
 TEST(PreloginChecks, OnlyHermesKmsHasBeenRunBeforeLogin) {

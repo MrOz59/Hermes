@@ -1,0 +1,27 @@
+name: KWin window placement regressions
+
+on:
+  pull_request:
+    paths:
+      - 'src/process.cpp'
+      - 'src/platform/linux/window_placement.h'
+      - 'src/platform/linux/virtual_display.*'
+      - 'tests/window_placement/**'
+      - '.github/workflows/window-placement.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  placement:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile the production KWin script generator
+        run: g++ -std=c++23 -Wall -Wextra -Werror -I. tests/window_placement/script.cc -o /tmp/hermes-placement-script
+      - name: Preserve unrelated local windows and fullscreen state
+        env:
+          HERMES_PLACEMENT_SCRIPT_GENERATOR: /tmp/hermes-placement-script
+        run: node --test tests/window_placement/kwin_script.cjs

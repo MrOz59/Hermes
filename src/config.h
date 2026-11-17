@@ -95,6 +95,7 @@ namespace config {
     bool hermes_kms_isolated_sessions;
     std::string gamescope_backend;
     std::string hermes_kms_session_compositor;
+    std::string isolation_method;
 
     struct dd_t {
       struct workarounds_t {
@@ -312,6 +313,11 @@ namespace config {
     std::vector<prep_cmd_t> prep_cmds;
     std::vector<prep_cmd_t> state_cmds;
     std::vector<server_cmd_t> server_cmds;
+
+    /// Inhibit screen locking while a client is connected. Linux only: the
+    /// inhibition is held through org.freedesktop.ScreenSaver on the D-Bus
+    /// session bus.
+    bool inhibit_screen_lock;
   };
 
   extern video_t video;

@@ -87,7 +87,7 @@ onMounted(() => {
       <div class="form-text">{{ $t('config.locale_desc') }}</div>
     </div>
 
-    <!-- Apollo Name -->
+    <!-- Hermes Name -->
     <div class="mb-3">
       <label for="sunshine_name" class="form-label">{{ $t('config.sunshine_name') }}</label>
       <input type="text" class="form-control" id="sunshine_name" placeholder="Hermes"
@@ -250,6 +250,15 @@ onMounted(() => {
               id="hide_tray_controls"
               locale-prefix="config"
               v-model="config.hide_tray_controls"
+              default="false"
+    ></Checkbox>
+
+    <!-- Inhibit screen locking while a client is connected -->
+    <Checkbox v-if="platform === 'linux'"
+              class="mb-3"
+              id="inhibit_screen_lock"
+              locale-prefix="config"
+              v-model="config.inhibit_screen_lock"
               default="false"
     ></Checkbox>
   </div>

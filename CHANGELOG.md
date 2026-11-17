@@ -12,6 +12,19 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- Fedora 45 packages: CI now builds `hermes-<version>-1.fc45.x86_64.rpm`,
+  installs it and runs the secure-loader checks on Fedora 45 alongside 43
+  and 44.
+- `inhibit_screen_lock` (off by default) keeps the host's screensaver and
+  screen lock from engaging while a client is connected. On Linux it holds an
+  inhibition through `org.freedesktop.ScreenSaver` on the D-Bus session bus and
+  releases it when the last client disconnects.
+- Double-NAT UPnP forwarding using the existing `upnp` setting, with ownership-aware
+  cleanup on both routers and recovery of permanent rules after a restart (#126).
+  Flatpak includes the MiniUPnPc XML bounds fixes for CVE-2026-110655 and CVE-2026-110656.
+- `isolation_method`: pick Gamescope with a virtual display or KWin's virtual
+  backend for launches that request a virtual display, next to the virtual
+  display backend in the Web UI.
 - Hermes checks the Hermes-KMS driver against itself and says what works
   without it ([#99], from PunkUnity). Three cases it reported wrongly or not
   at all: a driver whose render node Hermes may not open (`no_access`, until
@@ -32,6 +45,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   Input then has no controller.
 
 ### Changed
+- Use Hermes names for web/tray icon assets, stylesheet, restart/quit translation
+  keys, remaining translated product text, and resource links. Preserve external
+  protocol identifiers, existing configuration keys, and upstream credits.
+- The per-app `session-type` is now `isolation-method` (`default`, `gamescope`,
+  `kwin_virtual`), and `shared` is the `host-session` flag; `apps.json` is
+  migrated on start. The Detached Desktop and Detached Steam entries are renamed
+  unless you renamed them.
+- With independent sessions enabled, a requested virtual display is now isolated
+  unless the app's layout is explicitly `extend`, `mirror` or `exclusive`, or the
+  app sets `host-session`. It used to need the `detached` layout.
 - Emulated Switch Pro, DualShock 4 and DualSense pads keep one MAC address per
   paired client and controller number, the same in every session, seat and
   reconnection, so Steam's per-controller layouts stay applied
@@ -39,8 +62,52 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   precedence over `virtualhid_randomize_mac`; turn it off for the previous
   per-session addresses.
 
+### Fixed
+- Fix configuration of fetched Boost 1.89 Locale headers with newer CMake,
+  and install libc development files for the Ubuntu package-loader CI fixture.
+- Use `hermes` as the suggested username on the initial setup page.
+- An EVDI virtual display no longer stalls the desktop. When the driver already
+  had a frame waiting, `evdi_request_update()` returned true and sent no event
+  for it, but Hermes discarded that answer and waited for an event, so the frame
+  was never grabbed and its page flip never completed. On GNOME under X11 the
+  whole desktop froze for seconds at a time with `flip_done timed out` in the
+  kernel log. Hermes now grabs such a frame at once, and no longer repeats a
+  request the driver is still answering, which logged an `Update was already
+  requested` kernel warning hundreds of times a second.
+- Hermes finds the connector of an EVDI virtual display again. It looked for
+  the `evdi` driver under `/sys/class/drm/cardN-<connector>/device/driver`, but
+  a connector's `device` link points to its card, which has no driver link, so
+  the lookup always came back empty. Activating the output and exclusive mode
+  then stopped with "DRM connector was not found". The driver is now read from
+  the card's own device.
+- Starting a stream while the screens are asleep no longer opens an empty
+  virtual display beside the desktop ([#133], from PunkUnity). KWin's power
+  saving leaves every connector disabled, so Hermes found no lit monitor and
+  created one. When KScreen still lists a connected, enabled output, Hermes now
+  wakes the screens and streams the primary output as soon as it shows a
+  picture, waiting at most 3 seconds. A DisplayPort monitor in deep sleep is
+  woken with one read on its AUX channel instead, and Hermes waits until the
+  compositor has lit it: woken by a modeset, it failed link training
+  (`dpcd_set_link_settings ... failed` on amdgpu), dropped off and came back
+  seconds later. A monitor that answers the read is not waited for. Outputs
+  turned off in the display settings are left alone, so a host without a
+  monitor still gets a virtual display.
+- On KWin, touch and pen land on the monitor being streamed ([#131], from
+  PunkUnity). KWin bound new touch devices to an output of its own choosing,
+  so with more than one monitor a Multi touch client often did nothing. When
+  Hermes captures a physical output, the touch and pen devices are now bound
+  to it for the session and released afterwards.
+- With no display configured, Hermes streams the desktop's primary monitor
+  ([#138], from PunkUnity). Monitor numbers follow DRM plane order, not the
+  desktop layout, so monitor 0 could be a KVM capture input or a dummy plug.
+  On KWin, the output KScreen marks as primary is now listed first; a
+  configured display number still selects the same monitor as before.
+
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99
+[#131]: https://github.com/MrOz59/Hermes/pull/131
+[#133]: https://github.com/MrOz59/Hermes/pull/133
+[#138]: https://github.com/MrOz59/Hermes/pull/138
 
 ## [0.7.0] - 2026-11-02
 

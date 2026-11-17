@@ -464,27 +464,24 @@ const validateFallbackMode = (event) => {
       {{ $t('config.virtual_display_request_desc') }}
     </div>
 
-    <div class="mb-3" v-if="platform === 'linux'">
-      <label for="virtual_display_backend" class="form-label">{{ $t('config.virtual_display_backend') }}</label>
-      <select id="virtual_display_backend" class="form-select" v-model="config.virtual_display_backend">
-        <option value="evdi">{{ $t('config.virtual_display_backend_evdi') }}</option>
-        <option value="hermes_kms">{{ $t('config.virtual_display_backend_hermes_kms') }}</option>
-        <option value="none">{{ $t('config.virtual_display_backend_none') }}</option>
-      </select>
-      <div class="form-text">{{ $t('config.virtual_display_backend_desc') }}</div>
-    </div>
-
-    <Checkbox class="mb-3"
-              id="hermes_kms_multi_output"
-              locale-prefix="config"
-              v-model="config.hermes_kms_multi_output"
-              default="false"
-              v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms'"
-    ></Checkbox>
-
-    <div class="alert alert-warning small"
-         v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms' && hermesKmsSharedMultiOutputEnabled">
-      {{ $t('config.hermes_kms_multi_output_warning') }}
+    <div class="row g-3 mb-3" v-if="platform === 'linux'">
+      <div class="col-md">
+        <label for="virtual_display_backend" class="form-label">{{ $t('config.virtual_display_backend') }}</label>
+        <select id="virtual_display_backend" class="form-select" v-model="config.virtual_display_backend">
+          <option value="evdi">{{ $t('config.virtual_display_backend_evdi') }}</option>
+          <option value="hermes_kms">{{ $t('config.virtual_display_backend_hermes_kms') }}</option>
+          <option value="none">{{ $t('config.virtual_display_backend_none') }}</option>
+        </select>
+        <div class="form-text">{{ $t('config.virtual_display_backend_desc') }}</div>
+      </div>
+      <div class="col-md" v-if="config.virtual_display_backend === 'hermes_kms' && hermesKmsIsolatedSessionsEnabled">
+        <label for="isolation_method" class="form-label">{{ $t('config.isolation_method') }}</label>
+        <select id="isolation_method" class="form-select" v-model="config.isolation_method">
+          <option value="gamescope">{{ $t('config.isolation_method_gamescope') }}</option>
+          <option value="kwin_virtual">{{ $t('config.isolation_method_kwin_virtual') }}</option>
+        </select>
+        <div class="form-text">{{ $t('config.isolation_method_desc') }}</div>
+      </div>
     </div>
 
     <Checkbox class="mb-3"
@@ -498,6 +495,19 @@ const validateFallbackMode = (event) => {
     <div class="alert alert-danger small"
          v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms' && hermesKmsIsolatedSessionsEnabled">
       {{ $t('config.hermes_kms_isolated_sessions_warning') }}
+    </div>
+
+    <Checkbox class="mb-3"
+              id="hermes_kms_multi_output"
+              locale-prefix="config"
+              v-model="config.hermes_kms_multi_output"
+              default="false"
+              v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms'"
+    ></Checkbox>
+
+    <div class="alert alert-warning small"
+         v-if="platform === 'linux' && config.virtual_display_backend === 'hermes_kms' && hermesKmsSharedMultiOutputEnabled">
+      {{ $t('config.hermes_kms_multi_output_warning') }}
     </div>
 
     <DisplayDeviceOptions

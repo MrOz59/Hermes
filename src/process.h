@@ -15,6 +15,7 @@
 // standard includes
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -113,10 +114,11 @@ namespace proc {
     bool allow_client_commands;
     bool terminate_on_pause;
     bool unlock_host_session;
-    // auto: Detached virtual displays isolate when the capability is enabled.
-    // shared: force the existing host session.
-    // application/desktop: force the corresponding isolated profile.
-    std::string session_type;
+    // default: follow the global isolation_method when a virtual display is requested.
+    // gamescope/kwin_virtual: always run in that isolated session.
+    std::string isolation_method;
+    // Never isolate, whatever is requested.
+    bool host_session {false};
     // Isolated sessions only: how long the compositor has to put its first
     // frame on the session's card. Zero picks the profile's default.
     std::chrono::seconds first_frame_timeout {0};
@@ -159,15 +161,19 @@ namespace proc {
   /**
    * Resolve a launch to the host session or an independent private session.
    *
-   * Explicit application/desktop profiles retain their isolated semantics.
-   * In auto mode, a requested Detached virtual display selects isolation;
-   * other layouts remain on the host. session-type=shared always stays host.
+   * An app's own isolation method always applies. An app on the default follows
+   * global_method when a virtual display is requested, unless its layout places
+   * that display on the host desktop. host-session apps always stay on the host.
    */
   session_route_e resolve_session_route(
     const ctx_t &app,
     bool isolated_sessions_enabled,
-    bool virtual_display_requested
+    bool virtual_display_requested,
+    std::string_view global_method = "gamescope"
   );
+
+  /** Rename session-type to isolation-method in a parsed apps.json. */
+  void migration_v7(nlohmann::json &fileTree);
 
   class proc_t {
   public:

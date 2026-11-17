@@ -143,7 +143,7 @@ detect_distro() {
     *" arch "* | *" cachyos "*) distro=arch ;;
     *" fedora "*) distro=fedora ;;
     *" ubuntu "*) distro=ubuntu ;;
-    *) die "${PRETTY_NAME:-this distribution} is not supported here. Hermes packages exist for Arch/CachyOS, Ubuntu 24.04/26.04 and Fedora 43/44; see https://github.com/${HERMES_REPO}#installing." ;;
+    *) die "${PRETTY_NAME:-this distribution} is not supported here. Hermes packages exist for Arch/CachyOS, Ubuntu 24.04/26.04 and Fedora 43/44/45; see https://github.com/${HERMES_REPO}#installing." ;;
   esac
   # Derivatives report their own VERSION_ID; the packages follow the base.
   if [ "$distro" = ubuntu ] && [ "${ID:-}" != ubuntu ] && [ -n "${UBUNTU_CODENAME:-}" ]; then

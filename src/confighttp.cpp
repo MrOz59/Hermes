@@ -13,6 +13,8 @@
 #include <set>
 #include <sstream>
 #include <thread>
+#include <condition_variable>
+#include <mutex>
 #include <numeric>
 #include <algorithm>
 #include <atomic>
@@ -1033,7 +1035,7 @@ namespace confighttp {
   void getFaviconImage(resp_https_t response, req_https_t request) {
     print_req(request);
 
-    std::ifstream in(WEB_DIR "images/apollo.ico", std::ios::binary);
+    std::ifstream in(WEB_DIR "images/hermes.ico", std::ios::binary);
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "image/x-icon");
     headers.emplace("X-Frame-Options", "DENY");
@@ -1042,17 +1044,17 @@ namespace confighttp {
   }
 
   /**
-   * @brief Get the Apollo logo image.
+   * @brief Get the Hermes logo image.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    *
    * @todo combine function with getFaviconImage and possibly getNodeModules
    * @todo use mime_types map
    */
-  void getApolloLogoImage(resp_https_t response, req_https_t request) {
+  void getHermesLogoImage(resp_https_t response, req_https_t request) {
     print_req(request);
 
-    std::ifstream in(WEB_DIR "images/logo-apollo-45.png", std::ios::binary);
+    std::ifstream in(WEB_DIR "images/logo-hermes-45.png", std::ios::binary);
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "image/png");
     headers.emplace("X-Frame-Options", "DENY");
@@ -2274,7 +2276,25 @@ namespace confighttp {
 #ifdef __linux__
     // Virtual-display backend readiness (Linux only).
     const auto evdi = VDISPLAY::getEvdiStatus();
-    if (evdi.session_type == "wayland" || evdi.session_type == "x11") {
+    const auto env = [](const char *name) {
+      const char *value = std::getenv(name);
+      return std::string {value ? value : ""};
+    };
+    // Started before anyone logged in, or left behind by a session that has
+    // ended, Hermes has no desktop to talk to: the variables can be missing,
+    // empty, or point at nothing. Say so, rather than blaming the session type
+    // or a missing layout backend. Only when logind can tell; a deliberately
+    // headless host keeps the checks below.
+    const auto session_present = VDISPLAY::graphicalSessionPresent();
+    if (session_present.has_value() &&
+        !VDISPLAY::displayServerReachable(env("WAYLAND_DISPLAY"), env("DISPLAY"), env("XDG_RUNTIME_DIR"))) {
+      add("virtual_display", "warn",
+          *session_present ?
+            "A desktop session has started; Hermes joins it as soon as no client is connected. Until then the "
+            "virtual-display layout cannot be managed." :
+            "Nobody is logged in to a desktop yet, so the virtual-display layout cannot be managed. Hermes joins "
+            "the desktop after login.");
+    } else if (evdi.session_type == "wayland" || evdi.session_type == "x11") {
       if (evdi.exclusive_layout_supported) {
         add("virtual_display", "ok",
             "Virtual-display layout management available via " + evdi.output_layout_backend + ".");
@@ -3309,7 +3329,7 @@ namespace confighttp {
 
   /**
    * Start EVDI installation only after the user explicitly confirms it in the UI.
-   * pkexec owns the privilege prompt, so Apollo never handles an admin password.
+   * pkexec owns the privilege prompt, so Hermes never handles an admin password.
    */
   void installEvdi(resp_https_t response, req_https_t request) {
     if (!validateContentType(response, request, "application/json") || !authenticate(response, request)) {
@@ -3958,7 +3978,7 @@ fi')CLIP";
   }
 
   /**
-   * @brief Restart Apollo.
+   * @brief Restart Hermes.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    *
@@ -3977,8 +3997,20 @@ fi')CLIP";
     platf::restart();
   }
 
+  // A quit request answers only if Hermes is still running 5 s later. The
+  // thread that waits for that must let go of the response before the server
+  // is destroyed: a response that outlives it crashes Hermes when the thread
+  // writes or releases it, which happens whenever shutting down takes longer
+  // than 5 s (closing an EVDI display can).
+  namespace {
+    std::mutex quit_mutex;
+    std::condition_variable quit_cv;
+    bool server_stopping = false;
+    int quit_waiters = 0;
+  }  // namespace
+
   /**
-   * @brief Quit Apollo.
+   * @brief Quit Hermes.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    *
@@ -4004,9 +4036,21 @@ fi')CLIP";
       lifetime::exit_sunshine(0, true);
     }
     // If exit fails, write a response after 5 seconds.
-    std::thread write_resp([response]{
-      std::this_thread::sleep_for(5s);
-      response->write();
+    {
+      std::lock_guard<std::mutex> lock(quit_mutex);
+      if (server_stopping) {
+        return;
+      }
+      ++quit_waiters;
+    }
+    std::thread write_resp([response]() mutable {
+      std::unique_lock<std::mutex> lock(quit_mutex);
+      if (!quit_cv.wait_for(lock, 5s, [] { return server_stopping; })) {
+        response->write();
+      }
+      response.reset();
+      --quit_waiters;
+      quit_cv.notify_all();
     });
     write_resp.detach();
   }
@@ -4247,8 +4291,11 @@ fi')CLIP";
     server.resource["^/api/sessions/list$"]["GET"] = getSessions;
     server.resource["^/api/sessions/terminate$"]["POST"] = terminateSession;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
+    // Cached pages from earlier releases may still request these URLs.
     server.resource["^/images/apollo.ico$"]["GET"] = getFaviconImage;
-    server.resource["^/images/logo-apollo-45.png$"]["GET"] = getApolloLogoImage;
+    server.resource["^/images/logo-apollo-45.png$"]["GET"] = getHermesLogoImage;
+    server.resource["^/images/hermes.ico$"]["GET"] = getFaviconImage;
+    server.resource["^/images/logo-hermes-45.png$"]["GET"] = getHermesLogoImage;
     server.resource["^/assets\\/.+$"]["GET"] = getNodeModules;
     server.config.reuse_address = true;
     server.config.address = net::af_to_any_address_string(address_family);
@@ -4299,6 +4346,14 @@ fi')CLIP";
 
     // Wait for any event
     shutdown_event->view();
+
+    // Let a pending quit request drop its response while the server still exists.
+    {
+      std::unique_lock<std::mutex> lock(quit_mutex);
+      server_stopping = true;
+      quit_cv.notify_all();
+      quit_cv.wait(lock, [] { return quit_waiters == 0; });
+    }
 
     server.stop();
 

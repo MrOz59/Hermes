@@ -33,6 +33,7 @@ extern "C" {
 #include "network.h"
 #include "platform/common.h"
 #include "process.h"
+#include "session_activity_counter.h"
 #include "stream.h"
 #include "sync.h"
 #include "system_tray.h"
@@ -2182,7 +2183,7 @@ namespace stream {
   }
 
   namespace session {
-    std::atomic_uint running_sessions;
+    session_activity_counter_t running_sessions;
     std::atomic_uint shared_running_sessions;
 
     state_e state(session_t &session) {
@@ -2433,9 +2434,9 @@ namespace stream {
       }
 
       // Platform-wide streaming state still spans both ownership domains.
-      if (--running_sessions == 0) {
+      running_sessions.stopped([] {
         platf::streaming_will_stop();
-      }
+      });
 
       BOOST_LOG(debug) << "Session ended"sv;
     }
@@ -2496,9 +2497,9 @@ namespace stream {
 
       // Platform-wide callbacks track every stream, while the legacy process
       // lifecycle belongs only to streams attached to the shared host session.
-      if (++running_sessions == 1) {
+      running_sessions.started([] {
         platf::streaming_will_start();
-      }
+      });
 
       if (!session.isolated_session && ++shared_running_sessions == 1) {
         proc::proc.resume();

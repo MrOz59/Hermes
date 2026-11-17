@@ -21,14 +21,14 @@ const config = ref(props.config)
     <!-- Credentials File -->
     <div class="mb-3">
       <label for="credentials_file" class="form-label">{{ $t('config.credentials_file') }}</label>
-      <input type="text" class="form-control" id="credentials_file" placeholder="sunshine_state.json" v-model="config.credentials_file" />
+      <input type="text" class="form-control" id="credentials_file" placeholder="hermes_state.json" v-model="config.credentials_file" />
       <div class="form-text">{{ $t('config.credentials_file_desc') }}</div>
     </div>
 
     <!-- Log Path -->
     <div class="mb-3">
       <label for="log_path" class="form-label">{{ $t('config.log_path') }}</label>
-      <input type="text" class="form-control" id="log_path" placeholder="sunshine.log" v-model="config.log_path" />
+      <input type="text" class="form-control" id="log_path" placeholder="hermes.log" v-model="config.log_path" />
       <div class="form-text">{{ $t('config.log_path_desc') }}</div>
     </div>
 
@@ -49,7 +49,7 @@ const config = ref(props.config)
     <!-- State File -->
     <div class="mb-3">
       <label for="file_state" class="form-label">{{ $t('config.file_state') }}</label>
-      <input type="text" class="form-control" id="file_state" placeholder="sunshine_state.json"
+      <input type="text" class="form-control" id="file_state" placeholder="hermes_state.json"
              v-model="config.file_state" />
       <div class="form-text">{{ $t('config.file_state_desc') }}</div>
     </div>

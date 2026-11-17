@@ -10,10 +10,10 @@
     #include <accctrl.h>
     #include <aclapi.h>
     #include "platform/windows/utils.h"
-    #define TRAY_ICON WEB_DIR "images/apollo.ico"
-    #define TRAY_ICON_PLAYING WEB_DIR "images/apollo-playing.ico"
-    #define TRAY_ICON_PAUSING WEB_DIR "images/apollo-pausing.ico"
-    #define TRAY_ICON_LOCKED WEB_DIR "images/apollo-locked.ico"
+    #define TRAY_ICON WEB_DIR "images/hermes.ico"
+    #define TRAY_ICON_PLAYING WEB_DIR "images/hermes-playing.ico"
+    #define TRAY_ICON_PAUSING WEB_DIR "images/hermes-pausing.ico"
+    #define TRAY_ICON_LOCKED WEB_DIR "images/hermes-locked.ico"
   #elif defined(__linux__) || defined(linux) || defined(__linux)
     // Use absolute paths for tray icons to ensure they work with all icon themes
     #define TRAY_ICON "/usr/share/icons/hicolor/scalable/status/" SUNSHINE_TRAY_PREFIX "-tray.svg"
@@ -21,10 +21,10 @@
     #define TRAY_ICON_PAUSING "/usr/share/icons/hicolor/scalable/status/" SUNSHINE_TRAY_PREFIX "-pausing.svg"
     #define TRAY_ICON_LOCKED "/usr/share/icons/hicolor/scalable/status/" SUNSHINE_TRAY_PREFIX "-locked.svg"
   #elif defined(__APPLE__) || defined(__MACH__)
-    #define TRAY_ICON WEB_DIR "images/logo-apollo-16.png"
-    #define TRAY_ICON_PLAYING WEB_DIR "images/apollo-playing-16.png"
-    #define TRAY_ICON_PAUSING WEB_DIR "images/apollo-pausing-16.png"
-    #define TRAY_ICON_LOCKED WEB_DIR "images/apollo-locked-16.png"
+    #define TRAY_ICON WEB_DIR "images/logo-hermes-16.png"
+    #define TRAY_ICON_PLAYING WEB_DIR "images/hermes-playing-16.png"
+    #define TRAY_ICON_PAUSING WEB_DIR "images/hermes-pausing-16.png"
+    #define TRAY_ICON_LOCKED WEB_DIR "images/hermes-locked-16.png"
     #include <dispatch/dispatch.h>
   #endif
 

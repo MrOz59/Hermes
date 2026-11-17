@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cctype>
 #include <cerrno>
+#include <cstdarg>
 #include <cstddef>
 #include <cmath>
 #include <cstdio>
@@ -40,6 +41,7 @@
 // platform includes
 #include <csignal>
 #include <fcntl.h>
+#include <linux/i2c-dev.h>
 #include <poll.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
@@ -65,6 +67,7 @@
 #include "src/logging.h"
 #include "src/utility.h"
 #include "virtual_display.h"
+#include "window_placement.h"
 #ifdef SUNSHINE_BUILD_WAYLAND
   #include "wayland.h"
 #endif
@@ -77,69 +80,6 @@ namespace VDISPLAY {
   std::string systemdUserBusAddress(uint32_t uid) {
     return "unix:path=/run/user/" + std::to_string(uid) + "/bus";
   }
-
-#ifdef SUNSHINE_BUILD_SDBUS
-  /**
-   * Open the desktop's user bus even when Hermes carries a file capability.
-   *
-   * libsystemd deliberately reads DBUS_SESSION_BUS_ADDRESS and XDG_RUNTIME_DIR
-   * with secure_getenv(). Linux sets AT_SECURE for a file-capability binary, so
-   * sd_bus_open_user() then sees neither variable and returns ENOMEDIUM. The
-   * packaged binary carries cap_sys_admin+p for legacy KMS capture, which made
-   * every sd-bus feature fail even though its child tools could reach the bus.
-   *
-   * Try libsystemd's normal discovery first for non-systemd/custom sessions.
-   * Its standard user-bus fallback is deterministic, so reproduce that path
-   * explicitly when discovery is unavailable. The address contains only the
-   * kernel-provided real uid; no environment value crosses the capability
-   * boundary.
-   */
-  static int open_user_bus(sd_bus **result) {
-    if (!result) {
-      return -EINVAL;
-    }
-    *result = nullptr;
-
-    const int discovered = sd_bus_open_user(result);
-    if (discovered >= 0) {
-      return discovered;
-    }
-    if (*result) {
-      sd_bus_unref(*result);
-      *result = nullptr;
-    }
-    if (discovered != -ENOMEDIUM) {
-      return discovered;
-    }
-
-    sd_bus *bus = nullptr;
-    int status = sd_bus_new(&bus);
-    if (status < 0) {
-      return status;
-    }
-    const auto fail = [&bus](int error) {
-      sd_bus_unref(bus);
-      return error;
-    };
-
-    const auto address = systemdUserBusAddress(static_cast<uint32_t>(::getuid()));
-    status = sd_bus_set_address(bus, address.c_str());
-    if (status < 0) {
-      return fail(status);
-    }
-    status = sd_bus_set_bus_client(bus, 1);
-    if (status < 0) {
-      return fail(status);
-    }
-    status = sd_bus_start(bus);
-    if (status < 0) {
-      return fail(status);
-    }
-
-    *result = bus;
-    return 0;
-  }
-#endif
 
   /** Whether something accepts connections on a Unix socket. */
   static bool unix_socket_answers(const std::string &path, bool abstract_namespace = false) {
@@ -203,7 +143,18 @@ namespace VDISPLAY {
     if (status < 0) {
       return std::nullopt;
     }
-    return session && *session;
+    if (!session || !*session) {
+      return false;
+    }
+    // With no desktop, logind names whatever session the user has as its
+    // display, an SSH login included. Only a Wayland or X11 one is graphical.
+    char *type_raw = nullptr;
+    if (sd_session_get_type(session.get(), &type_raw) < 0) {
+      return std::nullopt;
+    }
+    const std::unique_ptr<char, decltype(&std::free)> type {type_raw, &std::free};
+    const std::string_view kind {type.get() ? type.get() : ""};
+    return kind == "wayland" || kind == "x11" || kind == "mir";
 #else
     return std::nullopt;
 #endif
@@ -223,7 +174,7 @@ namespace VDISPLAY {
   std::optional<std::vector<std::string>> userManagerEnvironment() {
 #ifdef SUNSHINE_BUILD_SDBUS
     sd_bus *bus = nullptr;
-    if (open_user_bus(&bus) < 0 || !bus) {
+    if (platf::open_user_bus(&bus) < 0 || !bus) {
       return std::nullopt;
     }
     const std::unique_ptr<sd_bus, decltype(&sd_bus_unref)> bus_guard {bus, &sd_bus_unref};
@@ -1388,7 +1339,8 @@ namespace VDISPLAY {
 
       if (devices.empty() && log_failures) {
         BOOST_LOG(error) << "[VDISPLAY/Hermes-KMS] No accessible Hermes-KMS render node found. "
-                            "Load hermes_kms and run hermes-kms-setup for this user.";
+                            "Load hermes_kms and run `sudo /usr/lib/hermes-kms/hermes-kms-setup configure --user auto` "
+                            "(hermes-kms-seatd package) for this user.";
       }
       return devices;
     }
@@ -3670,6 +3622,8 @@ namespace VDISPLAY {
      * Best effort by design: a failure costs the session its touch placement,
      * not its stream, so it is logged and the stream goes on.
      */
+    static void map_input_devices_to(const std::string &owner, const std::string &output);
+
     static void map_input_devices(const std::string &display_name) {
       std::string output;
       {
@@ -3680,6 +3634,15 @@ namespace VDISPLAY {
         }
         output = it->second.virtual_output;
       }
+      map_input_devices_to(display_name, output);
+    }
+
+    /**
+     * Bind the touch and pen devices to @p output on behalf of @p owner: a
+     * virtual display's name, or the physical-output session key. The owner is
+     * what unmap_input_devices() matches when the session ends.
+     */
+    static void map_input_devices_to(const std::string &owner, const std::string &output) {
       if (!safe_output_name(output)) {
         return;
       }
@@ -3692,7 +3655,7 @@ namespace VDISPLAY {
           std::lock_guard<std::mutex> output_lock(input_binding->output_mutex);
           input_binding->output = output;
         }
-        input_binding->owner = display_name;
+        input_binding->owner = owner;
         BOOST_LOG(info) << "[VDISPLAY/KScreen] Touch and pen input from new clients now goes to " << output << '.';
         return;
       }
@@ -3721,7 +3684,7 @@ namespace VDISPLAY {
         started->previous_uuids[i] = std::move(previous);
       }
 
-      const int opened = open_user_bus(&started->bus);
+      const int opened = platf::open_user_bus(&started->bus);
       if (opened < 0 || !started->bus) {
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not connect to the user bus to bind touch input: "
                            << (opened < 0 ? std::strerror(-opened) : "no connection was returned")
@@ -3748,7 +3711,7 @@ namespace VDISPLAY {
         sd_bus_unref(started->bus);
         return;
       }
-      started->owner = display_name;
+      started->owner = owner;
       started->output = output;
 
       // sd-bus permits an object to move between threads, but only one thread
@@ -3842,7 +3805,142 @@ namespace VDISPLAY {
     }
 
     static void unmap_input_devices(const std::string & /* display_name */) {}
+
+    static void map_input_devices_to(const std::string & /* owner */, const std::string & /* output */) {
+      BOOST_LOG(warning) << "[VDISPLAY/KScreen] Built without sd-bus, so touch and pen input cannot be bound to "
+                            "the streamed output; KWin will guess where it lands.";
+    }
 #endif
+
+#ifdef SUNSHINE_BUILD_SDBUS
+    /**
+     * Windows of these classes, put on a session's virtual output by a KWin
+     * script, keyed by the display the session made.
+     *
+     * KWin opens a new window on the output under the pointer, which during a
+     * stream is the virtual one, so most applications land there by
+     * themselves. Steam Big Picture does not: the app's command asks the Steam
+     * already running to switch its existing window, which stays on the
+     * physical monitor it was on (#31). Nothing creates a window for KWin to
+     * place. KWin's own scripting moves such windows, now and as they appear,
+     * and they go back once the output is removed.
+     */
+    std::mutex placements_mutex;
+    std::map<std::string, std::string> placements;  ///< Display name to script plugin name.
+
+    static bool call_kwin_scripting(sd_bus *bus, const char *path, const char *interface, const char *method, sd_bus_message **reply, const char *types, ...) {
+      sd_bus_error error = SD_BUS_ERROR_NULL;
+      va_list arguments;
+      va_start(arguments, types);
+      sd_bus_message *message = nullptr;
+      int status = sd_bus_message_new_method_call(bus, &message, kwin_service, path, interface, method);
+      if (status >= 0 && types) {
+        status = sd_bus_message_appendv(message, types, arguments);
+      }
+      va_end(arguments);
+      if (status >= 0) {
+        status = sd_bus_call(bus, message, 2000000, &error, reply);
+      }
+      sd_bus_message_unref(message);
+      if (status < 0) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] KWin scripting " << method << " failed: "
+                           << (error.message ? error.message : std::strerror(-status));
+      }
+      sd_bus_error_free(&error);
+      return status >= 0;
+    }
+
+    static void place_windows(const std::string &display_name, const std::vector<std::string> &classes, const std::vector<std::uint32_t> &gamescope_pids) {
+      std::string output;
+      {
+        std::lock_guard<std::mutex> lock(layouts_mutex);
+        const auto it = layouts.find(display_name);
+        if (it == layouts.end()) {
+          return;
+        }
+        output = it->second.virtual_output;
+      }
+      if (!safe_output_name(output) || classes.empty()) {
+        return;
+      }
+      const auto contents = platf::window_placement::kwin_script(output, classes, gamescope_pids);
+      if (contents.empty()) {
+        return;
+      }
+
+      const auto plugin = "hermes-place-" + output;
+      const auto directory = std::filesystem::path {"/run/user"} / std::to_string(::getuid()) / "hermes";
+      const auto script = directory / (plugin + ".js");
+      std::error_code ec;
+      std::filesystem::create_directories(directory, ec);
+      {
+        std::ofstream file {script, std::ios::trunc};
+        file << contents;
+        if (!file) {
+          BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not write " << script.string() << "; windows stay where KWin opens them.";
+          return;
+        }
+      }
+
+      sd_bus *bus = nullptr;
+      if (platf::open_user_bus(&bus) < 0 || !bus) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not reach KWin to place windows on " << output << '.';
+        return;
+      }
+      // A script of the same name from an earlier session would make loading fail.
+      call_kwin_scripting(bus, "/Scripting", "org.kde.kwin.Scripting", "unloadScript", nullptr, "s", plugin.c_str());
+      sd_bus_message *reply = nullptr;
+      int32_t id = -1;
+      if (call_kwin_scripting(bus, "/Scripting", "org.kde.kwin.Scripting", "loadScript", &reply, "ss", script.c_str(), plugin.c_str())) {
+        sd_bus_message_read(reply, "i", &id);
+        sd_bus_message_unref(reply);
+      }
+      bool running = false;
+      if (id >= 0) {
+        const auto path = "/Scripting/Script" + std::to_string(id);
+        // KWin 6 names it /Scripting/Script<id>; older ones /<id>.
+        running = call_kwin_scripting(bus, path.c_str(), "org.kde.kwin.Script", "run", nullptr, nullptr) ||
+                  call_kwin_scripting(bus, ("/" + std::to_string(id)).c_str(), "org.kde.kwin.Script", "run", nullptr, nullptr);
+      }
+      sd_bus_unref(bus);
+      if (!running) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] KWin did not run the window placement script; windows stay where KWin opens them.";
+        return;
+      }
+      std::lock_guard<std::mutex> lock(placements_mutex);
+      placements[display_name] = plugin;
+      BOOST_LOG(info) << "[VDISPLAY/KScreen] Application windows go to " << output << " for this session.";
+    }
+
+    static void unplace_windows(const std::string &display_name) {
+      std::string plugin;
+      {
+        std::lock_guard<std::mutex> lock(placements_mutex);
+        const auto it = placements.find(display_name);
+        if (it == placements.end()) {
+          return;
+        }
+        plugin = std::move(it->second);
+        placements.erase(it);
+      }
+      sd_bus *bus = nullptr;
+      if (platf::open_user_bus(&bus) >= 0 && bus) {
+        call_kwin_scripting(bus, "/Scripting", "org.kde.kwin.Scripting", "unloadScript", nullptr, "s", plugin.c_str());
+        sd_bus_unref(bus);
+      }
+      std::error_code ec;
+      std::filesystem::remove(std::filesystem::path {"/run/user"} / std::to_string(::getuid()) / "hermes" / (plugin + ".js"), ec);
+    }
+#else
+    static void place_windows(const std::string &, const std::vector<std::string> &, const std::vector<std::uint32_t> &) {}
+    static void unplace_windows(const std::string &) {}
+#endif
+
+    /** Whether any virtual display session currently has a KWin layout. */
+    static bool any_layout_active() {
+      std::lock_guard<std::mutex> lock(layouts_mutex);
+      return !layouts.empty();
+    }
   }  // namespace kscreen
 
   // GNOME / Mutter output management. Mutter does not speak kscreen-doctor or
@@ -5446,7 +5544,7 @@ namespace VDISPLAY {
       }
 
       auto started = std::make_unique<watcher_t>();
-      const int opened = open_user_bus(&started->bus);
+      const int opened = platf::open_user_bus(&started->bus);
       if (opened < 0 || !started->bus) {
         BOOST_LOG(debug) << "[VDISPLAY/Mutter] Could not connect to the user bus to watch for layout changes: "
                          << (opened < 0 ? std::strerror(-opened) : "no connection was returned") << '.';
@@ -6554,6 +6652,8 @@ namespace VDISPLAY {
     constexpr auto max_grab_interval = std::chrono::microseconds {16667};
     evdi_rect rects[max_rects];
     std::map<evdi_handle, std::chrono::steady_clock::time_point> next_grab_by_handle;
+    constexpr auto max_pending = std::chrono::seconds {1};
+    std::map<evdi_handle, std::chrono::steady_clock::time_point> pending_since;
 
     while (evdi_events_running) {
       {
@@ -6575,18 +6675,35 @@ namespace VDISPLAY {
           pollfd poll_fd {};
           poll_fd.fd = evdi.get_event_ready(display.handle);
           poll_fd.events = POLLIN;
-          if (poll_fd.fd < 0 || ::poll(&poll_fd, 1, 0) <= 0 || !(poll_fd.revents & POLLIN)) {
-            evdi.request_update(display.handle, display.evdi_buffer_id);
-            continue;
+          if (poll_fd.fd >= 0 && ::poll(&poll_fd, 1, 0) > 0 && (poll_fd.revents & POLLIN)) {
+            evdi.handle_events(display.handle, &event_context);
+            pending_since.erase(display.handle);
+          } else {
+            // While a request is pending the driver answers it with an event,
+            // and logs a warning for every repeated request, so ask again only
+            // if the answer seems lost.
+            const auto pending = pending_since.find(display.handle);
+            if (pending != pending_since.end() && now - pending->second < max_pending) {
+              continue;
+            }
+            if (!evdi.request_update(display.handle, display.evdi_buffer_id)) {
+              pending_since[display.handle] = now;
+              continue;
+            }
+            pending_since.erase(display.handle);
           }
+          // A true return means a frame is already waiting. The driver sends no
+          // event for it, so it has to be grabbed now: otherwise its pageflip is
+          // never acknowledged and the display server stalls on every commit.
 
-          evdi.handle_events(display.handle, &event_context);
           int rect_count = max_rects;
           display.evdi_buffer->begin_write();
           evdi.grab_pixels(display.handle, rects, &rect_count);
           display.evdi_buffer->end_write();
           display.evdi_buffer->mark_updated();
-          evdi.request_update(display.handle, display.evdi_buffer_id);
+          if (!evdi.request_update(display.handle, display.evdi_buffer_id)) {
+            pending_since[display.handle] = now;
+          }
           const auto refresh_rate = std::max<uint32_t>(display.fps, 1);
           const auto session_interval = std::chrono::microseconds {1000000 / refresh_rate};
           next_grab_by_handle[display.handle] = now + std::clamp(session_interval, min_grab_interval, max_grab_interval);
@@ -6599,6 +6716,9 @@ namespace VDISPLAY {
             ++it;
           }
         }
+        std::erase_if(pending_since, [&](const auto &entry) {
+          return !active_handles.contains(entry.first);
+        });
       }
 
       // A 1 ms pump keeps pageflip-to-capture wakeup below one millisecond
@@ -7297,6 +7417,7 @@ namespace VDISPLAY {
         lock.unlock();
         kscreen::restore(vdinfo.name);
         kscreen::unmap_input_devices(vdinfo.name);
+        kscreen::unplace_windows(vdinfo.name);
         mutter::restore(vdinfo.name);
         mutter::unmap_input_devices();
         lock.lock();
@@ -7318,6 +7439,7 @@ namespace VDISPLAY {
     lock.unlock();
     kscreen::restore(vdinfo.name);
     kscreen::unmap_input_devices(vdinfo.name);
+    kscreen::unplace_windows(vdinfo.name);
     mutter::restore(vdinfo.name);
     mutter::unmap_input_devices();
 
@@ -7458,8 +7580,12 @@ namespace VDISPLAY {
         if (name.rfind(prefix, 0) != 0) {
           continue;
         }
+        // A connector's "device" link points to its card, which is a DRM class
+        // device with no driver of its own; the driver belongs to the card's
+        // parent device.
         std::error_code ec;
-        const auto module = fs::canonical(entry.path() / "device/driver/module", ec).filename().string();
+        const auto card = entry.path().parent_path() / ("card" + std::to_string(card_index));
+        const auto module = fs::canonical(card / "device/driver/module", ec).filename().string();
         if (!ec && module == "evdi") {
           return name.substr(prefix.size());
         }
@@ -7728,6 +7854,303 @@ namespace VDISPLAY {
     (void) connector;
     return false;
 #endif
+  }
+
+  void placeWindowsOnVirtualDisplay(const std::string &displayName, const std::vector<std::string> &windowClasses, const std::vector<std::uint32_t> &gamescopePids) {
+    if (kscreen::is_active(displayName)) {
+      kscreen::place_windows(displayName, windowClasses, gamescopePids);
+    }
+  }
+
+  namespace {
+    // A session that streams an existing (physical) monitor rather than a
+    // virtual display. KWin binds an unbound touchscreen to an output of its own
+    // choosing - with more than one monitor, often not the one being streamed -
+    // so touch and pen land somewhere the client never sees. Bind them to the
+    // captured output for the duration of the session, as virtual displays do.
+    std::mutex physical_input_mutex;
+    bool physical_session_active = false;
+    std::string physical_capture_output;  ///< Connector the capture reported, e.g. "DP-2".
+    std::string physical_bound_output;    ///< Output the binding currently targets.
+    constexpr const char *physical_binding_owner = "hermes-physical-output";
+
+    void apply_physical_binding_locked() {
+      if (!physical_session_active || physical_capture_output.empty() ||
+          physical_bound_output == physical_capture_output) {
+        return;
+      }
+      if (window_system != window_system_e::WAYLAND || !kscreen::available()) {
+        return;
+      }
+      // A virtual display session owns the binding while it runs.
+      if (kscreen::any_layout_active()) {
+        return;
+      }
+      kscreen::map_input_devices_to(physical_binding_owner, physical_capture_output);
+      physical_bound_output = physical_capture_output;
+    }
+  }  // namespace
+
+  void notePhysicalCaptureOutput(const std::string &connector_name) {
+    std::lock_guard<std::mutex> lock(physical_input_mutex);
+    physical_capture_output = connector_name;
+    apply_physical_binding_locked();
+  }
+
+  std::string primaryPhysicalOutputName() {
+    if (window_system != window_system_e::WAYLAND || !kscreen::available()) {
+      return {};
+    }
+    for (const auto &output : kscreen::outputs()) {
+      if (output.connected && output.enabled && output.priority == 1) {
+        // A virtual output made primary is not a monitor to prefer.
+        return output.name.starts_with("Virtual") ? std::string {} : output.name;
+      }
+    }
+    return {};
+  }
+
+  void beginPhysicalOutputSession() {
+    std::lock_guard<std::mutex> lock(physical_input_mutex);
+    physical_session_active = true;
+    physical_bound_output.clear();
+    apply_physical_binding_locked();
+  }
+
+  void endPhysicalOutputSession() {
+    std::lock_guard<std::mutex> lock(physical_input_mutex);
+    if (!physical_session_active) {
+      return;
+    }
+    physical_session_active = false;
+    if (!physical_bound_output.empty()) {
+      // No-op if a virtual display took the binding over meanwhile.
+      kscreen::unmap_input_devices(physical_binding_owner);
+      physical_bound_output.clear();
+    }
+  }
+
+  namespace {
+    /**
+     * Whether connector @p name ("DP-2") on the DRM device behind @p fd is
+     * scanning out: bound to a CRTC that has a mode and a framebuffer.
+     */
+    bool connector_scanning_out(int fd, const std::string &name) {
+      drmModeRes *res = drmModeGetResources(fd);
+      if (!res) {
+        return false;
+      }
+      bool scanning_out = false;
+      for (int i = 0; i < res->count_connectors && !scanning_out; ++i) {
+        drmModeConnector *conn = drmModeGetConnectorCurrent(fd, res->connectors[i]);
+        if (!conn) {
+          continue;
+        }
+        const char *type = drmModeGetConnectorTypeName(conn->connector_type);
+        const bool match = type && name == std::string {type} + '-' + std::to_string(conn->connector_type_id);
+        drmModeEncoder *enc = match && conn->encoder_id ? drmModeGetEncoder(fd, conn->encoder_id) : nullptr;
+        drmModeCrtc *crtc = enc && enc->crtc_id ? drmModeGetCrtc(fd, enc->crtc_id) : nullptr;
+        scanning_out = crtc && crtc->mode_valid && crtc->buffer_id;
+        drmModeFreeCrtc(crtc);
+        drmModeFreeEncoder(enc);
+        drmModeFreeConnector(conn);
+      }
+      drmModeFreeResources(res);
+      return scanning_out;
+    }
+
+    /** Tell the desktop's screen saver that the user is active. */
+    void simulate_user_activity() {
+#ifdef SUNSHINE_BUILD_SDBUS
+      sd_bus *bus = nullptr;
+      if (platf::open_user_bus(&bus) < 0 || !bus) {
+        return;
+      }
+      // A wedged screensaver must not hold up starting a stream.
+      sd_bus_set_method_call_timeout(bus, 2'000'000);
+      sd_bus_call_method(bus, "org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver", "SimulateUserActivity", nullptr, nullptr, "");
+      sd_bus_flush_close_unref(bus);
+#endif
+    }
+
+    /** Whether any DRM card scans out connector @p name. */
+    bool output_scanning_out(const std::string &name) {
+      std::error_code ec;
+      for (const auto &entry : std::filesystem::directory_iterator {"/dev/dri", ec}) {
+        if (!entry.path().filename().string().starts_with("card")) {
+          continue;
+        }
+        const int fd = ::open(entry.path().c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) {
+          continue;
+        }
+        const bool scanning_out = connector_scanning_out(fd, name);
+        ::close(fd);
+        if (scanning_out) {
+          return true;
+        }
+      }
+      return false;
+    }
+  }  // namespace
+
+  namespace {
+    /** The kernel's hot-plug state of a /sys/class/drm connector, e.g. "connected". */
+    std::string connector_status(const std::filesystem::path &connector) {
+      std::ifstream in {connector / "status"};
+      std::string status;
+      std::getline(in, status);
+      return status;
+    }
+
+    /**
+     * The I2C adapter that runs over a DisplayPort connector's AUX channel,
+     * e.g. "/dev/i2c-9". It is a child of the connector in sysfs. The
+     * connector's "ddc" link is not it: on amdgpu that names the hardware DDC
+     * bus, which a sleeping DisplayPort monitor does not listen on.
+     */
+    std::string aux_i2c_device(const std::filesystem::path &connector) {
+      std::error_code ec;
+      for (const auto &entry : std::filesystem::directory_iterator {connector, ec}) {
+        const auto name = entry.path().filename().string();
+        if (name.starts_with("i2c-")) {
+          return "/dev/" + name;
+        }
+      }
+      return {};
+    }
+
+    /**
+     * Read the first byte of the monitor's EDID over @p device.
+     * @return 1 if the monitor answered, 0 if it did not, -1 if the device
+     * could not be opened.
+     */
+    int read_edid_byte(const std::string &device) {
+      const int fd = ::open(device.c_str(), O_RDWR | O_CLOEXEC);
+      if (fd < 0) {
+        return -1;
+      }
+      constexpr long edid_address = 0x50;
+      unsigned char byte = 0;
+      const bool answered = ::ioctl(fd, I2C_SLAVE, edid_address) == 0 && ::write(fd, &byte, 1) == 1 && ::read(fd, &byte, 1) == 1;
+      ::close(fd);
+      return answered ? 1 : 0;
+    }
+
+    /**
+     * Wake DisplayPort monitors from deep sleep, and wait for them.
+     *
+     * Woken by a modeset, a monitor in deep sleep fails link training (its AUX
+     * channel is not answering yet), drops off and returns seconds later. One
+     * read on its AUX channel wakes it instead: the read times out, the
+     * monitor starts, and the compositor lights it by itself once it has
+     * reconnected, with no failed training. Measured on an ASUS VG32V on an
+     * RX 9070 XT: lit 6.2 to 6.5 seconds after the read, either way.
+     *
+     * A monitor that answers the read is not in deep sleep, and nothing waits
+     * for it. Nothing more is sent while a monitor wakes.
+     * @return Whether a monitor was woken and has come up.
+     */
+    bool wake_displayport_monitors_from_deep_sleep() {
+      std::vector<std::string> waking;
+      std::error_code ec;
+      for (const auto &entry : std::filesystem::directory_iterator {"/sys/class/drm", ec}) {
+        const auto name = entry.path().filename().string();  // "card1-DP-2"
+        const auto dash = name.find('-');
+        if (!name.starts_with("card") || dash == std::string::npos) {
+          continue;
+        }
+        const auto connector = name.substr(dash + 1);
+        // Read the state first: a waking monitor drops it at once.
+        if (!connector.starts_with("DP-") || connector_status(entry.path()) != "connected" || output_scanning_out(connector)) {
+          continue;
+        }
+        const auto device = aux_i2c_device(entry.path());
+        if (device.empty()) {
+          continue;
+        }
+        const int answered = read_edid_byte(device);
+        if (answered < 0) {
+          BOOST_LOG(info) << "[VDISPLAY] Can't open " << device << " to wake " << connector << ": " << std::strerror(errno);
+        } else if (answered == 0) {
+          waking.push_back(connector);
+        }
+      }
+      if (waking.empty()) {
+        return false;
+      }
+
+      const auto start = std::chrono::steady_clock::now();
+      const auto all_lit = [&waking]() {
+        return std::ranges::all_of(waking, output_scanning_out);
+      };
+      bool lit = false;
+      while (!(lit = all_lit()) && std::chrono::steady_clock::now() - start < 8s) {
+        std::this_thread::sleep_for(100ms);
+      }
+      const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+      if (lit) {
+        BOOST_LOG(info) << "[VDISPLAY] Woke " << waking.front() << " from deep sleep over AUX; lit after " << waited << " ms.";
+      } else {
+        BOOST_LOG(warning) << "[VDISPLAY] " << waking.front() << " was woken from deep sleep over AUX but is not lit after " << waited << " ms.";
+      }
+      return lit;
+    }
+
+    struct physical_output_t {
+      std::string name;
+      bool primary = false;
+    };
+
+    /** The primary physical output, or failing that any enabled physical output. */
+    physical_output_t enabled_physical_output() {
+      physical_output_t result;
+      for (const auto &output : kscreen::outputs()) {
+        if (!output.connected || !output.enabled || output.name.starts_with("Virtual")) {
+          continue;
+        }
+        if (result.name.empty() || output.priority == 1) {
+          result = {output.name, output.priority == 1};
+        }
+      }
+      return result;
+    }
+  }  // namespace
+
+  bool wakeSleepingMonitor() {
+    if (window_system != window_system_e::WAYLAND || !kscreen::available()) {
+      return false;
+    }
+
+    const bool woken = wake_displayport_monitors_from_deep_sleep();
+
+    const auto monitor = enabled_physical_output();
+    if (monitor.name.empty()) {
+      return false;
+    }
+    // Count as user activity, so the idle timer that put the screens to sleep
+    // doesn't turn them off again before capture starts.
+    simulate_user_activity();
+    if (woken && output_scanning_out(monitor.name)) {
+      return true;  // The compositor lit it when it reconnected.
+    }
+
+    BOOST_LOG(info) << "[VDISPLAY/KScreen] " << monitor.name
+                    << " is enabled but dark (power saving); waking it instead of creating a virtual display.";
+    if (!kscreen::run_layout_command("kscreen-doctor --dpms on")) {
+      return false;
+    }
+
+    // The screens come back one at a time, and each reads as enabled before
+    // the compositor has drawn on it. Capture can only open it once it does.
+    for (int i = 0; i < 30; ++i) {
+      std::this_thread::sleep_for(100ms);
+      if (output_scanning_out(monitor.name)) {
+        return true;
+      }
+    }
+    BOOST_LOG(warning) << "[VDISPLAY/KScreen] " << monitor.name << " did not show a frame within 3 seconds.";
+    return false;
   }
 
   bool activateVirtualDisplayOutput(const std::string &displayName) {
@@ -8716,3 +9139,4 @@ namespace VDISPLAY {
   }
 
 }  // namespace VDISPLAY
+

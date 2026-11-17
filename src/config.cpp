@@ -503,6 +503,7 @@ namespace config {
     false,  // hermes_kms_isolated_sessions
     "auto"s,  // gamescope_backend
     "plasma"s,  // hermes_kms_session_compositor
+    "gamescope"s,  // isolation_method
 
     {
       video_t::dd_t::config_option_e::disabled,  // configuration_option
@@ -621,6 +622,7 @@ namespace config {
     {},  // prep commands
     {},  // state commands
     {},  // server commands
+    false,  // inhibit screen locking while a client is connected
   };
 
   bool endline(char ch) {
@@ -1272,6 +1274,7 @@ namespace config {
     // labwc are the profiles Hermes ships as opt-in fallbacks, and any other
     // name is a profile the administrator dropped in themselves.
     string_f(vars, "hermes_kms_session_compositor", video.hermes_kms_session_compositor);
+    string_restricted_f(vars, "isolation_method", video.isolation_method, {"gamescope"sv, "kwin_virtual"sv});
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);
     generic_f(vars, "dd_resolution_option", video.dd.resolution_option, dd::resolution_option_from_view);
@@ -1392,6 +1395,7 @@ namespace config {
 
     bool_f(vars, "system_tray", sunshine.system_tray);
     bool_f(vars, "hide_tray_controls", sunshine.hide_tray_controls);
+    bool_f(vars, "inhibit_screen_lock", sunshine.inhibit_screen_lock);
     bool_f(vars, "enable_pairing", sunshine.enable_pairing);
     bool_f(vars, "enable_discovery", sunshine.enable_discovery);
     bool_f(vars, "envvar_compatibility_mode", sunshine.envvar_compatibility_mode);

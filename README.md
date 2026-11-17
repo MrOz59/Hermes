@@ -147,7 +147,8 @@ Each app's `virtual-display-layout` field in `apps.json` decides where its
 virtual display sits: `auto` (follow the global "Use the Virtual Display
 exclusively" setting), `extend`, `mirror`, or `exclusive`. Nightly builds add
 `detached`, which on KDE enables and positions only the virtual output and
-leaves the physical monitor configuration untouched.
+leaves the physical monitor configuration untouched (the Web UI calls it
+"Beside the physical monitors").
 
 ### What needs Hermes-KMS
 
@@ -305,22 +306,23 @@ printf '%s\n' 'options hermes_kms initial_enabled=0 outputs=2' | sudo tee /etc/m
   the whole server into an isolated-session mode: shared-host streams and
   independent sessions may run on the same Hermes server at the same time.
 
-  With `session-type = auto`, an explicitly requested virtual display uses an
-  independent session only when `virtual-display-layout = detached`. A Detached
-  entry with no command becomes an independent desktop; one with a command
-  becomes an independent application session. Mirror, Extend, Exclusive, normal
-  Host Desktop launches, and launches without an explicit virtual-display request
-  stay on the shared host session. Explicit `desktop` and `application` session
-  types force the corresponding independent route, while `shared` always uses
-  the host session.
+  `isolation_method` then picks how a launch is isolated when the client requests
+  a virtual display: `gamescope` (the default, Gamescope with a virtual display)
+  or `kwin_virtual` (KWin's virtual backend). An app's `isolation-method` can
+  choose either for itself, and then applies whether or not a virtual display was
+  requested. With the default, `default`, an app with no command gets the KWin
+  desktop under `gamescope`, and an explicit `extend`, `mirror` or `exclusive`
+  layout stays on the host desktop. `host-session: true` in `apps.json` keeps an
+  app on the host desktop always.
 
   An independent session gets a separate compositor, application process tree,
-  capture path, and input of its own. Application profiles run directly in a
-  DRM Gamescope session, on their own Hermes-KMS card and private DRM seat. Desktop profiles run the compositor named by
-  `hermes_kms_session_compositor`: by default the user's own Plasma desktop,
-  detached on a virtual KWin output, which needs no Hermes-KMS card or seat
-  broker; or, opt-in, Weston with its desktop shell and panel. Application
-  profiles and the opt-in compositors need `gamescope` or `weston` and the
+  capture path, and input of its own. `gamescope` runs the app directly in a
+  DRM Gamescope session, on its own Hermes-KMS card and private DRM seat.
+  `kwin_virtual` runs the compositor named by `hermes_kms_session_compositor`:
+  by default the user's own Plasma desktop on KWin's virtual backend (a virtual
+  output, with input through KWin's fake-input protocol), which needs no
+  Hermes-KMS card or seat broker; or, opt-in, Weston with its desktop shell and
+  panel. `gamescope` and the opt-in compositors need `gamescope` or `weston` and the
   driver's optional private-seat broker (`hermes-kms-seatd-git`, or
   `sudo make INSTALL_BROKER=1 dkms-install` from a clone), configured for the
   user Hermes runs as:
@@ -383,7 +385,7 @@ The quickest way is the installer, run as the user Hermes will stream for:
 curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.sh | bash
 ```
 
-It installs Hermes for Arch/CachyOS, Ubuntu 24.04/26.04 or Fedora 43/44,
+It installs Hermes for Arch/CachyOS, Ubuntu 24.04/26.04 or Fedora 43/44/45,
 then offers the matching [Hermes-KMS](#installing-the-hermes-kms-driver)
 v0.4.1 driver from its published release assets, verified against SHA-256
 checksums. Where no native driver package is available, it offers a
@@ -436,7 +438,7 @@ version publishes a normal release, both at
 |:-------------|:------|:---------|
 | Arch / CachyOS | `hermes-streaming-<version>-1-x86_64.pkg.tar.zst` | `sudo pacman -U ./hermes-streaming-*.pkg.tar.zst` |
 | Ubuntu 24.04, 26.04 | `hermes_<version>_ubuntu<release>_amd64.deb` | `sudo apt install ./hermes_<version>_ubuntu<release>_amd64.deb` |
-| Fedora 43, 44 | `hermes-<version>-1.fc<release>.x86_64.rpm` | `sudo dnf install ./hermes-<version>-1.fc<release>.x86_64.rpm` |
+| Fedora 43, 44, 45 | `hermes-<version>-1.fc<release>.x86_64.rpm` | `sudo dnf install ./hermes-<version>-1.fc<release>.x86_64.rpm` |
 
 Match the release in the filename to the one you run: a `.deb` or `.rpm` is
 built inside that release's own container, so its dependencies are the sonames

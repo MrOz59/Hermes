@@ -442,6 +442,40 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### inhibit_screen_lock
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Keep the host's screensaver and screen lock from engaging while a
+            client is connected, by holding an inhibition through
+            <code>org.freedesktop.ScreenSaver</code> on the D-Bus session bus.
+            The inhibition is released when the last client disconnects.
+            @note{This option applies to Linux only. It needs a desktop
+            screensaver service implementing <code>org.freedesktop.ScreenSaver</code>
+            on the same D-Bus user bus as Hermes. The desktop must honor the
+            request; a manual lock or administrator-enforced lock is not
+            overridden. If the service restarts, Hermes attempts to restore
+            the inhibition. Use Save and Apply in the web UI (which restarts
+            Hermes) after changing this setting; saving alone does not change
+            an already-running stream.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            inhibit_screen_lock = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ## Input
 
 ### controller
@@ -941,7 +975,7 @@ alias; new configurations should use the key above.
             Switch Pro, DualShock 4 and DualSense emulation are HID devices that a kernel driver (`hid-nintendo`,
             `hid-playstation`) turns into a gamepad. Steam reads them through hidraw and does not grab that gamepad, so a
             game that reads it too gets every press twice: raw, and through Steam Input. When enabled, an isolated
-            session (Gamescope or detached desktop) gets only their hidraw nodes, and games see Steam Input's controller
+            session (Gamescope or KWin virtual backend) gets only their hidraw nodes, and games see Steam Input's controller
             alone. A game run without Steam Input then has no controller.
         </td>
     </tr>
@@ -1506,15 +1540,15 @@ alias; new configurations should use the key above.
 
             Enables the experimental independent-session capability. It does not switch the entire Hermes server into an isolated mode. Eligible launches may use independent sessions while ordinary Host Desktop, Remote Input, and other shared routes continue to use the existing host compositor.
 
-            <b>What every isolated session gets.</b> The detached Plasma
+            <b>What every isolated session gets.</b> The Plasma
             desktop (<code>hermes_kms_session_compositor = plasma</code>) runs
             on a virtual KWin output instead; every
             other isolated session gets its own Hermes-KMS DRM card
             on its own private DRM seat, its own compositor, its own Wayland
             socket, its own capture pipeline, and its own set of virtual input
             devices, tagged so that one client's keyboard and mouse cannot enter
-            another client's desktop. Application profiles use Gamescope;
-            desktop profiles use a session compositor chosen with
+            another client's desktop. Sessions isolated with Gamescope use Gamescope;
+            KWin virtual ones use a session compositor chosen with
             <code>hermes_kms_session_compositor</code>. This half is what
             separates what each client <i>sees and controls</i>, and it does not
             depend on the session broker.
@@ -1690,9 +1724,10 @@ alias; new configurations should use the key above.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Which desktop an experimental independent <code>desktop</code>
-            session starts. The default, <code>plasma</code>, is the user's own
-            Plasma desktop, detached (see below). Any other name selects a
+            Which desktop the <code>kwin_virtual</code> isolation method starts.
+            The default, <code>plasma</code>, is the user's own Plasma desktop
+            on KWin's virtual backend (see below). Any other name replaces KWin
+            with a
             compositor profile file, looked up first in
             <code>~/.config/hermes/session-compositors/</code> and then in the
             profiles Hermes ships; a profile declares the command line, any
@@ -1714,8 +1749,8 @@ alias; new configurations should use the key above.
             behind it, so every swapchain fails. Use <code>labwc</code> only
             with a KMS device whose render node Mesa can drive.}
             @note{<code>plasma</code> is not a profile file. It starts the
-            user's own Plasma desktop, detached: stock KWin on a virtual output
-            of its own, run as the same user in a transient unit of the user's
+            user's own Plasma desktop: stock KWin on the virtual output of its
+            virtual backend, run as the same user in a transient unit of the user's
             systemd manager, with a private D-Bus and runtime directory. It
             shares the user's home, files and settings, so changes made in it
             are real; it has no DRM device and no libinput, so it never wakes or
@@ -1726,7 +1761,7 @@ alias; new configurations should use the key above.
             DMA-BUFs. It needs KWin and Plasma 6, plasma-wayland-protocols at
             build time, and <code>dbus-run-session</code>. PowerDevil does not
             run inside it, so the host's alone manages the monitors and sleep.
-            It applies to the <code>desktop</code> profile without a command.
+            It runs the app's command, if any, inside the desktop.
             If it cannot start, the error names the reason and suggests
             <code>weston</code> as a fallback.}
             @note{The <code>labwc</code> profile sets the mode the client asked
@@ -1747,6 +1782,43 @@ alias; new configurations should use the key above.
         <td>Example</td>
         <td colspan="2">@code{}
             hermes_kms_session_compositor = weston
+            @endcode</td>
+    </tr>
+</table>
+
+### isolation_method
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            How a session is isolated when a client requests a virtual display,
+            with <code>hermes_kms_isolated_sessions</code> enabled. An app's
+            <code>isolation-method</code> overrides it.
+            <ul>
+                <li><code>gamescope</code>: Gamescope with a virtual display. The
+                app runs alone on its own Hermes-KMS card and private DRM seat. An
+                app with no command gets the <code>kwin_virtual</code> desktop.</li>
+                <li><code>kwin_virtual</code>: KWin's virtual backend, a virtual
+                output with input through KWin's fake-input protocol, running the
+                desktop chosen by <code>hermes_kms_session_compositor</code>. The
+                app's command starts inside it.</li>
+            </ul>
+            @note{An app on the <code>default</code> method with an explicit
+            <code>extend</code>, <code>mirror</code> or <code>exclusive</code>
+            <code>virtual-display-layout</code> stays on the host desktop.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            gamescope
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            isolation_method = kwin_virtual
             @endcode</td>
     </tr>
 </table>
@@ -2316,6 +2388,40 @@ alias; new configurations should use the key above.
             @endcode</td>
     </tr>
 </table>
+
+When enabled, UPnP also attempts forwarding through two routers (double NAT). Hermes selects the discovered
+IGD closest to the host's IPv4 address. If that router has a private WAN address and a suitable outer IGD is
+also discoverable, it maps the same ports there to the inner router's WAN address. Both hops follow `upnp`;
+there is no separate double-NAT switch. The application default remains disabled. Container installations
+seed `upnp = enabled` only when creating a configuration without that key.
+
+This can avoid manual forwarding on both a personal router and an ISP router, allowing direct remote
+streaming without a VPN relay. Both routers must offer reachable UPnP services. It does not bypass ISP
+CGNAT; if the outer IGD cannot be discovered, manual forwarding or another connectivity method is needed.
+Router selection uses an IPv4 prefix heuristic, not a complete routing-table topology discovery. When two outer IGDs are equally plausible, Hermes skips the external mapping instead of arbitrarily choosing one.
+
+Mappings to other destinations are left untouched. Existing manual mappings to the correct destination
+are reused without renewal or removal, even if their description resembles a Hermes-created rule.
+Hermes manages a mapping only after creating it successfully or recovering its journal record. Routers
+that rewrite descriptions may prevent automatic cleanup: ambiguous permanent mappings remain in the
+journal for inspection rather than being assumed removed. Hermes tracks its own rules separately for
+each router and checks ownership before cleanup. Routers supporting only permanent leases are used only after recovery intent
+has been written to `upnp_mappings.journal` in the configuration directory. On the next start Hermes
+attempts cleanup even if UPnP was disabled; unreachable rules remain recorded for retry.
+
+Some ISP routers report internal port `0` in a specific mapping query. For a locally recorded rule only,
+Hermes corroborates the port and destination using a bounded generic enumeration, then repeats the
+specific query to verify the exact description and destination before renewal or removal. Generic
+descriptions are not used as ownership evidence because these routers may append stale data to them.
+Incomplete enumeration, duplicate wildcard entries, changed destinations, or inconsistent leases leave
+the rule untouched. This compatibility check never adopts a pre-existing mapping.
+
+UPnP makes the configured streaming ports reachable from outside the LAN. The existing
+`origin_web_ui_allowed` policy still controls whether the Web UI port is mapped. Keep MiniUPnPc updated:
+the bundled Flatpak source includes upstream XML bounds fixes for CVE-2026-110655 and CVE-2026-110656;
+native packages must obtain the corresponding fixes from their distribution. The patches are derived
+from upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
+`64ef08a12aabab57be0bf7e40f047c8f14dedf9c`, also backported by ProsperoSunshine.
 
 ### address_family
 

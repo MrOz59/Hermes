@@ -533,6 +533,17 @@ namespace platf {
       return false;
     }
 
+    /**
+     * @brief Whether this capture backend requires an HDR encoder when the display is in HDR mode.
+     *
+     * Capture backends that cannot downconvert or tone-map an HDR/PQ scanout to SDR (such as
+     * KMS grab and Hermes-KMS on Linux) return true. Backends that can deliver an SDR frame from
+     * an HDR desktop (such as Windows Desktop Duplication) return false.
+     */
+    virtual bool requires_hdr_for_hdr_output() const {
+      return false;
+    }
+
     virtual bool get_hdr_metadata(SS_HDR_METADATA &metadata) {
       std::memset(&metadata, 0, sizeof(metadata));
       return false;

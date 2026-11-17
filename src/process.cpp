@@ -19,6 +19,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -38,7 +39,11 @@
   #include <unistd.h>
   #include <xf86drm.h>
 
+  #ifdef __linux__
+    #include "platform/linux/bounded_command.h"
+  #endif
   #include "platform/linux/gamescope_session.h"
+  #include "platform/linux/window_placement.h"
   // For the GBM allocation probe: picking the render node an isolated session
   // renders on is the same question the capture path answers, so it uses the
   // same answer rather than a second heuristic. Compiles to "yes" where Wayland
@@ -124,26 +129,32 @@ namespace proc {
   session_route_e resolve_session_route(
     const ctx_t &app,
     bool isolated_sessions_enabled,
-    bool virtual_display_requested
+    bool virtual_display_requested,
+    std::string_view global_method
   ) {
-    if (!isolated_sessions_enabled || app.session_type == "shared") {
+    if (!isolated_sessions_enabled || app.host_session) {
       return session_route_e::shared;
     }
 
-    if (app.session_type == "desktop") {
+    if (app.isolation_method == "kwin_virtual") {
       return session_route_e::isolated_desktop;
     }
 
-    if (app.session_type == "application") {
+    if (app.isolation_method == "gamescope") {
       return session_route_e::isolated_application;
     }
 
-    if (!virtual_display_requested ||
-        app.virtual_display_layout != "detached") {
+    if (!virtual_display_requested) {
       return session_route_e::shared;
     }
 
-    return app.cmd.empty() ?
+    const auto &layout = app.virtual_display_layout;
+    if (layout == "extend" || layout == "mirror" || layout == "exclusive") {
+      return session_route_e::shared;
+    }
+
+    // Gamescope needs a command to run; without one, the only thing to show is a desktop.
+    return global_method == "kwin_virtual" || app.cmd.empty() ?
              session_route_e::isolated_desktop :
              session_route_e::isolated_application;
   }
@@ -868,10 +879,8 @@ namespace proc {
     }
 
     std::string choose_isolated_profile(const ctx_t &app) {
-      if (app.session_type == "application" || app.session_type == "desktop") {
-        return app.session_type;
-      }
-      return app.cmd.empty() ? "desktop" : "application";
+      const auto route = resolve_session_route(app, true, true, config::video.isolation_method);
+      return route == session_route_e::isolated_desktop ? "desktop" : "application";
     }
 
     /**
@@ -1762,8 +1771,8 @@ namespace proc {
       launch_session->launch_error_message = "Independent-session capability is unavailable.";
       return 503;
     }
-    if (app.session_type == "shared") {
-      BOOST_LOG(error) << "[IsolatedSession] Shared-host profile was incorrectly routed "
+    if (app.host_session) {
+      BOOST_LOG(error) << "[IsolatedSession] A host-session app was incorrectly routed "
                           "to the isolated-session executor.";
       return 400;
     }
@@ -1930,7 +1939,7 @@ namespace proc {
       } else if (own_plasma_desktop) {
         // A sink on the host's server would only steer PulseAudio clients:
         // native PipeWire ones would still play on the host's own outputs.
-        launch_session->launch_error_message = "Could not start the detached desktop's own audio server.";
+        launch_session->launch_error_message = "Could not start the KWin virtual desktop's own audio server.";
         BOOST_LOG(error) << "[IsolatedSession] Could not start a private audio server for "
                          << runtime->runtime_id << "; refusing to share the host's audio devices.";
         return 503;
@@ -1939,7 +1948,7 @@ namespace proc {
         BOOST_LOG(info) << "[IsolatedSession] Session " << runtime->runtime_id << " plays into "
                         << audio_sink << " on the host's audio server (" << audio_channels << " channels).";
       } else if (runtime->profile == "desktop") {
-        launch_session->launch_error_message = "Could not create the detached desktop's private audio sink.";
+        launch_session->launch_error_message = "Could not create the KWin virtual desktop's private audio sink.";
         BOOST_LOG(error) << "[IsolatedSession] Could not create a private audio sink for "
                          << runtime->runtime_id << "; refusing to capture host audio.";
         return 503;
@@ -1979,7 +1988,7 @@ namespace proc {
         constexpr std::string_view fallback {
           " To use Weston instead, if it is installed, set hermes_kms_session_compositor = weston."
         };
-        launch_session->launch_error_message = "The detached Plasma desktop " + reason + '.' + std::string {fallback};
+        launch_session->launch_error_message = "The KWin virtual desktop " + reason + '.' + std::string {fallback};
         BOOST_LOG(error) << "[IsolatedSession] " << launch_session->launch_error_message;
         return 503;
       };
@@ -2027,7 +2036,7 @@ namespace proc {
       {
         std::lock_guard<std::mutex> probe_lock(encoder_probe_mutex);
         if (rtsp_stream::session_count() == 0 && video::probe_encoders_without_display()) {
-          launch_session->launch_error_message = "No working video encoder was found for the detached desktop.";
+          launch_session->launch_error_message = "No working video encoder was found for the KWin virtual desktop.";
           BOOST_LOG(error) << "[IsolatedSession] " << launch_session->launch_error_message;
           return 503;
         }
@@ -3388,6 +3397,12 @@ namespace proc {
       config::video.headless_mode         // Headless mode
       || launch_session->virtual_display  // User requested virtual display
       || _app.virtual_display;            // App is configured to use virtual display
+#ifdef __linux__
+    // Screens put to sleep read as unlit, the same as no monitor at all.
+    if (!virtual_display_requested && !gamescope_session && !video::display_present()) {
+      VDISPLAY::wakeSleepingMonitor();
+    }
+#endif
     const bool needs_virtual_display =
       !gamescope_session &&                 // Not in a standalone Gamescope session
       (virtual_display_requested ||
@@ -3431,6 +3446,11 @@ namespace proc {
                            "use one, or headless mode. 'virtual_display_backend' and "
                            "'hermes_kms_multi_output' pick which backend serves the request, never "
                            "whether one is made.";
+#ifndef _WIN32
+        // Bind touch and pen to the monitor this session streams once the capture
+        // reports it, instead of wherever KWin puts an unbound touchscreen.
+        VDISPLAY::beginPhysicalOutputSession();
+#endif
       }
     }
 
@@ -3800,6 +3820,25 @@ namespace proc {
 
     _env["APOLLO_APP_STATUS"] = "RUNNING";
 
+#ifdef __linux__
+    // Parse exactly as application commands are parsed elsewhere. Quoted
+    // executable paths and Flatpak Steam entries must not silently miss this.
+    const auto placement_arguments = [](const std::string &command) {
+      try {
+        return boost::program_options::split_unix(command);
+      } catch (const std::exception &error) {
+        BOOST_LOG(warning) << "[VDISPLAY] Could not parse window placement command: " << error.what();
+        return std::vector<std::string> {};
+      }
+    };
+    const auto app_arguments = placement_arguments(_app.cmd);
+    bool place_steam = platf::window_placement::opens_big_picture(app_arguments);
+    const bool app_gamescope = !gamescope_session &&
+                              (platf::window_placement::launches_gamescope(app_arguments) ||
+                               launch_session->launch_mode == "gamescope");
+    std::vector<std::uint32_t> gamescope_pids;
+#endif
+
     for (auto &cmd : _app.detached) {
       boost::filesystem::path working_dir = _app.working_dir.empty() ?
                                               find_working_directory(cmd, _env) :
@@ -3809,6 +3848,13 @@ namespace proc {
       if (ec) {
         BOOST_LOG(warning) << "Couldn't spawn ["sv << cmd << "]: System: "sv << ec.message();
       } else {
+#ifdef __linux__
+        const auto arguments = placement_arguments(cmd);
+        place_steam = place_steam || platf::window_placement::opens_big_picture(arguments);
+        if (!gamescope_session && platf::window_placement::launches_gamescope(arguments)) {
+          gamescope_pids.push_back(static_cast<std::uint32_t>(child.id()));
+        }
+#endif
         child.detach();
       }
     }
@@ -3869,6 +3915,21 @@ namespace proc {
         return -1;
       }
     }
+
+#ifdef __linux__
+    if (!this->display_name.empty()) {
+      if (app_gamescope && _process.valid()) {
+        gamescope_pids.push_back(static_cast<std::uint32_t>(_process.id()));
+      }
+      // Install after spawning: exact PIDs are now known. The script visits
+      // existing windows too, so a fast launch cannot miss its placement.
+      if (!gamescope_pids.empty()) {
+        VDISPLAY::placeWindowsOnVirtualDisplay(this->display_name, {"gamescope"}, gamescope_pids);
+      } else if (place_steam) {
+        VDISPLAY::placeWindowsOnVirtualDisplay(this->display_name, {"steam"});
+      }
+    }
+#endif
 
     _app_launch_time = std::chrono::steady_clock::now();
 
@@ -3944,6 +4005,16 @@ namespace proc {
     // calls to bp::wait() and platf::process_group_running() which both
     // invoke waitpid() under the hood.
     auto reaper = util::fail_guard([]() {
+  #ifdef __linux__
+      // A bounded command (kscreen-doctor and the like) reaps its own child.
+      // Reaping it here would take its exit status, and its complete reply
+      // would be thrown away. Skip this round while one runs; whatever exits
+      // meanwhile is reaped on a later call.
+      std::unique_lock lock {platf::bounded_command::reap_mutex(), std::try_to_lock};
+      if (!lock) {
+        return;
+      }
+  #endif
       while (waitpid(-1, nullptr, WNOHANG) > 0);
     });
 #endif
@@ -4083,6 +4154,11 @@ namespace proc {
   void proc_t::terminate(bool immediate, bool needs_refresh) {
     std::error_code ec;
     placebo = false;
+
+#ifndef _WIN32
+    // Put back the touch and pen binding a physical-monitor session made.
+    VDISPLAY::endPhysicalOutputSession();
+#endif
 
     if (!immediate) {
       terminate_process_group(_process, _process_group, _app.exit_timeout);
@@ -4721,6 +4797,47 @@ namespace proc {
     fileTree["version"] = this_version;
   }
 
+  /**
+   * v7: session-type became isolation-method, named after what each value runs;
+   * "shared" never was a way to isolate, so it became the host-session flag.
+   * Hermes' own entries lose "Detached" from their names unless the user renamed them.
+   */
+  void migration_v7(nlohmann::json& fileTree) {
+    static const int this_version = 7;
+
+    if (fileTree.contains("apps") && fileTree["apps"].is_array()) {
+      static const std::map<std::string, std::string> methods {
+        {"application", "gamescope"},
+        {"desktop", "kwin_virtual"},
+      };
+      static const std::map<std::string, std::string> names {
+        {"Detached Desktop", "Desktop (KWin virtual)"},
+        {"Detached Steam", "Steam (KWin virtual)"},
+      };
+      for (auto &app : fileTree["apps"]) {
+        if (!app.is_object()) {
+          continue;
+        }
+        const auto method = methods.find(app.value("session-type", ""));
+        if (method != methods.end() && !app.contains("isolation-method")) {
+          app["isolation-method"] = method->second;
+        }
+        if (app.value("session-type", "") == "shared") {
+          app["host-session"] = true;
+        }
+        app.erase("session-type");
+
+        const auto name = names.find(app.value("name", ""));
+        const auto uuid = app.value("uuid", "");
+        if (name != names.end() && (uuid == DETACHED_DESKTOP_UUID || uuid == DETACHED_STEAM_UUID)) {
+          app["name"] = name->second;
+        }
+      }
+    }
+
+    fileTree["version"] = this_version;
+  }
+
   void migrate(nlohmann::json& fileTree, const std::string& fileName) {
     int file_version = 0;
     if (fileTree.contains("version")) {
@@ -4742,6 +4859,10 @@ namespace proc {
     }
     if (file_version < 6) {
       migration_v6(fileTree);
+      changed = true;
+    }
+    if (file_version < 7) {
+      migration_v7(fileTree);
       changed = true;
     }
     if (changed) {
@@ -4889,15 +5010,15 @@ namespace proc {
           ctx.allow_client_commands = app_node.value("allow-client-commands", true);
           ctx.terminate_on_pause = app_node.value("terminate-on-pause", false);
           ctx.unlock_host_session = app_node.value("unlock-host-session", false);
-          ctx.session_type = app_node.value("session-type", "auto");
-          if (ctx.session_type != "auto" &&
-              ctx.session_type != "shared" &&
-              ctx.session_type != "application" &&
-              ctx.session_type != "desktop") {
-            BOOST_LOG(warning) << "Unknown session-type '" << ctx.session_type
-                               << "' for app " << name << "; using auto.";
-            ctx.session_type = "auto";
+          ctx.isolation_method = app_node.value("isolation-method", "default");
+          if (ctx.isolation_method != "default" &&
+              ctx.isolation_method != "gamescope" &&
+              ctx.isolation_method != "kwin_virtual") {
+            BOOST_LOG(warning) << "Unknown isolation-method '" << ctx.isolation_method
+                               << "' for app " << name << "; using the global setting.";
+            ctx.isolation_method = "default";
           }
+          ctx.host_session = app_node.value("host-session", false);
           {
             // Accepted as a number or a numeric string, the way an edited
             // apps.json tends to hold it; anything else means the default.
@@ -5016,7 +5137,7 @@ namespace proc {
       ctx.allow_client_commands = false;
       ctx.terminate_on_pause = false;
       ctx.unlock_host_session = false;
-      ctx.session_type = "auto";
+      ctx.isolation_method = "default";
 
       ctx.elevated = false;
       ctx.auto_detach = true;
@@ -5052,7 +5173,7 @@ namespace proc {
       ctx.allow_client_commands = false;
       ctx.terminate_on_pause = false;
       ctx.unlock_host_session = false;
-      ctx.session_type = "auto";
+      ctx.isolation_method = "default";
 
       ctx.elevated = false;
       ctx.auto_detach = true;
@@ -5089,7 +5210,7 @@ namespace proc {
         ctx.allow_client_commands = false;
         ctx.terminate_on_pause = true; // There's no need to keep an active input only session ongoing
         ctx.unlock_host_session = false;
-        ctx.session_type = "shared";
+        ctx.host_session = true;
 
         ctx.elevated = false;
         ctx.auto_detach = true;
@@ -5127,7 +5248,7 @@ namespace proc {
         ctx.allow_client_commands = false;
         ctx.terminate_on_pause = false;
         ctx.unlock_host_session = false;
-        ctx.session_type = "shared";
+        ctx.host_session = true;
 
         ctx.elevated = false;
         ctx.auto_detach = true;
@@ -5225,3 +5346,4 @@ namespace proc {
 #endif
 
 }  // namespace proc
+

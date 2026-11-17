@@ -274,6 +274,42 @@ namespace platf {
     return describe_render_node(fd);
   }
 
+  namespace {
+    std::mutex last_vaapi_node_mutex;
+    std::string last_vaapi_node;  ///< Render node path; described only when asked.
+  }  // namespace
+
+  void note_vaapi_encode_gpu(int fd) {
+    // Only the path: describing reads sysfs and amdgpu.ids, and this runs
+    // for every VAAPI device an encoder probe or a stream opens.
+    std::string node;
+    if (fd >= 0) {
+      std::error_code ec;
+      node = std::filesystem::read_symlink(std::format("/proc/self/fd/{}", fd), ec).string();
+    }
+    std::lock_guard lock {last_vaapi_node_mutex};
+    last_vaapi_node = std::move(node);
+  }
+
+  std::string last_vaapi_encode_gpu() {
+    std::string node;
+    {
+      std::lock_guard lock {last_vaapi_node_mutex};
+      node = last_vaapi_node;
+    }
+    if (node.empty()) {
+      return {};
+    }
+    const int fd = ::open(node.c_str(), O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+      return {};
+    }
+    auto close_fd = util::fail_guard([fd]() {
+      ::close(fd);
+    });
+    return describe_render_node(fd);
+  }
+
   std::vector<std::string> render_node_descriptions() {
     std::vector<std::string> descriptions;
     std::error_code ec;

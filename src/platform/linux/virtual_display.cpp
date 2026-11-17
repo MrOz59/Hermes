@@ -41,6 +41,7 @@
 // platform includes
 #include <csignal>
 #include <fcntl.h>
+#include <linux/i2c-dev.h>
 #include <poll.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
@@ -7914,6 +7915,229 @@ namespace VDISPLAY {
       kscreen::unmap_input_devices(physical_binding_owner);
       physical_bound_output.clear();
     }
+  }
+
+  namespace {
+    /**
+     * Whether connector @p name ("DP-2") on the DRM device behind @p fd is
+     * scanning out: bound to a CRTC that has a mode and a framebuffer.
+     */
+    bool connector_scanning_out(int fd, const std::string &name) {
+      drmModeRes *res = drmModeGetResources(fd);
+      if (!res) {
+        return false;
+      }
+      bool scanning_out = false;
+      for (int i = 0; i < res->count_connectors && !scanning_out; ++i) {
+        drmModeConnector *conn = drmModeGetConnectorCurrent(fd, res->connectors[i]);
+        if (!conn) {
+          continue;
+        }
+        const char *type = drmModeGetConnectorTypeName(conn->connector_type);
+        const bool match = type && name == std::string {type} + '-' + std::to_string(conn->connector_type_id);
+        drmModeEncoder *enc = match && conn->encoder_id ? drmModeGetEncoder(fd, conn->encoder_id) : nullptr;
+        drmModeCrtc *crtc = enc && enc->crtc_id ? drmModeGetCrtc(fd, enc->crtc_id) : nullptr;
+        scanning_out = crtc && crtc->mode_valid && crtc->buffer_id;
+        drmModeFreeCrtc(crtc);
+        drmModeFreeEncoder(enc);
+        drmModeFreeConnector(conn);
+      }
+      drmModeFreeResources(res);
+      return scanning_out;
+    }
+
+    /** Tell the desktop's screen saver that the user is active. */
+    void simulate_user_activity() {
+#ifdef SUNSHINE_BUILD_SDBUS
+      sd_bus *bus = nullptr;
+      if (platf::open_user_bus(&bus) < 0 || !bus) {
+        return;
+      }
+      // A wedged screensaver must not hold up starting a stream.
+      sd_bus_set_method_call_timeout(bus, 2'000'000);
+      sd_bus_call_method(bus, "org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver", "SimulateUserActivity", nullptr, nullptr, "");
+      sd_bus_flush_close_unref(bus);
+#endif
+    }
+
+    /** Whether any DRM card scans out connector @p name. */
+    bool output_scanning_out(const std::string &name) {
+      std::error_code ec;
+      for (const auto &entry : std::filesystem::directory_iterator {"/dev/dri", ec}) {
+        if (!entry.path().filename().string().starts_with("card")) {
+          continue;
+        }
+        const int fd = ::open(entry.path().c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) {
+          continue;
+        }
+        const bool scanning_out = connector_scanning_out(fd, name);
+        ::close(fd);
+        if (scanning_out) {
+          return true;
+        }
+      }
+      return false;
+    }
+  }  // namespace
+
+  namespace {
+    /** The kernel's hot-plug state of a /sys/class/drm connector, e.g. "connected". */
+    std::string connector_status(const std::filesystem::path &connector) {
+      std::ifstream in {connector / "status"};
+      std::string status;
+      std::getline(in, status);
+      return status;
+    }
+
+    /**
+     * The I2C adapter that runs over a DisplayPort connector's AUX channel,
+     * e.g. "/dev/i2c-9". It is a child of the connector in sysfs. The
+     * connector's "ddc" link is not it: on amdgpu that names the hardware DDC
+     * bus, which a sleeping DisplayPort monitor does not listen on.
+     */
+    std::string aux_i2c_device(const std::filesystem::path &connector) {
+      std::error_code ec;
+      for (const auto &entry : std::filesystem::directory_iterator {connector, ec}) {
+        const auto name = entry.path().filename().string();
+        if (name.starts_with("i2c-")) {
+          return "/dev/" + name;
+        }
+      }
+      return {};
+    }
+
+    /**
+     * Read the first byte of the monitor's EDID over @p device.
+     * @return 1 if the monitor answered, 0 if it did not, -1 if the device
+     * could not be opened.
+     */
+    int read_edid_byte(const std::string &device) {
+      const int fd = ::open(device.c_str(), O_RDWR | O_CLOEXEC);
+      if (fd < 0) {
+        return -1;
+      }
+      constexpr long edid_address = 0x50;
+      unsigned char byte = 0;
+      const bool answered = ::ioctl(fd, I2C_SLAVE, edid_address) == 0 && ::write(fd, &byte, 1) == 1 && ::read(fd, &byte, 1) == 1;
+      ::close(fd);
+      return answered ? 1 : 0;
+    }
+
+    /**
+     * Wake DisplayPort monitors from deep sleep, and wait for them.
+     *
+     * Woken by a modeset, a monitor in deep sleep fails link training (its AUX
+     * channel is not answering yet), drops off and returns seconds later. One
+     * read on its AUX channel wakes it instead: the read times out, the
+     * monitor starts, and the compositor lights it by itself once it has
+     * reconnected, with no failed training. Measured on an ASUS VG32V on an
+     * RX 9070 XT: lit 6.2 to 6.5 seconds after the read, either way.
+     *
+     * A monitor that answers the read is not in deep sleep, and nothing waits
+     * for it. Nothing more is sent while a monitor wakes.
+     * @return Whether a monitor was woken and has come up.
+     */
+    bool wake_displayport_monitors_from_deep_sleep() {
+      std::vector<std::string> waking;
+      std::error_code ec;
+      for (const auto &entry : std::filesystem::directory_iterator {"/sys/class/drm", ec}) {
+        const auto name = entry.path().filename().string();  // "card1-DP-2"
+        const auto dash = name.find('-');
+        if (!name.starts_with("card") || dash == std::string::npos) {
+          continue;
+        }
+        const auto connector = name.substr(dash + 1);
+        // Read the state first: a waking monitor drops it at once.
+        if (!connector.starts_with("DP-") || connector_status(entry.path()) != "connected" || output_scanning_out(connector)) {
+          continue;
+        }
+        const auto device = aux_i2c_device(entry.path());
+        if (device.empty()) {
+          continue;
+        }
+        const int answered = read_edid_byte(device);
+        if (answered < 0) {
+          BOOST_LOG(info) << "[VDISPLAY] Can't open " << device << " to wake " << connector << ": " << std::strerror(errno);
+        } else if (answered == 0) {
+          waking.push_back(connector);
+        }
+      }
+      if (waking.empty()) {
+        return false;
+      }
+
+      const auto start = std::chrono::steady_clock::now();
+      const auto all_lit = [&waking]() {
+        return std::ranges::all_of(waking, output_scanning_out);
+      };
+      bool lit = false;
+      while (!(lit = all_lit()) && std::chrono::steady_clock::now() - start < 8s) {
+        std::this_thread::sleep_for(100ms);
+      }
+      const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+      if (lit) {
+        BOOST_LOG(info) << "[VDISPLAY] Woke " << waking.front() << " from deep sleep over AUX; lit after " << waited << " ms.";
+      } else {
+        BOOST_LOG(warning) << "[VDISPLAY] " << waking.front() << " was woken from deep sleep over AUX but is not lit after " << waited << " ms.";
+      }
+      return lit;
+    }
+
+    struct physical_output_t {
+      std::string name;
+      bool primary = false;
+    };
+
+    /** The primary physical output, or failing that any enabled physical output. */
+    physical_output_t enabled_physical_output() {
+      physical_output_t result;
+      for (const auto &output : kscreen::outputs()) {
+        if (!output.connected || !output.enabled || output.name.starts_with("Virtual")) {
+          continue;
+        }
+        if (result.name.empty() || output.priority == 1) {
+          result = {output.name, output.priority == 1};
+        }
+      }
+      return result;
+    }
+  }  // namespace
+
+  bool wakeSleepingMonitor() {
+    if (window_system != window_system_e::WAYLAND || !kscreen::available()) {
+      return false;
+    }
+
+    const bool woken = wake_displayport_monitors_from_deep_sleep();
+
+    const auto monitor = enabled_physical_output();
+    if (monitor.name.empty()) {
+      return false;
+    }
+    // Count as user activity, so the idle timer that put the screens to sleep
+    // doesn't turn them off again before capture starts.
+    simulate_user_activity();
+    if (woken && output_scanning_out(monitor.name)) {
+      return true;  // The compositor lit it when it reconnected.
+    }
+
+    BOOST_LOG(info) << "[VDISPLAY/KScreen] " << monitor.name
+                    << " is enabled but dark (power saving); waking it instead of creating a virtual display.";
+    if (!kscreen::run_layout_command("kscreen-doctor --dpms on")) {
+      return false;
+    }
+
+    // The screens come back one at a time, and each reads as enabled before
+    // the compositor has drawn on it. Capture can only open it once it does.
+    for (int i = 0; i < 30; ++i) {
+      std::this_thread::sleep_for(100ms);
+      if (output_scanning_out(monitor.name)) {
+        return true;
+      }
+    }
+    BOOST_LOG(warning) << "[VDISPLAY/KScreen] " << monitor.name << " did not show a frame within 3 seconds.";
+    return false;
   }
 
   bool activateVirtualDisplayOutput(const std::string &displayName) {

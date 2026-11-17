@@ -385,32 +385,47 @@ The quickest way is the installer, run as the user Hermes will stream for:
 curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.sh | bash
 ```
 
-It installs Hermes for Arch/CachyOS, Ubuntu 24.04/26.04 or Fedora 43/44/45,
-then offers the matching [Hermes-KMS](#installing-the-hermes-kms-driver)
+It installs Hermes for Arch/CachyOS, Ubuntu 24.04/26.04 or Fedora 43/44/45
+(Fedora 45 packages are in the nightly builds; Hermes 0.7.0 has none), then
+offers the matching [Hermes-KMS](#installing-the-hermes-kms-driver)
 v0.4.1 driver from its published release assets, verified against SHA-256
-checksums. Where no native driver package is available, it offers a
-**separate, opt-in** source build from the pinned release tag. Kernel headers
-must match the running kernel. Immutable ostree systems (such as Bazzite)
-require the documented image-based driver setup instead.
+checksums. The Fedora driver packages are `noarch` DKMS packages with generic
+dependencies, so a Fedora release without its own build uses the checksummed
+package of another Fedora release; elsewhere, where no native driver package
+is available, it offers a **separate, opt-in** source build from the pinned
+release tag. Kernel headers must match the running kernel. Immutable ostree
+systems (such as Bazzite) require the documented image-based driver setup
+instead.
 
-The installer explains **two distinct independent-session options** in
-Hermes 0.7.0, both experimental:
+The installer explains the **two isolation methods** for independent
+sessions, both experimental:
 
-- **Detached Desktop / Detached Steam (KDE Plasma 6 Wayland):** the user's
-  own Plasma desktop and Steam library on a separate virtual display, without
-  disturbing the physical desktop. This requires Hermes-KMS, but **does not
-  require Gamescope, seatd or the private DRM seat broker**.
-- **Isolated Gamescope applications:** a game on its own DRM card/input seat,
-  with private audio and optional device isolation. This additionally
-  requires Hermes' patched Gamescope, seatd, PipeWire and the Hermes-KMS
-  seat broker. The setup is offered only when requested; the distribution's
-  regular Gamescope remains untouched. Patched Gamescope is unavailable on
-  Ubuntu 24.04.
+- **KWin virtual desktop (`kwin_virtual`, KDE Plasma 6 Wayland):** the user's
+  own Plasma desktop and Steam library on a separate virtual output, without
+  disturbing the physical desktop. Hermes 0.7.0 lists it as Detached
+  Desktop / Detached Steam; newer builds as Desktop / Steam (KWin virtual).
+  This requires Hermes-KMS, but **does not require Gamescope, seatd or the
+  private DRM seat broker**.
+- **Gamescope (`gamescope`):** a game on its own DRM card/input seat, with
+  private audio and optional device isolation. This additionally requires
+  Hermes' patched Gamescope, seatd, PipeWire and the Hermes-KMS seat broker.
+  The setup is offered only when requested; the distribution's regular
+  Gamescope remains untouched. Patched Gamescope is unavailable on Ubuntu
+  24.04.
+
+On builds that have the global [`isolation_method`](docs/configuration.md#isolation_method)
+setting, the installer matches it to what is actually installed: it keeps
+`gamescope` only when the patched Gamescope and its seat broker pass their
+checks and otherwise sets `kwin_virtual`, so a launch is never routed to a
+Gamescope session that cannot start. The Gamescope step also offers, opt-in, Hermes'
+card broker (cards created on demand instead of a fixed pool) and session
+broker (a Unix account of its own per client).
 
 After the installer enables the user service, it checks for the Hermes
-binary, the service status, DKMS and, if selected, patched Gamescope.
-These checks **do not certify real GPU streaming**; reboot when prompted,
-then use the Audio/Video diagnostics in the Web UI and test a real client.
+binary, the service status, DKMS, the isolation method and, if selected,
+patched Gamescope. These checks **do not certify real GPU streaming**; reboot
+when prompted, then use the Audio/Video diagnostics in the Web UI and test a
+real client.
 
 The installer leaves optional independent sessions and pre-login streaming
 **disabled by default**. If neither Hermes-KMS nor EVDI is available, it offers
@@ -423,8 +438,15 @@ The installer backs up an existing Hermes configuration before changing it.
 If Hermes was already running, a restart is offered but never forced (it would
 disconnect active streams). A missing stable package is **not silently replaced
 by nightly**; the installer asks before switching channels, and `--yes` refuses
-that experimental fallback. Secure Boot may require signing/MOK enrollment
-before the DKMS module can load.
+that experimental fallback. A release lookup that fails (offline, rate
+limited) stops the installer instead of being taken for a missing package.
+Hermes and Gamescope packages are checked against the SHA-256 digest GitHub
+publishes for each release asset. Secure Boot may require signing/MOK
+enrollment before the DKMS module can load.
+
+The release lookups use GitHub's API without a token, which allows 60 requests
+an hour per address; export `GITHUB_TOKEN` (or `GH_TOKEN`) to use your own
+quota instead.
 
 Run as your normal user, not root. Use `--nightly`
 for a rolling Hermes build (the driver stays pinned to 0.4.1), `--dry-run`
@@ -491,6 +513,13 @@ and optionally EVDI. If Hermes-KMS is present but DKMS is missing for the
 current kernel, the updater offers an **opt-in repair** using the registered
 driver source. It never enables new independent-session modes, modifies the
 chosen virtual-display backend or configures pre-login streaming.
+
+Builds after 0.7.0 choose how isolated sessions run with `isolation_method`,
+which defaults to `gamescope`. If isolated sessions are enabled but Hermes'
+Gamescope or its seat broker is not ready, launches that ask for a virtual
+display would fail after the update; the updater says so and offers to set
+`isolation_method = kwin_virtual`. It only changes the setting when you
+answer yes; `--yes` leaves it as it is.
 
 An existing Hermes configuration is backed up before a package update. A
 running service is restarted only with approval, since restarting disconnects

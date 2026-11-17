@@ -643,7 +643,7 @@
         "wan_encryption_mode_2": "Required for all clients",
         "wan_encryption_mode_desc": "This determines when encryption will be used when streaming over the Internet. Encryption can reduce streaming performance, particularly on less powerful hosts and clients.",
         "inhibit_screen_lock": "Inhibit Screen Locking",
-        "inhibit_screen_lock_desc": "Keep the host's screensaver and screen lock from engaging while a client is connected. Linux only, through org.freedesktop.ScreenSaver on the D-Bus session bus. The inhibition is released when the last client disconnects."
+        "inhibit_screen_lock_desc": "Prevent idle-triggered screen locking while a client is connected (Linux only). Requires an org.freedesktop.ScreenSaver service on the desktop's D-Bus session bus. Does not override manual or policy-enforced locking. Save and Apply to restart Hermes after changing this option."
     },
     "feed": {
         "learn_more": "Learn more"

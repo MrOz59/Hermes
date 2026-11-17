@@ -38,6 +38,7 @@ depends=(
 makedepends=(
   'base-devel'
   'cmake'
+  'cuda'
   'git'
   'git-lfs'
   'nodejs'
@@ -157,10 +158,14 @@ build() {
     # missing; fail here rather than ship a package without it.
     pkg-config --exists pyrowave-shared
 
-    # Published packages must ship NVENC, so CI fails without the CUDA toolkit;
-    # local builds use it only when installed.
+    # This experimental NVIDIA branch must compile Hermes' CUDA capture and
+    # conversion backend, including in local builds. FFmpeg can expose NVENC
+    # without it, which otherwise makes a successful stream a misleading test
+    # of the asynchronous upload and DMA-BUF experiments. Explicit ON also
+    # overrides a stale CMake cache from a build made without CUDA.
     cmake -S . -B build \
-      -DCUDA_FAIL_ON_MISSING="$([[ ${BRANCH} == local ]] && echo OFF || echo ON)" \
+      -DSUNSHINE_ENABLE_CUDA=ON \
+      -DCUDA_FAIL_ON_MISSING=ON \
       -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_TESTS=OFF \
       -DSUNSHINE_REQUIRE_PYROWAVE=ON \
@@ -187,4 +192,5 @@ package() {
          "${pkgdir}/usr/lib/systemd/user/hermes.service"
     fi
 }
+
 

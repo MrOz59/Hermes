@@ -78,12 +78,24 @@ TEST(SessionAssessment, EveryVerdictExplainsItself) {
   }
 }
 
-TEST(SessionAssessment, AWorkingKdeSessionIsReadyThroughout) {
+TEST(SessionAssessment, AWorkingKdeSessionAwaitsCapturePathSelection) {
   const auto facts = workingKwinSession();
   for (const auto &report : VDISPLAY::assessSession(facts)) {
-    EXPECT_EQ(report.readiness, VDISPLAY::readiness_e::ready)
+    const auto expected = report.feature == VDISPLAY::feature_e::zero_copy_capture ?
+                            VDISPLAY::readiness_e::unknown : VDISPLAY::readiness_e::ready;
+    EXPECT_EQ(report.readiness, expected)
       << VDISPLAY::featureName(report.feature) << ": " << report.detail;
   }
+}
+
+TEST(SessionAssessment, HermesKmsExportDoesNotPromiseAnActiveZeroCopyConsumer) {
+  // A driver that exports DMA-BUFs can still feed NVENC through a CPU copy.
+  // Startup cannot know which scanout auto mode will see when streaming.
+  const auto report = reportFor(workingKwinSession(), VDISPLAY::feature_e::zero_copy_capture);
+  EXPECT_EQ(report.readiness, VDISPLAY::readiness_e::unknown);
+  EXPECT_NE(report.detail.find("NVENC uses a CPU copy by default"), std::string::npos);
+  EXPECT_NE(report.remediation.find("capture-path log"), std::string::npos);
+  EXPECT_NE(report.remediation.find("HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto"), std::string::npos);
 }
 
 namespace {
@@ -328,3 +340,4 @@ TEST(SessionAssessment, AnX11SessionUsesItsOwnPathRatherThanReportingNoProtocols
   EXPECT_EQ(reportFor(facts, VDISPLAY::feature_e::virtual_display).readiness, VDISPLAY::readiness_e::ready);
   EXPECT_EQ(reportFor(facts, VDISPLAY::feature_e::exclusive_mode).readiness, VDISPLAY::readiness_e::ready);
 }
+

@@ -227,7 +227,7 @@ jobs:
         working-directory: build/tests
         env:
           HERMES_TEST_REQUIRE_UNIX_SOCKETS: "1"
-        run: ./test_sunshine --gtest_color=yes --gtest_filter='ProcessGroupTest.*:ServiceLifecycleTest.*:VirtualHidInputTest.*:SessionBrokerLockTest.*:SessionBrokerWorkersTest.*:SessionBrokerClientTest.*:SessionBrokerPolicyTest.*:SessionInputAccessTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*:GamescopeSession.*:ClientMicRouterTest.*:IsolatedRuntimeConcurrencyTest.*'
+        run: ./test_sunshine --gtest_color=yes --gtest_filter='ProcessGroupTest.*:ServiceLifecycleTest.*:SessionAssessment.*:VirtualHidInputTest.*:SessionBrokerLockTest.*:SessionBrokerWorkersTest.*:SessionBrokerClientTest.*:SessionBrokerPolicyTest.*:SessionInputAccessTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*:GamescopeSession.*:ClientMicRouterTest.*:IsolatedRuntimeConcurrencyTest.*'
 
       - name: Test concurrent private audio servers and resumed capture
         if: "!cancelled() && steps.compile.outcome == 'success'"
@@ -363,3 +363,4 @@ jobs:
                 --gtest_color=yes \
                 --gtest_filter="LinuxRuntimeTest.*:LinuxConsumerTest.InputEventPreference*"
             '
+

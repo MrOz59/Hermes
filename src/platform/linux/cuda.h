@@ -34,9 +34,10 @@ namespace cuda {
    * @param height Height of captured frames.
    * @param vram Frames arrive as CUDA textures rather than in host memory.
    * @param layout Channel layout of host-memory frames; ignored for VRAM.
+   * @param prefer_async_upload Host upload default when no environment override is set.
    * @return FFmpeg encoding device context.
    */
-  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram, pixel::layout_e layout = pixel::layout_e::bgra8);
+  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram, pixel::layout_e layout = pixel::layout_e::bgra8, bool prefer_async_upload = true);
 
   /**
    * @brief Create a GL->CUDA encoding device for consuming captured dmabufs.
@@ -153,7 +154,9 @@ namespace cuda {
 
     void apply_colorspace(const video::sunshine_colorspace_t &colorspace);
 
-    int load_ram(platf::img_t &img, cudaArray_t array);
+    // With a stream, the caller must retain img until that stream finishes
+    // reading it. A null stream preserves the synchronous dummy-frame path.
+    int load_ram(platf::img_t &img, cudaArray_t array, stream_t::pointer stream = nullptr);
 
     ptr_t color_matrix;
 

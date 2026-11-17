@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 
@@ -17,6 +18,10 @@ namespace VDISPLAY::hermes_kms {
   constexpr uint64_t status_scanout_active = 1ULL << 2;
   constexpr uint64_t status_frame_valid = 1ULL << 3;
   constexpr uint64_t status_dmabuf_export_ready = 1ULL << 4;
+  /// The latched framebuffer was PRIME-imported from another device (uapi >= 15).
+  constexpr uint64_t status_framebuffer_imported = 1ULL << 7;
+  /// Length of the exporter-name arrays in status and frame replies (uapi >= 15).
+  constexpr std::size_t exporter_name_len = 16;
 
   struct status_t {
     uint64_t flags;
@@ -49,7 +54,10 @@ namespace VDISPLAY::hermes_kms {
     /// Descriptors bound to this output's live session besides the owner's
     /// own (uapi >= 13); reset to zero by a revocation or a new session.
     uint64_t bound_fd_count;
-    uint64_t reserved[5];
+    /// Module that exported an imported framebuffer (uapi >= 15); empty for
+    /// the driver's own dumb buffers. Not necessarily NUL-terminated.
+    char framebuffer_exporter[exporter_name_len];
+    uint64_t reserved[3];
   };
 
   /**

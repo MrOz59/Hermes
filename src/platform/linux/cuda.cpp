@@ -3,16 +3,23 @@
  * @brief Definitions for CUDA encoding.
  */
 // standard includes
+#include <atomic>
 #include <bitset>
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <filesystem>
 #include <mutex>
+#include <optional>
+#include <sys/resource.h>
 #include <thread>
 
 // lib includes
 #include <ffnvcodec/dynlink_loader.h>
 #include <NvFBC.h>
+#include <xf86drm.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -22,7 +29,11 @@ extern "C" {
 
 // local includes
 #include "cuda.h"
+#include "cuda_upload_lifetime.h"
+#include "dmabuf_import_cache.h"
 #include "graphics.h"
+#include "nvidia_driver_version.h"
+#include "src/config.h"
 #include "src/logging.h"
 #include "src/utility.h"
 #include "src/video.h"
@@ -83,6 +94,12 @@ namespace cuda {
 
   using registered_resource_t = util::safe_ptr<CUgraphicsResource_st, unregisterResource>;
 
+  void destroyUploadEvent(CUevent event) {
+    CU_CHECK_IGNORE(cdf->cuEventDestroy(event), "Couldn't destroy upload completion event");
+  }
+
+  using upload_event_t = util::safe_ptr<CUevent_st, destroyUploadEvent>;
+
   class img_t: public platf::img_t {
   public:
     tex_t tex;
@@ -103,6 +120,12 @@ namespace cuda {
 
   // Not in the ffnvcodec headers.
   constexpr unsigned int cuMemHostAllocPortable = 0x01;
+
+  // Debug-only aggregate counters. Capture threads may allocate/free pinned
+  // host frames concurrently; relaxed atomics avoid introducing a hot lock.
+  // Successful allocations are counted once, not once per CUDA upload.
+  static std::atomic<std::uint64_t> pinned_host_allocations {0};
+  static std::atomic<std::uint64_t> pinned_host_frees {0};
 
   /**
    * cuMemHostAlloc and cuMemFreeHost, taken from the libcuda ffnvcodec opened:
@@ -175,6 +198,8 @@ namespace cuda {
     // A live allocation keeps its retain on the context; see free_host().
     if (!ptr) {
       CU_CHECK_IGNORE(cdf->cuDevicePrimaryCtxRelease(device), "Couldn't release the primary CUDA context");
+    } else {
+      pinned_host_allocations.fetch_add(1, std::memory_order_relaxed);
     }
     return ptr;
   }
@@ -194,7 +219,11 @@ namespace cuda {
       return;
     }
     if (!CU_CHECK_IGNORE(cdf->cuCtxPushCurrent(context), "Couldn't make the primary CUDA context current")) {
-      CU_CHECK_IGNORE(host_memory->free(ptr), "Couldn't free a page-locked frame");
+      const auto status = host_memory->free(ptr);
+      CU_CHECK_IGNORE(status, "Couldn't free a page-locked frame");
+      if (status == CUDA_SUCCESS) {
+        pinned_host_frees.fetch_add(1, std::memory_order_relaxed);
+      }
       CUcontext popped;
       CU_CHECK_IGNORE(cdf->cuCtxPopCurrent(&popped), "Couldn't restore the CUDA context");
     }
@@ -311,8 +340,116 @@ namespace cuda {
 
   class cuda_ram_t: public cuda_t {
   public:
+    ~cuda_ram_t() override {
+      // Drain both the upload and the conversion before their source/array,
+      // completion event and stream are destroyed, including error teardown.
+      if (stream) {
+        CU_CHECK_IGNORE(cdf->cuStreamSynchronize(stream.get()), "Couldn't drain CUDA upload/conversion during teardown");
+      }
+      pending_upload.finish([] { return true; });
+    }
+
+    int upload_frame(platf::img_t &img, stream_t::pointer upload_stream) {
+      if (!upload_diagnostics) {
+        return sws.load_ram(img, tex.array, upload_stream);
+      }
+
+#ifdef RUSAGE_THREAD
+      struct rusage before {};
+      const bool have_before = ::getrusage(RUSAGE_THREAD, &before) == 0;
+#endif
+      const auto start = std::chrono::steady_clock::now();
+      const int result = sws.load_ram(img, tex.array, upload_stream);
+      const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - start).count();
+
+      upload_submit_ns += elapsed;
+      upload_submit_peak_ns = std::max(upload_submit_peak_ns, elapsed);
+#ifdef RUSAGE_THREAD
+      struct rusage after {};
+      if (have_before && ::getrusage(RUSAGE_THREAD, &after) == 0 &&
+          after.ru_minflt >= before.ru_minflt) {
+        upload_submit_minor_faults += static_cast<std::uint64_t>(after.ru_minflt - before.ru_minflt);
+        ++upload_fault_samples;
+      }
+#endif
+
+      if (++upload_samples == 120) {
+        const auto allocs = pinned_host_allocations.load(std::memory_order_relaxed);
+        const auto frees = pinned_host_frees.load(std::memory_order_relaxed);
+        BOOST_LOG(info) << "[cuda-upload-metric] mode="sv << (async_upload ? "async"sv : "sync"sv)
+                        << " avg_submit_us="sv << upload_submit_ns / (1000.0 * upload_samples)
+                        << " peak_submit_us="sv << upload_submit_peak_ns / 1000.0
+                        << " submit_minor_faults_per_frame="sv
+                        << (upload_fault_samples ? upload_submit_minor_faults / static_cast<double>(upload_fault_samples) : -1.0)
+                        << " avg_previous_upload_wait_us="sv << upload_wait_ns / (1000.0 * upload_samples)
+                        << " host_alloc_delta="sv << (allocs - last_host_allocations)
+                        << " host_free_delta="sv << (frees - last_host_frees)
+                        << " host_alloc_total="sv << allocs
+                        << " host_free_total="sv << frees
+                        << " frames="sv << upload_samples;
+        last_host_allocations = allocs;
+        last_host_frees = frees;
+        upload_samples = 0;
+        upload_submit_ns = 0;
+        upload_submit_peak_ns = 0;
+        upload_submit_minor_faults = 0;
+        upload_fault_samples = 0;
+        upload_wait_ns = 0;
+      }
+      return result;
+    }
+
     int convert(platf::img_t &img) override {
-      return sws.load_ram(img, tex.array) || sws.convert(frame->data[0], frame->data[1], frame->linesize[0], frame->linesize[1], tex_obj(tex), stream.get());
+      // The next upload uses the same event and texture. Retire the previous
+      // source first; its upload normally completed while NVENC was encoding.
+      auto wait = [&] {
+        // An upload whose event could not be recorded must never be retired
+        // against a stale, already-signalled event from an older frame.
+        const auto start = upload_diagnostics ?
+          std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point {};
+        const auto result = upload_event_recorded ?
+                              cdf->cuEventSynchronize(upload_done.get()) :
+                              cdf->cuStreamSynchronize(stream.get());
+        if (upload_diagnostics) {
+          upload_wait_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        }
+        return !check(result, "Couldn't wait for CUDA upload: "sv);
+      };
+      if (!pending_upload.finish(wait)) {
+        return -1;
+      }
+
+      auto source = img.weak_from_this().lock();
+      if (!async_upload || !source) {
+        // Probes/dummy images can live on the stack. Without a shared owner
+        // they cannot outlive this call, so keep the synchronous upload.
+        return upload_frame(img, nullptr) || sws.convert(frame->data[0], frame->data[1], frame->linesize[0], frame->linesize[1], tex_obj(tex), stream.get());
+      }
+
+      if (!pending_upload.begin(std::move(source), wait)) {
+        return -1;
+      }
+      upload_event_recorded = false;
+      const auto drain_failed_submission = [&] {
+        // The event may not have been recorded, so waiting on it would refer
+        // to an older frame. Retain this source until the stream is drained.
+        pending_upload.finish([&] {
+          return !check(cdf->cuStreamSynchronize(stream.get()), "Couldn't drain failed CUDA upload: "sv);
+        });
+        return -1;
+      };
+      if (upload_frame(img, stream.get())) {
+        return drain_failed_submission();
+      }
+      if (check(cdf->cuEventRecord(upload_done.get(), stream.get()), "Couldn't record CUDA upload completion: "sv)) {
+        return drain_failed_submission();
+      }
+      upload_event_recorded = true;
+      // Release can happen after the upload, without waiting for conversion:
+      // the kernel reads the private CUDA array, never the capture-pool frame.
+      return sws.convert(frame->data[0], frame->data[1], frame->linesize[0], frame->linesize[1], tex_obj(tex), stream.get());
     }
 
     int set_frame(AVFrame *frame, AVBufferRef *hw_frames_ctx) override {
@@ -327,10 +464,48 @@ namespace cuda {
 
       tex = std::move(*tex_opt);
 
+      const char *async_setting = std::getenv("HERMES_CUDA_ASYNC_UPLOAD");
+      const bool valid_async_override = async_setting &&
+        (std::string_view {async_setting} == "0"sv || std::string_view {async_setting} == "1"sv);
+      if (async_setting && !valid_async_override) {
+        BOOST_LOG(warning) << "Invalid HERMES_CUDA_ASYNC_UPLOAD="sv << async_setting
+                           << "; expected 0 or 1. Using the backend default."sv;
+      }
+      async_upload = valid_async_override ? std::string_view {async_setting} == "1"sv : async_upload_default;
+      const char *diagnostics = std::getenv("HERMES_CUDA_UPLOAD_DIAGNOSTICS");
+      upload_diagnostics = diagnostics && std::string_view {diagnostics} == "1"sv;
+      if (upload_diagnostics) {
+        last_host_allocations = pinned_host_allocations.load(std::memory_order_relaxed);
+        last_host_frees = pinned_host_frees.load(std::memory_order_relaxed);
+        BOOST_LOG(info) << "CUDA upload diagnostics enabled (120-frame windows)."sv;
+      }
+      if (async_upload) {
+        CUevent event;
+        CU_CHECK(cdf->cuEventCreate(&event, CU_EVENT_DISABLE_TIMING), "Couldn't create upload completion event");
+        upload_done.reset(event);
+      }
+      BOOST_LOG(info) << "CUDA host upload: "sv
+                      << (async_upload ? "asynchronous (frame lease + completion event)"sv : "synchronous"sv)
+                      << (valid_async_override ? " (HERMES_CUDA_ASYNC_UPLOAD override)"sv : " (backend default)"sv);
+
       return 0;
     }
 
     tex_t tex;
+    upload_event_t upload_done;
+    upload_lifetime_t<platf::img_t> pending_upload;
+    bool async_upload {true};
+    bool async_upload_default {true};
+    bool upload_event_recorded {false};
+    bool upload_diagnostics {false};
+    std::uint64_t upload_samples {0};
+    std::uint64_t upload_fault_samples {0};
+    std::uint64_t upload_submit_minor_faults {0};
+    std::uint64_t last_host_allocations {0};
+    std::uint64_t last_host_frees {0};
+    std::int64_t upload_submit_ns {0};
+    std::int64_t upload_submit_peak_ns {0};
+    std::int64_t upload_wait_ns {0};
   };
 
   class cuda_vram_t: public cuda_t {
@@ -341,11 +516,27 @@ namespace cuda {
   };
 
   /**
-   * @brief Opens the DRM device associated with the CUDA device index.
+   * Which DRM node of the CUDA device to build the GBM/EGL importer on.
+   *
+   * Importing DMA-BUFs and rendering into textures needs no KMS, which is
+   * what render nodes exist for. Opening the primary node instead hands the
+   * opener DRM master implicitly whenever nobody holds it yet, which can take
+   * the card from a greeter or compositor that starts after Hermes - the
+   * pre-login hosting case. The primary node stays as a fallback for driver
+   * stacks whose GBM/EGL platform cannot initialise on a render node.
+   */
+  enum class drm_node_e {
+    render,
+    primary,
+  };
+
+  /**
+   * @brief Opens a DRM node of the GPU behind a CUDA device index.
    * @param index CUDA device index to open.
+   * @param node Which node of that GPU to open.
    * @return File descriptor or -1 on failure.
    */
-  file_t open_drm_fd_for_cuda_device(int index) {
+  file_t open_drm_fd_for_cuda_device(int index, drm_node_e node) {
     CUdevice device;
     CU_CHECK(cdf->cuDeviceGet(&device, index), "Couldn't get CUDA device");
 
@@ -360,7 +551,7 @@ namespace cuda {
       return std::tolower(c);
     });
 
-    // Look for the name of the primary node in sysfs
+    const auto prefix = node == drm_node_e::render ? "renderD"sv : "card"sv;
     try {
       char sysfs_path[PATH_MAX];
       std::snprintf(sysfs_path, sizeof(sysfs_path), "/sys/bus/pci/devices/%s/drm", pci_bus_id.data());
@@ -368,22 +559,83 @@ namespace cuda {
       for (auto &entry : fs::directory_iterator {sysfs_dir}) {
         auto file = entry.path().filename();
         auto filestring = file.generic_string();
-        if (std::string_view {filestring}.substr(0, 4) != "card"sv) {
+        if (std::string_view {filestring}.substr(0, prefix.size()) != prefix) {
           continue;
         }
 
-        BOOST_LOG(debug) << "Found DRM primary node: "sv << filestring;
-
         fs::path dri_path {"/dev/dri"sv};
         auto device_path = dri_path / file;
-        return open(device_path.c_str(), O_RDWR);
+        BOOST_LOG(debug) << "Found DRM "sv << (node == drm_node_e::render ? "render"sv : "primary"sv)
+                         << " node for CUDA device "sv << index << ": "sv << device_path.native();
+        return open(device_path.c_str(), O_RDWR | O_CLOEXEC);
       }
     } catch (const std::filesystem::filesystem_error &err) {
       BOOST_LOG(error) << "Failed to read sysfs: "sv << err.what();
     }
 
-    BOOST_LOG(error) << "Unable to find DRM device with PCI bus ID: "sv << pci_bus_id.data();
+    BOOST_LOG(node == drm_node_e::render ? debug : error)
+      << "Unable to find a DRM "sv << (node == drm_node_e::render ? "render"sv : "primary"sv)
+      << " node with PCI bus ID: "sv << pci_bus_id.data();
     return -1;
+  }
+
+  /**
+   * The importer, FFmpeg's CUDA hwcontext and the page-locked frames all use
+   * CUDA device 0. When adapter_name names a different NVIDIA GPU, Hermes
+   * would capture for one GPU and encode on another; say so, and how to
+   * select the GPU consistently, instead of failing later or obscurely.
+   * CUDA_VISIBLE_DEVICES renumbers devices for every CUDA user in the
+   * process at once, which is what keeps all three on the same GPU.
+   */
+  void warn_if_adapter_is_another_nvidia_gpu(int importer_fd) {
+    const auto &adapter = config::video.adapter_name;
+    if (adapter.empty()) {
+      return;
+    }
+    const int adapter_fd = ::open(adapter.c_str(), O_RDONLY | O_CLOEXEC);
+    if (adapter_fd < 0) {
+      return;
+    }
+    drmDevicePtr configured = nullptr;
+    drmDevicePtr importer = nullptr;
+    constexpr int pci_vendor_nvidia = 0x10de;
+    if (!drmGetDevice2(adapter_fd, 0, &configured) && !drmGetDevice2(importer_fd, 0, &importer) &&
+        configured->bustype == DRM_BUS_PCI && importer->bustype == DRM_BUS_PCI &&
+        configured->deviceinfo.pci && configured->deviceinfo.pci->vendor_id == pci_vendor_nvidia &&
+        !drmDevicesEqual(configured, importer)) {
+      const auto *bus = configured->businfo.pci;
+      char address[32];
+      std::snprintf(address, sizeof(address), "%04x:%02x:%02x.%x", bus->domain, bus->bus, bus->dev, bus->func);
+      BOOST_LOG(warning) << "adapter_name "sv << adapter << " is the NVIDIA GPU at "sv << address
+                         << ", but CUDA device 0 (used for capture import and NVENC) is another GPU. "
+                            "Start Hermes with CUDA_VISIBLE_DEVICES set to that GPU's CUDA index "
+                            "(nvidia-smi -L) so capture and encoding use the same GPU."sv;
+    }
+    drmFreeDevice(&configured);
+    drmFreeDevice(&importer);
+    ::close(adapter_fd);
+  }
+
+  /**
+   * HERMES_CUDA_EGL_IMPORT_CACHE: how many DMA-BUF imports the GL->CUDA
+   * consumer keeps. Unset uses the default; 0 imports every frame as before.
+   */
+  std::size_t egl_import_cache_capacity() {
+    constexpr std::size_t default_capacity = 4;
+    constexpr unsigned long max_capacity = 16;
+    const char *setting = std::getenv("HERMES_CUDA_EGL_IMPORT_CACHE");
+    if (!setting || !*setting) {
+      return default_capacity;
+    }
+    char *end = nullptr;
+    errno = 0;
+    const unsigned long parsed = std::strtoul(setting, &end, 10);
+    if (errno || !end || *end || *setting == '-' || parsed > max_capacity) {
+      BOOST_LOG(warning) << "Ignoring HERMES_CUDA_EGL_IMPORT_CACHE="sv << setting
+                         << "; expected 0.."sv << max_capacity << ". Using "sv << default_capacity << '.';
+      return default_capacity;
+    }
+    return static_cast<std::size_t>(parsed);
   }
 
   class gl_cuda_vram_t: public platf::avcodec_encode_device_t {
@@ -400,11 +652,67 @@ namespace cuda {
       // This must be non-zero to tell the video core that it's a hardware encoding device.
       data = (void *) 0x1;
 
-      // TODO: Support more than one CUDA device
-      file = std::move(open_drm_fd_for_cuda_device(0));
+      // TODO: Support more than one CUDA device. FFmpeg's CUDA hwcontext
+      // opens device 0 as well, so the importer must stay on that GPU.
+      if (init_importer(drm_node_e::render)) {
+        BOOST_LOG(warning) << "GL->CUDA importer could not start on the CUDA GPU's render node; "
+                              "retrying on its primary node."sv;
+        if (init_importer(drm_node_e::primary)) {
+          return -1;
+        }
+      }
+
+      const auto import_capacity = egl_import_cache_capacity();
+      imports.resize(import_capacity);
+      if (import_capacity) {
+        BOOST_LOG(info) << "GL->CUDA DMA-BUF import cache: up to "sv << import_capacity << " buffers"sv;
+      } else {
+        BOOST_LOG(info) << "GL->CUDA DMA-BUF import cache disabled (HERMES_CUDA_EGL_IMPORT_CACHE=0)"sv;
+      }
+      // NVIDIA's DMA-BUF import, mapping and teardown behaviour has changed
+      // between releases (the 2026-09-30 security bulletin fixed bugs on those
+      // paths), so name the driver next to the importer's other settings.
+      BOOST_LOG(info) << "GL->CUDA importer: NVIDIA kernel module "sv
+                      << platf::nvidia::describe(platf::nvidia::loaded_driver_version());
+
+      width = in_width;
+      height = in_height;
+
+      sequence = 0;
+
+      this->offset_x = offset_x;
+      this->offset_y = offset_y;
+
+      return 0;
+    }
+
+    ~gl_cuda_vram_t() override {
+      if (imports.enabled()) {
+        BOOST_LOG(debug) << "GL->CUDA DMA-BUF import cache: "sv << imports.hits() << " hits, "sv
+                         << imports.misses() << " imports, "sv << imports.evictions() << " evictions"sv;
+      }
+    }
+
+    /**
+     * @brief Build the GBM device, EGL display and GL context on one DRM node
+     *        of the CUDA GPU, releasing whatever it created if a step fails.
+     * @param node Render node first; the primary node is only a fallback.
+     * @return 0 on success or -1 on failure.
+     */
+    int init_importer(drm_node_e node) {
+      auto release = util::fail_guard([&]() {
+        ctx = egl::ctx_t {};
+        display.reset();
+        gbm.reset();
+        file = file_t {};
+      });
+
+      file = open_drm_fd_for_cuda_device(0, node);
       if (file.el < 0) {
-        char string[1024];
-        BOOST_LOG(error) << "Couldn't open DRM FD for CUDA device: "sv << strerror_r(errno, string, sizeof(string));
+        if (node == drm_node_e::primary) {
+          char string[1024];
+          BOOST_LOG(error) << "Couldn't open DRM FD for CUDA device: "sv << strerror_r(errno, string, sizeof(string));
+        }
         return -1;
       }
 
@@ -425,16 +733,40 @@ namespace cuda {
       }
 
       ctx = std::move(*ctx_opt);
-
-      width = in_width;
-      height = in_height;
-
-      sequence = 0;
-
-      this->offset_x = offset_x;
-      this->offset_y = offset_y;
-
+      release.disable();
+      warn_if_adapter_is_another_nvidia_gpu(file.el);
       return 0;
+    }
+
+    /**
+     * @brief Import a captured DMA-BUF, or reuse the import made for the same
+     *        buffer and layout earlier.
+     * @param sd Descriptor whose fds stay owned by the captured image.
+     * @return The texture source, or nullptr when the import failed.
+     */
+    egl::rgb_t *import_frame(const egl::surface_descriptor_t &sd) {
+      std::optional<platf::dmabuf::identity_t> identity;
+      if (imports.enabled()) {
+        identity = platf::dmabuf::identify(sd.width, sd.height, sd.fourcc, sd.modifier, sd.fds, sd.pitches, sd.offsets);
+        if (identity) {
+          if (auto cached = imports.find(*identity)) {
+            return cached;
+          }
+        }
+      }
+
+      // Uncached: release the previous import before creating the next one,
+      // as this consumer always has.
+      rgb = egl::rgb_t {};
+      auto rgb_opt = egl::import_source(display.get(), sd);
+      if (!rgb_opt) {
+        return nullptr;
+      }
+      if (identity) {
+        return imports.insert(*identity, std::move(*rgb_opt));
+      }
+      rgb = std::move(*rgb_opt);
+      return &rgb;
     }
 
     /**
@@ -496,22 +828,23 @@ namespace cuda {
       if (descriptor.sequence == 0) {
         // For dummy images, use a blank RGB texture instead of importing a DMA-BUF
         rgb = egl::create_blank(img);
+        source = &rgb;
       } else if (descriptor.sequence > sequence) {
         sequence = descriptor.sequence;
 
-        rgb = egl::rgb_t {};
-
-        auto rgb_opt = egl::import_source(display.get(), descriptor.sd);
-
-        if (!rgb_opt) {
+        source = import_frame(descriptor.sd);
+        if (!source) {
           return -1;
         }
+      }
 
-        rgb = std::move(*rgb_opt);
+      if (!source) {
+        BOOST_LOG(error) << "GL->CUDA convert called before any frame was imported"sv;
+        return -1;
       }
 
       // Perform the color conversion and scaling in GL
-      sws.load_vram(descriptor, offset_x, offset_y, rgb->tex[0]);
+      sws.load_vram(descriptor, offset_x, offset_y, (*source)->tex[0]);
       if (sws.convert(nv12->buf)) {
         return -1;
       }
@@ -572,6 +905,10 @@ namespace cuda {
 
     std::uint64_t sequence;
     egl::rgb_t rgb;
+    // Imports of the buffers the producer rotates through; destroyed before
+    // the context and display above. `source` points into it or at `rgb`.
+    platf::dmabuf::import_cache_t<egl::rgb_t> imports;
+    egl::rgb_t *source {nullptr};
 
     registered_resource_t y_res;
     registered_resource_t uv_res;
@@ -579,7 +916,7 @@ namespace cuda {
     int offset_x, offset_y;
   };
 
-  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram, pixel::layout_e layout) {
+  std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram, pixel::layout_e layout, bool prefer_async_upload) {
     if (init()) {
       return nullptr;
     }
@@ -589,8 +926,10 @@ namespace cuda {
     if (vram) {
       cuda = std::make_unique<cuda_vram_t>();
     } else {
-      cuda = std::make_unique<cuda_ram_t>();
-      cuda->layout = layout;
+      auto ram = std::make_unique<cuda_ram_t>();
+      ram->layout = layout;
+      ram->async_upload_default = prefer_async_upload;
+      cuda = std::move(ram);
     }
 
     if (cuda->init(width, height)) {

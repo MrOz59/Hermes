@@ -92,6 +92,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   seconds later. A monitor that answers the read is not waited for. Outputs
   turned off in the display settings are left alone, so a host without a
   monitor still gets a virtual display.
+- On KWin, touch and pen land on the monitor being streamed ([#131], from
+  PunkUnity). KWin bound new touch devices to an output of its own choosing,
+  so with more than one monitor a Multi touch client often did nothing. When
+  Hermes captures a physical output, the touch and pen devices are now bound
+  to it for the session and released afterwards.
+- With no display configured, Hermes streams the desktop's primary monitor
+  ([#138], from PunkUnity). Monitor numbers follow DRM plane order, not the
+  desktop layout, so monitor 0 could be a KVM capture input or a dummy plug.
+  On KWin, the output KScreen marks as primary is now listed first; a
+  configured display number still selects the same monitor as before.
 - A stream no longer jumps to another screen when its monitor drops off for a
   moment ([#139], from PunkUnity). A DisplayPort monitor coming out of deep
   sleep can fail its first link training and reconnect a few seconds later;
@@ -101,7 +111,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99
+[#131]: https://github.com/MrOz59/Hermes/pull/131
 [#133]: https://github.com/MrOz59/Hermes/pull/133
+[#138]: https://github.com/MrOz59/Hermes/pull/138
 [#139]: https://github.com/MrOz59/Hermes/pull/139
 
 ## [0.7.0] - 2026-11-02

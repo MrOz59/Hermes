@@ -16,11 +16,13 @@ set -euo pipefail
 
 HERMES_REPO="MrOz59/Hermes"
 KMS_REPO="MrOz59/Hermes-KMS"
-KMS_RELEASE="v0.4.1"  # Stable release matching Hermes 0.7.0 / UAPI 14
+KMS_RELEASE="v0.4.1"  # Stable release matching Hermes 0.7.0 and current nightlies / UAPI 14
 GAMESCOPE_REPO="MrOz59/gamescope"
 GAMESCOPE_BRANCH="hermes"
 GAMESCOPE_RELEASE="hermes-nightly"
 GAMESCOPE_SOURCE_PREFIX="/opt/hermes-gamescope"
+CARD_BROKER_ALLOW="/etc/hermes/card-broker.allow"
+SESSION_BROKER_ALLOW="/etc/hermes/session-broker.allow"
 
 ASSUME_YES=0
 DRY_RUN=0
@@ -31,11 +33,14 @@ MODE="install"
 did_kms=0
 kms_ready=0
 broker_from_source=0
-did_detached=0
+did_kwin_virtual=0
 did_broker=0
 did_isolated=0
 did_gamescope=0
+did_card_broker=0
+did_session_broker=0
 did_prelogin=0
+isolation_method_note=""
 need_reboot=0
 config_changed=0
 config_backed_up=0
@@ -122,11 +127,16 @@ Installs or updates Hermes and its existing ecosystem components.
 Options:
   --update    update installed Hermes and existing components only
   --nightly   install the rolling nightly build of main instead of the
-              latest release (KMS remains pinned to v0.4.1 for Hermes 0.7.0)
+              latest release (Hermes-KMS remains pinned to ${KMS_RELEASE})
   --yes       take the default answer to every question (optional pieces
               that default to no stay off)
   --dry-run   show what would run without changing anything
   -h, --help  show this help
+
+Environment:
+  GITHUB_TOKEN or GH_TOKEN
+              read release metadata with your own GitHub API quota instead
+              of the anonymous one (60 requests an hour per address)
 EOF
 }
 
@@ -176,8 +186,46 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The download URLs of a release's assets, one per line. The GitHub API is
-# read without a token, so its rate limit (60 requests an hour) applies.
+# GitHub API reads. Without a token the anonymous limit (60 requests an hour
+# per address) applies; GITHUB_TOKEN or GH_TOKEN raises it. The header goes
+# through stdin so the token never appears in the process list.
+github_api() {
+  local url=$1 token=${GITHUB_TOKEN:-${GH_TOKEN:-}}
+  if [ -n "$token" ]; then
+    printf 'Authorization: Bearer %s\n' "$token" |
+      curl -fsSL -H 'Accept: application/vnd.github+json' -H @- "$url"
+  else
+    curl -fsSL -H 'Accept: application/vnd.github+json' "$url"
+  fi
+}
+
+# GitHub publishes a SHA-256 digest for every release asset. Remember the
+# digest of each download URL so the download can be checked against it.
+# Each asset object starts with its own API url, which is the boundary used
+# to pair a digest with its download URL whatever order the fields come in.
+record_asset_digests() {
+  [ -n "$workdir" ] && [ -d "$workdir" ] || return 0
+  printf '%s\n' "$1" |
+    grep -oE '"(url|digest|browser_download_url)": *("[^"]*"|null)' |
+    awk -F '"' '
+      function flush() {
+        if (download != "" && digest ~ /^sha256:[0-9a-fA-F]{64}$/) print download, substr(digest, 8)
+        download = ""; digest = ""
+      }
+      $2 == "url" && $4 ~ "/releases/assets/[0-9]+$" { flush(); next }
+      $2 == "digest" { digest = $4; next }
+      $2 == "browser_download_url" { download = $4 }
+      END { flush() }
+    ' >>"${workdir}/asset-digests" || true
+}
+
+asset_digest() {
+  local url=$1 file="${workdir}/asset-digests"
+  [ -n "$workdir" ] && [ -f "$file" ] || return 0
+  awk -v url="$url" '$1 == url { digest = $2 } END { if (digest != "") print tolower(digest) }' "$file"
+}
+
+# The download URLs of a release's assets, one per line.
 release_assets() {
   local repo=$1 tag=$2 url json
   if [ "$tag" = latest ]; then
@@ -185,13 +233,37 @@ release_assets() {
   else
     url="https://api.github.com/repos/${repo}/releases/tags/${tag}"
   fi
-  json=$(curl -fsSL -H 'Accept: application/vnd.github+json' "$url") || return 1
+  if ! json=$(github_api "$url"); then
+    warn "Could not read the ${tag} release of ${repo} from the GitHub API."
+    if [ -z "${GITHUB_TOKEN:-${GH_TOKEN:-}}" ]; then
+      warn "Anonymous API use is limited to 60 requests an hour; export GITHUB_TOKEN to use your own quota."
+    fi
+    return 1
+  fi
+  record_asset_digests "$json"
   printf '%s\n' "$json" | grep -o '"browser_download_url": *"[^"]*"' | sed 's/.*"\(https[^"]*\)"$/\1/'
 }
 
 download() {
   local url=$1 dest=$2
   run curl -fL --progress-bar -o "$dest" "$url"
+}
+
+# Download a release asset and check it against the digest GitHub published
+# for it. Releases that predate asset digests are still accepted over HTTPS.
+download_verified() {
+  local url=$1 dest=$2 expected actual
+  download "$url" "$dest"
+  [ "$DRY_RUN" = 1 ] && return 0
+  expected=$(asset_digest "$url")
+  if [ -z "$expected" ]; then
+    warn "GitHub published no SHA-256 digest for ${dest##*/}; relying on HTTPS alone."
+    return 0
+  fi
+  actual=$(sha256sum "$dest")
+  actual=${actual%% *}
+  [ "$actual" = "$expected" ] || die "Checksum mismatch for ${dest##*/} against GitHub's published digest; aborting."
+  ok "Verified ${dest##*/} against GitHub's published SHA-256 digest."
 }
 
 kernel_headers_package() {
@@ -216,6 +288,26 @@ gamescope_unavailable() {
 
 config_file() {
   echo "${XDG_CONFIG_HOME:-$HOME/.config}/hermes/hermes.conf"
+}
+
+# The value of key in Hermes' config, the last assignment winning as it does
+# in Hermes; empty when unset.
+config_value() {
+  local key=$1 file
+  file=$(config_file)
+  [ -f "$file" ] || return 0
+  sed -n -E "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$file" |
+    tail -n1 | sed -E 's/[[:space:]]+$//'
+}
+
+# Hermes' own boolean parsing: true, yes, enable(d), on, or anything with a 1.
+config_flag_enabled() {
+  local value
+  value=$(config_value "$1")
+  case "${value,,}" in
+    true | yes | enable | enabled | on | *1*) return 0 ;;
+  esac
+  return 1
 }
 
 # Set key = value in Hermes' config, replacing an existing line for the key.
@@ -249,9 +341,45 @@ set_config() {
 }
 
 
+# The file name in a download URL, percent-decoded: GitHub writes the "+" of
+# a nightly version (0.7.0+38c8825) as %2B, and the package manager reports
+# the version with the "+".
+url_basename() {
+  local name=${1##*/}
+  printf '%b\n' "${name//%/\\x}"
+}
+
 release_asset_url() {
   local assets=$1 pattern=$2
   printf '%s\n' "$assets" | grep -E "$pattern" | head -n1 || true
+}
+
+# The native Hermes-KMS package of the pinned release: core (the DKMS module)
+# or broker (the private-seat helper). Fedora's are noarch DKMS packages that
+# only depend on dkms, acl, kmod, make and gcc, so when the release has no
+# build for this Fedora release, another Fedora build of the same version is
+# the same package; dnf still resolves its dependencies before installing.
+kms_package_url() {
+  local assets=$1 kind=$2 name url
+  case "$kind" in
+    core) name=hermes-kms-dkms ;;
+    broker) name=hermes-kms-seatd ;;
+    *) return 1 ;;
+  esac
+  case "$distro" in
+    arch) release_asset_url "$assets" "/${name}-git-[0-9][^/]*-any[.]pkg[.]tar[.]zst$" ;;
+    ubuntu) release_asset_url "$assets" "/${name}_[0-9][^/]*_all[.]deb$" ;;
+    fedora)
+      url=$(release_asset_url "$assets" "/${name}-[0-9][^/]*[.]fc${distro_version}[.]noarch[.]rpm$")
+      if [ -z "$url" ]; then
+        url=$(release_asset_url "$assets" "/${name}-[0-9][^/]*[.]fc[0-9]+[.]noarch[.]rpm$")
+        if [ -n "$url" ]; then
+          info "No Fedora ${distro_version} build of ${name} ${KMS_RELEASE}; using $(url_basename "$url") (noarch, same release)." >&2
+        fi
+      fi
+      printf '%s\n' "$url"
+      ;;
+  esac
 }
 
 download_checked_kms() {
@@ -346,21 +474,41 @@ installed_package_version() {
 hermes_package_name() {
   case "$distro" in arch) echo hermes-streaming ;; *) echo hermes ;; esac
 }
+
+# Release asset patterns. The version must start with a digit: the Arch
+# release also carries hermes-streaming-debug (and the Gamescope fork may
+# carry gamescope-hermes-debug), which a bare prefix match would pick up.
+hermes_package_pattern() {
+  case "$distro" in
+    arch) echo '/hermes-streaming-[0-9][^/]*-x86_64[.]pkg[.]tar[.]zst$' ;;
+    ubuntu) echo "/hermes_[0-9][^/]*_ubuntu${distro_version//./[.]}_amd64[.]deb$" ;;
+    fedora) echo "/hermes-[0-9][^/]*[.]fc${distro_version}[.]x86_64[.]rpm$" ;;
+  esac
+}
+gamescope_package_pattern() {
+  case "$distro" in
+    arch) echo '/gamescope-hermes-[0-9][^/]*-x86_64[.]pkg[.]tar[.]zst$' ;;
+    ubuntu) echo "/gamescope-hermes_[0-9][^/]*_ubuntu${distro_version//./[.]}_amd64[.]deb$" ;;
+    fedora) echo "/gamescope-hermes-[0-9][^/]*[.]fc${distro_version}[.]x86_64[.]rpm$" ;;
+  esac
+}
+
 gamescope_asset_version() {
-  local name=${1##*/}
+  local name
+  name=$(url_basename "$1")
   case "$distro" in
     arch)
-      [[ "$name" == gamescope-hermes-*-x86_64.pkg.tar.zst ]] || return 1
+      [[ "$name" == gamescope-hermes-[0-9]*-x86_64.pkg.tar.zst ]] || return 1
       name=${name#gamescope-hermes-}
       echo "${name%-x86_64.pkg.tar.zst}"
       ;;
     ubuntu)
-      [[ "$name" == gamescope-hermes_*_ubuntu${distro_version}_amd64.deb ]] || return 1
+      [[ "$name" == gamescope-hermes_[0-9]*_ubuntu${distro_version}_amd64.deb ]] || return 1
       name=${name#gamescope-hermes_}
       echo "${name%_ubuntu${distro_version}_amd64.deb}"
       ;;
     fedora)
-      [[ "$name" == gamescope-hermes-*.fc${distro_version}.x86_64.rpm ]] || return 1
+      [[ "$name" == gamescope-hermes-[0-9]*.fc${distro_version}.x86_64.rpm ]] || return 1
       name=${name#gamescope-hermes-}
       echo "${name%.x86_64.rpm}"
       ;;
@@ -377,15 +525,16 @@ kms_broker_package_name() {
 gamescope_package_name() { echo gamescope-hermes; }
 
 hermes_asset_version() {
-  local name=${1##*/}
+  local name
+  name=$(url_basename "$1")
   case "$distro" in
-    arch) [[ "$name" == hermes-streaming-*-x86_64.pkg.tar.zst ]] || return 1
+    arch) [[ "$name" == hermes-streaming-[0-9]*-x86_64.pkg.tar.zst ]] || return 1
       name=${name#hermes-streaming-}
       echo "${name%-x86_64.pkg.tar.zst}" ;;
-    ubuntu) [[ "$name" == hermes_*_ubuntu${distro_version}_amd64.deb ]] || return 1
+    ubuntu) [[ "$name" == hermes_[0-9]*_ubuntu${distro_version}_amd64.deb ]] || return 1
       name=${name#hermes_}
       echo "${name%_ubuntu${distro_version}_amd64.deb}" ;;
-    fedora) [[ "$name" == hermes-*.fc${distro_version}.x86_64.rpm ]] || return 1
+    fedora) [[ "$name" == hermes-[0-9]*.fc${distro_version}.x86_64.rpm ]] || return 1
       name=${name#hermes-}
       echo "${name%.x86_64.rpm}" ;;
   esac
@@ -473,7 +622,7 @@ preflight() {
   fi
   detect_distro
   info "Distribution: ${distro} ${distro_version}, kernel $(uname -r), user ${USER}."
-  if systemctl --user is-active --quiet hermes; then
+  if systemctl --user is-active --quiet hermes 2>/dev/null; then
     service_was_active=1
   fi
   if [ "$DRY_RUN" = 0 ]; then
@@ -490,16 +639,12 @@ install_hermes() {
   step "Hermes"
   local tag=latest pattern assets url file
   [ "$CHANNEL" = nightly ] && tag=nightly
-  case "$distro" in
-    arch) pattern='hermes-streaming-.*-x86_64\.pkg\.tar\.zst$' ;;
-    ubuntu) pattern="hermes_.*_ubuntu${distro_version}_amd64\.deb$" ;;
-    fedora) pattern="hermes-.*\.fc${distro_version}\.x86_64\.rpm$" ;;
-  esac
+  pattern=$(hermes_package_pattern)
   info "Looking for the ${CHANNEL} package in ${HERMES_REPO}..."
-  assets=$(release_assets "$HERMES_REPO" "$tag") || {
-    [ "$CHANNEL" = release ] || die "could not read the nightly release from GitHub."
-    assets=''
-  }
+  # A failed lookup (offline, rate limited) is not a missing package, so it
+  # never leads to the question about switching channels.
+  assets=$(release_assets "$HERMES_REPO" "$tag") ||
+    die "could not read the ${CHANNEL} release from GitHub; nothing was installed."
   url=$(printf '%s\n' "$assets" | grep -E "$pattern" | head -n1 || true)
   if [ -z "$url" ]; then
     if [ "$CHANNEL" = release ]; then
@@ -512,8 +657,8 @@ install_hermes() {
     fi
     [ -n "$url" ] || die "no Hermes package for ${distro} ${distro_version} in the releases at https://github.com/${HERMES_REPO}/releases."
   fi
-  file="${workdir}/${url##*/}"
-  download "$url" "$file"
+  file="${workdir}/$(url_basename "$url")"
+  download_verified "$url" "$file"
   install_local_package "$file"
   ok "Hermes installed."
 }
@@ -523,8 +668,9 @@ install_kms() {
   explain <<'EOF'
 Hermes-KMS provides virtual displays with zero-copy capture. It is needed for
 independent sessions and streaming the login screen; EVDI is an alternative for
-basic streaming. We use the published Hermes-KMS 0.4.1 release for Hermes 0.7.0,
-rather than cloning a changing main branch. This kernel module uses DKMS.
+basic streaming. We use the published Hermes-KMS 0.4.1 release, which Hermes
+0.7.0 and the current nightlies both support, rather than cloning a changing
+main branch. This kernel module uses DKMS.
 EOF
   if ! ask "Install Hermes-KMS?" y; then
     if has_kms_installed; then
@@ -534,21 +680,12 @@ EOF
     return 0
   fi
 
-  local headers pattern assets url file src
+  local headers assets url file src
   headers=$(kernel_headers_package)
   case "$distro" in
-    arch)
-      pkg_install base-devel dkms "$headers"
-      pattern='/hermes-kms-dkms-git-.*-any\.pkg\.tar\.zst$'
-      ;;
-    ubuntu)
-      pkg_install build-essential dkms "$headers"
-      pattern='/hermes-kms-dkms_.*_all\.deb$'
-      ;;
-    fedora)
-      pkg_install make gcc dkms "$headers"
-      pattern="/hermes-kms-dkms-.*\.fc${distro_version}\.noarch\.rpm$"
-      ;;
+    arch) pkg_install base-devel dkms "$headers" ;;
+    ubuntu) pkg_install build-essential dkms "$headers" ;;
+    fedora) pkg_install make gcc dkms "$headers" ;;
   esac
   if [ "$DRY_RUN" = 0 ] && [ ! -f "/lib/modules/$(uname -r)/build/Makefile" ]; then
     warn "No matching kernel headers for $(uname -r); Hermes-KMS installation skipped."
@@ -557,9 +694,9 @@ EOF
 
   assets=$(release_assets "$KMS_REPO" "$KMS_RELEASE") ||
     die "Cannot read Hermes-KMS ${KMS_RELEASE} release metadata."
-  url=$(release_asset_url "$assets" "$pattern")
+  url=$(kms_package_url "$assets" core)
   if [ -n "$url" ]; then
-    file="${workdir}/${url##*/}"
+    file="${workdir}/$(url_basename "$url")"
     download_checked_kms "$assets" "$url" "$file"
     install_local_package "$file"
   else
@@ -601,10 +738,10 @@ EOF
   ok "Hermes-KMS installation completed. Reboot before testing."
 }
 
-# The default Plasma Detached Desktop does not require this private-seat helper.
+# The KWin virtual desktop does not need this private-seat helper; Gamescope does.
 install_kms_broker() {
   step "Private DRM card/seat broker for Gamescope sessions"
-  local assets url pattern file rc
+  local assets url file rc
   pkg_install acl seatd
   if [ "$broker_from_source" = 1 ]; then
     [ -n "$kms_source_dir" ] || { warn "Missing pinned Hermes-KMS source for broker setup."; return 1; }
@@ -613,17 +750,12 @@ install_kms_broker() {
     as_root udevadm control --reload-rules
   else
     assets=$(release_assets "$KMS_REPO" "$KMS_RELEASE") || die "Cannot read Hermes-KMS broker release."
-    case "$distro" in
-      arch) pattern='/hermes-kms-seatd-git-.*-any\.pkg\.tar\.zst$' ;;
-      ubuntu) pattern='/hermes-kms-seatd_.*_all\.deb$' ;;
-      fedora) pattern="/hermes-kms-seatd-.*\.fc${distro_version}\.noarch\.rpm$" ;;
-    esac
-    url=$(release_asset_url "$assets" "$pattern")
+    url=$(kms_package_url "$assets" broker)
     if [ -z "$url" ]; then
       warn "No matching private-seat package for ${distro} ${distro_version}."
       return 1
     fi
-    file="${workdir}/${url##*/}"
+    file="${workdir}/$(url_basename "$url")"
     download_checked_kms "$assets" "$url" "$file"
     install_local_package "$file"
   fi
@@ -693,16 +825,12 @@ EOF
   # The fork's CI builds a package per distribution release, like Hermes'
   # own, and keeps them on a rolling release.
   local pattern assets url file src
-  case "$distro" in
-    arch) pattern='gamescope-hermes-.*-x86_64\.pkg\.tar\.zst$' ;;
-    ubuntu) pattern="gamescope-hermes_.*_ubuntu${distro_version}_amd64\.deb$" ;;
-    fedora) pattern="gamescope-hermes-.*\.fc${distro_version}\.x86_64\.rpm$" ;;
-  esac
+  pattern=$(gamescope_package_pattern)
   if assets=$(release_assets "$GAMESCOPE_REPO" "$GAMESCOPE_RELEASE" 2>/dev/null) &&
     url=$(printf '%s\n' "$assets" | grep -E "$pattern" | head -n1) &&
     [ -n "$url" ]; then
-    file="${workdir}/${url##*/}"
-    download "$url" "$file"
+    file="${workdir}/$(url_basename "$url")"
+    download_verified "$url" "$file"
     install_local_package "$file"
     if ! verify_gamescope_binary; then
       notes+=("Gamescope was installed but its private DRM interface could not be verified.")
@@ -843,55 +971,171 @@ EOF
   ok "EVDI package installed. Reboot before using a virtual display."
 }
 
-install_isolated() {
-  step "Independent sessions — Hermes 0.7.0 (experimental)"
-  explain <<'EOF'
-Hermes has TWO ways to keep remote streams separate from the host desktop:
-
-DETACHED DESKTOP / DETACHED STEAM (KDE Plasma 6, Wayland)
-  Built with help from PunkUnity's work. Your own Plasma account, files,
-  settings and Steam library run on a detached virtual output; the physical
-  desktop stays usable and its keyboard/mouse do not control the remote view.
-  These modes do NOT need a patched Gamescope or private-seat broker.
-
-ISOLATED APPLICATION (Gamescope DRM)
-  A game runs in its own patched Gamescope on a dedicated Hermes-KMS DRM card
-  and input seat, with separate PipeWire audio and optional private devices.
-  This needs a private-seat broker, seatd and Hermes' Gamescope build.
-
-Both are experimental, per-app choices in the Web UI. Normal Desktop and
-shared-host streams remain available. Future releases may change these modes.
-EOF
-  if [ "$kms_ready" = 0 ]; then
-    warn "Skipping independent sessions: a working Hermes-KMS driver is required."
+# Hermes builds after 0.7.0 choose how an isolated session runs with the
+# global isolation_method and a per-app isolation-method; 0.7.0 used a per-app
+# session-type instead. The installed binary says which one it reads.
+hermes_supports_isolation_method() {
+  local binary
+  binary=$(command -v hermes 2>/dev/null || true)
+  if [ -n "$binary" ] && [ -r "$binary" ] && grep -aqF 'isolation_method' "$binary"; then
     return 0
   fi
-  if ! ask "Enable independent sessions (including Detached Desktop/Steam)?" n; then
-    return 0
-  fi
-  if [ "${XDG_SESSION_TYPE:-}" != wayland ] ||
-     [[ "${XDG_CURRENT_DESKTOP:-}" != *KDE* && "${KDE_FULL_SESSION:-}" != true ]]; then
-    warn "Detached Desktop/Steam needs an active KDE Plasma 6 Wayland desktop."
-    warn "You can enable the feature now, but it will not work on an X11/other desktop."
-  fi
+  # A dry run has installed nothing yet: go by the channel it would install.
+  [ "$DRY_RUN" = 1 ] && [ "$CHANNEL" = nightly ]
+}
 
-  set_config virtual_display_backend hermes_kms
-  set_config hermes_kms_isolated_sessions enabled
-  if [ "$DRY_RUN" = 1 ] || [ -x /usr/bin/hermes-detached-session ]; then
-    did_detached=1
-    ok "Independent-session capability enabled; shared streaming remains available."
+kwin_virtual_entries() {
+  if hermes_supports_isolation_method; then
+    echo "Desktop (KWin virtual) and Steam (KWin virtual)"
   else
-    warn "Detached Desktop/Steam helper is absent; check the Hermes package's KWin build."
-    notes+=("Detached Desktop/Steam requires /usr/bin/hermes-detached-session and KDE Plasma 6 Wayland.")
+    echo "Detached Desktop and Detached Steam"
   fi
-  info "Use Detached Desktop or Detached Steam in the app list, or choose session-type per app."
+}
 
+plasma_wayland_session() {
+  [ "${XDG_SESSION_TYPE:-}" = wayland ] &&
+    [[ "${XDG_CURRENT_DESKTOP:-}" == *KDE* || "${KDE_FULL_SESSION:-}" == true ]]
+}
+
+# Gamescope isolation needs the patched build and the private-seat broker,
+# whether this run installed them or an earlier one did.
+gamescope_isolation_ready() {
+  [ "$did_isolated" = 1 ] && return 0
+  [ -x /usr/lib/hermes-kms/hermes-kms-setup ] || return 1
+  # Read-only, so it is also checked during a dry run.
+  local binary help_text
+  binary=$(gamescope_binary) || return 1
+  help_text=$("$binary" --help 2>&1) || return 1
+  grep -Eq -- '--prefer-drm|--drm-device' <<<"$help_text"
+}
+
+# Hermes' default isolation_method is gamescope: an app with a command that
+# asks for a virtual display is sent to a Gamescope session, which fails to
+# start without the patched Gamescope and its seat broker. Choose the method
+# from what is actually installed, keeping the user's own choice wherever it
+# can work.
+configure_isolation_method() {
+  local current
+  if ! hermes_supports_isolation_method; then
+    if gamescope_isolation_ready; then
+      info "Hermes 0.7.0: set session-type = application on an app to run it in Gamescope."
+    else
+      info "Hermes 0.7.0: use the Detached entries (session-type = desktop); session-type = application needs Hermes' Gamescope."
+    fi
+    return 0
+  fi
+  current=$(config_value isolation_method)
+  current=${current:-gamescope}
+  if [ "$current" = gamescope ] && ! gamescope_isolation_ready; then
+    explain <<'EOF'
+Hermes' default isolation method is gamescope: an app with a command that asks
+for a virtual display would be sent to a Gamescope session, which cannot start
+without Hermes' Gamescope and the private-seat broker. kwin_virtual runs those
+apps inside the KWin virtual desktop instead. Rerun this installer and choose
+the Gamescope step later to switch back.
+EOF
+    set_config isolation_method kwin_virtual
+    current=kwin_virtual
+  elif [ "$current" = kwin_virtual ] && [ "$did_isolated" = 1 ]; then
+    if ask "Make gamescope the isolation method for apps that ask for a virtual display?" y; then
+      set_config isolation_method gamescope
+      current=gamescope
+    fi
+  fi
+  isolation_method_note=$current
+  case "$current" in
+    gamescope)
+      info "Isolation method: gamescope. Entries without a command, and apps with isolation-method = kwin_virtual, use the KWin virtual desktop."
+      ;;
+    kwin_virtual)
+      info "Isolation method: kwin_virtual. An app's isolation-method = gamescope selects Gamescope once it is installed."
+      ;;
+  esac
+}
+
+# Root services shipped with Hermes that widen Gamescope isolation. Each
+# answers only the users listed in its allow file.
+grant_broker_user() {
+  local file=$1 tmp
+  if [ -f "$file" ] && awk -v user="$USER" -v uid="$(id -u)" '
+      { sub(/#.*/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, "") }
+      $0 == user || $0 == uid { found = 1 }
+      END { exit !found }' "$file"; then
+    info "${USER} is already listed in ${file}."
+    return 0
+  fi
+  tmp="${workdir}/${file##*/}"
+  if [ -f "$file" ]; then
+    cat -- "$file" >"$tmp"
+  else
+    : >"$tmp"
+  fi
+  printf '%s\n' "$USER" >>"$tmp"
+  as_root install -D -m 0644 -o root -g root "$tmp" "$file"
+}
+
+system_unit_present() {
+  [ "$DRY_RUN" = 1 ] || systemctl cat "$1" >/dev/null 2>&1
+}
+
+setup_optional_brokers() {
+  explain <<'EOF'
+Two optional root services that ship with Hermes extend Gamescope isolation.
+Each answers only the users listed in its allow file under /etc/hermes.
+
+Card broker: when the pre-configured pool of private cards is used up, it
+creates another Hermes-KMS card on demand instead of refusing the launch.
+
+Session broker: gives each paired client a Unix account of its own
+(hermes-s01 upwards) with a private home under /var/lib/hermes/sessions, so a
+session cannot read your files, keys or browser profiles. Games and Steam
+libraries installed for your account are not visible there, and such sessions
+still hear the host's audio for now. Accounts are kept until removed by hand.
+The KWin virtual desktop always runs as you and does not use it.
+EOF
+  if ask "Enable the card broker?" n; then
+    if ! system_unit_present hermes-kms-card-broker.socket; then
+      warn "hermes-kms-card-broker.socket is not installed; this Hermes package has no card broker."
+    elif grant_broker_user "$CARD_BROKER_ALLOW" &&
+      as_root systemctl enable --now hermes-kms-card-broker.socket; then
+      did_card_broker=1
+      ok "Card broker enabled for ${USER}."
+    else
+      warn "The card broker could not be enabled; the fixed card pool still works."
+    fi
+  fi
+  if ask "Enable the session broker (a separate Unix account per client)?" n; then
+    if ! system_unit_present hermes-session-broker.socket; then
+      warn "hermes-session-broker.socket is not installed; this Hermes package has no session broker."
+      return 0
+    fi
+    # The broker refuses to create accounts until the group its polkit rule
+    # confines exists; the package's sysusers entry creates it.
+    if [ "$DRY_RUN" = 0 ] && ! getent group hermes-session >/dev/null 2>&1; then
+      as_root systemd-sysusers || true
+    fi
+    if [ "$DRY_RUN" = 0 ] && ! getent group hermes-session >/dev/null 2>&1; then
+      warn "The hermes-session group is missing; the session broker would refuse every account."
+      return 0
+    fi
+    if grant_broker_user "$SESSION_BROKER_ALLOW" &&
+      as_root systemctl enable --now hermes-session-broker.socket; then
+      did_session_broker=1
+      ok "Session broker enabled for ${USER}."
+      notes+=("Session accounts (hermes-sNN) and their homes stay until removed: stop hermes-session-broker.socket, then userdel --remove the account.")
+    else
+      warn "The session broker could not be enabled; sessions keep running as ${USER}."
+    fi
+  fi
+}
+
+setup_gamescope_isolation() {
   if gamescope_unavailable; then
-    warn "Ubuntu 24.04 cannot run the patched Gamescope. Detached Desktop/Steam remains an option on Plasma Wayland."
+    warn "Ubuntu 24.04 cannot run the patched Gamescope; the KWin virtual desktop remains an option on Plasma Wayland."
     return 0
   fi
   if ! ask "Also install support for isolated Gamescope application sessions?" n; then
-    info "No Gamescope or seatd changes are needed for Plasma Detached Desktop/Steam."
+    info "No Gamescope or seatd changes are needed for the KWin virtual desktop."
     return 0
   fi
 
@@ -906,7 +1150,7 @@ EOF
   esac
   install_gamescope
   if [ "$did_gamescope" != 1 ]; then
-    notes+=("Hermes Gamescope not installed; use Detached sessions only until the patched Gamescope is available.")
+    notes+=("Hermes' Gamescope is not installed; use the KWin virtual desktop until it is.")
     return 0
   fi
   if ! install_kms_broker; then
@@ -932,7 +1176,54 @@ EOF
     fi
   fi
   did_isolated=1
-  ok "Dedicated Gamescope session prerequisites configured. Choose session-type = application per app."
+  ok "Dedicated Gamescope session prerequisites configured."
+  setup_optional_brokers
+}
+
+install_isolated() {
+  step "Independent sessions (experimental)"
+  explain <<'EOF'
+Hermes can keep a remote stream apart from the host desktop in two ways:
+
+KWIN VIRTUAL DESKTOP (KDE Plasma 6, Wayland; isolation method kwin_virtual)
+  Built with help from PunkUnity's work. Your own Plasma account, files,
+  settings and Steam library run on a separate virtual output; the physical
+  desktop stays usable and its keyboard/mouse do not control the remote view.
+  It does NOT need a patched Gamescope or a private-seat broker.
+
+GAMESCOPE (private DRM card and seat; isolation method gamescope)
+  A game runs in its own patched Gamescope on a dedicated Hermes-KMS DRM card
+  and input seat, with separate PipeWire audio and optional private devices.
+  This needs a private-seat broker, seatd and Hermes' Gamescope build.
+
+Both are experimental. Shared-host streams (the usual Desktop and apps) stay
+available beside them. Future releases may change these modes.
+EOF
+  if [ "$kms_ready" = 0 ]; then
+    warn "Skipping independent sessions: a working Hermes-KMS driver is required."
+    return 0
+  fi
+  if ! ask "Enable independent sessions?" n; then
+    return 0
+  fi
+  if ! plasma_wayland_session; then
+    warn "The KWin virtual desktop needs an active KDE Plasma 6 Wayland desktop."
+    warn "Elsewhere, use Gamescope isolation, or hermes_kms_session_compositor = weston (which needs the private-seat broker)."
+  fi
+
+  set_config virtual_display_backend hermes_kms
+  set_config hermes_kms_isolated_sessions enabled
+  if [ "$DRY_RUN" = 1 ] || [ -x /usr/bin/hermes-detached-session ]; then
+    did_kwin_virtual=1
+    ok "Independent-session capability enabled; shared streaming remains available."
+  else
+    warn "The KWin virtual desktop helper is absent; check the Hermes package's KWin build."
+    notes+=("The KWin virtual desktop requires /usr/bin/hermes-detached-session and KDE Plasma 6 Wayland.")
+  fi
+  info "App list entries for the KWin virtual desktop: $(kwin_virtual_entries)."
+
+  setup_gamescope_isolation
+  configure_isolation_method
 }
 
 setup_prelogin() {
@@ -1020,6 +1311,30 @@ EOF
 }
 
 
+# True when isolated sessions are on and the effective isolation method is
+# Gamescope, but nothing installed can start a Gamescope session.
+isolation_method_broken() {
+  config_flag_enabled hermes_kms_isolated_sessions || return 1
+  hermes_supports_isolation_method || return 1
+  local method
+  method=$(config_value isolation_method)
+  [ "${method:-gamescope}" = gamescope ] || return 1
+  ! gamescope_isolation_ready
+}
+
+check_isolation_method() {
+  config_flag_enabled hermes_kms_isolated_sessions || return 0
+  hermes_supports_isolation_method || return 0
+  if isolation_method_broken; then
+    warn "isolation_method is gamescope, but Hermes' Gamescope or its seat broker is not ready."
+    warn "Launches that ask for a virtual display will fail; set isolation_method = kwin_virtual in $(config_file)."
+  else
+    local method
+    method=$(config_value isolation_method)
+    ok "Isolation method: ${method:-gamescope}."
+  fi
+}
+
 post_install_checks() {
   step "Post-install checks"
   if [ "$DRY_RUN" = 1 ]; then
@@ -1031,7 +1346,7 @@ post_install_checks() {
   else
     warn "Hermes executable missing from PATH."
   fi
-  if systemctl --user is-active --quiet hermes; then
+  if systemctl --user is-active --quiet hermes 2>/dev/null; then
     ok "Hermes user service is active."
   else
     warn "Service not active: run systemctl --user status hermes."
@@ -1043,9 +1358,10 @@ post_install_checks() {
   if [ "$did_gamescope" = 1 ]; then
     verify_gamescope_binary || true
   fi
-  if [ "$did_detached" = 1 ] && [ ! -x /usr/bin/hermes-detached-session ]; then
-    warn "Detached Desktop helper is missing."
+  if [ "$did_kwin_virtual" = 1 ] && [ ! -x /usr/bin/hermes-detached-session ]; then
+    warn "The KWin virtual desktop helper (hermes-detached-session) is missing."
   fi
+  check_isolation_method
   for input_node in /dev/uinput /dev/uhid; do
     if [ ! -c "$input_node" ]; then
       warn "$input_node is missing; virtual input may need kernel/udev setup."
@@ -1068,9 +1384,12 @@ summary() {
   fi
   info "Web UI: https://localhost:47990 (create a username and password on first visit)."
   [ "$kms_ready" = 1 ] && info "Hermes-KMS: available for this kernel."
-  [ "$did_detached" = 1 ] && info "Detached Desktop/Steam: enabled (needs KDE Plasma 6 Wayland)."
+  [ "$did_kwin_virtual" = 1 ] && info "KWin virtual desktop: enabled (needs KDE Plasma 6 Wayland)."
   [ "$did_broker" = 1 ] && info "Private-seat brokers: configured."
-  [ "$did_isolated" = 1 ] && info "Gamescope application isolation: configured; select session-type per app."
+  [ "$did_isolated" = 1 ] && info "Gamescope application isolation: configured."
+  [ -n "$isolation_method_note" ] && info "Isolation method: ${isolation_method_note}."
+  [ "$did_card_broker" = 1 ] && info "Card broker: enabled."
+  [ "$did_session_broker" = 1 ] && info "Session broker: enabled (one Unix account per client)."
   [ "$did_gamescope" = 1 ] && info "Gamescope for Hermes: installed."
   [ "$did_prelogin" = 1 ] && info "Login screen streaming: enabled."
   local note
@@ -1100,11 +1419,7 @@ update_hermes() {
   [ -n "$installed" ] ||
     die "--update requires a package-managed Hermes installation; run without --update for initial setup."
   [ "$CHANNEL" = nightly ] && tag=nightly
-  case "$distro" in
-    arch) pattern='hermes-streaming-.*-x86_64[.]pkg[.]tar[.]zst$' ;;
-    ubuntu) pattern="hermes_.*_ubuntu${distro_version}_amd64[.]deb$" ;;
-    fedora) pattern="hermes-.*[.]fc${distro_version}[.]x86_64[.]rpm$" ;;
-  esac
+  pattern=$(hermes_package_pattern)
   assets=$(release_assets "$HERMES_REPO" "$tag") ||
     die "Cannot fetch Hermes $CHANNEL release metadata; installed package was preserved."
   url=$(release_asset_url "$assets" "$pattern")
@@ -1123,8 +1438,8 @@ update_hermes() {
   else
     ask "Update Hermes to $candidate ($CHANNEL)?" y || return 0
   fi
-  file="${workdir}/${url##*/}"
-  download "$url" "$file"
+  file="${workdir}/$(url_basename "$url")"
+  download_verified "$url" "$file"
   if [ "$DRY_RUN" = 1 ]; then
     info "Dry-run: would inspect the asset and update Hermes if needed."
     return 0
@@ -1150,7 +1465,7 @@ update_hermes() {
 # downgrade a newer driver just because Hermes itself was updated.
 update_kms() {
   step "Update existing Hermes-KMS"
-  local current core_version relation headers pattern broker_pattern assets url broker_url
+  local current core_version relation headers assets url broker_url
   local core_file broker_file broker_version native_version src
   current=$(kms_installed_version || true)
   if [ -z "$current" ]; then
@@ -1207,23 +1522,9 @@ update_kms() {
   native_version=$(installed_package_version "$(kms_core_package_name)" || true)
   broker_version=$(installed_package_version "$(kms_broker_package_name)" || true)
   headers=$(kernel_headers_package)
-  case "$distro" in
-    arch)
-      pattern='/hermes-kms-dkms-git-.*-any[.]pkg[.]tar[.]zst$'
-      broker_pattern='/hermes-kms-seatd-git-.*-any[.]pkg[.]tar[.]zst$'
-      ;;
-    ubuntu)
-      pattern='/hermes-kms-dkms_.*_all[.]deb$'
-      broker_pattern='/hermes-kms-seatd_.*_all[.]deb$'
-      ;;
-    fedora)
-      pattern="/hermes-kms-dkms-.*[.]fc${distro_version}[.]noarch[.]rpm$"
-      broker_pattern="/hermes-kms-seatd-.*[.]fc${distro_version}[.]noarch[.]rpm$"
-      ;;
-  esac
   assets=$(release_assets "$KMS_REPO" "$KMS_RELEASE") ||
     die "Cannot fetch pinned Hermes-KMS release metadata; old driver remains."
-  url=$(release_asset_url "$assets" "$pattern")
+  url=$(kms_package_url "$assets" core)
   if [ -z "$url" ] && [ -n "$native_version" ]; then
     warn "No matching native KMS package. Refusing to overwrite a package-managed driver with a source install."
     return 0
@@ -1242,16 +1543,16 @@ update_kms() {
   if [ -n "$url" ]; then
     broker_url=''
     if [ -n "$broker_version" ]; then
-      broker_url=$(release_asset_url "$assets" "$broker_pattern")
+      broker_url=$(kms_package_url "$assets" broker)
       if [ -z "$broker_url" ]; then
         warn "Broker package for this OS missing; cannot safely update just the core."
         return 0
       fi
     fi
-    core_file="${workdir}/${url##*/}"
+    core_file="${workdir}/$(url_basename "$url")"
     download_checked_kms "$assets" "$url" "$core_file"
     if [ -n "$broker_url" ]; then
-      broker_file="${workdir}/${broker_url##*/}"
+      broker_file="${workdir}/$(url_basename "$broker_url")"
       download_checked_kms "$assets" "$broker_url" "$broker_file"
       install_local_package "$core_file" "$broker_file"
       did_broker=1
@@ -1298,11 +1599,7 @@ update_gamescope() {
     fi
     return 0
   fi
-  case "$distro" in
-    arch) pattern='gamescope-hermes-.*-x86_64[.]pkg[.]tar[.]zst$' ;;
-    ubuntu) pattern="gamescope-hermes_.*_ubuntu${distro_version}_amd64[.]deb$" ;;
-    fedora) pattern="gamescope-hermes-.*[.]fc${distro_version}[.]x86_64[.]rpm$" ;;
-  esac
+  pattern=$(gamescope_package_pattern)
   if ! assets=$(release_assets "$GAMESCOPE_REPO" "$GAMESCOPE_RELEASE"); then
     warn "Gamescope release unavailable. Existing package left intact."
     return 0
@@ -1323,8 +1620,8 @@ update_gamescope() {
   else
     ask "Check/update patched Gamescope ($installed -> $candidate)?" y || return 0
   fi
-  file="${workdir}/${url##*/}"
-  download "$url" "$file"
+  file="${workdir}/$(url_basename "$url")"
+  download_verified "$url" "$file"
   if [ "$DRY_RUN" = 1 ]; then
     info "Dry-run: would compare Gamescope asset checksum."
     return 0
@@ -1400,11 +1697,35 @@ EOF
   fi
 }
 
+# Builds after 0.7.0 default isolation_method to gamescope and route apps that
+# ask for a virtual display through it. A host that enabled isolated sessions
+# for the Detached desktop alone would see those launches fail after the
+# update, so the updater points that out and offers the KWin method. It only
+# changes the setting with consent; --yes leaves it alone.
+update_isolation_method() {
+  isolation_method_broken || return 0
+  step "Isolation method after update"
+  explain <<'EOF'
+This Hermes build chooses how isolated sessions run with isolation_method,
+which defaults to gamescope: apps with a command that ask for a virtual display
+start in a Gamescope session. Hermes' Gamescope or its seat broker is not
+ready here, so those launches would fail. kwin_virtual runs them inside the
+KWin virtual desktop instead.
+EOF
+  if ask "Set isolation_method = kwin_virtual?" n; then
+    set_config isolation_method kwin_virtual
+    isolation_method_note=kwin_virtual
+  else
+    notes+=("isolation_method defaults to gamescope, which is not ready here; set isolation_method = kwin_virtual or install Hermes' Gamescope.")
+  fi
+}
+
 run_updater() {
   update_hermes
   update_kms
   update_gamescope
   update_evdi
+  update_isolation_method
   finish_update_service
   post_install_checks
   summary

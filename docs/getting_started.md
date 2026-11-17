@@ -24,7 +24,7 @@ Packages are built in CI and published at
 |:-------------|:------|
 | Arch / CachyOS | `hermes-streaming-{version}-1-x86_64.pkg.tar.zst` |
 | Ubuntu 24.04, 26.04 | `hermes_{version}_ubuntu{release}_amd64.deb` |
-| Fedora 43, 44 | `hermes-{version}-1.fc{release}.x86_64.rpm` |
+| Fedora 43, 44, 45 | `hermes-{version}-1.fc{release}.x86_64.rpm` |
 
 Match the release in the filename to the one you run. Each `.deb` and `.rpm` is
 built inside that release's own container, so its dependencies are the sonames

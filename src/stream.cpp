@@ -33,6 +33,7 @@ extern "C" {
 #include "network.h"
 #include "platform/common.h"
 #include "process.h"
+#include "session_activity_counter.h"
 #include "stream.h"
 #include "sync.h"
 #include "system_tray.h"
@@ -2182,13 +2183,8 @@ namespace stream {
   }
 
   namespace session {
-    std::atomic_uint running_sessions;
+    session_activity_counter_t running_sessions;
     std::atomic_uint shared_running_sessions;
-    // Orders a running_sessions transition with the platform hook it triggers.
-    // Without it a session starting between another's decrement and its
-    // streaming_will_stop() call could leave platform state (such as a
-    // screen-lock inhibition) released while a client is still connected.
-    std::mutex running_sessions_mutex;
 
     state_e state(session_t &session) {
       return session.state.load(std::memory_order_relaxed);
@@ -2438,12 +2434,9 @@ namespace stream {
       }
 
       // Platform-wide streaming state still spans both ownership domains.
-      {
-        std::lock_guard<std::mutex> lock {running_sessions_mutex};
-        if (--running_sessions == 0) {
-          platf::streaming_will_stop();
-        }
-      }
+      running_sessions.stopped([] {
+        platf::streaming_will_stop();
+      });
 
       BOOST_LOG(debug) << "Session ended"sv;
     }
@@ -2504,12 +2497,9 @@ namespace stream {
 
       // Platform-wide callbacks track every stream, while the legacy process
       // lifecycle belongs only to streams attached to the shared host session.
-      {
-        std::lock_guard<std::mutex> lock {running_sessions_mutex};
-        if (++running_sessions == 1) {
-          platf::streaming_will_start();
-        }
-      }
+      running_sessions.started([] {
+        platf::streaming_will_start();
+      });
 
       if (!session.isolated_session && ++shared_running_sessions == 1) {
         proc::proc.resume();

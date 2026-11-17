@@ -386,7 +386,7 @@ curl -fsSL https://raw.githubusercontent.com/MrOz59/Hermes/main/scripts/install.
 ```
 
 It installs the Hermes package for your distribution (Arch, CachyOS, Ubuntu
-24.04/26.04 or Fedora 43/44) and then asks, one at a time, about the
+24.04/26.04 or Fedora 43/44/45) and then asks, one at a time, about the
 [Hermes-KMS](#installing-the-hermes-kms-driver) driver, experimental isolated
 sessions (with Hermes' own Gamescope build) and streaming the login screen.
 Add `--nightly` for the rolling build of `main`, `--dry-run` to see the
@@ -400,7 +400,7 @@ version publishes a normal release, both at
 |:-------------|:------|:---------|
 | Arch / CachyOS | `hermes-streaming-<version>-1-x86_64.pkg.tar.zst` | `sudo pacman -U ./hermes-streaming-*.pkg.tar.zst` |
 | Ubuntu 24.04, 26.04 | `hermes_<version>_ubuntu<release>_amd64.deb` | `sudo apt install ./hermes_<version>_ubuntu<release>_amd64.deb` |
-| Fedora 43, 44 | `hermes-<version>-1.fc<release>.x86_64.rpm` | `sudo dnf install ./hermes-<version>-1.fc<release>.x86_64.rpm` |
+| Fedora 43, 44, 45 | `hermes-<version>-1.fc<release>.x86_64.rpm` | `sudo dnf install ./hermes-<version>-1.fc<release>.x86_64.rpm` |
 
 Match the release in the filename to the one you run: a `.deb` or `.rpm` is
 built inside that release's own container, so its dependencies are the sonames

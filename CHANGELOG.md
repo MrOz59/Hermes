@@ -12,6 +12,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- Fedora 45 packages: CI now builds `hermes-<version>-1.fc45.x86_64.rpm`,
+  installs it and runs the secure-loader checks on Fedora 45 alongside 43
+  and 44.
 - `inhibit_screen_lock` (off by default) keeps the host's screensaver and
   screen lock from engaging while a client is connected. On Linux it holds an
   inhibition through `org.freedesktop.ScreenSaver` on the D-Bus session bus and
@@ -77,20 +80,34 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   the lookup always came back empty. Activating the output and exclusive mode
   then stopped with "DRM connector was not found". The driver is now read from
   the card's own device.
+- Starting a stream while the screens are asleep no longer opens an empty
+  virtual display beside the desktop ([#133], from PunkUnity). KWin's power
+  saving leaves every connector disabled, so Hermes found no lit monitor and
+  created one. When KScreen still lists a connected, enabled output, Hermes now
+  wakes the screens and streams the primary output as soon as it shows a
+  picture, waiting at most 3 seconds. A DisplayPort monitor in deep sleep is
+  woken with one read on its AUX channel instead, and Hermes waits until the
+  compositor has lit it: woken by a modeset, it failed link training
+  (`dpcd_set_link_settings ... failed` on amdgpu), dropped off and came back
+  seconds later. A monitor that answers the read is not waited for. Outputs
+  turned off in the display settings are left alone, so a host without a
+  monitor still gets a virtual display.
 - On KWin, touch and pen land on the monitor being streamed ([#131], from
   PunkUnity). KWin bound new touch devices to an output of its own choosing,
   so with more than one monitor a Multi touch client often did nothing. When
   Hermes captures a physical output, the touch and pen devices are now bound
   to it for the session and released afterwards.
 - With no display configured, Hermes streams the desktop's primary monitor
-  (from PunkUnity). Monitor numbers follow DRM plane order, not the desktop
-  layout, so monitor 0 could be a KVM capture input or a dummy plug. On KWin,
-  the output KScreen marks as primary is now listed first; a configured
-  display number still selects the same monitor as before.
+  ([#138], from PunkUnity). Monitor numbers follow DRM plane order, not the
+  desktop layout, so monitor 0 could be a KVM capture input or a dummy plug.
+  On KWin, the output KScreen marks as primary is now listed first; a
+  configured display number still selects the same monitor as before.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99
 [#131]: https://github.com/MrOz59/Hermes/pull/131
+[#133]: https://github.com/MrOz59/Hermes/pull/133
+[#138]: https://github.com/MrOz59/Hermes/pull/138
 
 ## [0.7.0] - 2026-11-02
 

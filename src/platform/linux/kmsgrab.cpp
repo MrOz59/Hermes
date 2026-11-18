@@ -30,6 +30,7 @@
 #include "cuda.h"
 #include "dmabuf_mapping.h"
 #include "graphics.h"
+#include "misc.h"
 #include "pyrowave.h"
 #include "src/config.h"
 #include "src/logging.h"
@@ -751,7 +752,7 @@ namespace platf {
 
       int init(const char *path) {
         cap_sys_admin admin;
-        fd.el = open(path, O_RDWR);
+        fd.el = platf::open_drm_node(path, O_RDWR);
 
         if (fd.el < 0) {
           BOOST_LOG(error) << "Couldn't open: "sv << path << ": "sv << strerror(errno);

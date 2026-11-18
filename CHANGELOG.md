@@ -102,6 +102,15 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   desktop layout, so monitor 0 could be a KVM capture input or a dummy plug.
   On KWin, the output KScreen marks as primary is now listed first; a
   configured display number still selects the same monitor as before.
+- Hermes no longer locks the compositor out of a GPU (from PunkUnity). The
+  kernel makes whoever opens `/dev/dri/cardN` while no one holds DRM master
+  that card's master, and Hermes kept it. Start a stream while the desktop
+  session is inactive (a text console, or the moment between the login screen
+  and the desktop), and when the session came back logind could not hand the
+  card back to KWin, so that GPU's outputs stayed frozen until the stream
+  ended. Hermes now gives master back as soon as it opens a card, as logind
+  and KWin do; capture never needed it. Its card descriptors are also
+  close-on-exec, so launched apps no longer inherit them.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

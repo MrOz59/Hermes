@@ -102,6 +102,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   desktop layout, so monitor 0 could be a KVM capture input or a dummy plug.
   On KWin, the output KScreen marks as primary is now listed first; a
   configured display number still selects the same monitor as before.
+- AMD encoders on Linux keep frames near their size budget (from PunkUnity).
+  radeonsi accepts the single-frame VBV in VBR but does not hold frames to
+  it, so key frames and frames after a still stretch came out many times
+  over budget, too large for FEC and dropped whole when a packet was lost.
+  On radeonsi, Hermes now uses CBR with the single-frame VBV, and removes
+  the filler data CBR pads H.264 and HEVC frames with, so a still screen
+  does not stream at the full bitrate.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

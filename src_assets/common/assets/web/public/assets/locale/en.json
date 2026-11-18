@@ -136,7 +136,7 @@
         "isolate_off": "Off",
         "isolate_on_plain": "On",
         "stop_desktop_steam": "Shut down the desktop's Steam",
-        "stop_desktop_steam_desc": "Independent sessions only. Steam runs once per user and hands a second launch to the running client, so a Steam left open on the desktop would take over the session's. Hermes asks it to quit (SIGTERM: it logs off and saves its settings) and kills it only if it is still running after 30 seconds. A Steam inside another Hermes session is left alone.",
+        "stop_desktop_steam_desc": "Independent sessions, and apps that start Steam in a Gamescope nested in the desktop (Gamescope Steam Session). Steam runs once per user and hands a second launch to the running client, so a Steam left open on the desktop would take over the session's. Hermes asks it to quit (SIGTERM: it logs off and saves its settings) and kills it only if it is still running after 30 seconds. A Steam inside another Hermes session is left alone.",
         "stop_desktop_steam_auto": "Auto (when the command runs steam)",
         "terminate_on_pause": "Terminate on Pause",
         "terminate_on_pause_desc": "Terminate the app when all clients are disconnected.",

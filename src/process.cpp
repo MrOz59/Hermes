@@ -342,7 +342,7 @@ namespace proc {
      * seconds even when its window is unmapped; `steam -shutdown` would start
      * Steam's updater if no client were left by then.
      */
-    void stop_desktop_steam() {
+    void stop_desktop_steam(std::string_view tag = "[IsolatedSession]") {
       const char *home = std::getenv("HOME");
       pid_t pid = 0;
       std::ifstream {std::string {home ? home : ""} + "/.steam/steam.pid"} >> pid;
@@ -355,19 +355,19 @@ namespace proc {
         return;
       }
 
-      BOOST_LOG(info) << "[IsolatedSession] Shutting down the desktop's Steam (pid " << pid << ") first.";
+      BOOST_LOG(info) << tag << " Shutting down the desktop's Steam (pid " << pid << ") first.";
       ::kill(pid, SIGTERM);
       const auto deadline = std::chrono::steady_clock::now() + 30s;
       while (std::filesystem::exists("/proc/" + std::to_string(pid)) && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(100ms);
       }
       if (!std::filesystem::exists("/proc/" + std::to_string(pid))) {
-        BOOST_LOG(info) << "[IsolatedSession] The desktop's Steam has exited.";
+        BOOST_LOG(info) << tag << " The desktop's Steam has exited.";
         return;
       }
 
       // Not graceful: no log-off, unsaved config and cloud sync are lost.
-      BOOST_LOG(warning) << "[IsolatedSession] The desktop's Steam ignored SIGTERM for 30 s; killing it.";
+      BOOST_LOG(warning) << tag << " The desktop's Steam ignored SIGTERM for 30 s; killing it.";
       std::vector<pid_t> tree {pid};
       std::error_code ec;
       for (bool grew = true; grew;) {
@@ -3837,6 +3837,23 @@ namespace proc {
                               (platf::window_placement::launches_gamescope(app_arguments) ||
                                launch_session->launch_mode == "gamescope");
     std::vector<std::uint32_t> gamescope_pids;
+
+    // A Gamescope nested in the desktop starts a Steam of its own. Steam runs
+    // once per user: with another Steam running, that one takes the request,
+    // the new one exits, and Gamescope and the app end within a second. Shut
+    // the other Steam down first, as independent sessions do. Inside a
+    // standalone Gamescope session the running Steam is the session's own and
+    // is meant to take the request.
+    if (!gamescope_session && _app.stop_desktop_steam != "off") {
+      bool nested_steam = platf::window_placement::gamescope_runs_steam(app_arguments) ||
+                          (launch_session->launch_mode == "gamescope" && runs_steam(_app));
+      for (const auto &cmd : _app.detached) {
+        nested_steam = nested_steam || platf::window_placement::gamescope_runs_steam(placement_arguments(cmd));
+      }
+      if (nested_steam) {
+        stop_desktop_steam("[Gamescope]");
+      }
+    }
 #endif
 
     for (auto &cmd : _app.detached) {

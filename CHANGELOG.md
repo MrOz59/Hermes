@@ -102,12 +102,34 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   desktop layout, so monitor 0 could be a KVM capture input or a dummy plug.
   On KWin, the output KScreen marks as primary is now listed first; a
   configured display number still selects the same monitor as before.
+- An idle EVDI virtual display no longer keeps the encoder busy ([#132], from
+  itkawa). The capture loop copied the pixel buffer and pushed it as a new frame
+  on every tick, even when the driver had delivered nothing new, so an idle
+  desktop was encoded at almost the full frame rate. An unchanged frame is now
+  reported as not captured, and the encoder repeats the previous one at its
+  minimum rate. On an idle 1280x720 desktop this went from 53 to 18 fps and
+  from 22% to 9% of one thread.
+- Quit in the Web UI no longer crashes Hermes when shutting down takes longer
+  than 5 seconds ([#136], from itkawa). `/api/quit` answered from a detached
+  thread after 5 s, which then wrote to, or released, a response whose HTTPS
+  server had already been destroyed. Closing an EVDI virtual display can take
+  that long, and on GNOME under Wayland the quit ended in a segfault (exit 139).
+  The thread now lets go of the response before the server stops.
+- With more than one EVDI device, Hermes watches the connector of the card it
+  opened ([#140], from itkawa). libevdi numbers devices by their DRM card
+  (`/dev/dri/cardN`), but Hermes looked the same number up as the `evdi.N`
+  platform device, which can be another card. It then waited for a connector
+  that never appeared, and the client got a 503. The card libevdi opened is now
+  checked first.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99
 [#131]: https://github.com/MrOz59/Hermes/pull/131
+[#132]: https://github.com/MrOz59/Hermes/pull/132
 [#133]: https://github.com/MrOz59/Hermes/pull/133
+[#136]: https://github.com/MrOz59/Hermes/pull/136
 [#138]: https://github.com/MrOz59/Hermes/pull/138
+[#140]: https://github.com/MrOz59/Hermes/pull/140
 
 ## [0.7.0] - 2026-11-02
 

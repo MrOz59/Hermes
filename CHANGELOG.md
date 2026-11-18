@@ -102,6 +102,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   desktop layout, so monitor 0 could be a KVM capture input or a dummy plug.
   On KWin, the output KScreen marks as primary is now listed first; a
   configured display number still selects the same monitor as before.
+- A frame too large for the protocol's four FEC blocks keeps as much FEC as
+  still fits, instead of none (from PunkUnity). At the default 20%, frames
+  over about 800 packets were sent with no parity at all, so a single lost
+  packet dropped them, and they were mostly key frames. AMD's VAAPI encoder
+  produced such frames of 0.9-1 MB at bitrates from 2 to 80 Mbps; a
+  937-packet key frame now goes out with 8% FEC.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

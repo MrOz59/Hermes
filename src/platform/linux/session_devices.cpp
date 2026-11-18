@@ -3,6 +3,7 @@
  * @brief What an isolated session sees of the host's /dev.
  */
 #include "session_devices.h"
+#include "session_lineage.h"
 
 // standard includes
 #include <cctype>
@@ -12,7 +13,9 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <set>
+#include <string>
 #include <thread>
 
 // platform includes
@@ -299,9 +302,34 @@ namespace platf::session_devices {
       }
     };
 
-    // Whether only processes in mount namespace ns hold uinput, Hermes aside:
-    // a uinput device does not record who made it, and a Steam outside the
-    // session (its virtual pads pass on the host's controllers) must not count.
+    std::optional<ino_t> mount_namespace_of(pid_t pid) {
+      struct stat st {};
+      if (::stat(("/proc/" + std::to_string(pid) + "/ns/mnt").c_str(), &st)) {
+        return std::nullopt;
+      }
+      return st.st_ino;
+    }
+
+    std::optional<pid_t> parent_of(pid_t pid) {
+      std::ifstream status {"/proc/" + std::to_string(pid) + "/status"};
+      std::string line;
+      while (std::getline(status, line)) {
+        if (line.starts_with("PPid:")) {
+          try {
+            return static_cast<pid_t>(std::stol(line.substr(5)));
+          } catch (const std::exception &) {
+            return std::nullopt;
+          }
+        }
+      }
+      return std::nullopt;
+    }
+
+    // Whether only the session's processes hold uinput, Hermes aside: a uinput
+    // device does not record who made it, and a Steam outside the session (its
+    // virtual pads pass on the host's controllers) must not count. The session's
+    // own Steam runs in its runtime's mount namespace, inside the session's, so
+    // a holder counts when it descends from the session (belongs_to_session).
     bool only_session_holds_uinput(ino_t ns) {
       std::error_code ec;
       const auto self = std::to_string(::getpid());
@@ -317,8 +345,7 @@ namespace platf::session_devices {
           if (fs::read_symlink(fd.path(), link_ec) != "/dev/uinput") {
             continue;
           }
-          struct stat st {};
-          if (::stat((proc.path() / "ns" / "mnt").c_str(), &st) || st.st_ino != ns) {
+          if (!belongs_to_session(static_cast<pid_t>(std::stol(pid)), ns, mount_namespace_of, parent_of)) {
             return false;
           }
           session = true;

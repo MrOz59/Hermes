@@ -157,6 +157,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   On radeonsi, Hermes now uses CBR with the single-frame VBV, and removes
   the filler data CBR pads H.264 and HEVC frames with, so a still screen
   does not stream at the full bitrate.
+- Games in a detached desktop see Steam Input's controller again (from
+  PunkUnity). Hermes gives the desktop Steam's virtual pads only when the
+  processes holding /dev/uinput belong to it, and counted only those in the
+  desktop's own mount namespace. The Steam client runs in its runtime's
+  namespace inside the desktop, so its pads stayed on the host: Steam's menus
+  took the controller, the game got nothing. A process now belongs to the
+  desktop when it descends from one in its namespace.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

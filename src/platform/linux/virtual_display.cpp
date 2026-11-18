@@ -6346,10 +6346,21 @@ namespace VDISPLAY {
     return -1;
   }
 
-  // EVDI device indexes and DRM card indexes are independent.  In particular,
-  // card0 is usually the physical GPU, even when the first EVDI device is 0.
-  // Discover the card through sysfs instead of assuming they are the same.
+  // libevdi numbers devices by their DRM card: evdi_check_device(N) and
+  // evdi_open(N) use /dev/dri/cardN. That index is not the N of the evdi.N
+  // platform device - the first EVDI device (evdi.0) is usually card1, and a
+  // second one added later can become card0. Use the card the handle was opened
+  // on, and fall back to the platform device for anything else.
   static int find_evdi_drm_card(int device_index) {
+    {
+      std::error_code ec;
+      const fs::path card = "/sys/class/drm/card" + std::to_string(device_index);
+      const auto module = fs::read_symlink(card / "device" / "driver" / "module", ec).filename().string();
+      if (!ec && module == "evdi") {
+        return device_index;
+      }
+    }
+
     const auto expected_device = "evdi." + std::to_string(device_index);
     std::vector<int> evdi_cards;
 
@@ -7980,7 +7991,7 @@ namespace VDISPLAY {
         if (!entry.path().filename().string().starts_with("card")) {
           continue;
         }
-        const int fd = ::open(entry.path().c_str(), O_RDONLY | O_CLOEXEC);
+        const int fd = platf::open_drm_node(entry.path().c_str(), O_RDONLY);
         if (fd < 0) {
           continue;
         }

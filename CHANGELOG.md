@@ -12,6 +12,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- At the end of a stream, Hermes logs the video the client lost on the way
+  to it (from PunkUnity): `Client [name] lost N of M video packets (x%): …
+  frame blocks repaired by FEC, … frames dropped`. Moonlight-family clients
+  already report every frame block that lost packets
+  (`SS_FRAME_FEC_STATUS`), and Hermes ignored those reports, so loss on the
+  network (Wi-Fi, a slow port, a congested hop) was invisible on the host.
+  Nothing is logged when nothing was lost.
 - Fedora 45 packages: CI now builds `hermes-<version>-1.fc45.x86_64.rpm`,
   installs it and runs the secure-loader checks on Fedora 45 alongside 43
   and 44.
@@ -112,12 +119,70 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   commands. A command that only handed a request to a program already
   running, such as a Steam the user opened, leaves nothing to stop. The new
   per-app option `stop-detached` (on by default) keeps the old behaviour.
+- Hermes no longer locks the compositor out of a GPU (from PunkUnity). The
+  kernel makes whoever opens `/dev/dri/cardN` while no one holds DRM master
+  that card's master, and Hermes kept it. Start a stream while the desktop
+  session is inactive (a text console, or the moment between the login screen
+  and the desktop), and when the session came back logind could not hand the
+  card back to KWin, so that GPU's outputs stayed frozen until the stream
+  ended. Hermes now gives master back as soon as it opens a card, as logind
+  and KWin do; capture never needed it. Its card descriptors are also
+  close-on-exec, so launched apps no longer inherit them.
+- An idle EVDI virtual display no longer keeps the encoder busy ([#132], from
+  itkawa). The capture loop copied the pixel buffer and pushed it as a new frame
+  on every tick, even when the driver had delivered nothing new, so an idle
+  desktop was encoded at almost the full frame rate. An unchanged frame is now
+  reported as not captured, and the encoder repeats the previous one at its
+  minimum rate. On an idle 1280x720 desktop this went from 53 to 18 fps and
+  from 22% to 9% of one thread.
+- Quit in the Web UI no longer crashes Hermes when shutting down takes longer
+  than 5 seconds ([#136], from itkawa). `/api/quit` answered from a detached
+  thread after 5 s, which then wrote to, or released, a response whose HTTPS
+  server had already been destroyed. Closing an EVDI virtual display can take
+  that long, and on GNOME under Wayland the quit ended in a segfault (exit 139).
+  The thread now lets go of the response before the server stops.
+- With more than one EVDI device, Hermes watches the connector of the card it
+  opened ([#140], from itkawa). libevdi numbers devices by their DRM card
+  (`/dev/dri/cardN`), but Hermes looked the same number up as the `evdi.N`
+  platform device, which can be another card. It then waited for a connector
+  that never appeared, and the client got a 503. The card libevdi opened is now
+  checked first.
+- Quieter capture logs (from PunkUnity). While a captured monitor is off or
+  being reconfigured, KMS capture logged `Couldn't get drm fb for plane [0]`
+  on every frame, about 60 lines a second; it now says so once, and once more
+  when the picture returns. Opening the Hermes-KMS render node, which only
+  root may open read-write by design, is no longer a warning on every monitor
+  scan. And the note that encoder testing may log errors now comes before
+  those errors, not after a configured encoder's.
+- A frame too large for the protocol's four FEC blocks keeps as much FEC as
+  still fits, instead of none (from PunkUnity). At the default 20%, frames
+  over about 800 packets were sent with no parity at all, so a single lost
+  packet dropped them, and they were often key frames. AMD's VAAPI encoder
+  produced such frames at every bitrate tested, from 2 to 300 Mbps; a
+  920-packet frame now goes out with 10% FEC.
+- AMD encoders on Linux keep frames near their size budget (from PunkUnity).
+  radeonsi accepts the single-frame VBV in VBR but does not hold frames to
+  it, so key frames and frames after a still stretch came out many times
+  over budget, too large for FEC and dropped whole when a packet was lost.
+  On radeonsi, Hermes now uses CBR with the single-frame VBV, and removes
+  the filler data CBR pads H.264 and HEVC frames with, so a still screen
+  does not stream at the full bitrate.
+- Games in a detached desktop see Steam Input's controller again (from
+  PunkUnity). Hermes gives the desktop Steam's virtual pads only when the
+  processes holding /dev/uinput belong to it, and counted only those in the
+  desktop's own mount namespace. The Steam client runs in its runtime's
+  namespace inside the desktop, so its pads stayed on the host: Steam's menus
+  took the controller, the game got nothing. A process now belongs to the
+  desktop when it descends from one in its namespace.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99
 [#131]: https://github.com/MrOz59/Hermes/pull/131
+[#132]: https://github.com/MrOz59/Hermes/pull/132
 [#133]: https://github.com/MrOz59/Hermes/pull/133
+[#136]: https://github.com/MrOz59/Hermes/pull/136
 [#138]: https://github.com/MrOz59/Hermes/pull/138
+[#140]: https://github.com/MrOz59/Hermes/pull/140
 
 ## [0.7.0] - 2026-11-02
 

@@ -30,6 +30,7 @@
 #include "cuda.h"
 #include "dmabuf_mapping.h"
 #include "graphics.h"
+#include "misc.h"
 #include "pyrowave.h"
 #include "src/config.h"
 #include "src/logging.h"
@@ -751,7 +752,7 @@ namespace platf {
 
       int init(const char *path) {
         cap_sys_admin admin;
-        fd.el = open(path, O_RDWR);
+        fd.el = platf::open_drm_node(path, O_RDWR);
 
         if (fd.el < 0) {
           BOOST_LOG(error) << "Couldn't open: "sv << path << ": "sv << strerror(errno);
@@ -768,7 +769,11 @@ namespace platf {
           BOOST_LOG(debug) << "Opening render node: "sv << rendernode_path;
           render_fd.el = open(rendernode_path, O_RDWR);
           if (render_fd.el < 0) {
-            BOOST_LOG(warning) << "Couldn't open render node: "sv << rendernode_path << ": "sv << strerror(errno);
+            // Hermes-KMS grants read-write on its render node to root only, so
+            // generic GPU probes skip it; Hermes reaches it read-only through
+            // its own path. Failing here is expected for it, not worth a warning.
+            const bool hermes_kms = errno == EACCES && ver && ver->name && ver->name == "hermes-kms"sv;
+            BOOST_LOG(hermes_kms ? debug : warning) << "Couldn't open render node: "sv << rendernode_path << ": "sv << strerror(errno);
             render_fd.el = dup(fd.el);
           }
           free(rendernode_path);
@@ -1601,9 +1606,19 @@ namespace platf {
 
         auto fb = card.fb(plane.get());
         if (!fb) {
-          // This can happen if the display is being reconfigured while streaming
-          BOOST_LOG(warning) << "Couldn't get drm fb for plane ["sv << plane->fb_id << "]: "sv << strerror(errno);
+          // The plane shows nothing while its output is off (framebuffer 0)
+          // or being reconfigured. Capture retries every frame until it
+          // returns, so say so once rather than on every frame.
+          if (!plane_lost) {
+            BOOST_LOG(warning) << "Couldn't get drm fb for plane ["sv << plane->fb_id << "]: "sv << strerror(errno)
+                               << "; waiting for the display to show a picture again"sv;
+            plane_lost = true;
+          }
           return capture_e::timeout;
+        }
+        if (plane_lost) {
+          BOOST_LOG(info) << "The display shows a picture again; capture resumed"sv;
+          plane_lost = false;
         }
 
         if (!fb->handles[0]) {
@@ -1660,6 +1675,7 @@ namespace platf {
       int plane_id;
       int crtc_id;
       int crtc_index;
+      bool plane_lost = false;  ///< The plane had no framebuffer at the last refresh().
 
       std::optional<uint32_t> connector_id;
       std::optional<uint64_t> hdr_metadata_blob_id;

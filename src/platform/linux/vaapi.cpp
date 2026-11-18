@@ -281,7 +281,17 @@ namespace va {
           ctx->codec_id == AV_CODEC_ID_AV1) {
         ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
 
-        if (rc_attr.value & VA_RC_VBR) {
+        // radeonsi accepts the VBV size in VBR but does not hold frames to it:
+        // the first key frame and frames after a still stretch came out far
+        // over the single-frame budget (39.6x at 2 Mbps on an RX 9070 XT,
+        // against 5.7x in CBR). CBR keeps the bound; the filler it pads
+        // H.264 and HEVC frames with is removed before sending (video.cpp).
+        const bool radeonsi = vendor && strstr(vendor, "radeonsi");
+
+        if (radeonsi && (rc_attr.value & VA_RC_CBR)) {
+          BOOST_LOG(info) << "Using CBR with single frame VBV size (radeonsi ignores the VBV in VBR)"sv;
+          av_dict_set(options, "rc_mode", "CBR", 0);
+        } else if (rc_attr.value & VA_RC_VBR) {
           BOOST_LOG(info) << "Using VBR with single frame VBV size"sv;
           av_dict_set(options, "rc_mode", "VBR", 0);
         } else if (rc_attr.value & VA_RC_CBR) {

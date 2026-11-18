@@ -23,6 +23,7 @@ extern "C" {
 // local includes
 #include "cuda.h"
 #include "graphics.h"
+#include "misc.h"
 #include "src/logging.h"
 #include "src/utility.h"
 #include "src/video.h"
@@ -376,7 +377,7 @@ namespace cuda {
 
         fs::path dri_path {"/dev/dri"sv};
         auto device_path = dri_path / file;
-        return open(device_path.c_str(), O_RDWR);
+        return platf::open_drm_node(device_path.c_str(), O_RDWR);
       }
     } catch (const std::filesystem::filesystem_error &err) {
       BOOST_LOG(error) << "Failed to read sysfs: "sv << err.what();

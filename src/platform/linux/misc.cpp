@@ -49,6 +49,7 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <xf86drm.h>
 
 // local includes
 #include "clipboard_process.h"
@@ -132,6 +133,18 @@ namespace dyn {
 }  // namespace dyn
 
 namespace platf {
+
+  int open_drm_node(const char *path, int flags) {
+    const int fd = ::open(path, flags | O_CLOEXEC);
+    if (fd >= 0) {
+      // EINVAL when this fd is not master, and render nodes refuse the
+      // ioctl: either way there is nothing to give back.
+      const int saved_errno = errno;
+      (void) drmDropMaster(fd);
+      errno = saved_errno;
+    }
+    return fd;
+  }
 
 #ifdef SUNSHINE_BUILD_SDBUS
   int open_user_bus(sd_bus **result) {

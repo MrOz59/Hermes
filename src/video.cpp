@@ -21,6 +21,7 @@ extern "C" {
 
 // local includes
 #include "process.h"
+#include "annexb_filler.h"
 #include "cbs.h"
 #include "config.h"
 #include "display_device.h"
@@ -572,6 +573,8 @@ namespace video {
     // inject sps/vps data into idr pictures
     int inject;
     bool frame_submitted {false};
+    /// Filler data has been removed from a frame of this session (logged once).
+    bool filler_stripped {false};
   };
 
   class nvenc_encode_session_t: public encode_session_t {
@@ -1752,6 +1755,23 @@ namespace video {
         return 0;
       } else if (ret < 0) {
         return ret;
+      }
+
+      // In CBR, radeonsi pads H.264 and HEVC frames with filler data up to the
+      // target bitrate: a still screen would stream at the full bitrate. The
+      // decoder discards filler, so remove it before anything reads the frame.
+      if ((ctx->codec_id == AV_CODEC_ID_H264 || ctx->codec_id == AV_CODEC_ID_HEVC) && av_packet->size > 0 &&
+          av_packet_make_writable(av_packet) == 0) {
+        const auto codec = ctx->codec_id == AV_CODEC_ID_H264 ? annexb::codec_e::h264 : annexb::codec_e::hevc;
+        const auto size = static_cast<std::size_t>(av_packet->size);
+        const auto stripped = annexb::strip_filler_data(av_packet->data, size, codec);
+        if (stripped < size) {
+          if (!session.filler_stripped) {
+            BOOST_LOG(info) << "Removing the filler data the encoder pads frames with"sv;
+            session.filler_stripped = true;
+          }
+          av_shrink_packet(av_packet, static_cast<int>(stripped));
+        }
       }
 
       if (av_packet) {

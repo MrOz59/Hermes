@@ -144,6 +144,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   root may open read-write by design, is no longer a warning on every monitor
   scan. And the note that encoder testing may log errors now comes before
   those errors, not after a configured encoder's.
+- A frame too large for the protocol's four FEC blocks keeps as much FEC as
+  still fits, instead of none (from PunkUnity). At the default 20%, frames
+  over about 800 packets were sent with no parity at all, so a single lost
+  packet dropped them, and they were often key frames. AMD's VAAPI encoder
+  produced such frames at every bitrate tested, from 2 to 300 Mbps; a
+  920-packet frame now goes out with 10% FEC.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

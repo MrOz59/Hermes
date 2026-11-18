@@ -40,6 +40,7 @@ extern "C" {
 #include "system_tray.h"
 #include "thread_safe.h"
 #include "utility.h"
+#include "video_fec_budget.h"
 #include "video_loss_monitor.h"
 
 #define IDX_START_A 0
@@ -1582,11 +1583,17 @@ namespace stream {
       auto max_data_per_fec_block = max_data_shards_per_fec_block * blocksize;
       auto fec_blocks_needed = (payload.size() + (max_data_per_fec_block - 1)) / max_data_per_fec_block;
 
-      // If the number of FEC blocks needed exceeds the protocol limit, turn off FEC for this frame.
-      // For normal FEC percentages, this should only happen for enormous frames (over 800 packets at 20%).
+      // A frame that needs more FEC blocks than the protocol carries (over 800
+      // packets at 20%) keeps as much FEC as still fits in MAX_FEC_BLOCKS,
+      // rather than none: one lost packet would otherwise drop the frame.
       if (fec_blocks_needed > MAX_FEC_BLOCKS) {
-        BOOST_LOG(warning) << "Skipping FEC for abnormally large encoded frame (needed "sv << fec_blocks_needed << " FEC blocks)"sv;
-        fecPercentage = 0;
+        static_assert(static_cast<std::size_t>(MAX_FEC_BLOCKS) == max_fec_blocks);
+        const auto data_packets = (payload.size() + blocksize - 1) / blocksize;
+        const auto reduced = large_frame_fec_percentage(data_packets, fecPercentage, session->config.minRequiredFecPackets);
+        BOOST_LOG(warning) << "Abnormally large encoded "sv << (packet->is_idr() ? "key frame"sv : "frame"sv) << " ("sv
+                           << payload.size() / 1024 << " KiB in "sv << data_packets << " packets) needed "sv << fec_blocks_needed
+                           << " FEC blocks; sending it with "sv << reduced << "% FEC instead of "sv << fecPercentage << '%';
+        fecPercentage = reduced;
         fec_blocks_needed = MAX_FEC_BLOCKS;
       }
 

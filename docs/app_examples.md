@@ -24,6 +24,10 @@ and applications to Sunshine.
 > [!NOTE]
 > Steam is launched as a detached command because Steam starts with a process that self updates itself and the original
 > process is killed.
+>
+> On Linux, ending the app stops the Steam this entry started, and any game started from it, after the undo command
+> closes Big Picture. A Steam that was already running when the stream started is left alone. Turn off
+> "Stop detached commands with the app" (`stop-detached`) to keep Steam running after the stream.
 
 > [!IMPORTANT]
 > This entry does not put Steam on a virtual display, and turning on "Always create Virtual Display" for it will not

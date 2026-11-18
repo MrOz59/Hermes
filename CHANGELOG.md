@@ -102,6 +102,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   desktop layout, so monitor 0 could be a KVM capture input or a dummy plug.
   On KWin, the output KScreen marks as primary is now listed first; a
   configured display number still selects the same monitor as before.
+- Ending an app now stops what its detached commands started (from
+  PunkUnity). Detached commands were let go as soon as they were spawned, so
+  the Steam the Steam Big Picture entry opens kept running after the stream:
+  its undo command only closes Big Picture. The next app that runs Steam, a
+  detached Steam desktop included, then handed its launch to that Steam. On
+  Linux each detached command now runs in a transient scope of the user's
+  systemd manager, which Hermes stops when the app ends, after its undo
+  commands. A command that only handed a request to a program already
+  running, such as a Steam the user opened, leaves nothing to stop. The new
+  per-app option `stop-detached` (on by default) keeps the old behaviour.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

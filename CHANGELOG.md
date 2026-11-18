@@ -102,6 +102,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   desktop layout, so monitor 0 could be a KVM capture input or a dummy plug.
   On KWin, the output KScreen marks as primary is now listed first; a
   configured display number still selects the same monitor as before.
+- Games in a detached desktop see Steam Input's controller again (from
+  PunkUnity). Hermes gives the desktop Steam's virtual pads only when the
+  processes holding /dev/uinput belong to it, and counted only those in the
+  desktop's own mount namespace. The Steam client runs in its runtime's
+  namespace inside the desktop, so its pads stayed on the host: Steam's menus
+  took the controller, the game got nothing. A process now belongs to the
+  desktop when it descends from one in its namespace.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

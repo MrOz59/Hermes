@@ -12,6 +12,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- With `HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto`, a Hermes-KMS scanout that
+  arrives as a dumb buffer now logs, once, that the compositor copied it with
+  the CPU and that on KDE Plasma 6.8 Hermes-KMS's experimental KWin render
+  bridge lets KWin render it on the NVIDIA GPU instead
+  (docs/experimental-nvidia.md, step 2b).
 - `scripts/install.sh` installs Hermes from its GitHub releases on Arch,
   CachyOS, Ubuntu and Fedora and asks about each optional piece: the
   Hermes-KMS driver (built with DKMS, with `hermes-kms-setup` run for the

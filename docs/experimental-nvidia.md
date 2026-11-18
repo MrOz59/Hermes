@@ -13,6 +13,7 @@ There are separate improvements:
 | Asynchronous host upload on Hermes-KMS NVENC CPU-copy | Disabled by default after Blackwell regression testing; opt in with `HERMES_CUDA_ASYNC_UPLOAD=1` | `CUDA host upload: synchronous (backend default)` |
 | EGL import cache and render-node importer | Enabled when a GL->CUDA capture consumer is used; not used by CPU-copy capture | `GL->CUDA DMA-BUF import cache: up to 4 buffers` |
 | Experimental Hermes-KMS DMA-BUF capture with NVENC | Disabled until opted in | `Hermes-KMS NVENC auto route: scanout ... -> DMA-BUF import` during a real stream |
+| KWin render bridge (Hermes-KMS package `hermes-kms-kwin-bridge-git`, KWin 6.8) | Not installed | `hermes-kms-kwin-bridge: KWin renders Hermes-KMS card ...` in the compositor's journal, then `(imported from nvidia_drm) -> DMA-BUF import` here |
 
 The `hermes.conf` settings remain:
 
@@ -119,6 +120,37 @@ systemctl --user stop hermes.service
 env HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=auto HERMES_KMS_FORCE_CPU_COPY=0 /usr/bin/hermes
 ```
 
+### 2b. Let KWin render the virtual output on the NVIDIA GPU (KWin 6.8)
+
+The `auto` route can only import what the compositor hands over. KWin 6.8
+finds no render engine behind a Hermes-KMS card and copies the output with
+the CPU into a dumb buffer, which `auto` correctly leaves on the CPU copy.
+Hermes-KMS's experimental
+[KWin render bridge](https://github.com/MrOz59/Hermes-KMS/blob/feat/kwin-nvidia-render-bridge/docs/kwin-render-bridge.md)
+removes that fallback without modifying KWin: it gives the card a GBM
+allocator on the NVIDIA render node and tells KWin the card renders on the
+NVIDIA GPU, so KWin renders the output into NVIDIA buffers and PRIME-imports
+them. Hermes-KMS then reports the scanout as imported from `nvidia_drm`.
+
+1. Install `hermes-kms-kwin-bridge-git` from the same Hermes-KMS branch.
+2. Publish the NVIDIA layouts on the virtual plane: `hermes-gpu-scanout-test
+   --list-modifiers --gpu /dev/dri/renderDN --device /dev/dri/cardN` (from a
+   Hermes-KMS `make tools` build) suggests a `scanout_modifiers=` value for
+   `/etc/modprobe.d/hermes-kms.conf`. Without it KWin falls back to a GPU
+   double copy through system memory: imported from NVIDIA, but not
+   zero-copy.
+3. Reboot (the module option and the compositor both need it), then check
+   the compositor:
+
+```bash
+journalctl --user -b -u plasma-kwin_wayland.service | grep hermes-kms-kwin-bridge
+```
+
+Expect `active in kwin_wayland`, `allocates on /dev/dri/renderD...` and
+`KWin renders Hermes-KMS card ...`; once a stream enables the output,
+`first GPU buffer for card ...`. Hermes logs a one-time pointer to the bridge
+when it still receives a dumb buffer.
+
 ### 3. Check a real streaming session
 
 Connect a client and inspect the log **after `CLIENT CONNECTED`**. Encoder
@@ -129,14 +161,15 @@ availability probes use dummy images and are not evidence of the active route.
 | `auto route: scanout ... -> DMA-BUF import`, followed by `Hermes-KMS zero-copy capture ready` | The experimental import path was selected; still check moving content across the whole image and memory use |
 | `auto route: scanout ... -> CPU copy` | `auto` is enabled, but this scanout does not prove NVIDIA origin; this fallback is intentional |
 | `(origin not reported; Hermes-KMS predates UAPI 15)` with a linear modifier | Verify/rebuild the experimental driver and reboot |
-| `(Hermes-KMS dumb buffer) -> CPU copy` | The compositor supplied system-memory storage; enabling the switch cannot change its allocation |
+| `(Hermes-KMS dumb buffer) -> CPU copy` | The compositor supplied system-memory storage; enabling the switch cannot change its allocation. On KWin 6.8 install the render bridge (step 2b) |
 | `Hermes-KMS CPU-copy capture path selected` with no auto-route line | Expected during probes; during the real stream, check the variable, force-copy override and installed binary |
 | `Hermes was built without its CUDA capture/conversion backend` | Rebuild Hermes with CUDA enabled; NVENC encoding alone is insufficient |
 
-Start with the default module modifiers. UAPI 15 can recognise a linear buffer
-exported by NVIDIA; tiled modifiers are not required for that case. If KWin
-keeps choosing a dumb buffer, use the GPU producer's `--list-modifiers` and
-validation procedure below before changing `scanout_modifiers=`. Do not use
+UAPI 15 can recognise a linear buffer exported by NVIDIA, so the route does
+not need tiled modifiers. KWin does: with the render bridge it renders
+directly into a scanout buffer only in a layout the virtual plane advertises,
+and NVIDIA does not render to linear, so publish the layouts as in step 2b.
+Without the bridge KWin keeps choosing a dumb buffer whatever the modifiers. Do not use
 `HERMES_KMS_EXPERIMENTAL_NVENC_DMABUF=1` just to bypass a CPU-copy result: it
 also imports the system-memory buffers associated with the corruption.
 

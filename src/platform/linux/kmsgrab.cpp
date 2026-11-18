@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -226,6 +227,22 @@ namespace platf {
       return text;
     }
 
+    /**
+     * Once per process: a dumb-buffer scanout means the compositor read the
+     * frame back with the CPU. On KWin 6.8 that is its DumbBuffer fallback
+     * for a card without a render engine, which the Hermes-KMS KWin render
+     * bridge removes by letting KWin render the output on the NVIDIA GPU.
+     */
+    inline void hint_kwin_render_bridge(const hermes_nvenc::scanout_t &scanout) {
+      static std::atomic_bool hinted {false};
+      if (scanout.origin != hermes_nvenc::origin_e::dumb || hinted.exchange(true)) {
+        return;
+      }
+      BOOST_LOG(info) << "Hermes-KMS NVENC auto route: the compositor copied this output into a dumb buffer with the CPU. "sv
+                      << "On KDE Plasma 6.8, Hermes-KMS's KWin render bridge (hermes-kms-kwin-bridge) lets KWin render it "sv
+                      << "on the NVIDIA GPU and hand Hermes that buffer instead; see Hermes-KMS docs/kwin-render-bridge.md."sv;
+    }
+
     inline void log_hermes_nvenc_route_switch(hermes_nvenc::route_e to, const hermes_nvenc::scanout_t &scanout) {
       if (to == hermes_nvenc::route_e::dmabuf_import) {
         BOOST_LOG(info) << "Hermes-KMS NVENC auto route: scanout "sv << describe_hermes_scanout(scanout)
@@ -233,6 +250,7 @@ namespace platf {
       } else {
         BOOST_LOG(info) << "Hermes-KMS NVENC auto route: scanout "sv << describe_hermes_scanout(scanout)
                         << " does not prove an NVIDIA GPU-origin buffer; rebuilding capture on the CPU copy."sv;
+        hint_kwin_render_bridge(scanout);
       }
     }
 
@@ -3201,6 +3219,9 @@ namespace platf {
         if (inspect_scanout) {
           BOOST_LOG(info) << "Hermes-KMS NVENC auto route: scanout "sv << kms::describe_hermes_scanout(scanout)
                           << " -> "sv << (route == hermes_nvenc::route_e::dmabuf_import ? "DMA-BUF import"sv : "CPU copy"sv);
+          if (route == hermes_nvenc::route_e::cpu_copy) {
+            kms::hint_kwin_render_bridge(scanout);
+          }
         }
       } else if (nvenc_route.forced_cpu_copy) {
         route = hermes_nvenc::route_e::cpu_copy;

@@ -12,6 +12,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- At the end of a stream, Hermes logs the video the client lost on the way
+  to it (from PunkUnity): `Client [name] lost N of M video packets (x%): …
+  frame blocks repaired by FEC, … frames dropped`. Moonlight-family clients
+  already report every frame block that lost packets
+  (`SS_FRAME_FEC_STATUS`), and Hermes ignored those reports, so loss on the
+  network (Wi-Fi, a slow port, a congested hop) was invisible on the host.
+  Nothing is logged when nothing was lost.
 - Fedora 45 packages: CI now builds `hermes-<version>-1.fc45.x86_64.rpm`,
   installs it and runs the secure-loader checks on Fedora 45 alongside 43
   and 44.

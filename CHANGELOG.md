@@ -137,6 +137,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   platform device, which can be another card. It then waited for a connector
   that never appeared, and the client got a 503. The card libevdi opened is now
   checked first.
+- Quieter capture logs (from PunkUnity). While a captured monitor is off or
+  being reconfigured, KMS capture logged `Couldn't get drm fb for plane [0]`
+  on every frame, about 60 lines a second; it now says so once, and once more
+  when the picture returns. Opening the Hermes-KMS render node, which only
+  root may open read-write by design, is no longer a warning on every monitor
+  scan. And the note that encoder testing may log errors now comes before
+  those errors, not after a configured encoder's.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

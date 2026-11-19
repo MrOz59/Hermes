@@ -341,18 +341,20 @@ namespace proc {
      * one. SIGTERM shuts it down cleanly (logs off, saves its config) in a few
      * seconds even when its window is unmapped; `steam -shutdown` would start
      * Steam's updater if no client were left by then.
+     *
+     * @return Whether a Steam was running and has been stopped.
      */
-    void stop_desktop_steam(std::string_view tag = "[IsolatedSession]") {
+    bool stop_desktop_steam(std::string_view tag = "[IsolatedSession]") {
       const char *home = std::getenv("HOME");
       pid_t pid = 0;
       std::ifstream {std::string {home ? home : ""} + "/.steam/steam.pid"} >> pid;
       // The pid file outlives the client.
       if (pid <= 0 || read_proc_line(pid, "comm") != "steam") {
-        return;
+        return false;
       }
       const auto own = read_proc_line(getpid(), "cgroup");
       if (own.ends_with(".service") && read_proc_line(pid, "cgroup").starts_with(own)) {
-        return;
+        return false;
       }
 
       BOOST_LOG(info) << tag << " Shutting down the desktop's Steam (pid " << pid << ") first.";
@@ -363,7 +365,7 @@ namespace proc {
       }
       if (!std::filesystem::exists("/proc/" + std::to_string(pid))) {
         BOOST_LOG(info) << tag << " The desktop's Steam has exited.";
-        return;
+        return true;
       }
 
       // Not graceful: no log-off, unsaved config and cloud sync are lost.
@@ -391,6 +393,7 @@ namespace proc {
       for (const auto member : tree) {
         ::kill(member, SIGKILL);
       }
+      return true;
     }
 
     std::string isolated_runtime_root() {
@@ -1093,6 +1096,60 @@ namespace proc {
     std::string find_program(const std::string &name) {
       const auto path = boost::process::v1::search_path(name);
       return path.empty() ? std::string {} : boost::filesystem::absolute(path).string();
+    }
+
+    /**
+     * @brief Start the desktop's Steam again, after an app that had to shut it down.
+     *
+     * Runs in the background: it first waits for the app's own Steam to exit,
+     * because a Steam started while another is running hands itself to that
+     * one. The new Steam is a unit of the user's service manager, not a child
+     * of Hermes, so ending a later app leaves it alone. `-silent` brings it
+     * back to the tray, as a Steam started at login runs.
+     *
+     * @param environment `NAME=value` pairs it needs to reach the desktop.
+     */
+    void reopen_desktop_steam(std::vector<std::string> environment) {
+      const auto systemd_run = find_program("systemd-run");
+      const auto steam = find_program("steam");
+      if (systemd_run.empty() || steam.empty()) {
+        BOOST_LOG(warning) << "[Gamescope] Cannot start the desktop's Steam again: "
+                           << (systemd_run.empty() ? "systemd-run" : "steam") << " is not in PATH.";
+        return;
+      }
+      std::thread {[systemd_run, steam, environment = std::move(environment)]() {
+        const char *home = std::getenv("HOME");
+        const auto pid_file = std::string {home ? home : ""} + "/.steam/steam.pid";
+        const auto steam_running = [&pid_file]() {
+          pid_t pid = 0;
+          std::ifstream {pid_file} >> pid;
+          return pid > 0 && read_proc_line(pid, "comm") == "steam";
+        };
+        const auto deadline = std::chrono::steady_clock::now() + 30s;
+        while (steam_running() && std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(250ms);
+        }
+        if (steam_running()) {
+          BOOST_LOG(warning) << "[Gamescope] The app's Steam is still running after 30 s; "
+                                "not starting the desktop's Steam again.";
+          return;
+        }
+
+        const auto unit = "hermes-desktop-steam-" +
+                          std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+                                           std::chrono::system_clock::now().time_since_epoch())
+                                           .count());
+        std::vector<std::string> arguments {systemd_run, "--user", "--quiet", "--collect", "--unit=" + unit};
+        for (const auto &variable : environment) {
+          arguments.push_back("--setenv=" + variable);
+        }
+        arguments.insert(arguments.end(), {"--", steam, "-silent"});
+        if (run_program(arguments, 30s) == 0) {
+          BOOST_LOG(info) << "[Gamescope] Started the desktop's Steam again (" << unit << ").";
+        } else {
+          BOOST_LOG(warning) << "[Gamescope] Could not start the desktop's Steam again.";
+        }
+      }}.detach();
     }
 
     /**
@@ -3850,8 +3907,9 @@ namespace proc {
       for (const auto &cmd : _app.detached) {
         nested_steam = nested_steam || platf::window_placement::gamescope_runs_steam(placement_arguments(cmd));
       }
-      if (nested_steam) {
-        stop_desktop_steam("[Gamescope]");
+      // It was the user's, so it comes back when the app ends.
+      if (nested_steam && stop_desktop_steam("[Gamescope]")) {
+        _reopen_desktop_steam = true;
       }
     }
 #endif
@@ -4209,6 +4267,18 @@ namespace proc {
     }
 
     _pipe.reset();
+
+#ifdef __linux__
+    if (std::exchange(_reopen_desktop_steam, false)) {
+      std::vector<std::string> environment;
+      for (const char *name : {"DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"}) {
+        if (const auto variable = _env.find(name); variable != _env.end()) {
+          environment.push_back(std::string {name} + '=' + variable->to_string());
+        }
+      }
+      reopen_desktop_steam(std::move(environment));
+    }
+#endif
 
     bool has_run = _app_id > 0;
 

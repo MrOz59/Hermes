@@ -336,6 +336,8 @@ namespace proc {
 
     // If no command associated with _app_id, yet it's still running
     bool placebo {};
+    /// The app shut down the desktop's Steam to start its own; start it again when the app ends.
+    bool _reopen_desktop_steam {};
 
     boost::process::v1::child _process;
     boost::process::v1::group _process_group;

@@ -421,8 +421,10 @@ seconds) before starting the session, and kills it and its children if it is
 still running after 30 seconds. The same applies to an app on the desktop that
 starts Steam in a nested Gamescope, such as Gamescope Steam Session: otherwise
 Gamescope's Steam hands its request to the running one and exits, and
-Gamescope ends with it. Big Picture on the desktop is unaffected; it is meant
-to use the running Steam.
+Gamescope ends with it. When such an app ends, Hermes starts the desktop's
+Steam again (`steam -silent`, in the tray) once the app's own Steam has
+exited, as a unit of the user's service manager so later apps leave it alone.
+Big Picture on the desktop is unaffected; it is meant to use the running Steam.
 
 With `hermes_kms_session_compositor = plasma`, the default, the `kwin_virtual`
 method is the user's own Plasma desktop on KWin's virtual backend: it runs as the

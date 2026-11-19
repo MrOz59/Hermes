@@ -140,6 +140,8 @@
         "stop_desktop_steam_auto": "Auto (when the command runs steam)",
         "terminate_on_pause": "Terminate on Pause",
         "terminate_on_pause_desc": "Terminate the app when all clients are disconnected.",
+        "stop_detached": "Stop detached commands with the app",
+        "stop_detached_desc": "When the app ends, stop what its detached commands started, such as the Steam a Steam Big Picture entry opened, and everything that started in turn. A program those commands only handed a request to, such as a Steam that was already running, is left alone. Turn off to keep them running after the app ends.",
         "unlock_host_session": "Unlock host session on launch",
         "unlock_host_session_desc": "If the active local Linux desktop session is locked, ask systemd-logind to unlock it before launching this app. This unlocks the entire existing host desktop session, not only the virtual display. Intended for unattended same-session streaming; leave it off unless that behavior is wanted.",
         "use_app_identity": "Use App Identity",

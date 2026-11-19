@@ -89,6 +89,7 @@
   #include "platform/linux/session_audio.h"
   #include "platform/linux/session_broker.h"
   #include "platform/linux/process_group.h"
+  #include "platform/linux/detached_scope.h"
   #include "platform/linux/session_devices.h"
   #include "platform/linux/virtual_display.h"
   #include <sys/stat.h>
@@ -3839,12 +3840,32 @@ namespace proc {
     std::vector<std::uint32_t> gamescope_pids;
 #endif
 
+#ifdef __linux__
+    // Detached commands outlive the process Hermes starts (Steam's first
+    // process updates itself and exits), so a process group cannot hold them.
+    // A scope of the user's systemd manager does, however they fork, setsid or
+    // enter containers, and ending the app stops it (terminate()).
+    _detached_units.clear();
+    const auto systemd_run = find_program("systemd-run");
+    const bool scoped = _app.stop_detached && !_app.elevated && !systemd_run.empty() &&
+                        std::filesystem::exists("/run/user/" + std::to_string(::getuid()) + "/bus");
+    static std::atomic<unsigned> detached_launches {0};
+    const unsigned launch = ++detached_launches;
+#endif
     for (auto &cmd : _app.detached) {
       boost::filesystem::path working_dir = _app.working_dir.empty() ?
                                               find_working_directory(cmd, _env) :
                                               boost::filesystem::path(_app.working_dir);
       BOOST_LOG(info) << "Spawning ["sv << cmd << "] in ["sv << working_dir << ']';
-      auto child = platf::run_command(_app.elevated, true, cmd, working_dir, _env, _pipe.get(), ec, nullptr);
+      std::string spawn = cmd;
+#ifdef __linux__
+      std::string unit;
+      if (scoped) {
+        unit = platf::detached_scope::unit_name(::getpid(), launch, _detached_units.size());
+        spawn = platf::detached_scope::wrap(systemd_run, unit, std::max(_app.exit_timeout, std::chrono::seconds {15}), cmd);
+      }
+#endif
+      auto child = platf::run_command(_app.elevated, true, spawn, working_dir, _env, _pipe.get(), ec, nullptr);
       if (ec) {
         BOOST_LOG(warning) << "Couldn't spawn ["sv << cmd << "]: System: "sv << ec.message();
       } else {
@@ -3853,6 +3874,9 @@ namespace proc {
         place_steam = place_steam || platf::window_placement::opens_big_picture(arguments);
         if (!gamescope_session && platf::window_placement::launches_gamescope(arguments)) {
           gamescope_pids.push_back(static_cast<std::uint32_t>(child.id()));
+        }
+        if (!unit.empty()) {
+          _detached_units.push_back(unit);
         }
 #endif
         child.detach();
@@ -4190,6 +4214,23 @@ namespace proc {
 
       finish_undo_command(child, undo_group, _app.exit_timeout);
     }
+
+#ifdef __linux__
+    // After the undo commands, which may still talk to them (Steam's
+    // steam://close/bigpicture). A command that handed its work to a program
+    // already running, such as a Steam the user opened, has left its scope
+    // empty and gone; only what Hermes started is stopped.
+    if (!_detached_units.empty()) {
+      if (const auto systemctl = find_program("systemctl"); !systemctl.empty()) {
+        const auto timeout = std::max(_app.exit_timeout, std::chrono::seconds {15});
+        for (const auto &unit : _detached_units) {
+          BOOST_LOG(info) << "Stopping "sv << unit << ", what this app's detached commands started"sv;
+          run_program({systemctl, "--user", "--quiet", "stop", unit}, timeout + 10s);
+        }
+      }
+      _detached_units.clear();
+    }
+#endif
 
     _pipe.reset();
 
@@ -5010,6 +5051,7 @@ namespace proc {
           ctx.allow_client_commands = app_node.value("allow-client-commands", true);
           ctx.terminate_on_pause = app_node.value("terminate-on-pause", false);
           ctx.unlock_host_session = app_node.value("unlock-host-session", false);
+          ctx.stop_detached = app_node.value("stop-detached", true);
           ctx.isolation_method = app_node.value("isolation-method", "default");
           if (ctx.isolation_method != "default" &&
               ctx.isolation_method != "gamescope" &&

@@ -12,6 +12,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- VAAPI rolling intra refresh (`vaapi_intra_refresh`, on by default; from
+  PunkUnity). The encoder refreshes a band of rows in every frame, the whole
+  picture every half second, so a frame lost on the network heals on its
+  own. Hermes then offers reference frame invalidation: a client that lost
+  frames keeps decoding instead of freezing until a key frame, and no key
+  frame burst follows each loss. It needs an FFmpeg whose VAAPI encoders have
+  the `intra_refresh` option (a build-deps patch) and a driver that
+  refreshes rows (Mesa radeonsi); otherwise nothing changes.
 - `virtual-display-layout: primary` (Linux, KDE/KWin; from PunkUnity): extend,
   with the virtual display as the primary monitor for the session. Games
   launched from Big Picture open on the primary output, so in the extend

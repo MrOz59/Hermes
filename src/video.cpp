@@ -532,7 +532,7 @@ namespace video {
       other.frame_submitted = false;
       intra_refresh_frames = other.intra_refresh_frames;
       next_after_invalidation = other.next_after_invalidation;
-      frames_since_invalidation = other.frames_since_invalidation;
+      recovering_until = other.recovering_until;
 
       return *this;
     }
@@ -570,18 +570,20 @@ namespace video {
       // The encoder refreshes a band of rows in every frame, so whatever the
       // lost frames damaged heals within one full refresh. Let the client go
       // on decoding from the next frame instead of freezing for a key frame.
-      // A second loss before the last one healed gets a key frame.
-      if (frames_since_invalidation < intra_refresh_frames) {
-        BOOST_LOG(info) << "Frames "sv << first_frame << '-' << last_frame
-                        << " lost again before the picture healed; requesting a key frame"sv;
-        request_idr_frame();
-        frames_since_invalidation = std::numeric_limits<int64_t>::max() / 2;
+      //
+      // Until a frame marked as following the invalidation reaches it, the
+      // client drops every frame and asks again, with the same first frame
+      // and a later last one. Those repeats are the same loss: mark the next
+      // frame again and nothing more. If the picture does not recover, the
+      // client asks for a key frame itself after too many dropped frames.
+      next_after_invalidation = true;
+      if (first_frame <= recovering_until) {
+        recovering_until = std::max(recovering_until, last_frame);
         return;
       }
+      recovering_until = last_frame;
       BOOST_LOG(info) << "Frames "sv << first_frame << '-' << last_frame
                       << " lost; intra refresh heals them within "sv << intra_refresh_frames << " frames"sv;
-      next_after_invalidation = true;
-      frames_since_invalidation = 0;
     }
 
     avcodec_ctx_t avcodec_ctx;
@@ -601,7 +603,8 @@ namespace video {
     int intra_refresh_frames {0};
     /// The next frame is the first the client may decode after a loss.
     bool next_after_invalidation {false};
-    int64_t frames_since_invalidation {std::numeric_limits<int64_t>::max() / 2};
+    /// The last frame of the loss being recovered; requests up to it are repeats.
+    int64_t recovering_until {-1};
   };
 
   class nvenc_encode_session_t: public encode_session_t {
@@ -1865,9 +1868,6 @@ namespace video {
           packet->after_ref_frame_invalidation = true;
         }
         session.next_after_invalidation = false;
-        if (session.frames_since_invalidation < std::numeric_limits<int64_t>::max() / 2) {
-          ++session.frames_since_invalidation;
-        }
       }
 
       packet->replacements = &session.replacements;

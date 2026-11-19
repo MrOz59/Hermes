@@ -149,6 +149,21 @@ TEST(KScreenLayout, DoesNotEnableTheVirtualOutputTwice) {
   );
 }
 
+TEST(KScreenLayout, PrimaryPutsTheVirtualOutputFirstAndKeepsThePhysicalOrder) {
+  // Games open on the primary output; primary layout makes that the stream's
+  // output and moves the monitors down one place, in their own order.
+  const std::map<std::string, int> enabled_before {{"DP-2", 1}, {"HDMI-A-1", 2}};
+  EXPECT_EQ(
+    VDISPLAY::buildKScreenLayoutCommand("Virtual-1", enabled_before, 2560, 0, 1920, 1080, 60, {}, VDISPLAY::virtual_display_layout_e::primary),
+    "kscreen-doctor"
+    " output.DP-2.enable output.DP-2.priority.2"
+    " output.HDMI-A-1.enable output.HDMI-A-1.priority.3"
+    " output.Virtual-1.enable output.Virtual-1.priority.1"
+    " output.Virtual-1.position.2560,0"
+    " output.Virtual-1.mode.1920x1080@60"
+  );
+}
+
 TEST(KScreenLayout, LeavesPriorityUnsetForAnOutputThatHasNone) {
   // KScreen reports 0 for an output outside the priority order. Replaying that
   // as `.priority.0` would be a different request from the one we captured.

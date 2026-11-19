@@ -36,7 +36,8 @@ and applications to Sunshine.
 > a fullscreen window of the desktop compositor, which would normally place that window on the primary monitor. The
 > entry therefore ships with `virtual-display-layout: mirror`, which makes Hermes position the virtual display over
 > the primary output, so the desktop (and the Gamescope window on it) is cloned into the stream. Set the app's
-> `virtual-display-layout` to `exclusive` instead to hand the desktop to the virtual display and turn the
+> `virtual-display-layout` to `primary` to keep the monitors on but make the virtual display the primary one, so
+> games launched from Big Picture open in the stream, or to `exclusive` to hand the desktop to the virtual display and turn the
 > physical monitors off for the session (native resolution, no clone), or to `extend` for the default side-by-side
 > placement. Gamescope's own log is at `~/.local/state/hermes/gamescope.log`.
 >
@@ -351,7 +352,7 @@ can select an `isolation-method` in the Web UI or `apps.json`:
 - `default`: follow the global `isolation_method` when the launch requests a
   virtual display, and stay on the shared host session otherwise. Under
   `gamescope`, an entry with no `cmd` becomes a KWin desktop, as there is nothing
-  to run in Gamescope. An explicit `extend`, `mirror` or `exclusive`
+  to run in Gamescope. An explicit `extend`, `primary`, `mirror` or `exclusive`
   `virtual-display-layout` stays on the host session;
 - `gamescope`: always start only the configured application inside an
   independent DRM Gamescope session, without a desktop panel;

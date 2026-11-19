@@ -24,6 +24,10 @@ and applications to Sunshine.
 > [!NOTE]
 > Steam is launched as a detached command because Steam starts with a process that self updates itself and the original
 > process is killed.
+>
+> On Linux, ending the app stops the Steam this entry started, and any game started from it, after the undo command
+> closes Big Picture. A Steam that was already running when the stream started is left alone. Turn off
+> "Stop detached commands with the app" (`stop-detached`) to keep Steam running after the stream.
 
 > [!IMPORTANT]
 > This entry does not put Steam on a virtual display, and turning on "Always create Virtual Display" for it will not
@@ -36,9 +40,11 @@ and applications to Sunshine.
 > a fullscreen window of the desktop compositor, which would normally place that window on the primary monitor. The
 > entry therefore ships with `virtual-display-layout: mirror`, which makes Hermes position the virtual display over
 > the primary output, so the desktop (and the Gamescope window on it) is cloned into the stream. Set the app's
-> `virtual-display-layout` to `exclusive` instead to hand the desktop to the virtual display and turn the
+> `virtual-display-layout` to `primary` to keep the monitors on but make the virtual display the primary one, so
+> games launched from Big Picture open in the stream, or to `exclusive` to hand the desktop to the virtual display and turn the
 > physical monitors off for the session (native resolution, no clone), or to `extend` for the default side-by-side
-> placement. Gamescope's own log is at `~/.local/state/hermes/gamescope.log`.
+> placement. Gamescope's own log is at `~/.local/state/hermes/gamescope.log`. A Steam already running on the
+> desktop is shut down first (`stop-desktop-steam`, below): Gamescope's Steam would hand its request to it and exit.
 >
 > Keeping this entry is still useful for the opposite case: reaching the Steam on the host's own desktop.
 > If you do give this entry a virtual display, a `virtual-display-layout` of `mirror` will clone the desktop —
@@ -351,7 +357,7 @@ can select an `isolation-method` in the Web UI or `apps.json`:
 - `default`: follow the global `isolation_method` when the launch requests a
   virtual display, and stay on the shared host session otherwise. Under
   `gamescope`, an entry with no `cmd` becomes a KWin desktop, as there is nothing
-  to run in Gamescope. An explicit `extend`, `mirror` or `exclusive`
+  to run in Gamescope. An explicit `extend`, `primary`, `mirror` or `exclusive`
   `virtual-display-layout` stays on the host session;
 - `gamescope`: always start only the configured application inside an
   independent DRM Gamescope session, without a desktop panel;
@@ -417,7 +423,13 @@ Steam runs once per user and hands a second launch to the running client. If
 the pid in `~/.steam/steam.pid` is a live Steam outside Hermes' sessions,
 Hermes sends it SIGTERM (it logs off and saves its settings, usually in a few
 seconds) before starting the session, and kills it and its children if it is
-still running after 30 seconds.
+still running after 30 seconds. The same applies to an app on the desktop that
+starts Steam in a nested Gamescope, such as Gamescope Steam Session: otherwise
+Gamescope's Steam hands its request to the running one and exits, and
+Gamescope ends with it. When such an app ends, Hermes starts the desktop's
+Steam again (`steam -silent`, in the tray) once the app's own Steam has
+exited, as a unit of the user's service manager so later apps leave it alone.
+Big Picture on the desktop is unaffected; it is meant to use the running Steam.
 
 With `hermes_kms_session_compositor = plasma`, the default, the `kwin_virtual`
 method is the user's own Plasma desktop on KWin's virtual backend: it runs as the

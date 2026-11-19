@@ -114,6 +114,8 @@ namespace proc {
     bool allow_client_commands;
     bool terminate_on_pause;
     bool unlock_host_session;
+    /// Stop the app's detached commands, and all they started, when the app ends.
+    bool stop_detached {true};
     // default: follow the global isolation_method when a virtual display is requested.
     // gamescope/kwin_virtual: always run in that isolated session.
     std::string isolation_method;
@@ -336,9 +338,13 @@ namespace proc {
 
     // If no command associated with _app_id, yet it's still running
     bool placebo {};
+    /// The app shut down the desktop's Steam to start its own; start it again when the app ends.
+    bool _reopen_desktop_steam {};
 
     boost::process::v1::child _process;
     boost::process::v1::group _process_group;
+    /// Transient scopes the current app's detached commands run in (Linux).
+    std::vector<std::string> _detached_units;
 
     file_t _pipe;
     std::vector<cmd_t>::const_iterator _app_prep_it;

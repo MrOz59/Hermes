@@ -12,6 +12,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- `virtual-display-layout: primary` (Linux, KDE/KWin; from PunkUnity): extend,
+  with the virtual display as the primary monitor for the session. Games
+  launched from Big Picture open on the primary output, so in the extend
+  layout they opened on the physical monitor instead of the stream; with
+  primary they open in the stream while the monitors stay on. The physical
+  monitors keep their order one place down, and their priorities are put back
+  when the session ends. Elsewhere it behaves like extend.
 - At the end of a stream, Hermes logs the video the client lost on the way
   to it (from PunkUnity): `Client [name] lost N of M video packets (x%): …
   frame blocks repaired by FEC, … frames dropped`. Moonlight-family clients
@@ -70,6 +77,17 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 
 ### Fixed
+- The Gamescope Steam Session app no longer ends within a second when a Steam
+  is already running (from PunkUnity). Gamescope's own client is a new
+  `steam -bigpicture`; Steam runs once per user, so it handed the request to
+  the running Steam and exited, Gamescope exited with it, and the client saw
+  the app quit (Hestia retried, and each retry ended the same way). Before
+  starting a nested Gamescope that runs Steam, Hermes now shuts the other
+  Steam down the way independent sessions already do (`stop-desktop-steam`,
+  `auto`; `off` keeps it), and starts it again, in the tray, when the app
+  ends. A Steam Hermes started itself is not started again. Inside a
+  standalone Gamescope session (SteamOS Game Mode) the running Steam is left
+  alone.
 - Fix configuration of fetched Boost 1.89 Locale headers with newer CMake,
   and install libc development files for the Ubuntu package-loader CI fixture.
 - Use `hermes` as the suggested username on the initial setup page.
@@ -109,6 +127,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   desktop layout, so monitor 0 could be a KVM capture input or a dummy plug.
   On KWin, the output KScreen marks as primary is now listed first; a
   configured display number still selects the same monitor as before.
+- Ending an app now stops what its detached commands started (from
+  PunkUnity). Detached commands were let go as soon as they were spawned, so
+  the Steam the Steam Big Picture entry opens kept running after the stream:
+  its undo command only closes Big Picture. The next app that runs Steam, a
+  detached Steam desktop included, then handed its launch to that Steam. On
+  Linux each detached command now runs in a transient scope of the user's
+  systemd manager, which Hermes stops when the app ends, after its undo
+  commands. A command that only handed a request to a program already
+  running, such as a Steam the user opened, leaves nothing to stop. The new
+  per-app option `stop-detached` (on by default) keeps the old behaviour.
 - Hermes no longer locks the compositor out of a GPU (from PunkUnity). The
   kernel makes whoever opens `/dev/dri/cardN` while no one holds DRM master
   that card's master, and Hermes kept it. Start a stream while the desktop

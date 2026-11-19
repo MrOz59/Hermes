@@ -2330,8 +2330,12 @@ alias; new configurations should use the key above.
             @note{Individual apps can override this through their
             <code>virtual-display-layout</code> field in apps.json:
             <code>exclusive</code> forces this behaviour for that app, while
-            <code>extend</code> or <code>mirror</code> keep the physical
-            outputs on even when this option is enabled.}
+            <code>extend</code>, <code>primary</code> or <code>mirror</code> keep the physical
+            outputs on even when this option is enabled. <code>primary</code>
+            is <code>extend</code> with the virtual display as the primary
+            output for the session, so applications and games open in the
+            stream; on KDE/KWin only, elsewhere it behaves like
+            <code>extend</code>.}
             @note{On Linux, this requires a compositor Hermes can drive:
             KDE/KWin through KScreen, a Wayland compositor implementing the
             wlr-output-management protocol, or GNOME through Mutter's own

@@ -630,6 +630,8 @@
         "keybindings_desc": "Remap input key codes, given as a map of source to target key codes. Edit in the config file directly.",
         "vaapi_quality": "VAAPI Quality",
         "vaapi_quality_desc": "FFmpeg VAAPI quality/global_quality option. -1 leaves the codec default; otherwise 0-8 (lower = higher quality).",
+        "vaapi_intra_refresh": "Recover from lost frames without a key frame",
+        "vaapi_intra_refresh_desc": "The encoder refreshes a band of rows in every frame, the whole picture every half second, so a frame lost on the network heals on its own and the client keeps playing instead of waiting for a key frame. Needs an FFmpeg build with VAAPI intra refresh and a driver that supports it (Mesa radeonsi does); otherwise nothing changes.",
         "output_name": "Output Name",
         "output_name_desc": "The display/output to capture, identified by its platform-specific name. If unset, the primary output is used.",
         "virtual_sink_placeholder": "Steam Streaming Speakers",

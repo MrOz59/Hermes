@@ -1365,17 +1365,9 @@ namespace video {
     return pipeline_metrics_state.published;
   }
   namespace {
-    /**
-     * HERMES_VAAPI_INTRA_REFRESH=1 turns on rolling intra refresh for VAAPI
-     * encoders (experimental). It needs an FFmpeg whose VAAPI encoders have
-     * the intra_refresh option, and a driver that does rolling rows.
-     */
+    /// vaapi_intra_refresh: rolling intra refresh, when FFmpeg and the driver can do it.
     bool vaapi_intra_refresh_requested() {
-      static const bool requested = [] {
-        const char *value = std::getenv("HERMES_VAAPI_INTRA_REFRESH");
-        return value && std::string_view {value} == "1";
-      }();
-      return requested;
+      return config::video.vaapi.intra_refresh;
     }
 
     /// A session opened during the current encoder probe had intra refresh.

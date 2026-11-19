@@ -3981,6 +3981,34 @@ from upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     </tr>
 </table>
 
+### vaapi_intra_refresh
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Rolling intra refresh: the encoder refreshes a band of rows in every frame, the whole picture every half
+            second. A frame lost on the network then heals on its own, so Hermes offers reference frame invalidation
+            and a client that lost frames keeps decoding instead of waiting for a key frame.
+            @note{Only applies when using the VA-API [encoder](#encoder), with an FFmpeg build whose VA-API encoders
+            have the <code>intra_refresh</code> option and a driver that refreshes rows (Mesa radeonsi). Otherwise
+            nothing changes.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vaapi_intra_refresh = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ## Software Encoder
 
 ### sw_preset

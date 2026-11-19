@@ -245,6 +245,7 @@ namespace VDISPLAY {
     extend,    ///< Side-by-side, reasserting the pre-session physical layout.
     detached,  ///< Side-by-side while preserving physical-output state where possible.
     mirror,    ///< Overlapped with the primary output, so the desktop is cloned.
+    primary,   ///< Side-by-side like extend, with the virtual output as the primary one.
   };
 
   /**

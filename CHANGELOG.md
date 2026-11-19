@@ -12,6 +12,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- `virtual-display-layout: primary` (Linux, KDE/KWin; from PunkUnity): extend,
+  with the virtual display as the primary monitor for the session. Games
+  launched from Big Picture open on the primary output, so in the extend
+  layout they opened on the physical monitor instead of the stream; with
+  primary they open in the stream while the monitors stay on. The physical
+  monitors keep their order one place down, and their priorities are put back
+  when the session ends. Elsewhere it behaves like extend.
 - At the end of a stream, Hermes logs the video the client lost on the way
   to it (from PunkUnity): `Client [name] lost N of M video packets (x%): …
   frame blocks repaired by FEC, … frames dropped`. Moonlight-family clients

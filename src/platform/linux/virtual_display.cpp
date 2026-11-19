@@ -2471,15 +2471,21 @@ namespace VDISPLAY {
 
     std::string command = "kscreen-doctor";
     if (layout != virtual_display_layout_e::detached) {
-      int next_priority = 1;
+      // Primary puts the virtual output first and moves every physical output
+      // down one place, keeping their order. Applications and games open on
+      // the primary output, so this is what puts them in the stream while the
+      // monitors stay on. restore() puts the recorded priorities back.
+      const bool virtual_primary = layout == virtual_display_layout_e::primary;
+      const int shift = virtual_primary ? 1 : 0;
+      int next_priority = 1 + shift;
       for (const auto &[output, priority] : enabled_before) {
         if (output == virtual_output || !safe_output_name(output)) {
           continue;
         }
         command += " output." + output + ".enable";
         if (priority > 0) {
-          command += " output." + output + ".priority." + std::to_string(priority);
-          next_priority = std::max(next_priority, priority + 1);
+          command += " output." + output + ".priority." + std::to_string(priority + shift);
+          next_priority = std::max(next_priority, priority + shift + 1);
         }
         // Enabling an output says nothing about where it lands, so KWin keeps
         // whatever the setup it replayed for this output combination said - which
@@ -2493,7 +2499,7 @@ namespace VDISPLAY {
       }
 
       command += " output." + virtual_output + ".enable";
-      command += " output." + virtual_output + ".priority." + std::to_string(next_priority);
+      command += " output." + virtual_output + ".priority." + std::to_string(virtual_primary ? 1 : next_priority);
     } else {
       // Detached mode deliberately does not name any physical output and does
       // not change the virtual output's priority. KWin may read the physical
@@ -3041,6 +3047,8 @@ namespace VDISPLAY {
                             " overlapping the primary output (mirror)" :
                           layout == virtual_display_layout_e::detached ?
                             " outside the physical output regions (detached; physical outputs preserved)" :
+                          layout == virtual_display_layout_e::primary ?
+                            " outside the pre-session output regions, as the primary output" :
                             " outside the pre-session output regions");
       return true;
     }

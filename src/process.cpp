@@ -150,7 +150,7 @@ namespace proc {
     }
 
     const auto &layout = app.virtual_display_layout;
-    if (layout == "extend" || layout == "mirror" || layout == "exclusive") {
+    if (layout == "extend" || layout == "primary" || layout == "mirror" || layout == "exclusive") {
       return session_route_e::shared;
     }
 
@@ -168,6 +168,9 @@ namespace proc {
       }
       if (layout == "detached") {
         return VDISPLAY::virtual_display_layout_e::detached;
+      }
+      if (layout == "primary") {
+        return VDISPLAY::virtual_display_layout_e::primary;
       }
       return VDISPLAY::virtual_display_layout_e::extend;
     }
@@ -3587,13 +3590,14 @@ namespace proc {
         // Per-app virtual display layout: "mirror" overlaps the primary
         // output so the desktop is cloned, "exclusive" hands the desktop to
         // the virtual display for the session, "extend" forces the default
-        // side-by-side placement, "detached" places it beside the physical
+        // side-by-side placement, "primary" does the same with the virtual
+        // display as the primary output, "detached" places it beside the physical
         // desktop without intentionally rewriting physical-output state, and
         // "auto" follows the global exclusive option. Any explicit non-exclusive
         // placement also disables the global exclusive option for this session.
         const std::string &vd_layout = _app.virtual_display_layout;
         const bool vd_layout_explicit =
-          vd_layout == "extend" || vd_layout == "detached" || vd_layout == "mirror";
+          vd_layout == "extend" || vd_layout == "primary" || vd_layout == "detached" || vd_layout == "mirror";
         const bool want_exclusive = vd_layout == "exclusive" ||
                                     (config::video.isolated_virtual_display_option && !vd_layout_explicit);
         if (config::video.isolated_virtual_display_option && vd_layout_explicit) {
@@ -5171,6 +5175,7 @@ namespace proc {
           ctx.virtual_display_layout = app_node.value("virtual-display-layout", "auto");
           if (ctx.virtual_display_layout != "auto" &&
               ctx.virtual_display_layout != "extend" &&
+              ctx.virtual_display_layout != "primary" &&
               ctx.virtual_display_layout != "detached" &&
               ctx.virtual_display_layout != "mirror" &&
               ctx.virtual_display_layout != "exclusive") {

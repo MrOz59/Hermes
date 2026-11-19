@@ -572,14 +572,14 @@ namespace video {
       // on decoding from the next frame instead of freezing for a key frame.
       // A second loss before the last one healed gets a key frame.
       if (frames_since_invalidation < intra_refresh_frames) {
-        BOOST_LOG(debug) << "Frames "sv << first_frame << '-' << last_frame
-                         << " lost again before the picture healed; requesting a key frame"sv;
+        BOOST_LOG(info) << "Frames "sv << first_frame << '-' << last_frame
+                        << " lost again before the picture healed; requesting a key frame"sv;
         request_idr_frame();
         frames_since_invalidation = std::numeric_limits<int64_t>::max() / 2;
         return;
       }
-      BOOST_LOG(debug) << "Frames "sv << first_frame << '-' << last_frame
-                       << " lost; intra refresh heals them within "sv << intra_refresh_frames << " frames"sv;
+      BOOST_LOG(info) << "Frames "sv << first_frame << '-' << last_frame
+                      << " lost; intra refresh heals them within "sv << intra_refresh_frames << " frames"sv;
       next_after_invalidation = true;
       frames_since_invalidation = 0;
     }

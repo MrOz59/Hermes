@@ -70,6 +70,17 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 
 ### Fixed
+- The Gamescope Steam Session app no longer ends within a second when a Steam
+  is already running (from PunkUnity). Gamescope's own client is a new
+  `steam -bigpicture`; Steam runs once per user, so it handed the request to
+  the running Steam and exited, Gamescope exited with it, and the client saw
+  the app quit (Hestia retried, and each retry ended the same way). Before
+  starting a nested Gamescope that runs Steam, Hermes now shuts the other
+  Steam down the way independent sessions already do (`stop-desktop-steam`,
+  `auto`; `off` keeps it), and starts it again, in the tray, when the app
+  ends. A Steam Hermes started itself is not started again. Inside a
+  standalone Gamescope session (SteamOS Game Mode) the running Steam is left
+  alone.
 - Fix configuration of fetched Boost 1.89 Locale headers with newer CMake,
   and install libc development files for the Ubuntu package-loader CI fixture.
 - Use `hermes` as the suggested username on the initial setup page.

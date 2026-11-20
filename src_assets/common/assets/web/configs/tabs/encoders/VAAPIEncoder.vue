@@ -19,6 +19,13 @@ const config = ref(props.config)
               v-model="config.vaapi_strict_rc_buffer"
               default="false"
     ></Checkbox>
+    <!-- Rolling intra refresh -->
+    <Checkbox class="mb-3"
+              id="vaapi_intra_refresh"
+              locale-prefix="config"
+              v-model="config.vaapi_intra_refresh"
+              default="true"
+    ></Checkbox>
   </div>
 </template>
 

@@ -530,6 +530,9 @@ namespace video {
       inject = other.inject;
       frame_submitted = other.frame_submitted;
       other.frame_submitted = false;
+      intra_refresh_frames = other.intra_refresh_frames;
+      next_after_invalidation = other.next_after_invalidation;
+      recovering_until = other.recovering_until;
 
       return *this;
     }
@@ -558,8 +561,29 @@ namespace video {
     }
 
     void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
-      BOOST_LOG(error) << "Encoder doesn't support reference frame invalidation";
-      request_idr_frame();
+      if (intra_refresh_frames <= 0) {
+        BOOST_LOG(error) << "Encoder doesn't support reference frame invalidation";
+        request_idr_frame();
+        return;
+      }
+
+      // The encoder refreshes a band of rows in every frame, so whatever the
+      // lost frames damaged heals within one full refresh. Let the client go
+      // on decoding from the next frame instead of freezing for a key frame.
+      //
+      // Until a frame marked as following the invalidation reaches it, the
+      // client drops every frame and asks again, with the same first frame
+      // and a later last one. Those repeats are the same loss: mark the next
+      // frame again and nothing more. If the picture does not recover, the
+      // client asks for a key frame itself after too many dropped frames.
+      next_after_invalidation = true;
+      if (first_frame <= recovering_until) {
+        recovering_until = std::max(recovering_until, last_frame);
+        return;
+      }
+      recovering_until = last_frame;
+      BOOST_LOG(info) << "Frames "sv << first_frame << '-' << last_frame
+                      << " lost; intra refresh heals them within "sv << intra_refresh_frames << " frames"sv;
     }
 
     avcodec_ctx_t avcodec_ctx;
@@ -575,6 +599,12 @@ namespace video {
     bool frame_submitted {false};
     /// Filler data has been removed from a frame of this session (logged once).
     bool filler_stripped {false};
+    /// Frames per full rolling intra refresh, when the encoder is doing one; 0 otherwise.
+    int intra_refresh_frames {0};
+    /// The next frame is the first the client may decode after a loss.
+    bool next_after_invalidation {false};
+    /// The last frame of the loss being recovered; requests up to it are repeats.
+    int64_t recovering_until {-1};
   };
 
   class nvenc_encode_session_t: public encode_session_t {
@@ -1334,6 +1364,16 @@ namespace video {
     std::lock_guard lg {pipeline_metrics_mutex};
     return pipeline_metrics_state.published;
   }
+  namespace {
+    /// vaapi_intra_refresh: rolling intra refresh, when FFmpeg and the driver can do it.
+    bool vaapi_intra_refresh_requested() {
+      return config::video.vaapi.intra_refresh;
+    }
+
+    /// A session opened during the current encoder probe had intra refresh.
+    bool probe_saw_intra_refresh = false;
+  }  // namespace
+
   bool last_encoder_probe_supported_ref_frames_invalidation = false;
   std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {
     true,
@@ -1815,6 +1855,13 @@ namespace video {
         packet->frame_timestamp = frame_timestamp;
       }
 
+      if (session.intra_refresh_frames > 0) {
+        if (session.next_after_invalidation && !(av_packet->flags & AV_PKT_FLAG_KEY)) {
+          packet->after_ref_frame_invalidation = true;
+        }
+        session.next_after_invalidation = false;
+      }
+
       packet->replacements = &session.replacements;
       packet->channel_data = channel_data;
       packets->raise(std::move(packet));
@@ -2247,6 +2294,13 @@ namespace video {
         }
       }
 
+      // Rolling intra refresh lets a client recover from a lost frame
+      // without a key frame (see invalidate_ref_frames()). It needs an
+      // FFmpeg whose VAAPI encoders have the option; others ignore it.
+      if (encoder.name == "vaapi"sv && vaapi_intra_refresh_requested()) {
+        av_dict_set_int(&options, "intra_refresh", std::max(1, config.framerate / 2), 0);
+      }
+
       // Allow the encoding device a final opportunity to set/unset or override any options
       encode_device->init_codec_options(ctx.get(), &options);
 
@@ -2337,6 +2391,23 @@ namespace video {
 
     encode_device_final->apply_colorspace();
 
+    int64_t intra_refresh_frames = 0;
+    if (encoder.name == "vaapi"sv && vaapi_intra_refresh_requested()) {
+      // The patched encoder reads 0 back when the driver cannot do it.
+      if (av_opt_get_int(ctx->priv_data, "intra_refresh", 0, &intra_refresh_frames) < 0) {
+        intra_refresh_frames = 0;
+      }
+      if (intra_refresh_frames > 0) {
+        probe_saw_intra_refresh = true;
+        if (!config.encoder_probe) {
+          BOOST_LOG(info) << "VAAPI rolling intra refresh: the whole picture every "sv << intra_refresh_frames
+                          << " frames, so a lost frame heals without a key frame"sv;
+        }
+      } else if (!config.encoder_probe) {
+        BOOST_LOG(warning) << "VAAPI intra refresh was requested, but this FFmpeg or driver cannot do it"sv;
+      }
+    }
+
     auto session = std::make_unique<avcodec_encode_session_t>(
       std::move(ctx),
       std::move(encode_device_final),
@@ -2344,6 +2415,7 @@ namespace video {
       // 0 ==> don't inject, 1 ==> inject for h264, 2 ==> inject for hevc
       config.videoFormat <= 1 ? (1 - (int) video_format[encoder_t::VUI_PARAMETERS]) * (1 + config.videoFormat) : 0
     );
+    session->intra_refresh_frames = static_cast<int>(intra_refresh_frames);
 
     return session;
   }
@@ -3186,6 +3258,8 @@ namespace video {
       BOOST_LOG(info) << "Encoder ["sv << encoder.name << "] failed"sv;
     });
 
+    probe_saw_intra_refresh = false;
+
     auto test_hevc = active_hevc_mode >= 2 || (active_hevc_mode == 0 && !(encoder.flags & H264_ONLY));
     auto test_av1 = active_av1_mode >= 2 || (active_av1_mode == 0 && !(encoder.flags & H264_ONLY));
 
@@ -3345,6 +3419,18 @@ namespace video {
 
       test_hdr_and_yuv444(encoder.hevc, 1);
       test_hdr_and_yuv444(encoder.av1, 2);
+    }
+
+    // A VAAPI encoder doing rolling intra refresh can answer a client's
+    // reference frame invalidation; advertise it only when a probe session
+    // actually had it.
+    if (encoder.name == "vaapi"sv) {
+      if (probe_saw_intra_refresh) {
+        encoder.flags |= REF_FRAMES_INVALIDATION;
+        BOOST_LOG(info) << encoder.name << ": rolling intra refresh available; offering reference frame invalidation"sv;
+      } else {
+        encoder.flags &= ~REF_FRAMES_INVALIDATION;
+      }
     }
 
     encoder.h264[encoder_t::VUI_PARAMETERS] = encoder.h264[encoder_t::VUI_PARAMETERS] && !config::sunshine.flags[config::flag::FORCE_VIDEO_HEADER_REPLACE];

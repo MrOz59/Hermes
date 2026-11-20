@@ -28,6 +28,13 @@ and applications to Sunshine.
 > On Linux, ending the app stops the Steam this entry started, and any game started from it, after the undo command
 > closes Big Picture. A Steam that was already running when the stream started is left alone. Turn off
 > "Stop detached commands with the app" (`stop-detached`) to keep Steam running after the stream.
+>
+> "Limit the game to the stream's frame rate" (`limit-fps`, Linux, off by default) caps the games this entry's Steam
+> starts at the client's frame rate:
+> - `DXVK_FRAME_RATE` and `VKD3D_FRAME_RATE` for Proton games, in DXVK/VKD3D-Proton builds that keep their limiter;
+> - `fps_limit` in `MANGOHUD_CONFIG` (after `read_cfg`) where MangoHud is enabled. Hermes never turns MangoHud on.
+>
+> It reaches only games started by a Steam that Hermes starts.
 
 > [!IMPORTANT]
 > This entry does not put Steam on a virtual display, and turning on "Always create Virtual Display" for it will not

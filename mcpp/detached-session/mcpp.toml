@@ -1,0 +1,14 @@
+[package]
+name = "hermes-detached-session"
+standard = "c++20"
+
+[build]
+sources = []
+cxx_runtime = "host-coupled"
+include_dirs = ["../../.toolchain/json-include"]
+cxxflags = ["-pthread"]
+ldflags = ["-pthread"]
+
+[targets.hermes-detached-session]
+kind = "bin"
+main = "../../tools/hermes-detached-session.cpp"

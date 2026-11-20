@@ -1,32 +1,31 @@
 #!/usr/bin/env bash
 # Stage a Hermes install tree for a distribution package.
 #
-# The .deb and .rpm used to be assembled by hand, file by file, and quietly
-# shipped without the menu entries, the icons and (on Fedora) the systemd unit
-# (#52): the desktop files and icons exist only as CMake install rules, which
-# nothing in those jobs ran. This runs the install the Arch package already
-# uses, applies the two renames a package needs, and refuses to hand back a
-# tree that is missing anything a user would notice.
+# Both build systems feed the same payload checks. The distribution package
+# jobs add their own dependency metadata and installation hooks afterward.
 #
-# Usage: stage-install.sh <build-dir> <staging-dir>
+# Usage: stage-install.sh <cmake-build-dir> <staging-dir>
+#        stage-install.sh --mcpp <staging-dir> --result target/.last-result.json
 set -euo pipefail
 
-build_dir=${1:?usage: stage-install.sh <build-dir> <staging-dir>}
-root=${2:?usage: stage-install.sh <build-dir> <staging-dir>}
+if [[ ${1:-} == --mcpp ]]; then
+  shift
+  root=${1:?usage: stage-install.sh --mcpp <staging-dir> --result target/.last-result.json}
+  python3 "$(dirname "${BASH_SOURCE[0]}")/stage-mcpp-install.py" "$@"
+else
+  build_dir=${1:?usage: stage-install.sh <cmake-build-dir> <staging-dir>}
+  root=${2:?usage: stage-install.sh <cmake-build-dir> <staging-dir>}
 
-rm -rf "$root"
-mkdir -p "$root"
-DESTDIR="$root" cmake --install "$build_dir"
+  rm -rf "$root"
+  mkdir -p "$root"
+  DESTDIR="$root" cmake --install "$build_dir"
 
-# CMake installs the versioned binary plus a `sunshine` symlink beside it; a
-# package ships one binary, named after this fork.
-rm -f "$root/usr/bin/sunshine"
-mv "$root"/usr/bin/sunshine-* "$root/usr/bin/hermes"
-
-# Same for the unit, whose upstream name would collide with an apollo or
-# sunshine install on the same machine.
-if [ -f "$root/usr/lib/systemd/user/sunshine.service" ]; then
-  mv "$root/usr/lib/systemd/user/sunshine.service" "$root/usr/lib/systemd/user/hermes.service"
+  # Native packages expose the fork's binary and systemd unit names.
+  rm -f "$root/usr/bin/sunshine"
+  mv "$root"/usr/bin/sunshine-* "$root/usr/bin/hermes"
+  if [ -f "$root/usr/lib/systemd/user/sunshine.service" ]; then
+    mv "$root/usr/lib/systemd/user/sunshine.service" "$root/usr/lib/systemd/user/hermes.service"
+  fi
 fi
 
 # What the user sees if it is missing: no entry in the application menu, a

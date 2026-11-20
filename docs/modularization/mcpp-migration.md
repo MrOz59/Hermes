@@ -103,6 +103,32 @@ MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
   --profile coverage -- --gtest_color=yes
 ```
 
+## Stage a Fedora package payload
+
+Build the host with its installed asset path and save its result manifest.
+Build the companion executables in a second invocation, without the host
+features.
+
+```sh
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  mcpp build --offline --release -p hermes-host \
+  --features cuda,kwin,package-assets,xtest,pyrowave,tray
+host_result=$(python3 -c 'import json, pathlib; print(json.loads(pathlib.Path("target/.last-result.json").read_text())["data"]["result"])')
+
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  mcpp build --offline --release -p hermes-kms-card-broker \
+  -p hermes-session-broker -p hermes-gamemode -p hermes-detached-session
+
+packaging/linux/stage-install.sh --mcpp "$PWD/target/hermes-payload" \
+  --result "$host_result" --result target/.last-result.json \
+  --pyrowave-prefix .toolchain/pyrowave --libdir lib64 --tray
+```
+
+The stager creates a new payload directory. It validates the installed
+PyroWave library path and converts the mcpp binary's legacy RPATH to RUNPATH
+on the staged copy. An installed package must still pass the file-capability
+loader test.
+
 ## Parity status
 
 The CUDA-disabled CMake reference and the matching mcpp profile compile the

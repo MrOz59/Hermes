@@ -3,6 +3,8 @@ members = [
     "mcpp/host",
     "mcpp/card-broker",
     "mcpp/session-broker",
+    "mcpp/detached-session",
+    "mcpp/gamemode",
     "tests/network_lifecycle",
 ]
 

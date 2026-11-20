@@ -371,6 +371,15 @@
                   v-model="editForm['terminate-on-pause']"
                   default="false"
         ></Checkbox>
+        <!-- cap the application at the stream's frame rate -->
+        <Checkbox v-if="platform === 'linux'"
+                  class="mb-3"
+                  id="limitFps"
+                  label="apps.limit_fps"
+                  desc="apps.limit_fps_desc"
+                  v-model="editForm['limit-fps']"
+                  default="false"
+        ></Checkbox>
         <!-- stop detached commands with the app -->
         <Checkbox v-if="platform === 'linux'"
                   class="mb-3"
@@ -643,6 +652,7 @@
     "stop-desktop-steam": "auto",
     "terminate-on-pause": false,
     "stop-detached": true,
+    "limit-fps": false,
     "gamepad": ""
   }
 

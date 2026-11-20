@@ -72,3 +72,9 @@ docs/codex/*
 jsson-lsp.log
 test_sunshine.log*
 write_file_test_*.txt
+
+# mcpp build output and local toolchain
+/target/
+/mcpp/*/target/
+/.mcpp/
+/.toolchain/

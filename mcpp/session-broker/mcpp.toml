@@ -1,0 +1,18 @@
+[package]
+name = "hermes-session-broker"
+standard = "c++20"
+
+[build]
+sources = ["../../tools/session-broker-input.cpp"]
+include_dirs = ["../../.toolchain/linux-headers-7.3.5/include"]
+include_dirs_after = ["../../.toolchain/acl/include"]
+cxx_runtime = "host-coupled"
+cxxflags = ["-Wall", "-Wno-sign-compare"]
+
+[targets.hermes-session-broker]
+kind = "bin"
+main = "../../tools/hermes-session-broker.cpp"
+
+[runtime]
+libraries = ["acl"]
+link_library_dirs = ["../../.toolchain/acl/lib"]

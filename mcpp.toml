@@ -1,0 +1,14 @@
+[workspace]
+members = [
+    "mcpp/card-broker",
+    "mcpp/session-broker",
+    "tests/network_lifecycle",
+]
+
+[workspace.package]
+mcpp = ">=2026.11.20.1"
+version = "0.7.0"
+license = "GPL-3.0-only"
+
+[workspace.target.x86_64-linux-gnu]
+sysroot = "glibc@system"

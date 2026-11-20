@@ -70,6 +70,7 @@
 #include "logging.h"
 #include "platform/common.h"
 #include "process.h"
+#include "frame_limit_env.h"
 #include "httpcommon.h"
 #include "system_tray.h"
 #include "utility.h"
@@ -1043,6 +1044,14 @@ namespace proc {
       env["HERMES_CLIENT_RENDER_WIDTH"] = std::to_string(render_width);
       env["HERMES_CLIENT_RENDER_HEIGHT"] = std::to_string(render_height);
       env["HERMES_CLIENT_FPS"] = fps_buffer;
+      if (app.limit_fps) {
+        const auto existing = env.find("MANGOHUD_CONFIG");
+        for (const auto &[name, value] : frame_limit::environment(
+               static_cast<int>(std::lround(static_cast<double>(fps_millihz) / 1000.0)),
+               existing != env.end() ? existing->to_string() : std::string {})) {
+          env[name] = value;
+        }
+      }
       env["HERMES_SESSION_ID"] = runtime.runtime_id;
       env["HERMES_SESSION_SEAT"] = runtime.seat_id;
       env["HERMES_SEATD_SOCKET"] = runtime.seatd_socket;
@@ -3811,6 +3820,25 @@ namespace proc {
       _env["PROTON_ENABLE_HDR"] = "0";
     }
 
+    if (_app.limit_fps) {
+      const auto existing = _env.find("MANGOHUD_CONFIG");
+      const auto limits = frame_limit::environment(
+        static_cast<int>(std::lround(static_cast<double>(launch_session->fps) / 1000.0)),
+        existing != _env.end() ? existing->to_string() : std::string {}
+      );
+      // _env outlives the app: remember what was there, so terminate() can
+      // give the next app the environment without this app's limit.
+      for (const auto &[name, value] : limits) {
+        const auto previous = _env.find(name);
+        _frame_limit_restore.emplace_back(name, previous != _env.end() ? std::optional<std::string> {previous->to_string()} : std::nullopt);
+        _env[name] = value;
+      }
+      if (!limits.empty()) {
+        BOOST_LOG(info) << "Capping " << _app.name << " at the stream's " << limits.front().second
+                        << " FPS (DXVK, VKD3D-Proton, and MangoHud where it is enabled)";
+      }
+    }
+
     int channelCount = launch_session->surround_info & 65535;
     switch (channelCount) {
       case 2:
@@ -4312,6 +4340,17 @@ namespace proc {
 #endif
 
     _pipe.reset();
+
+    // Undo this app's frame limit, newest first, so a variable set twice ends
+    // with the value it had before either.
+    for (auto it = _frame_limit_restore.rbegin(); it != _frame_limit_restore.rend(); ++it) {
+      if (it->second) {
+        _env[it->first] = *it->second;
+      } else {
+        _env.erase(it->first);
+      }
+    }
+    _frame_limit_restore.clear();
 
 #ifdef __linux__
     if (std::exchange(_reopen_desktop_steam, false)) {
@@ -5143,6 +5182,7 @@ namespace proc {
           ctx.terminate_on_pause = app_node.value("terminate-on-pause", false);
           ctx.unlock_host_session = app_node.value("unlock-host-session", false);
           ctx.stop_detached = app_node.value("stop-detached", true);
+          ctx.limit_fps = app_node.value("limit-fps", false);
           ctx.isolation_method = app_node.value("isolation-method", "default");
           if (ctx.isolation_method != "default" &&
               ctx.isolation_method != "gamescope" &&

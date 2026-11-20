@@ -12,31 +12,36 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
-- VAAPI rolling intra refresh (`vaapi_intra_refresh`, on by default; from
-  PunkUnity). The encoder refreshes a band of rows in every frame, the whole
-  picture every half second, so a frame lost on the network heals on its
-  own. Hermes then offers reference frame invalidation: a client that lost
-  frames keeps decoding instead of freezing until a key frame, and no key
-  frame burst follows each loss. It needs an FFmpeg whose VAAPI encoders have
-  the `intra_refresh` option (a build-deps patch) and a driver that
-  refreshes rows (Mesa radeonsi); otherwise nothing changes.
+- VAAPI rolling intra refresh (`vaapi_intra_refresh`, on by default; from PunkUnity).
+  The encoder refreshes a band of rows in every frame, the whole picture every
+  half second, so a frame lost on the network heals on its own. Hermes then offers
+  reference frame invalidation: a client that lost frames keeps decoding instead
+  of freezing until a key frame, and no key frame burst follows each loss. It
+  needs an FFmpeg whose VAAPI encoders have the `intra_refresh` option (a
+  build-deps patch) and a driver that refreshes rows (Mesa radeonsi); otherwise
+  nothing changes.
+- Per-app `limit-fps` (Linux, off by default; from PunkUnity): cap what the app
+  starts at the stream's frame rate, so games don't render frames the stream
+  drops. Hermes sets `DXVK_FRAME_RATE` and `VKD3D_FRAME_RATE` (DXVK and
+  VKD3D-Proton builds that keep their limiter, such as Proton-CachyOS) and adds
+  `fps_limit` to `MANGOHUD_CONFIG` for MangoHud users, keeping their
+  MangoHud.conf. Nothing extra is required, and MangoHud is never turned on.
+  The previous values come back when the app ends.
 - `virtual-display-layout: primary` (Linux, KDE/KWin; from PunkUnity): extend,
-  with the virtual display as the primary monitor for the session. Games
-  launched from Big Picture open on the primary output, so in the extend
-  layout they opened on the physical monitor instead of the stream; with
-  primary they open in the stream while the monitors stay on. The physical
-  monitors keep their order one place down, and their priorities are put back
-  when the session ends. Elsewhere it behaves like extend.
-- At the end of a stream, Hermes logs the video the client lost on the way
-  to it (from PunkUnity): `Client [name] lost N of M video packets (x%): …
-  frame blocks repaired by FEC, … frames dropped`. Moonlight-family clients
-  already report every frame block that lost packets
-  (`SS_FRAME_FEC_STATUS`), and Hermes ignored those reports, so loss on the
-  network (Wi-Fi, a slow port, a congested hop) was invisible on the host.
-  Nothing is logged when nothing was lost.
+  with the virtual display as the primary monitor for the session. Games launched
+  from Big Picture open on the primary output, so in the extend layout they
+  opened on the physical monitor instead of the stream; with primary they open
+  in the stream while the monitors stay on. The physical monitors keep their
+  order one place down, and their priorities are put back when the session ends.
+  Elsewhere it behaves like extend.
+- At the end of a stream, Hermes logs the video the client lost on the way to it
+  (from PunkUnity): `Client [name] lost N of M video packets (x%): … frame blocks
+  repaired by FEC, … frames dropped`. Moonlight-family clients already report
+  every frame block that lost packets (`SS_FRAME_FEC_STATUS`), and Hermes ignored
+  those reports, so loss on the network (Wi-Fi, a slow port, a congested hop)
+  was invisible on the host. Nothing is logged when nothing was lost.
 - Fedora 45 packages: CI now builds `hermes-<version>-1.fc45.x86_64.rpm`,
-  installs it and runs the secure-loader checks on Fedora 45 alongside 43
-  and 44.
+  installs it and runs the secure-loader checks on Fedora 45 alongside 43 and 44.
 - `inhibit_screen_lock` (off by default) keeps the host's screensaver and
   screen lock from engaging while a client is connected. On Linux it holds an
   inhibition through `org.freedesktop.ScreenSaver` on the D-Bus session bus and

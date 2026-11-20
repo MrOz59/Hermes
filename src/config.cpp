@@ -492,6 +492,7 @@ namespace config {
     {
       false,  // strict_rc_buffer
       -1,  // quality
+      true,  // intra_refresh
     },  // vaapi
 
     {},  // capture
@@ -1253,6 +1254,7 @@ namespace config {
 
     bool_f(vars, "vaapi_strict_rc_buffer", video.vaapi.strict_rc_buffer);
     int_between_f(vars, "vaapi_quality", video.vaapi.quality, {-1, 8});
+    bool_f(vars, "vaapi_intra_refresh", video.vaapi.intra_refresh);
 
     string_f(vars, "capture", video.capture);
     string_f(vars, "encoder", video.encoder);

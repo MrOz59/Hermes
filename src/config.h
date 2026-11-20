@@ -84,6 +84,7 @@ namespace config {
     struct {
       bool strict_rc_buffer;
       int quality;  // ffmpeg VAAPI quality option, -1 = leave codec default.
+      bool intra_refresh;  // rolling intra refresh, so a lost frame heals without a key frame
     } vaapi;
 
     std::string capture;

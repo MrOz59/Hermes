@@ -177,16 +177,15 @@ tests also exercise the actual helper pipe code with deliberately inheritable
 sockets, full-size/empty content, failed commands, and broken pipes. The target supplements the full suite;
 it does not exercise RTSP negotiation, capture, or actual client sessions.
 
-On Ubuntu, install `cmake`, `ninja-build`, `libboost-log-dev`,
-`libboost-system-dev`, and `nlohmann-json3-dev`, then run:
+Use the project-local [mcpp toolchain setup](modularization/mcpp-migration.md).
+Run from the repository root.
 
 ```bash
 git submodule update --init third-party/googletest third-party/moonlight-common-c
 git -C third-party/moonlight-common-c submodule update --init enet
-cmake -S tests/network_lifecycle -B build-network -G Ninja \
-  -DCMAKE_BUILD_TYPE=Debug -DHERMES_TEST_SANITIZERS=ON
-cmake --build build-network --parallel 2
-ctest --test-dir build-network --output-on-failure
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  mcpp run --offline --profile sanitize -p hermes-network-lifecycle \
+  network_lifecycle_tests -- --gtest_color=yes
 ```
 
 The `Network lifecycle regressions` workflow runs this target with AddressSanitizer,

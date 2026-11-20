@@ -17,7 +17,7 @@ The existing build has these constraints:
 | CUDA | Same file: C++17, with separate compiler selection in `cmake/compile_definitions/linux.cmake` |
 | Main unit/integration suite | `tests/CMakeLists.txt`: `test_sunshine` recompiles the host source list without `src/main.cpp` |
 | Main suite invocation | `.github/workflows/build.yml`: run the GoogleTest binary directly under Xvfb; no CTest registration for that binary |
-| Existing focused example | `tests/network_lifecycle/CMakeLists.txt`: production networking code with a separate CTest entry, without capture SDKs |
+| Existing focused example | `tests/network_lifecycle/mcpp.toml`: a focused executable for production networking code with no capture SDK requirements |
 | Host CI | Arch container, CUDA disabled, required pinned PyroWave SDK; additional headless Sway layout tests |
 | Package CI | Arch, Ubuntu 24.04/26.04 and Fedora 43/44; secure-loader fixtures are separate jobs |
 | Other platforms | Windows build job explicitly disabled; no macOS build job in this workflow. Source presence does not establish support. |

@@ -14,6 +14,8 @@ on:
       - 'tests/helpers/executed_helper.h'
       - 'tests/unit/test_thread_safe.cpp'
       - 'tests/network_lifecycle/**'
+      - 'mcpp.toml'
+      - 'scripts/prepare-mcpp-ci.sh'
       - '.github/workflows/network-lifecycle.yml'
   pull_request:
     paths:
@@ -27,6 +29,8 @@ on:
       - 'tests/helpers/executed_helper.h'
       - 'tests/unit/test_thread_safe.cpp'
       - 'tests/network_lifecycle/**'
+      - 'mcpp.toml'
+      - 'scripts/prepare-mcpp-ci.sh'
       - '.github/workflows/network-lifecycle.yml'
   workflow_dispatch:
 
@@ -46,19 +50,26 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libboost-log-dev libboost-system-dev nlohmann-json3-dev
-      - name: Configure with sanitizers
-        run: cmake -S tests/network_lifecycle -B build-network -G Ninja -DCMAKE_BUILD_TYPE=Debug -DHERMES_TEST_SANITIZERS=ON
-      - name: Build
-        run: cmake --build build-network --parallel 2
+          sudo apt-get install -y g++-14 ninja-build patchelf libboost-log-dev libboost-system-dev nlohmann-json3-dev
+      - name: Prepare mcpp with the runner toolchain
+        run: |
+          export MCPP_HOME="$RUNNER_TEMP/hermes-mcpp"
+          export MCPP_TOOLCHAIN="path:$RUNNER_TEMP/hermes-gcc"
+          scripts/prepare-mcpp-ci.sh 14
+          mkdir -p .toolchain/boost/stage
+          ln -s "/usr/lib/$(gcc-14 -dumpmachine)" .toolchain/boost/stage/lib
+          printf 'MCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\n' "$MCPP_HOME" "$MCPP_TOOLCHAIN" >> "$GITHUB_ENV"
+          printf '%s\n' "$MCPP_HOME/bin" >> "$GITHUB_PATH"
+      - name: Build with sanitizers
+        run: mcpp build --offline --profile sanitize -p hermes-network-lifecycle -j2
       - name: Test socket cleanup and reconnect
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: ctest --test-dir build-network --output-on-failure
+        run: mcpp run --offline --profile sanitize -p hermes-network-lifecycle network_lifecycle_tests -- --gtest_color=yes
 
       - name: Stress post-exec socket release and inheritance detection
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: build-network/network_lifecycle_tests --gtest_color=yes --gtest_filter='HostCreateTests/HostCreateTest.*ExecutedHelper*' --gtest_repeat=100
+        run: mcpp run --offline --profile sanitize -p hermes-network-lifecycle network_lifecycle_tests -- --gtest_color=yes --gtest_filter='HostCreateTests/HostCreateTest.*ExecutedHelper*' --gtest_repeat=100

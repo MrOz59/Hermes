@@ -17,13 +17,15 @@ jobs:
       - name: Install fixture dependencies
         run: |
           if command -v dnf >/dev/null; then
-            dnf install -y git gcc cmake binutils libcap util-linux shadow-utils
+            dnf install -y git gcc cmake binutils libcap util-linux shadow-utils python3 pkgconf-pkg-config patchelf
           else
             apt-get update
             # libc6-dev is only a Recommends of gcc, and the ubuntu:26.04 image
             # no longer installs those; without it the linker misses crti.o.
-            apt-get install -y git gcc libc6-dev cmake binutils libcap2-bin util-linux passwd
+            apt-get install -y git gcc libc6-dev cmake binutils libcap2-bin util-linux passwd python3 pkg-config patchelf
           fi
       - uses: actions/checkout@v4
-      - name: Test the production install rule with capabilities
+      - name: Test the CMake install rule with capabilities
         run: bash scripts/tests/pyrowave-runtime-loader.sh
+      - name: Test the native mcpp staging rule with capabilities
+        run: bash scripts/tests/mcpp-pyrowave-runtime-loader.sh

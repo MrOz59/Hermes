@@ -1,0 +1,31 @@
+import std;
+import mcpp;
+
+#include "../wayland-actions.hpp"
+
+int main() {
+  namespace fs = std::filesystem;
+  const auto root = fs::path(mcpp::manifest_dir()).parent_path().parent_path();
+  const auto source = root / "third-party/tray/src/QtTrayMenu.h";
+  const auto output = fs::path(mcpp::out_dir()) / "moc_QtTrayMenu.cpp";
+
+  auto moc = hermes::build::configured_path("HERMES_MCPP_QT_MOC");
+  if (moc.empty()) {
+    moc = root / ".toolchain/fedora/usr/lib64/qt6/libexec/moc";
+  }
+  if (!fs::is_regular_file(moc)) {
+    throw std::runtime_error("Qt 6 moc is required at " + moc.string());
+  }
+
+  // The tray submodule uses C++17 and does not import any named modules.
+  mcpp::cxxflag("-std=gnu++17");
+  for (const char *flag : {"-DQT_CORE_LIB", "-DQT_GUI_LIB", "-DQT_WIDGETS_LIB", "-DQT_SVG_LIB"}) {
+    mcpp::cxxflag(flag);
+  }
+
+  mcpp::action action;
+  action.id = "hermes-qt-tray-moc";
+  action.role = mcpp::roles::source;
+  action.arg(moc.c_str()).arg(source.c_str()).arg("-o").arg(output.c_str())
+    .input(moc.c_str()).input(source.c_str()).output(output.c_str()).submit();
+}

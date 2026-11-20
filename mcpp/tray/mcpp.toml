@@ -1,0 +1,34 @@
+[package]
+name = "hermes-qt-tray"
+version = "0.0.0"
+description = "Hermes' Qt 6 tray submodule"
+license = "MIT"
+standard = "gnu++20"
+
+[build]
+sources = [
+    "../../third-party/tray/src/QtTrayMenu.cpp",
+    "../../third-party/tray/src/tray_qt.cpp",
+]
+include_dirs = [
+    "../../third-party/tray/src",
+    "../../.toolchain/fedora/usr/include/qt6",
+    "../../.toolchain/fedora/usr/include/qt6/QtCore",
+    "../../.toolchain/fedora/usr/include/qt6/QtGui",
+    "../../.toolchain/fedora/usr/include/qt6/QtWidgets",
+    "../../.toolchain/fedora/usr/include/qt6/QtSvg",
+]
+private_include_dirs = [
+    "../../.toolchain/fedora/usr/include/qt6",
+    "../../.toolchain/fedora/usr/include/qt6/QtCore",
+    "../../.toolchain/fedora/usr/include/qt6/QtGui",
+    "../../.toolchain/fedora/usr/include/qt6/QtWidgets",
+    "../../.toolchain/fedora/usr/include/qt6/QtSvg",
+]
+
+[targets.hermes-qt-tray]
+kind = "lib"
+
+[runtime]
+libraries = ["Qt6Svg", "Qt6Widgets", "Qt6Gui", "Qt6Core"]
+link_library_dirs = ["../../.toolchain/fedora/usr/lib64"]

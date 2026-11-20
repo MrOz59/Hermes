@@ -1,0 +1,21 @@
+[package]
+name = "hermes-libdisplaydevice"
+version = "0.0.0"
+description = "Common portion of the libdisplaydevice submodule"
+standard = "gnu++20"
+
+[build]
+sources = ["../../third-party/libdisplaydevice/src/common/*.cpp"]
+include_dirs = [
+    "../../third-party/libdisplaydevice/src/common/include",
+    "../../.toolchain/json-include",
+]
+private_include_dirs = ["../../.toolchain/json-include"]
+
+# The submodule's common library uses C++20 and has no named modules.
+[[build.flags]]
+glob = "../../third-party/libdisplaydevice/src/common/*.cpp"
+cxxflags = ["-std=gnu++20"]
+
+[targets.hermes-libdisplaydevice]
+kind = "lib"

@@ -1,0 +1,122 @@
+# mcpp migration
+
+The Linux x86-64 mcpp workspace builds the streaming host and both privileged
+brokers. It also carries the standalone networking suite. The host build
+uses DRM, X11, Wayland, VA-API, and systemd's D-Bus client. KWin capture and
+libvirtualhid's XTest fallback can be enabled independently. CUDA, Qt tray,
+and PyroWave also have native build features.
+
+## Local build inputs
+
+Use Fedora GCC and glibc for the native ABI. The current build was verified
+with GCC 16.2.1, glibc 2.44, GNU Binutils 2.47, exported Linux 7.3.5 UAPI
+headers, and Ninja 1.13.2. The compiler adapter in `.toolchain/bin` normalizes
+Fedora GCC's mcpp detection probes, points GCC at the local GNU assembler and
+linker, and uses the locally extracted `.toolchain/static/libstdc++.a` when
+mcpp builds its native build programs. The application links against Fedora's
+shared C++ runtime.
+
+The mcpp home at `.mcpp/local-home` supplies Ninja and patchelf through
+project-local links. Put the following development inputs in `.toolchain/`.
+
+| Location | Build input |
+| --- | --- |
+| `linux-headers-7.3.5/include` | Exported Linux userspace headers |
+| `fedora/usr` | Extracted Fedora development RPMs for the native libraries and `bin/wayland-scanner`. For libraries already on the workstation, the unversioned linker names can resolve to the matching installed SONAMEs. |
+| `boost/boost` and `boost/stage/lib` | Boost 1.89.0 headers and libraries. The host uses static archives with the glibc iconv backend for Boost.Locale. The focused networking target uses shared Boost.Log. |
+| `json-include/nlohmann` | nlohmann/json 3.11.3 headers |
+| `libvirtualhid` | Hermes' libvirtualhid fork at commit `14ee6c4717d32b678c2983bfa6c54019b944d421` |
+| `acl/include` and `acl/lib` | libacl development files for the session broker |
+
+Initialize the Git submodules, including `third-party/build-deps` for Hermes'
+pinned FFmpeg and codec archives. For a Web UI build, provision Node.js, npm,
+and this project's dependencies under `node_modules` ahead of the build. The
+asset action invokes `npm run build` with the installed dependencies.
+
+## Build and check
+
+Run these commands from the repository root. The environment assignments
+apply to a single invocation. `--offline` keeps mcpp from populating its
+managed package store over the network.
+
+```sh
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  mcpp build --offline --release -p hermes-host --features kwin,web-assets,xtest
+```
+
+Wayland is enabled by default. The `kwin` feature adds the isolated KWin
+PipeWire transport and needs the Plasma Wayland Protocols XML, including
+screencast protocol version 6 or newer, in
+`.toolchain/fedora/usr/share/plasma-wayland-protocols`. The `xtest` feature
+needs the extracted Xtst headers and linker files in the Fedora prefix.
+Use `tray` with the Qt 6 Widgets and SVG headers and linker files in the
+Fedora prefix. The native build runs Qt's `moc` from
+`.toolchain/fedora/usr/lib64/qt6/libexec/moc`. Set `HERMES_MCPP_QT_MOC`
+when the matching Qt tool lives elsewhere.
+
+The `cuda` feature follows Hermes's CUDA 12.9 release policy to preserve its
+supported GPU architectures. Use
+`scripts/install_cuda_redist.sh 12.9.1 "$PWD/.toolchain/cuda-12.9"` to
+provision a local toolkit. Its device compiler compiles only `cuda.cu`
+using C++17 and a compatible GCC 14 host compiler. An extracted Fedora GCC
+14.4.1 can live at `.toolchain/cuda-gcc14/usr/bin/g++-14`. Set
+`CUDAHOSTCXX` or `HERMES_MCPP_CUDA_PREFIX` for alternative locations. The
+main host continues to use its configured C++23 toolchain.
+
+Use `pyrowave` with the matching upstream shared SDK at `.toolchain/pyrowave`
+or set `HERMES_MCPP_PYROWAVE_PREFIX` to its install prefix. The SDK needs
+`include/pyrowave/pyrowave.h` and `lib/libpyrowave-shared.so`, and the Fedora
+prefix provides the Vulkan loader and headers. Local builds use the SDK's
+`lib` directory at runtime. For packages, configure
+`HERMES_MCPP_PYROWAVE_RUNPATH` to the absolute installed library directory if
+it differs from Fedora's `/usr/lib64/hermes`.
+
+`web-assets` builds Vite and stages Linux runtime assets, including a default
+`apps.json`, in the mcpp output tree. A package build can use
+`package-assets` for identical staged assets and a runtime path of
+`/usr/share/hermes`.
+
+The release host executable is at
+`target/x86_64-linux-gnu/<fingerprint>/bin/hermes-host/hermes`. Its
+`--version` and `--help` commands can run with a temporary
+`XDG_CONFIG_HOME` to keep smoke-test output and generated configuration
+separate from an installed Hermes instance. Set `XDG_RUNTIME_DIR` to a
+private, writable directory if the build runs under a sandbox with restricted
+access to the session runtime directory.
+
+```sh
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  mcpp build --offline --release -p hermes-kms-card-broker -p hermes-session-broker
+```
+
+Pass the resulting executables to `scripts/card-broker-test.sh` and
+`scripts/session-broker-concurrency-test.py`. Both use temporary fixtures. The
+session broker's end-to-end test requires a disposable Linux VM.
+
+Run the full Linux GoogleTest suite from the repository root so it can read
+the source fixtures. Use a short temporary directory for Unix socket tests
+and a virtual X display when running outside a graphical session.
+
+```sh
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  xvfb-run -a mcpp test --offline -p hermes-host --features kwin,web-assets \
+  --profile coverage -- --gtest_color=yes
+```
+
+## Parity status
+
+The CUDA-disabled CMake reference and the matching mcpp profile compile the
+same 88 source units across the host, ENet, libdisplaydevice, and
+libvirtualhid, including the generated Wayland protocol C sources. KWin adds
+six source units, including two generated protocol C sources. The host linked
+and returned its version and help text. Live streaming and hardware capture
+need separate verification.
+
+The host also built and linked with both Qt tray and PyroWave enabled.
+The full Xvfb test suite with KWin, Qt tray, PyroWave, XTest, and the SDL2
+helper enabled passed 658 cases and skipped 30. A separate headless Sway
+pass completed all three live Wayland layout cases and passed 11 cases
+overall, with six skips. The skips include live GPU and kernel-input cases.
+The Linux migration still needs CUDA and release workflow verification.
+CI, downstream build entry points, and macOS and Windows need their own
+validation before removing CMake.

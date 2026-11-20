@@ -88,9 +88,9 @@ mkdir -p "${prefix}/targets/x86_64-linux"
 ln -sfn ../../include "${prefix}/targets/x86_64-linux/include"
 ln -sfn ../../lib "${prefix}/targets/x86_64-linux/lib"
 
-# The build looks for nvcc under the unversioned path, the way a distro toolkit
-# or the runfile installer leaves it.
-if [ "${prefix}" != "/usr/local/cuda" ]; then
+# Keep the unversioned system path for callers using the default install.
+# An explicit prefix belongs to the caller and must stay self-contained.
+if [ -z "${2:-}" ]; then
     ln -sfn "${prefix}" /usr/local/cuda
 fi
 

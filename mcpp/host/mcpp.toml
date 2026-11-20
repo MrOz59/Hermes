@@ -1,0 +1,265 @@
+[package]
+name = "hermes-host"
+version = "0.7.0"
+description = "Hermes Linux streaming host"
+license = "GPL-3.0-only"
+standard = "gnu++23"
+
+[build]
+cxx_runtime = "host-coupled"
+c_standard = "gnu23"
+sources = [
+    "../../src/audio.cpp",
+    "../../src/cbs.cpp",
+    "../../src/config.cpp",
+    "../../src/confighttp.cpp",
+    "../../src/crypto.cpp",
+    "../../src/display_device.cpp",
+    "../../src/entry_handler.cpp",
+    "../../src/file_handler.cpp",
+    "../../src/globals.cpp",
+    "../../src/httpcommon.cpp",
+    "../../src/input.cpp",
+    "../../src/logging.cpp",
+    "../../src/network.cpp",
+    "../../src/nvhttp.cpp",
+    "../../src/process.cpp",
+    "../../src/rswrapper.c",
+    "../../src/rtsp.cpp",
+    "../../src/stat_trackers.cpp",
+    "../../src/stream.cpp",
+    "../../src/system_tray.cpp",
+    "../../src/upnp.cpp",
+    "../../src/video.cpp",
+    "../../src/video_colorspace.cpp",
+    "../../src/nvenc/*.cpp",
+    "../../src/platform/linux/audio.cpp",
+    "../../src/platform/linux/card_broker.cpp",
+    "../../src/platform/linux/encode_gpu.cpp",
+    "../../src/platform/linux/encoder_probe_display.cpp",
+    "../../src/platform/linux/graphics.cpp",
+    "../../src/platform/linux/input/virtualhid*.cpp",
+    "../../src/platform/linux/kmsgrab.cpp",
+    "../../src/platform/linux/misc.cpp",
+    "../../src/platform/linux/prelogin.cpp",
+    "../../src/platform/linux/publish.cpp",
+    "../../src/platform/linux/session_attach.cpp",
+    "../../src/platform/linux/session_audio.cpp",
+    "../../src/platform/linux/session_broker.cpp",
+    "../../src/platform/linux/session_broker_transport.cpp",
+    "../../src/platform/linux/session_devices.cpp",
+    "../../src/platform/linux/vaapi.cpp",
+    "../../src/platform/linux/virtual_display.cpp",
+    "../../src/platform/linux/x11grab.cpp",
+    "../../third-party/glad/src/egl.c",
+    "../../third-party/glad/src/gl.c",
+    "../../third-party/moonlight-common-c/enet/*.c",
+    "../../third-party/moonlight-common-c/src/RtspParser.c",
+]
+include_dirs = [
+    "../..",
+    "../../third-party/nv-codec-headers/include",
+    "../../third-party",
+    "../../third-party/moonlight-common-c/enet/include",
+    "../../third-party/nanors",
+    "../../third-party/nanors/deps/obl",
+    "../../third-party/build-deps/dist/Linux-x86_64/include",
+    "../../third-party/glad/include",
+    "../../.toolchain/linux-headers-7.3.5/include",
+    "../../.toolchain/boost",
+    "../../.toolchain/json-include",
+    "../../.toolchain/fedora/usr/include",
+    "../../.toolchain/fedora/usr/include/libdrm",
+    "../../.toolchain/fedora/usr/include/opus",
+    "../../.toolchain/fedora/usr/include/pipewire-0.3",
+    "../../.toolchain/fedora/usr/include/spa-0.2",
+    "../../.toolchain/fedora/usr/include/libevdev-1.0",
+]
+defines = [
+    "BOOST_ATOMIC_NO_LIB",
+    "BOOST_ATOMIC_STATIC_LINK",
+    "BOOST_CHRONO_NO_LIB",
+    "BOOST_CHRONO_STATIC_LINK",
+    "BOOST_CONTAINER_NO_LIB",
+    "BOOST_CONTAINER_STATIC_LINK",
+    "BOOST_CONTEXT_EXPORT=",
+    "BOOST_CONTEXT_NO_LIB=",
+    "BOOST_CONTEXT_STATIC_LINK=",
+    "BOOST_DATE_TIME_NO_LIB",
+    "BOOST_DATE_TIME_STATIC_LINK",
+    "BOOST_FILESYSTEM_NO_LIB",
+    "BOOST_FILESYSTEM_STATIC_LINK=1",
+    "BOOST_LOCALE_NO_LIB",
+    "BOOST_LOCALE_STATIC_LINK",
+    "BOOST_LOG_NO_LIB",
+    "BOOST_LOG_STATIC_LINK",
+    "BOOST_PROCESS_STATIC_LINK",
+    "BOOST_PROGRAM_OPTIONS_NO_LIB",
+    "BOOST_PROGRAM_OPTIONS_STATIC_LINK",
+    "BOOST_SERIALIZATION_NO_LIB",
+    "BOOST_SERIALIZATION_STATIC_LINK",
+    "BOOST_THREAD_NO_LIB",
+    "BOOST_THREAD_STATIC_LINK",
+    "BOOST_THREAD_USE_LIB",
+    "EGL_NO_X11=1",
+    "SUNSHINE_BUILD_DRM",
+    "SUNSHINE_BUILD_VAAPI",
+    "SUNSHINE_BUILD_X11",
+    "SUNSHINE_BUILD_SDBUS",
+    'SUNSHINE_PLATFORM="linux"',
+    'SUNSHINE_PUBLISHER_NAME="SudoMaker"',
+    'SUNSHINE_PUBLISHER_WEBSITE="https://www.sudomaker.com"',
+    'SUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/MrOz59/Apollo-Linux/issues"',
+]
+cxxflags = ["-Wall", "-Wno-sign-compare", "-Wno-maybe-uninitialized", "-pthread"]
+ldflags = [
+    "-pthread",
+    "-L../../.toolchain/fedora/usr/lib64",
+    "-L../../third-party/build-deps/dist/Linux-x86_64/lib",
+    "-L../../.toolchain/boost/stage/lib",
+    "-Wl,--start-group",
+    "-l:libavcodec.a",
+    "-l:libswscale.a",
+    "-l:libavutil.a",
+    "-l:libcbs.a",
+    "-l:libSvtAv1Enc.a",
+    "-l:libx264.a",
+    "-l:libx265.a",
+    "-l:libhdr10plus.a",
+    "-l:libboost_filesystem.a",
+    "-l:libboost_locale.a",
+    "-l:libboost_log_setup.a",
+    "-l:libboost_log.a",
+    "-l:libboost_process.a",
+    "-l:libboost_program_options.a",
+    "-l:libboost_thread.a",
+    "-l:libboost_atomic.a",
+    "-l:libboost_chrono.a",
+    "-l:libboost_regex.a",
+    "-l:libboost_date_time.a",
+    "-l:libboost_charconv.a",
+    "-l:libboost_context.a",
+    "-l:libboost_serialization.a",
+    "-l:libboost_container.a",
+    "-Wl,--end-group",
+    "-lcurl",
+    "-lminiupnpc",
+    "-lopus",
+    "-ldrm",
+    "-lcap",
+    "-lva-drm",
+    "-lva-x11",
+    "-lva",
+    "-lX11",
+    "-lXext",
+    "-lpipewire-0.3",
+    "-lpulse-simple",
+    "-lpulse",
+    "-lsystemd",
+    "-lssl",
+    "-lcrypto",
+    "-lnuma",
+    "-lquadmath",
+    "-lrt",
+    "-ldl",
+]
+
+[[build.flags]]
+glob = "../../src/rswrapper.c"
+cflags = ["-ftree-vectorize", "-funroll-loops"]
+
+[[build.flags]]
+glob = "../../src/upnp.cpp"
+cxxflags = ["-Wno-pedantic"]
+
+[[build.flags]]
+glob = "../../third-party/moonlight-common-c/enet/*.c"
+cflags = [
+    "-DHAS_FCNTL=1",
+    "-DHAS_IOCTL=1",
+    "-DHAS_POLL=1",
+    "-DHAS_GETADDRINFO=1",
+    "-DHAS_GETNAMEINFO=1",
+    "-DHAS_GETHOSTBYNAME_R=1",
+    "-DHAS_GETHOSTBYADDR_R=1",
+    "-DHAS_INET_PTON=1",
+    "-DHAS_INET_NTOP=1",
+    "-DHAS_MSGHDR_FLAGS=1",
+    "-DHAS_SOCKLEN_T=1",
+    "-Wno-error",
+]
+
+[targets.hermes]
+kind = "bin"
+main = "../../src/main.cpp"
+
+[dependencies]
+hermes-libdisplaydevice = { path = "../libdisplaydevice" }
+hermes-libvirtualhid = { path = "../libvirtualhid" }
+
+[features]
+default = ["wayland"]
+
+[features.web-assets]
+
+[features.package-assets]
+
+[features.xtest]
+
+[features.wayland]
+sources = ["../../src/platform/linux/wlgrab.cpp", "../../src/platform/linux/wayland.cpp"]
+
+[features.cuda]
+defines = ["SUNSHINE_BUILD_CUDA"]
+sources = ["../../src/platform/linux/cuda.cpp"]
+
+[features.pyrowave]
+defines = ["HAVE_PYROWAVE"]
+sources = ["../../src/platform/linux/pyrowave.cpp"]
+
+[features.tray]
+
+[features.kwin]
+defines = ["SUNSHINE_BUILD_KWIN_TRANSPORT"]
+sources = ["../../src/platform/linux/kwin_display.cpp", "../../src/platform/linux/input/kwin_input.cpp"]
+
+[feature-deps.tray]
+hermes-qt-tray = { path = "../tray" }
+
+[feature-deps.kwin]
+hermes-kwin-transport = { path = "../kwin-transport" }
+
+[feature-deps.xtest]
+hermes-libvirtualhid = { path = "../libvirtualhid", features = ["xtest"] }
+
+[profile.release]
+opt = 3
+
+[features.sdl-hid-tests]
+implies = ["full-tests"]
+
+[feature-deps.sdl-hid-tests]
+hermes-hid-consumer = { path = "../hid-consumer", tools = ["hermes-hid-consumer"] }
+
+[features.full-tests]
+defines = ["SUNSHINE_TESTS", "HERMES_TEST_SESSION_INPUT=1"]
+sources = [
+    "../../third-party/googletest/googletest/src/gtest-all.cc",
+    "../../tools/session-broker-input.cpp",
+]
+
+[profile.coverage]
+opt = 0
+debug = true
+split_debuginfo = "off"
+cflags = ["-fprofile-arcs", "-ftest-coverage", "-ggdb"]
+cxxflags = ["-fprofile-arcs", "-ftest-coverage", "-ggdb"]
+ldflags = ["-fprofile-arcs", "-ftest-coverage"]
+
+[test]
+# The tests link points to the source suite at the repository root.
+discover = ["tests/tests_main.cpp", "tests/integration/*.cpp", "tests/unit/**/*.cpp"]
+programs = "package"
+split = "none"
+link = "objects"
+features = ["full-tests"]

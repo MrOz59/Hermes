@@ -1,0 +1,180 @@
+import std;
+import mcpp;
+
+#include "../wayland-actions.hpp"
+#include "web-assets.hpp"
+#include "pyrowave-build.hpp"
+
+namespace {
+  namespace fs = std::filesystem;
+
+  void add_version_action(const fs::path &manifest, const fs::path &root, const fs::path &out) {
+    const auto generator = (manifest / "generate-version.py").string();
+    const auto version = (root / "VERSION").string();
+    const auto header = (out / "hermes-build-version.h").string();
+    const auto depfile = (out / "hermes-build-version.d").string();
+    const auto repo = root.string();
+
+    mcpp::cxxflag("-include");
+    mcpp::cxxflag(header.c_str());
+
+    mcpp::action action;
+    action.id = "hermes-version";
+    action.role = mcpp::roles::source;
+    action.depfile = depfile.c_str();
+    action.arg("python3").arg(generator.c_str()).arg(repo.c_str())
+      .arg(header.c_str()).arg(depfile.c_str())
+      .input(generator.c_str()).input(version.c_str()).output(header.c_str());
+
+    for (const char *key : {"BRANCH", "BUILD_VERSION", "COMMIT"}) {
+      mcpp::rerun_if_env_changed(key);
+      action.env(key, std::getenv(key) ? std::getenv(key) : "");
+      if (std::getenv(key)) {
+        const auto presence = std::string("HERMES_BUILD_HAS_") + key;
+        action.env(presence.c_str(), "1");
+      }
+    }
+    action.submit();
+  }
+
+  void add_wayland_actions(const fs::path &root, const fs::path &out) {
+    const auto scanner = hermes::build::wayland_scanner(root);
+    mcpp::define("SUNSHINE_BUILD_WAYLAND");
+    for (const char *library : {"-lwayland-client", "-lwayland-server", "-lwayland-egl", "-lwayland-cursor", "-lgbm"}) {
+      mcpp::link_flag(library);
+    }
+    mcpp::include_dir(out.c_str());
+    auto protocols = hermes::build::configured_path("HERMES_MCPP_WAYLAND_PROTOCOLS");
+    if (protocols.empty()) {
+      protocols = root / "third-party/wayland-protocols";
+    }
+    const auto wlr = root / "third-party/wlr-protocols/unstable";
+    const std::array inputs = {
+      protocols / "unstable/xdg-output/xdg-output-unstable-v1.xml",
+      protocols / "unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml",
+      protocols / "staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1.xml",
+      protocols / "staging/ext-image-capture-source/ext-image-capture-source-v1.xml",
+      protocols / "staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml",
+      wlr / "wlr-screencopy-unstable-v1.xml",
+      wlr / "wlr-output-management-unstable-v1.xml",
+    };
+    for (const auto &input : inputs) {
+      hermes::build::add_wayland_protocol(scanner, input, out);
+    }
+  }
+  void add_cuda_kernel(const std::filesystem::path &root, const std::filesystem::path &out) {
+    namespace fs = std::filesystem;
+
+    auto prefix = hermes::build::configured_path("HERMES_MCPP_CUDA_PREFIX");
+    if (prefix.empty()) {
+      prefix = root / ".toolchain/cuda-12.9";
+    }
+    auto host_cxx = hermes::build::configured_path("CUDAHOSTCXX");
+    if (host_cxx.empty()) {
+      host_cxx = root / ".toolchain/cuda-gcc14/usr/bin/g++-14";
+    }
+    const auto nvcc = prefix / "bin/nvcc";
+    const auto runtime = prefix / "lib/libcudart_static.a";
+    const auto culibos = prefix / "lib/libculibos.a";
+    for (const auto &path : {nvcc, host_cxx, runtime, culibos}) {
+      if (!fs::is_regular_file(path)) {
+        throw std::runtime_error("Missing CUDA 12.9 build input: " + path.string());
+      }
+    }
+
+    const auto source = root / "src/platform/linux/cuda.cu";
+    const auto obj = out / "cuda-kernel.o";
+    const auto depfile = out / "cuda-kernel.d";
+
+    mcpp::include_dir((root / "third-party/nvfbc").c_str());
+    mcpp::link_flag(runtime.c_str());
+    mcpp::link_flag(culibos.c_str());
+
+    mcpp::action action;
+    action.id = "hermes-cuda-kernel";
+    action.role = mcpp::roles::object;
+    action.depfile = depfile.c_str();
+    action.arg(nvcc.c_str()).arg("-ccbin").arg(host_cxx.c_str())
+      .arg("-std=c++17").arg("-DSUNSHINE_BUILD_CUDA").arg("-Xcompiler=-fPIC")
+      .arg("-I").arg(root.c_str()).arg("-I").arg((root / "third-party/nvfbc").c_str())
+      .arg("-I").arg((root / "third-party/build-deps/dist/Linux-x86_64/include").c_str())
+      .arg("-MD").arg("-MF").arg(depfile.c_str())
+      .arg("-c").arg(source.c_str()).arg("-o").arg(obj.c_str())
+      .input(nvcc.c_str()).input(host_cxx.c_str()).input(source.c_str()).output(obj.c_str());
+
+    const auto binutils = fs::path(mcpp::toolchain_dir()) / "bin";
+    if (fs::is_regular_file(binutils / "as")) {
+      action.arg(std::format("-Xcompiler=-B{}/", binutils.string()).c_str());
+    }
+
+    // Preserve the GPU coverage of Hermes's CUDA 12.9 release toolchain.
+    for (const char *arch : {"50", "52", "53", "60", "61", "62", "70", "72", "75", "80", "86", "87", "89", "90", "100", "101", "103", "120", "121"}) {
+      const std::string option = std::format("--generate-code=arch=compute_{},code=[compute_{},sm_{}]", arch, arch, arch);
+      action.arg(option.c_str());
+    }
+
+    const std::string_view profile = mcpp::profile();
+    if (profile == "release" || profile == "dist") {
+      action.arg("-O3").arg("-DNDEBUG");
+    } else {
+      action.arg("-g");
+    }
+    action.submit();
+  }
+}  // namespace
+
+int main() {
+  const auto manifest = fs::path(mcpp::manifest_dir());
+  const auto root = manifest.parent_path().parent_path();
+  const auto out = fs::path(mcpp::out_dir());
+  add_version_action(manifest, root, out);
+  const bool package_assets = mcpp::has_feature("package-assets");
+  if (package_assets) {
+    hermes::build::add_web_assets(root, out, "/usr/share/hermes");
+  } else if (mcpp::has_feature("web-assets")) {
+    hermes::build::add_web_assets(root, out, out / "assets");
+  } else {
+    mcpp::define("SUNSHINE_ASSETS_DIR=\"/usr/assets\"");
+  }
+  if (mcpp::has_feature("xtest")) {
+    mcpp::link_lib("Xtst");
+  }
+  if (mcpp::has_feature("full-tests")) {
+    const auto gtest = root / "third-party/googletest/googletest";
+    mcpp::include_dir(gtest.c_str());
+    mcpp::include_dir((gtest / "include").c_str());
+    mcpp::include_dir_after((root / ".toolchain/acl/include").c_str());
+    mcpp::link_search((root / ".toolchain/acl/lib").c_str());
+    mcpp::link_lib("acl");
+
+    const auto define_path = [](const char *key, const fs::path &path) {
+      std::ostringstream definition;
+      definition << key << '=' << std::quoted(path.string());
+      mcpp::define(definition.str().c_str());
+    };
+    define_path("SUNSHINE_SOURCE_DIR", root);
+    define_path("SUNSHINE_TEST_BIN_DIR", ".");
+    define_path("SUNSHINE_SHADERS_DIR", root / "src_assets/linux/assets/shaders/opengl");
+    if (mcpp::has_feature("sdl-hid-tests")) {
+      define_path("HERMES_TEST_HID_CONSUMER", mcpp::dep_bin("hermes-hid-consumer", "hermes-hid-consumer"));
+    }
+    if (fs::is_regular_file("/usr/bin/udevadm")) {
+      define_path("UDEVADM_EXECUTABLE", "/usr/bin/udevadm");
+    }
+  }
+  if (mcpp::has_feature("tray")) {
+    mcpp::define("SUNSHINE_TRAY=1");
+    mcpp::define("SUNSHINE_TRAY_PREFIX=\"hermes\"");
+  } else {
+    mcpp::define("SUNSHINE_TRAY=0");
+  }
+  if (mcpp::has_feature("pyrowave")) {
+    hermes::build::add_pyrowave(root, package_assets);
+  }
+  if (mcpp::has_feature("cuda")) {
+    add_cuda_kernel(root, out);
+  }
+  if (mcpp::has_feature("wayland")) {
+    add_wayland_actions(root, out);
+  }
+}

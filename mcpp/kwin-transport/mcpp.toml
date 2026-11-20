@@ -1,0 +1,35 @@
+[package]
+name = "hermes-kwin-transport"
+version = "0.7.0"
+license = "GPL-3.0-only"
+standard = "gnu++20"
+
+[build]
+sources = [
+    "../../src/platform/linux/kwin_session.cpp",
+    "../../src/platform/linux/pipewire_session.cpp",
+]
+include_dirs = [
+    "../../.toolchain/fedora/usr/include",
+    "../../.toolchain/fedora/usr/include/pipewire-0.3",
+    "../../.toolchain/fedora/usr/include/spa-0.2",
+]
+cxxflags = ["-pthread"]
+ldflags = ["-pthread"]
+
+[targets.hermes-kwin-transport]
+kind = "lib"
+
+[runtime]
+libraries = ["wayland-client", "../../.toolchain/fedora/usr/lib64/libpipewire-0.3.so"]
+link_library_dirs = ["../../.toolchain/fedora/usr/lib64"]
+
+# This library uses no named modules and CMake compiles it as GNU C++20.
+# mcpp otherwise inherits the root's language standard across dependencies.
+[[build.flags]]
+glob = "../../src/platform/linux/kwin_session.cpp"
+cxxflags = ["-std=gnu++20"]
+
+[[build.flags]]
+glob = "../../src/platform/linux/pipewire_session.cpp"
+cxxflags = ["-std=gnu++20"]

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "mcpp/host",
     "mcpp/card-broker",
     "mcpp/session-broker",
     "tests/network_lifecycle",

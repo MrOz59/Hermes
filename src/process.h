@@ -344,6 +344,7 @@ namespace proc {
     std::vector<std::pair<std::string, std::optional<std::string>>> _frame_limit_restore;
     /// The app shut down the desktop's Steam to start its own; start it again when the app ends.
     bool _reopen_desktop_steam {};
+    bool _desktop_steam_flatpak {};
 
     boost::process::v1::child _process;
     boost::process::v1::group _process_group;

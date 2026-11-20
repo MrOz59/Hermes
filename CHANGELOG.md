@@ -90,6 +90,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 
 ### Fixed
+- Stopping the desktop's Steam before a session, and starting it again after a
+  nested Gamescope app, works with Flatpak Steam too (from PunkUnity). Its pid
+  file is in the Flatpak's home and holds a pid from inside the sandbox, so
+  Hermes left it running.
+  Hermes now looks through /proc for the Steam client when `~/.steam/steam.pid`
+  names none, and brings a Flatpak back with `flatpak run`.
 - The Gamescope Steam Session app no longer ends within a second when a Steam
   is already running (from PunkUnity). Gamescope's own client is a new
   `steam -bigpicture`; Steam runs once per user, so it handed the request to

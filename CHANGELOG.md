@@ -12,6 +12,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- Hermes names an application whose audio misses the stream (from PunkUnity).
+  A stream follows the default sink unless an output was chosen for it, in
+  the desktop's sound settings or remembered by the sound server for that
+  application; such a stream stays on its output when Hermes makes its own
+  sink the default, so the client hears nothing from it. During a stream on
+  the host's sound server, Hermes now logs a warning once per application
+  and output: `Audio from <app> -> <sink> does not reach the client, which
+  hears <stream sink>`.
 - VAAPI rolling intra refresh (`vaapi_intra_refresh`, on by default; from PunkUnity).
   The encoder refreshes a band of rows in every frame, the whole picture every
   half second, so a frame lost on the network heals on its own. Hermes then offers

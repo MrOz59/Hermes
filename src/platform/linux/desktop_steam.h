@@ -47,16 +47,17 @@ namespace platf::desktop_steam {
       return false;
     }
 
-    /// The client is `ubuntu12_32/steam` (or `ubuntu12_64/steam`) under the
-    /// Steam directory. The `steam` launcher script has the same name, so the
-    /// name alone does not tell them apart.
+    /// The client is an executable named `steam` under the Steam directory:
+    /// `steamrt64/steam` for the 64-bit client, `ubuntu12_32/steam` before it.
+    /// The `steam` launcher is a shell script with the same process name, but
+    /// its executable is the shell, so the executable's name tells them apart.
     inline bool is_client(const std::filesystem::path &entry) {
       if (first_line(entry / "comm") != "steam") {
         return false;
       }
       std::error_code ec;
       const auto exe = std::filesystem::read_symlink(entry / "exe", ec);
-      return !ec && exe.filename() == "steam" && exe.parent_path().filename().string().starts_with("ubuntu12_");
+      return !ec && exe.filename() == "steam";
     }
 
     inline bool in_flatpak(const std::filesystem::path &entry) {

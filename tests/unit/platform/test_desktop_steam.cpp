@@ -82,6 +82,15 @@ TEST_F(FakeProc, TheLauncherScriptAndOtherUsersAreNotTheClient) {
   EXPECT_FALSE(find(proc, 1000, "", ""));
 }
 
+TEST_F(FakeProc, TheSixtyFourBitClientIsFound) {
+  // Steam's 64-bit client runs from steamrt64/, as seen on the user's host.
+  process(15564, "steam", "/home/u/.local/share/Steam/steamrt64/steam", 1000, "0::/user.slice/user@1000.service/app.slice/app-flatpak-com.valvesoftware.Steam-9.scope");
+  const auto client = find(proc, 1000, "", "");
+  ASSERT_TRUE(client);
+  EXPECT_EQ(client->pid, 15564);
+  EXPECT_TRUE(client->flatpak);
+}
+
 TEST_F(FakeProc, AStalePidFileFallsBackToTheScan) {
   process(4200, "bash", "/usr/bin/bash", 1000);
   process(4300, "steam", "/home/u/.local/share/Steam/ubuntu12_32/steam", 1000);

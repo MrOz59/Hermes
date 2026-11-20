@@ -12,6 +12,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- Import Games on the Applications page (Linux; from PunkUnity): lists the games
+  installed in Steam (native and Flatpak, every Steam library) and Lutris
+  (native and Flatpak), and adds the ones you pick as apps that start the game
+  (`steam steam://rungameid/<id>` or `lutris lutris:rungameid/<id>`, detached).
+  Proton, the Steam Linux Runtime and redistributables are left out, and games
+  that already have an app are marked. Nothing is added until you choose.
 - VAAPI rolling intra refresh (`vaapi_intra_refresh`, on by default; from PunkUnity).
   The encoder refreshes a band of rows in every frame, the whole picture every
   half second, so a frame lost on the network heals on its own. Hermes then offers

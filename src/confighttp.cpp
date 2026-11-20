@@ -30,6 +30,9 @@
   #include <unistd.h>
 #endif
 #ifdef __linux__
+  #include "platform/linux/bounded_command.h"
+  #include "platform/linux/game_library.h"
+
   #include <cerrno>
   #include <cstring>
   #include <fcntl.h>
@@ -1160,6 +1163,74 @@ namespace confighttp {
       BOOST_LOG(warning) << "GetApps: "sv << e.what();
       bad_request(response, request, e.what());
     }
+  }
+
+  /**
+   * @brief List the games installed in Steam and Lutris, to add as apps.
+   *
+   * Reads native Steam (`~/.local/share/Steam`, `~/.steam/steam`) and Flatpak
+   * Steam, and asks Lutris (native or Flatpak) for its installed games. Each
+   * game comes with the command that starts it; nothing is added here.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/library| GET| null}
+   */
+  void getLibrary(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json games = nlohmann::json::array();
+#ifdef __linux__
+    namespace library = platf::game_library;
+    const char *home_env = std::getenv("HOME");
+    const std::filesystem::path home {home_env ? home_env : ""};
+    std::vector<library::game_t> found;
+    const auto add = [&found](std::vector<library::game_t> more) {
+      std::ranges::move(more, std::back_inserter(found));
+    };
+
+    // ~/.steam/steam is usually a link to ~/.local/share/Steam; a game seen
+    // twice is listed once.
+    for (const auto &root : {home / ".local/share/Steam", home / ".steam/steam"}) {
+      std::error_code ec;
+      if (std::filesystem::is_directory(root / "steamapps", ec)) {
+        add(library::steam_games(root, "steam"));
+      }
+    }
+    if (std::error_code ec; std::filesystem::is_directory(home / ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps", ec)) {
+      add(library::steam_games(home / ".var/app/com.valvesoftware.Steam/.local/share/Steam", "flatpak run com.valvesoftware.Steam"));
+    }
+
+    std::string lutris;
+    if (!boost::process::v1::search_path("lutris").empty()) {
+      lutris = "lutris";
+    } else if (std::error_code ec; std::filesystem::is_directory(home / ".var/app/net.lutris.Lutris", ec) &&
+                                   !boost::process::v1::search_path("flatpak").empty()) {
+      lutris = "flatpak run net.lutris.Lutris";
+    }
+    if (!lutris.empty()) {
+      bool timed_out = false;
+      const auto output = platf::bounded_command::output(lutris + " --list-games --installed --json </dev/null 2>/dev/null", std::chrono::seconds {30}, &timed_out);
+      if (output) {
+        add(library::lutris_games(*output, lutris));
+      } else {
+        BOOST_LOG(warning) << "Library: couldn't list Lutris' games"sv << (timed_out ? " (no answer in 30 s)"sv : ""sv);
+      }
+    }
+
+    for (const auto &game : library::merge(std::move(found))) {
+      games.push_back({{"source", game.source}, {"id", game.id}, {"name", game.name}, {"cmd", game.cmd}});
+    }
+#endif
+
+    nlohmann::json output_tree;
+    output_tree["games"] = std::move(games);
+    send_response(response, output_tree);
   }
 
   /**
@@ -4249,6 +4320,7 @@ fi')CLIP";
     server.resource["^/api/apps$"]["GET"] = getApps;
     server.resource["^/api/apps$"]["POST"] = saveApp;
     server.resource["^/api/apps/reorder$"]["POST"] = reorderApps;
+    server.resource["^/api/library$"]["GET"] = getLibrary;
     server.resource["^/api/apps/delete$"]["POST"] = deleteApp;
     server.resource["^/api/apps/launch$"]["POST"] = launchApp;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;

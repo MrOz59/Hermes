@@ -51,6 +51,9 @@ Unless otherwise specified, authentication is required for all API calls.
 ## POST /api/apps/close
 @copydoc confighttp::closeApp()
 
+## GET /api/library
+@copydoc confighttp::getLibrary()
+
 ## POST /api/covers/upload
 @copydoc confighttp::uploadCover()
 

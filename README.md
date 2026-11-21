@@ -85,6 +85,12 @@ one-file-per-module rules. Shared interfaces should expose only what consumers
 need. Avoid introducing abstraction layers that merely forward calls without
 reducing coupling.
 
+## Modernization research (21 November 2026)
+
+- [Architecture and branch divergence](docs/modularization/architecture-review.md) traces the route decision, resource owners, and a behavior change on `main` that the first extraction must account for.
+- [CMake, mcpp, and Xmake for Hermes](docs/modularization/build-system-review.md) compares the proposed tools against the host, CUDA, generated sources, and distribution packages.
+- [Pilot and validation plan](docs/modularization/validation-plan.md) records the successful branch CI reference and defines comparable experiments and adoption criteria. The build-system decision remains open.
+
 ## Migration plan
 
 ### Phase 0 — Baseline and inventory

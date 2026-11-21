@@ -8,6 +8,7 @@ module;
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 export module hermes.client_link_monitor;
 
@@ -47,9 +48,8 @@ export namespace stream {
      * Record a message from the client.
      * @return The silence this message ended, when it is long enough to report.
      */
-    inline std::optional<std::chrono::milliseconds> on_message(clock::time_point now) {
-      const auto previous = last_heard;
-      last_heard = now;
+    inline std::optional<std::chrono::milliseconds> on_message(clock::time_point now) noexcept {
+      const auto previous = std::exchange(last_heard, now);
       if (!armed || !previous) {
         return std::nullopt;
       }
@@ -59,19 +59,25 @@ export namespace stream {
         return std::nullopt;
       }
 
-      last_silence = silence;
-      last_silence_end = now;
+      last_silence = silence_sample_t {.ended_at = now, .duration = silence};
       const auto ms = static_cast<std::uint64_t>(silence.count());
       silences.fetch_add(1, std::memory_order_relaxed);
       total_ms.fetch_add(ms, std::memory_order_relaxed);
+#if defined(__cpp_lib_atomic_min_max)
+      if (ms > longest_ms.load(std::memory_order_relaxed)) {
+        longest_ms.fetch_max(ms, std::memory_order_relaxed);
+      }
+#else
+      // Older libstdc++ releases do not provide the C++26 atomic maximum.
       auto longest = longest_ms.load(std::memory_order_relaxed);
       while (ms > longest && !longest_ms.compare_exchange_weak(longest, ms, std::memory_order_relaxed)) {
       }
+#endif
       return silence;
     }
 
     /// The client sends periodic pings, so its silences mean something.
-    inline void on_periodic_ping() {
+    inline void on_periodic_ping() noexcept {
       armed = true;
     }
 
@@ -79,37 +85,41 @@ export namespace stream {
      * The silence that ended within attribution_window of `now`, if any.
      * Called when the client asks for a key frame.
      */
-    inline std::optional<std::chrono::milliseconds> silence_before(clock::time_point now) const {
-      if (!last_silence_end || now - *last_silence_end > attribution_window) {
+    [[nodiscard]] inline std::optional<std::chrono::milliseconds> silence_before(clock::time_point now) const noexcept {
+      if (!last_silence || now - last_silence->ended_at > attribution_window) {
         return std::nullopt;
       }
-      return last_silence;
+      return last_silence->duration;
     }
 
     /// How long ago the most recent silence ended, relative to `now`.
-    inline std::chrono::milliseconds since_last_silence(clock::time_point now) const {
-      return last_silence_end ?
-               std::chrono::duration_cast<std::chrono::milliseconds>(now - *last_silence_end) :
-               std::chrono::milliseconds::max();
+    [[nodiscard]] inline std::chrono::milliseconds since_last_silence(clock::time_point now) const noexcept {
+      return last_silence.transform([now](const silence_sample_t &sample) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(now - sample.ended_at);
+      }).value_or(std::chrono::milliseconds::max());
     }
 
-    inline std::uint64_t silence_count() const {
+    [[nodiscard]] inline std::uint64_t silence_count() const noexcept {
       return silences.load(std::memory_order_relaxed);
     }
 
-    inline std::chrono::milliseconds longest_silence() const {
+    [[nodiscard]] inline std::chrono::milliseconds longest_silence() const noexcept {
       return std::chrono::milliseconds {longest_ms.load(std::memory_order_relaxed)};
     }
 
-    inline std::chrono::milliseconds total_silence() const {
+    [[nodiscard]] inline std::chrono::milliseconds total_silence() const noexcept {
       return std::chrono::milliseconds {total_ms.load(std::memory_order_relaxed)};
     }
 
   private:
+    struct silence_sample_t {
+      clock::time_point ended_at;
+      std::chrono::milliseconds duration;
+    };
+
     bool armed {false};
     std::optional<clock::time_point> last_heard;
-    std::optional<clock::time_point> last_silence_end;
-    std::chrono::milliseconds last_silence {0};
+    std::optional<silence_sample_t> last_silence;
 
     std::atomic<std::uint64_t> silences {0};
     std::atomic<std::uint64_t> total_ms {0};

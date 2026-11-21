@@ -22,7 +22,7 @@ const config = ref(props.config)
     ></Checkbox>
 
     <!-- Emulated Gamepad Type -->
-    <div class="mb-3" v-if="config.controller === 'enabled' && platform !== 'macos'">
+    <div class="mb-3" v-if="config.controller === 'enabled'">
       <label for="gamepad" class="form-label">{{ $t('config.gamepad') }}</label>
       <select id="gamepad" class="form-select" v-model="config.gamepad">
         <option value="auto">{{ $t('_common.auto') }}</option>
@@ -38,10 +38,6 @@ const config = ref(props.config)
             <option value="xone">{{ $t("config.gamepad_xone") }}</option>
           </template>
 
-          <template #windows>
-            <option value="ds4">{{ $t('config.gamepad_ds4') }}</option>
-            <option value="x360">{{ $t('config.gamepad_x360') }}</option>
-          </template>
         </PlatformLayout>
       </select>
       <div class="form-text">{{ $t('config.gamepad_desc') }}</div>
@@ -62,7 +58,7 @@ const config = ref(props.config)
 
     <!-- Additional options based on gamepad type -->
     <template v-if="config.controller === 'enabled'">
-      <template v-if="config.gamepad === 'ds4' || config.gamepad === 'ds5' || (config.gamepad === 'auto' && platform !== 'macos')">
+      <template v-if="config.gamepad === 'ds4' || config.gamepad === 'ds5' || config.gamepad === 'auto'">
         <div class="mb-3 accordion">
           <div class="accordion-item">
             <h2 class="accordion-header">
@@ -74,16 +70,16 @@ const config = ref(props.config)
             <div id="panelsStayOpen-collapseOne" class="accordion-collapse collapse show"
                  aria-labelledby="panelsStayOpen-headingOne">
               <div class="accordion-body">
-                <!-- Automatic detection options (for Windows and Linux) -->
-                <template v-if="config.gamepad === 'auto' && (platform === 'windows' || platform === 'linux')">
-                  <!-- Gamepad with motion-capability as DS4(Windows)/DS5(Linux) -->
+                <!-- Automatic detection options -->
+                <template v-if="config.gamepad === 'auto'">
+                  <!-- Gamepad with motion-capability as DS5 -->
                   <Checkbox class="mb-3"
                             id="motion_as_ds4"
                             locale-prefix="config"
                             v-model="config.motion_as_ds4"
                             default="true"
                   ></Checkbox>
-                  <!-- Gamepad with touch-capability as DS4(Windows)/DS5(Linux) -->
+                  <!-- Gamepad with touch-capability as DS5 -->
                   <Checkbox class="mb-3"
                             id="touchpad_as_ds4"
                             locale-prefix="config"
@@ -92,7 +88,7 @@ const config = ref(props.config)
                   ></Checkbox>
                 </template>
                 <!-- Back/Select can click any PlayStation-style virtual touchpad. -->
-                <template v-if="config.gamepad === 'ds4' || (platform === 'linux' && config.gamepad === 'ds5') || (config.gamepad === 'auto' && (platform === 'windows' || platform === 'linux'))">
+                <template v-if="config.gamepad === 'ds4' || config.gamepad === 'ds5' || config.gamepad === 'auto'">
                   <Checkbox class="mb-3"
                             id="ds4_back_as_touchpad_click"
                             locale-prefix="config"
@@ -142,30 +138,8 @@ const config = ref(props.config)
               default="true"
     ></Checkbox>
 
-    <!-- Key Repeat Delay-->
-    <div class="mb-3" v-if="config.keyboard === 'enabled' && platform === 'windows'">
-      <label for="key_repeat_delay" class="form-label">{{ $t('config.key_repeat_delay') }}</label>
-      <input type="text" class="form-control" id="key_repeat_delay" placeholder="500"
-             v-model="config.key_repeat_delay" />
-      <div class="form-text">{{ $t('config.key_repeat_delay_desc') }}</div>
-    </div>
 
-    <!-- Key Repeat Frequency-->
-    <div class="mb-3" v-if="config.keyboard === 'enabled' && platform === 'windows'">
-      <label for="key_repeat_frequency" class="form-label">{{ $t('config.key_repeat_frequency') }}</label>
-      <input type="text" class="form-control" id="key_repeat_frequency" placeholder="24.9"
-             v-model="config.key_repeat_frequency" />
-      <div class="form-text">{{ $t('config.key_repeat_frequency_desc') }}</div>
-    </div>
 
-    <!-- Always send scancodes -->
-    <Checkbox v-if="config.keyboard === 'enabled' && platform === 'windows'"
-              class="mb-3"
-              id="always_send_scancodes"
-              locale-prefix="config"
-              v-model="config.always_send_scancodes"
-              default="true"
-    ></Checkbox>
 
     <!-- Mapping Key AltRight to Key Windows -->
     <Checkbox v-if="config.keyboard === 'enabled'"
@@ -232,13 +206,6 @@ const config = ref(props.config)
 
     <!-- Enable Rumble Messages to Controllers -->
     <hr>
-    <Checkbox v-if="platform === 'windows'"
-              class="mb-3"
-              id="forward_rumble"
-              locale-prefix="config"
-              v-model="config.forward_rumble"
-              default="true"
-    ></Checkbox>
 
   </div>
 </template>

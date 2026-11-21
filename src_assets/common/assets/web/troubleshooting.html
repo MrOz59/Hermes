@@ -160,25 +160,6 @@
         </div>
       </div>
     </div>
-    <!-- Reset persistent display device settings -->
-    <div class="card p-2 my-4" v-if="platform === 'windows'">
-      <div class="card-body">
-        <h2 id="dd_reset">{{ $t('troubleshooting.dd_reset') }}</h2>
-        <br>
-        <p style="white-space: pre-line">{{ $t('troubleshooting.dd_reset_desc') }}</p>
-        <div class="alert alert-success" v-if="ddResetStatus === true">
-          {{ $t('troubleshooting.dd_reset_success') }}
-        </div>
-        <div class="alert alert-danger" v-if="ddResetStatus === false">
-          {{ $t('troubleshooting.dd_reset_error') }}
-        </div>
-        <div>
-          <button class="btn btn-warning" :disabled="ddResetPressed" @click="ddResetPersistence">
-            {{ $t('troubleshooting.dd_reset') }}
-          </button>
-        </div>
-      </div>
-    </div>
     <!-- Diagnostic report -->
     <div class="card p-2 my-4">
       <div class="card-body">
@@ -223,8 +204,6 @@
           clients: [],
           closeAppPressed: false,
           closeAppStatus: null,
-          ddResetPressed: false,
-          ddResetStatus: null,
           logs: 'Loading...',
           logFilter: null,
           logInterval: null,
@@ -364,24 +343,6 @@
               this.serverQuit = true;
             });
           }
-        },
-        ddResetPersistence() {
-          this.ddResetPressed = true;
-          fetch("/api/reset-display-device-persistence", {
-            credentials: 'include',
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          })
-            .then((r) => r.json())
-            .then((r) => {
-              this.ddResetPressed = false;
-              this.ddResetStatus = r.status;
-              setTimeout(() => {
-                this.ddResetStatus = null;
-              }, 5000);
-            });
         },
       },
     });

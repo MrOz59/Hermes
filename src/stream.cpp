@@ -367,7 +367,6 @@ namespace stream {
 
   struct session_t {
     ~session_t() {
-#ifdef __linux__
       if (isolated_session) {
         proc::proc.disconnect_isolated(isolated_runtime_owner_id);
       } else if (session_scoped_virtual_display) {
@@ -375,7 +374,6 @@ namespace stream {
           BOOST_LOG(warning) << "Failed to release session-scoped virtual display " << display_name;
         }
       }
-#endif
     }
 
     config_t config;
@@ -455,11 +453,7 @@ namespace stream {
     std::string isolated_seat_id;
     bool session_scoped_virtual_display {false};
     std::string display_name;
-#ifndef _WIN32
     uuid_util::uuid_t display_guid {};
-#else
-    GUID display_guid {};
-#endif
     crypto::PERM permission;
 
     std::list<crypto::command_entry_t> do_cmds;

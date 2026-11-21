@@ -33,9 +33,6 @@ const serverCmdTemplate = {
 function addCmd(cmdArr, template, idx) {
   const _tpl = Object.assign({}, template);
 
-  if (props.platform === 'windows') {
-    _tpl.elevated = false;
-  }
   if (idx < 0) {
     cmdArr.push(_tpl);
   } else {
@@ -119,9 +116,6 @@ onMounted(() => {
         <tr>
           <th scope="col"><i class="fas fa-play"></i> {{ $t('_common.do_cmd') }}</th>
           <th scope="col"><i class="fas fa-undo"></i> {{ $t('_common.undo_cmd') }}</th>
-          <th scope="col" v-if="platform === 'windows'">
-            <i class="fas fa-shield-alt"></i> {{ $t('_common.run_as') }}
-          </th>
           <th scope="col"></th>
         </tr>
         </thead>
@@ -132,14 +126,6 @@ onMounted(() => {
           </td>
           <td>
             <input type="text" class="form-control monospace" v-model="c.undo" />
-          </td>
-          <td v-if="platform === 'windows'" class="align-middle">
-            <Checkbox :id="type + '-cmd-admin-' + i"
-                      label="_common.elevated"
-                      desc=""
-                      default="false"
-                      v-model="c.elevated"
-            ></Checkbox>
           </td>
           <td class="text-end">
             <button class="btn btn-danger me-2" @click="removeCmd(cmds[type], i)">
@@ -169,9 +155,6 @@ onMounted(() => {
         <tr>
           <th scope="col"><i class="fas fa-tag"></i> {{ $t('_common.cmd_name') }}</th>
           <th scope="col"><i class="fas fa-terminal"></i> {{ $t('_common.cmd_val') }}</th>
-          <th scope="col" v-if="platform === 'windows'">
-            <i class="fas fa-shield-alt"></i> {{ $t('_common.run_as') }}
-          </th>
           <th scope="col"></th>
         </tr>
         </thead>
@@ -182,12 +165,6 @@ onMounted(() => {
           </td>
           <td>
             <input type="text" class="form-control monospace" v-model="c.cmd" />
-          </td>
-          <td v-if="platform === 'windows'">
-            <div class="form-check">
-              <input type="checkbox" class="form-check-input" :id="'server-cmd-admin-' + i" v-model="c.elevated"/>
-              <label :for="'server-cmd-admin-' + i" class="form-check-label">{{ $t('_common.elevated') }}</label>
-            </div>
           </td>
           <td class="text-end">
             <button class="btn btn-danger me-2" @click="removeCmd(serverCmd, i)">

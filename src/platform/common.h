@@ -13,12 +13,10 @@
 
 // lib includes
 #include <boost/core/noncopyable.hpp>
-#ifndef _WIN32
-  #include <boost/asio/ip/address.hpp>
-  #include <boost/process/v1/child.hpp>
-  #include <boost/process/v1/group.hpp>
-  #include <boost/process/v1/environment.hpp>
-#endif
+#include <boost/asio/ip/address.hpp>
+#include <boost/process/v1/child.hpp>
+#include <boost/process/v1/group.hpp>
+#include <boost/process/v1/environment.hpp>
 
 // local includes
 #include "src/config.h"
@@ -40,29 +38,6 @@ struct AVHWFramesContext;
 struct AVCodecContext;
 struct AVDictionary;
 
-#ifdef _WIN32
-// Forward declarations of boost classes to avoid having to include boost headers
-// here, which results in issues with Windows.h and WinSock2.h include order.
-namespace boost {
-  namespace asio {
-    namespace ip {
-      class address;
-    }  // namespace ip
-  }  // namespace asio
-
-  namespace filesystem {
-    class path;
-  }
-
-  namespace process::inline v1 {
-    class child;
-    class group;
-    template<typename Char>
-    class basic_environment;
-    typedef basic_environment<char> environment;
-  }  // namespace process::inline v1
-}  // namespace boost
-#endif
 namespace video {
   struct config_t;
 }  // namespace video
@@ -236,9 +211,7 @@ namespace platf {
   enum class mem_type_e {
     system,  ///< System memory
     vaapi,  ///< VAAPI
-    dxgi,  ///< DXGI
     cuda,  ///< CUDA
-    videotoolbox,  ///< VideoToolbox
     unknown  ///< Unknown
   };
 
@@ -394,8 +367,7 @@ namespace platf {
     // Play on host PC
     std::string host;
 
-    // On macOS and Windows, it is not possible to create a virtual sink
-    // Therefore, it is optional
+    // The audio backend may provide virtual sinks for stream capture.
     struct null_t {
       std::string stereo;
       std::string surround51;
@@ -537,8 +509,8 @@ namespace platf {
      * @brief Whether this capture backend requires an HDR encoder when the display is in HDR mode.
      *
      * Capture backends that cannot downconvert or tone-map an HDR/PQ scanout to SDR (such as
-     * KMS grab and Hermes-KMS on Linux) return true. Backends that can deliver an SDR frame from
-     * an HDR desktop (such as Windows Desktop Duplication) return false.
+     * KMS grab and Hermes-KMS) return true. Backends that can deliver an SDR frame
+     * from an HDR desktop return false.
      */
     virtual bool requires_hdr_for_hdr_output() const {
       return false;
@@ -679,14 +651,12 @@ namespace platf {
    */
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
 
-#ifdef __linux__
   /**
    * @brief A display with no screen behind it, for validating encoders.
    * @details It captures nothing; validation encodes only the synthetic frames
    * it fills in, so no monitor or virtual output is needed or touched.
    */
   std::shared_ptr<display_t> encoder_probe_display(mem_type_e hwdevice_type, const video::config_t &config);
-#endif
 
   // A list of names of displays accepted as display_name with the mem_type_e
   std::vector<std::string> display_names(mem_type_e hwdevice_type);

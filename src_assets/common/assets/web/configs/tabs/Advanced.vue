@@ -99,7 +99,7 @@ const config = ref(props.config)
     </div>
 
     <!-- Capture -->
-    <div class="mb-3" v-if="platform !== 'macos'">
+    <div class="mb-3">
       <label for="capture" class="form-label">{{ $t('config.capture') }}</label>
       <select id="capture" class="form-select" v-model="config.capture">
         <option value="">{{ $t('_common.autodetect') }}</option>
@@ -109,10 +109,6 @@ const config = ref(props.config)
             <option value="wlr">wlroots</option>
             <option value="kms">KMS</option>
             <option value="x11">X11</option>
-          </template>
-          <template #windows>
-            <option value="ddx">Desktop Duplication API</option>
-            <option value="wgc">Windows.Graphics.Capture {{ $t('_common.beta') }}</option>
           </template>
         </PlatformLayout>
       </select>
@@ -125,17 +121,9 @@ const config = ref(props.config)
       <select id="encoder" class="form-select" v-model="config.encoder">
         <option value="">{{ $t('_common.autodetect') }}</option>
         <PlatformLayout :platform="platform">
-          <template #windows>
-            <option value="nvenc">NVIDIA NVENC</option>
-            <option value="quicksync">Intel QuickSync</option>
-            <option value="amdvce">AMD AMF/VCE</option>
-          </template>
           <template #linux>
             <option value="nvenc">NVIDIA NVENC</option>
             <option value="vaapi">VA-API</option>
-          </template>
-          <template #macos>
-            <option value="videotoolbox">VideoToolbox</option>
           </template>
         </PlatformLayout>
         <option value="software">{{ $t('config.encoder_software') }}</option>

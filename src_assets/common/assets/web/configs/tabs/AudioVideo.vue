@@ -4,7 +4,6 @@ import {$tp} from '../../platform-i18n'
 import PlatformLayout from '../../PlatformLayout.vue'
 import AdapterNameSelector from './audiovideo/AdapterNameSelector.vue'
 import DisplayOutputSelector from './audiovideo/DisplayOutputSelector.vue'
-import DisplayDeviceOptions from "./audiovideo/DisplayDeviceOptions.vue";
 import DisplayModesSettings from "./audiovideo/DisplayModesSettings.vue";
 import Checkbox from "../../Checkbox.vue";
 
@@ -13,7 +12,6 @@ const $t = inject('i18n').t;
 const props = defineProps([
   'platform',
   'config',
-  'vdisplay',
   'evdiSetupRequired',
   'evdiDiagnostic',
   'evdiInfo',
@@ -21,16 +19,6 @@ const props = defineProps([
   'hermesKmsInfo',
   'min_fps_factor',
 ])
-
-const sudovdaStatus = {
-  '1': 'Unknown',
-  '0': 'Ready',
-  '-1': 'Uninitialized',
-  '-2': 'Version Incompatible',
-  '-3': 'Watchdog Failed'
-}
-
-const currentDriverStatus = computed(() => sudovdaStatus[props.vdisplay])
 
 const evdiMessage = ref('')
 const evdiInstallError = ref(false)
@@ -380,53 +368,14 @@ const validateFallbackMode = (event) => {
       <div class="form-text pre-wrap">
         {{ $tp('config.audio_sink_desc') }}<br>
         <PlatformLayout :platform="platform">
-          <template #windows>
-            <pre>tools\audio-info.exe</pre>
-          </template>
           <template #linux>
             <pre>pacmd list-sinks | grep "name:"</pre>
             <pre>pactl info | grep Source</pre>
-          </template>
-          <template #macos>
-            <a href="https://github.com/mattingalls/Soundflower" target="_blank">Soundflower</a><br>
-            <a href="https://github.com/ExistentialAudio/BlackHole" target="_blank">BlackHole</a>.
           </template>
         </PlatformLayout>
       </div>
     </div>
 
-    <PlatformLayout :platform="platform">
-      <template #windows>
-        <!-- Virtual Sink -->
-        <div class="mb-3">
-          <label for="virtual_sink" class="form-label">{{ $t('config.virtual_sink') }}</label>
-          <input type="text" class="form-control" id="virtual_sink" :placeholder="$t('config.virtual_sink_placeholder')"
-                 v-model="config.virtual_sink" />
-          <div class="form-text pre-wrap">{{ $t('config.virtual_sink_desc') }}</div>
-        </div>
-        <!-- Install Steam Audio Drivers -->
-        <Checkbox class="mb-3"
-                  id="install_steam_audio_drivers"
-                  locale-prefix="config"
-                  v-model="config.install_steam_audio_drivers"
-                  default="true"
-        ></Checkbox>
-
-        <Checkbox class="mb-3"
-                  id="keep_sink_default"
-                  locale-prefix="config"
-                  v-model="config.keep_sink_default"
-                  default="true"
-        ></Checkbox>
-
-        <Checkbox class="mb-3"
-                  id="auto_capture_sink"
-                  locale-prefix="config"
-                  v-model="config.auto_capture_sink"
-                  default="true"
-        ></Checkbox>
-      </template>
-    </PlatformLayout>
 
     <!-- Disable Audio -->
     <Checkbox class="mb-3"
@@ -457,7 +406,7 @@ const validateFallbackMode = (event) => {
 
     <!-- Two users read the driver status as "ready" and expected a virtual display to
          appear on its own. Nothing here asks for one; say so before the settings. -->
-    <div class="alert alert-info small" v-if="platform === 'linux' || platform === 'windows'">
+    <div class="alert alert-info small">
       <div class="fw-semibold mb-1">
         <i class="fa-solid fa-circle-info"></i> {{ $t('config.virtual_display_request_title') }}
       </div>
@@ -510,10 +459,6 @@ const validateFallbackMode = (event) => {
       {{ $t('config.hermes_kms_multi_output_warning') }}
     </div>
 
-    <DisplayDeviceOptions
-      :platform="platform"
-      :config="config"
-    />
 
     <!-- Display Modes -->
     <DisplayModesSettings
@@ -535,23 +480,7 @@ const validateFallbackMode = (event) => {
       <div class="form-text">{{ $t('config.fallback_mode_desc') }}</div>
     </div>
 
-    <!-- Headless Mode -->
-    <Checkbox class="mb-3"
-              id="headless_mode"
-              locale-prefix="config"
-              v-model="config.headless_mode"
-              default="false"
-              v-if="platform === 'windows'"
-    ></Checkbox>
 
-    <!-- Double Refreshrate -->
-    <Checkbox class="mb-3"
-              id="double_refreshrate"
-              locale-prefix="config"
-              v-model="config.double_refreshrate"
-              default="false"
-              v-if="platform === 'windows'"
-    ></Checkbox>
 
     <!-- Isolated Virtual Display -->
     <Checkbox class="mb-3"
@@ -559,14 +488,8 @@ const validateFallbackMode = (event) => {
               locale-prefix="config"
               v-model="config.isolated_virtual_display_option"
               default="false"
-              v-if="platform === 'windows' || platform === 'linux'"
     ></Checkbox>
 
-    <!-- SudoVDA Driver Status -->
-    <div class="alert" :class="[vdisplay ? 'alert-warning' : 'alert-success']" v-if="platform === 'windows'">
-      <i class="fa-solid fa-xl fa-circle-info"></i> SudoVDA Driver status: {{currentDriverStatus}}
-    </div>
-    <div class="form-text" v-if="platform === 'windows' && vdisplay">Please ensure SudoVDA driver is installed to the latest version and enabled properly.</div>
 
     <section class="border-top pt-3 mt-4" v-if="platform === 'linux' && config.virtual_display_backend === 'evdi'">
       <div class="d-flex align-items-center justify-content-between mb-3">

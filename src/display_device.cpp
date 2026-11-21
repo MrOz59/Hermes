@@ -21,11 +21,6 @@
 #include "rtsp.h"
 
 // platform-specific includes
-#ifdef _WIN32
-  #include <display_device/windows/settings_manager.h>
-  #include <display_device/windows/win_api_layer.h>
-  #include <display_device/windows/win_display_device.h>
-#endif
 
 namespace display_device {
   namespace {
@@ -613,20 +608,7 @@ namespace display_device {
      * @return An interface or nullptr if the OS does not support the interface.
      */
     std::unique_ptr<SettingsManagerInterface> make_settings_manager([[maybe_unused]] const std::filesystem::path &persistence_filepath, [[maybe_unused]] const config::video_t &video_config) {
-#ifdef _WIN32
-      return std::make_unique<SettingsManager>(
-        std::make_shared<WinDisplayDevice>(std::make_shared<WinApiLayer>()),
-        std::make_shared<sunshine_audio_context_t>(),
-        std::make_unique<PersistentState>(
-          std::make_shared<FileSettingsPersistence>(persistence_filepath)
-        ),
-        WinWorkarounds {
-          .m_hdr_blank_delay = video_config.dd.wa.hdr_toggle_delay != std::chrono::milliseconds::zero() ? std::make_optional(video_config.dd.wa.hdr_toggle_delay) : std::nullopt
-        }
-      );
-#else
       return nullptr;
-#endif
     }
 
     /**

@@ -1,6 +1,6 @@
 # App Examples
 Since not all applications behave the same, we decided to create some examples to help you get started adding games
-and applications to Sunshine.
+and applications to Hermes.
 
 > [!TIP]
 > Throughout these examples, any fields not shown are left blank. You can enhance your experience by
@@ -44,69 +44,12 @@ and applications to Sunshine.
 > If you do give this entry a virtual display, a `virtual-display-layout` of `mirror` will clone the desktop —
 > Steam included — into the stream; that is the mirror doing it, not the window being placed.
 
-@tabs{
-  @tab{Linux | <!-- -->
-    \| Field                        \| Value                                                \|
-    \|------------------------------\|------------------------------------------------------\|
-    \| Application Name             \| @code{}Steam Big Picture@endcode                     \|
-    \| Command Preporations -> Undo \| @code{}setsid steam steam://close/bigpicture@endcode \|
-    \| Detached Commands            \| @code{}setsid steam steam://open/bigpicture@endcode  \|
-    \| Image                        \| @code{}steam.png@endcode                             \|
-  }
-  @tab{macOS | <!-- -->
-    \| Field                        \| Value                                          \|
-    \|------------------------------\|------------------------------------------------\|
-    \| Application Name             \| @code{}Steam Big Picture@endcode               \|
-    \| Command Preporations -> Undo \| @code{}open steam://close/bigpicture@endcode   \|
-    \| Detached Commands            \| @code{}open steam://open/bigpicture@endcode    \|
-    \| Image                        \| @code{}steam.png@endcode                       \|
-  }
-  @tab{Windows | <!-- -->
-    \| Field                        \| Value                                     \|
-    \|------------------------------\|-------------------------------------------\|
-    \| Application Name             \| @code{}Steam Big Picture@endcode          \|
-    \| Command Preporations -> Undo \| @code{}steam://close/bigpicture@endcode   \|
-    \| Detached Commands            \| @code{}steam://open/bigpicture@endcode    \|
-    \| Image                        \| @code{}steam.png@endcode                  \|
-  }
-}
-
-### Epic Game Store game
-
-> [!NOTE]
-> Using the URI method will be the most consistent between various games.
-
-#### URI
-
-@tabs{
-  @tab{Windows | <!-- -->
-    \| Field            \| Value                                                                                                                                                 \|
-    \|------------------\|-------------------------------------------------------------------------------------------------------------------------------------------------------\|
-    \| Application Name \| @code{}Surviving Mars@endcode                                                                                                                         \|
-    \| Commands         \| @code{}com.epicgames.launcher://apps/d759128018124dcabb1fbee9bb28e178%3A20729b9176c241f0b617c5723e70ec2d%3AOvenbird?action=launch&silent=true@endcode \|
-  }
-}
-
-#### Binary (w/ working directory
-@tabs{
-  @tab{Windows | <!-- -->
-    \| Field             \| Value                                                      \|
-    \|-------------------\|------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                              \|
-    \| Command           \| @code{}MarsEpic.exe@endcode                                \|
-    \| Working Directory \| @code{}"C:\Program Files\Epic Games\SurvivingMars"@endcode \|
-  }
-}
-
-#### Binary (w/o working directory)
-@tabs{
-  @tab{Windows | <!-- -->
-    \| Field             \| Value                                                                   \|
-    \|-------------------\|-------------------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                           \|
-    \| Command           \| @code{}"C:\Program Files\Epic Games\SurvivingMars\MarsEpic.exe"@endcode \|
-  }
-}
+| Field                        | Value                                                |
+|------------------------------|------------------------------------------------------|
+| Application Name             | @code{}Steam Big Picture@endcode                     |
+| Command Preparations -> Undo | @code{}setsid steam steam://close/bigpicture@endcode |
+| Detached Commands            | @code{}setsid steam steam://open/bigpicture@endcode  |
+| Image                        | @code{}steam.png@endcode                             |
 
 ### Steam game
 
@@ -115,73 +58,25 @@ and applications to Sunshine.
 
 #### URI
 
-@tabs{
-  @tab{Linux | <!-- -->
-    \| Field             \| Value                                                \|
-    \|-------------------\|------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                        \|
-    \| Detached Commands \| @code{}setsid steam steam://rungameid/464920@endcode \|
-  }
-  @tab{macOS | <!-- -->
-    \| Field             \| Value                                        \|
-    \|-------------------\|----------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                \|
-    \| Detached Commands \| @code{}open steam://rungameid/464920@endcode \|
-  }
-  @tab{Windows | <!-- -->
-    \| Field             \| Value                                   \|
-    \|-------------------\|-----------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode           \|
-    \| Detached Commands \| @code{}steam://rungameid/464920@endcode \|
-  }
-}
+| Field             | Value                                                |
+|-------------------|------------------------------------------------------|
+| Application Name  | @code{}Surviving Mars@endcode                        |
+| Detached Commands | @code{}setsid steam steam://rungameid/464920@endcode |
 
-#### Binary (w/ working directory
-@tabs{
-  @tab{Linux | <!-- -->
-    \| Field             \| Value                                                        \|
-    \|-------------------\|--------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                \|
-    \| Command           \| @code{}MarsSteam@endcode                                     \|
-    \| Working Directory \| @code{}~/.steam/steam/SteamApps/common/Survivng Mars@endcode \|
-  }
-  @tab{macOS | <!-- -->
-    \| Field             \| Value                                                        \|
-    \|-------------------\|--------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                \|
-    \| Command           \| @code{}MarsSteam@endcode                                     \|
-    \| Working Directory \| @code{}~/.steam/steam/SteamApps/common/Survivng Mars@endcode \|
-  }
-  @tab{Windows | <!-- -->
-    \| Field             \| Value                                                                         \|
-    \|-------------------\|-------------------------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                                 \|
-    \| Command           \| @code{}MarsSteam.exe@endcode                                                  \|
-    \| Working Directory \| @code{}"C:\Program Files (x86)\Steam\steamapps\common\Surviving Mars"@endcode \|
-  }
-}
+#### Binary (with a working directory)
 
-#### Binary (w/o working directory)
-@tabs{
-  @tab{Linux | <!-- -->
-    \| Field             \| Value                                                                  \|
-    \|-------------------\|------------------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                          \|
-    \| Command           \| @code{}~/.steam/steam/SteamApps/common/Survivng Mars/MarsSteam@endcode \|
-  }
-  @tab{macOS | <!-- -->
-    \| Field             \| Value                                                                  \|
-    \|-------------------\|------------------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                          \|
-    \| Command           \| @code{}~/.steam/steam/SteamApps/common/Survivng Mars/MarsSteam@endcode \|
-  }
-  @tab{Windows | <!-- -->
-    \| Field             \| Value                                                                                       \|
-    \|-------------------\|---------------------------------------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                                               \|
-    \| Command           \| @code{}"C:\Program Files (x86)\Steam\steamapps\common\Surviving Mars\MarsSteam.exe"@endcode \|
-  }
-}
+| Field             | Value                                                        |
+|-------------------|--------------------------------------------------------------|
+| Application Name  | @code{}Surviving Mars@endcode                                |
+| Command           | @code{}MarsSteam@endcode                                     |
+| Working Directory | @code{}~/.steam/steam/SteamApps/common/Survivng Mars@endcode |
+
+#### Binary (without a working directory)
+
+| Field             | Value                                                                  |
+|-------------------|------------------------------------------------------------------------|
+| Application Name  | @code{}Surviving Mars@endcode                                          |
+| Command           | @code{}~/.steam/steam/SteamApps/common/Survivng Mars/MarsSteam@endcode |
 
 ### Prep Commands
 
@@ -306,35 +201,6 @@ unmaintained and do not support newer Mutter features such as HDR and VRR.
 | Do        | @code{}sh -c "nvidia-settings -a CurrentMetaMode=\"HDMI-1: nvidia-auto-select { ViewPortIn=${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT}, ViewPortOut=${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT}+0+0 }\""@endcode |
 | Undo      | @code{}nvidia-settings -a CurrentMetaMode=\"HDMI-1: nvidia-auto-select { ViewPortIn=3840x2160, ViewPortOut=3840x2160+0+0 }"@endcode                                                                                            |
 
-##### macOS
-
-###### displayplacer
-
-> [!NOTE]
-> This example uses the `displayplacer` tool to change the resolution.
-> This tool can be installed following instructions in their
-> [GitHub repository](https://github.com/jakehilborn/displayplacer).
-
-| Prep Step | Command                                                                                                                                                                  |
-|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "displayplacer \"id:<screenId> res:${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT} hz:${SUNSHINE_CLIENT_FPS} scaling:on origin:(0,0) degree:0\""@endcode |
-| Undo      | @code{}displayplacer "id:<screenId> res:3840x2160 hz:120 scaling:on origin:(0,0) degree:0"@endcode                                                                       |
-
-##### Windows
-Sunshine has built-in support for changing the resolution and refresh rate on Windows. If you prefer to use a
-third-party tool, you can use *QRes* as an example.
-
-###### QRes
-
-> [!NOTE]
-> This example uses the *QRes* tool to change the resolution and refresh rate.
-> This tool can be downloaded from their [SourceForge repository](https://sourceforge.net/projects/qres).
-
-| Prep Step | Command                                                                                                                   |
-|-----------|---------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}cmd /C "FullPath\qres.exe /x:%SUNSHINE_CLIENT_WIDTH% /y:%SUNSHINE_CLIENT_HEIGHT% /r:%SUNSHINE_CLIENT_FPS%"@endcode |
-| Undo      | @code{}FullPath\qres.exe /x:3840 /y:2160 /r:120@endcode                                                                   |
-
 ### Additional Considerations
 
 #### Experimental independent Linux sessions
@@ -384,7 +250,7 @@ Three fields tune it:
   command's program is `steam`; `on`/`off` force it. Steam mode passes
   `-e --xwayland-count 2`: Steam then picks the visible app and draws its
   overlay, and games run on their own Xwayland so the overlay cannot take
-  their X focus (Wine games minimize when it does). Windows without a Steam
+  their X focus (Wine games minimize when it does). App windows without a Steam
   app ID cannot take focus in Steam mode. Off passes `--xwayland-count 1`.
 - `gamescope-args`: replaces the default
   `--expose-wayland --force-windows-fullscreen`; empty keeps it. These flags
@@ -449,33 +315,6 @@ socket to the compositor automatically.
 > [!CAUTION]
 > Because Flatpak packages run in a sandboxed environment and do not normally have access to the
 > host. A downstream Flatpak with host access may require `flatpak-spawn --host` before a host command.
-
-#### Windows
-**Elevating Commands (Windows)**
-
-If you've installed Sunshine as a service (default), you can specify if a command should be elevated with
-administrative privileges. Simply enable the elevated option in the WEB UI, or add it to the JSON configuration.
-This is an option for both prep-cmd and regular commands and will launch the process with the current user without a
-UAC prompt.
-
-**Example**
-```json
-{
-  "name": "Game With AntiCheat that Requires Admin",
-  "output": "",
-  "cmd": "ping 127.0.0.1",
-  "exclude-global-prep-cmd": false,
-  "elevated": true,
-  "prep-cmd": [
-    {
-      "do": "powershell.exe -command \"Start-Streaming\"",
-      "undo": "powershell.exe -command \"Stop-Streaming\"",
-      "elevated": false
-    }
-  ],
-  "image-path": ""
-}
-```
 
 <div class="section_buttons">
 

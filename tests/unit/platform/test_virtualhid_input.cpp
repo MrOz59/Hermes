@@ -2,7 +2,6 @@
  * @file tests/unit/platform/test_virtualhid_input.cpp
  * @brief Linux input translation and independent-session regression tests.
  */
-#ifdef __linux__
   #include "../../tests_common.h"
   #include "src/globals.h"
   #include "src/input.h"
@@ -1022,4 +1021,3 @@ namespace {
   INSTANTIATE_TEST_SUITE_P(ControllerProfiles, VirtualHidKernelTest, testing::Values("generic", "x360", "xone", "xseries", "ds4", "ds5", "switch"));
   INSTANTIATE_TEST_SUITE_P(XboxEventProfiles, VirtualHidEventKernelTest, testing::Values("xone", "xseries"));
 }  // namespace
-#endif

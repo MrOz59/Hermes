@@ -2,7 +2,6 @@
  * @file tests/unit/test_clipboard_process.cpp
  * @brief Clipboard helpers must not inherit the host's streaming descriptors.
  */
-#ifdef __linux__
   #include <array>
   #include <gtest/gtest.h>
   #include <src/platform/linux/clipboard_process.h>
@@ -111,4 +110,3 @@ TEST(ClipboardProcessTest, ReportsAReaderThatFails) {
   EXPECT_EQ(fgetc(helper.get()), EOF);
   EXPECT_FALSE(helper.finish());
 }
-#endif

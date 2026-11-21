@@ -54,7 +54,6 @@ TEST(HostnameTests, TestAsioEquality) {
   ASSERT_EQ(platf::get_host_name(), boost::asio::ip::host_name());
 }
 
-#ifdef __linux__
 // Detection of a standalone Gamescope session (SteamOS Game Mode) is driven by
 // XDG_CURRENT_DESKTOP / GAMESCOPE_WAYLAND_DISPLAY and takes precedence over the
 // desktop window-system, so it is testable without a real compositor.
@@ -94,4 +93,3 @@ TEST_F(SessionEnvironmentTest, NonGamescopeDesktopIsNotGamescopeSession) {
   const auto env = platf::detect_session_environment();
   ASSERT_NE(env.kind, platf::session_environment_e::gamescope_session);
 }
-#endif

@@ -27,8 +27,6 @@ location by modifying the configuration file.
 |---------|-------------------------------------------------|
 | Docker  | @code{}/config@endcode                          |
 | Linux   | @code{}~/.config/hermes@endcode               |
-| macOS   | @code{}~/.config/hermes@endcode               |
-| Windows | @code{}%ProgramFiles%\\Sunshine\\config@endcode |
 
 Although it is recommended to use the configuration UI, it is possible manually configure Sunshine by
 editing the `conf` file in a text editor. Use the examples as reference.
@@ -233,7 +231,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            global_prep_cmd = [{"do":"nircmd.exe setdisplay 1280 720 32 144","elevated":true,"undo":"nircmd.exe setdisplay 2560 1440 32 144"}]
+            global_prep_cmd = [{"do":"xrandr --output HDMI-1 --mode 1920x1080","undo":"xrandr --output HDMI-1 --mode 3840x2160"}]
             @endcode</td>
     </tr>
 </table>
@@ -291,7 +289,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            server_cmd = [{"name":"Bubbles","cmd":"bubbles.scr","elevated":false}]
+            server_cmd = [{"name":"Open Steam","cmd":"steam"}]
             @endcode</td>
     </tr>
 </table>
@@ -553,8 +551,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td colspan="2">
             Allow Select/Back inputs to also trigger a PlayStation touchpad click. Useful for clients looking to
             emulate touchpad click on Xinput devices.
-            @hint{On Linux this applies to DS4, DS5 and automatically selected PlayStation profiles.
-            On Windows it applies when ds4 is selected manually.}
+            @hint{Applies to DS4, DS5 and automatically selected PlayStation profiles.}
         </td>
     </tr>
     <tr>
@@ -578,7 +575,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Description</td>
         <td colspan="2">
             If a client reports that a connected gamepad has motion sensor support, emulate it on the
-            host as a PlayStation-style controller (DualSense on Linux, DS4 on Windows).
+            host as a PlayStation-style controller (DualSense).
             <br>
             <br>
             When disabled, motion sensors will not be taken into account during gamepad type selection.
@@ -606,7 +603,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Description</td>
         <td colspan="2">
             If a client reports that a connected gamepad has a touchpad, emulate it on the host
-            as a PlayStation-style controller (DualSense on Linux, DS4 on Windows).
+            as a PlayStation-style controller (DualSense).
             <br>
             <br>
             When disabled, touchpad presence will not be taken into account during gamepad type selection.
@@ -779,44 +776,13 @@ alias; new configurations should use the key above.
     </tr>
 </table>
 
-### always_send_scancodes
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Sending scancodes enhances compatibility with games and apps but may result in incorrect keyboard input
-            from certain clients that aren't using a US English keyboard layout.
-            <br>
-            <br>
-            Enable if keyboard input is not working at all in certain applications.
-            <br>
-            <br>
-            Disable if keys on the client are generating the wrong input on the host.
-            @caution{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            enabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            always_send_scancodes = enabled
-            @endcode</td>
-    </tr>
-</table>
-
 ### key_rightalt_to_key_win
 
 <table>
     <tr>
         <td>Description</td>
         <td colspan="2">It may be possible that you cannot send the Windows Key from Moonlight directly. In those cases it may be useful to
-            make Sunshine think the Right Alt key is the Windows key.
+            map the Right Alt key to the Super key on the host.
             </td>
     </tr>
     <tr>
@@ -1067,26 +1033,7 @@ alias; new configurations should use the key above.
             # in some causes you'd need to use the `Sink` device, if `Source` doesn't work, so try:
             pactl info | grep Sink
             @endcode
-            <br>
-            <br>
-            **macOS:**
-            <br>
-            Sunshine can only access microphones on macOS due to system limitations.
-            To stream system audio use
-            [Soundflower](https://github.com/mattingalls/Soundflower) or
-            [BlackHole](https://github.com/ExistentialAudio/BlackHole).
-            <br>
-            <br>
-            **Windows:**
-            <br>
-            Enter the following command in command prompt or PowerShell.
-            @code{}
-            %ProgramFiles%\Sunshine\tools\audio-info.exe
-            @endcode
-            If you have multiple audio devices with identical names, use the Device ID instead.
             }
-            @attention{If you want to mute the host speakers, use
-            [virtual_sink](#virtual_sink) instead.}
         </td>
     </tr>
     <tr>
@@ -1094,51 +1041,9 @@ alias; new configurations should use the key above.
         <td colspan="2">Sunshine will select the default audio device.</td>
     </tr>
     <tr>
-        <td>Example (Linux)</td>
-        <td colspan="2">@code{}
-            audio_sink = alsa_output.pci-0000_09_00.3.analog-stereo
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example (macOS)</td>
-        <td colspan="2">@code{}
-            audio_sink = BlackHole 2ch
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example (Windows)</td>
-        <td colspan="2">@code{}
-            audio_sink = Speakers (High Definition Audio Device)
-            @endcode</td>
-    </tr>
-</table>
-
-### virtual_sink
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            The audio device that's virtual, like Steam Streaming Speakers. This allows Sunshine to stream audio,
-            while muting the speakers.
-            @tip{See [audio_sink](#audio_sink)!}
-            @tip{These are some options for virtual sound devices.
-            * Stream Streaming Speakers (Linux, macOS, Windows)
-              * Steam must be installed.
-              * Enable [install_steam_audio_drivers](#install_steam_audio_drivers)
-                or use Steam Remote Play at least once to install the drivers.
-            * [Virtual Audio Cable](https://vb-audio.com/Cable) (macOS, Windows)
-            }
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">n/a</td>
-    </tr>
-    <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            virtual_sink = Steam Streaming Speakers
+            audio_sink = alsa_output.pci-0000_09_00.3.analog-stereo
             @endcode</td>
     </tr>
 </table>
@@ -1189,31 +1094,6 @@ alias; new configurations should use the key above.
         <td>Example</td>
         <td colspan="2">@code{}
             stream_mic = enabled
-            @endcode</td>
-    </tr>
-</table>
-
-### install_steam_audio_drivers
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Installs the Steam Streaming Speakers driver (if Steam is installed) to support surround sound and muting
-            host audio.
-            @note{This option is only supported on Windows.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            enabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            install_steam_audio_drivers = enabled
             @endcode</td>
     </tr>
 </table>
@@ -1285,17 +1165,6 @@ alias; new configurations should use the key above.
             @endcode
             To be supported by Sunshine, it needs to have at the very minimum:
             `VAProfileH264High   : VAEntrypointEncSlice`
-            <br>
-            <br>
-            **Windows:**
-            <br>
-            Enter the following command in command prompt or PowerShell.
-            @code{}
-            %ProgramFiles%\Sunshine\tools\dxgi-info.exe
-            @endcode
-            For hybrid graphics systems, DXGI reports the outputs are connected to whichever graphics
-            adapter that the application is configured to use, so it's not a reliable indicator of how the
-            display is physically connected.
             }
         </td>
     </tr>
@@ -1304,15 +1173,9 @@ alias; new configurations should use the key above.
         <td colspan="2">Sunshine will select the default video card.</td>
     </tr>
     <tr>
-        <td>Example (Linux)</td>
+        <td>Example</td>
         <td colspan="2">@code{}
             adapter_name = /dev/dri/renderD128
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example (Windows)</td>
-        <td colspan="2">@code{}
-            adapter_name = Radeon RX 580 Series
             @endcode</td>
     </tr>
 </table>
@@ -1339,71 +1202,6 @@ alias; new configurations should use the key above.
             Info: Detected display: DVI-D-1 (id: 4) connected: false
             @endcode
             You need to use the id value inside the parenthesis, e.g. `1`.
-            <br>
-            <br>
-            **macOS:**
-            <br>
-            During Sunshine startup, you should see the list of detected displays:
-            @code{}
-            Info: Detecting displays
-            Info: Detected display: Monitor-0 (id: 3) connected: true
-            Info: Detected display: Monitor-1 (id: 2) connected: true
-            @endcode
-            You need to use the id value inside the parenthesis, e.g. `3`.
-            <br>
-            <br>
-            **Windows:**
-            <br>
-            During Sunshine startup, you should see the list of detected displays:
-            @code{}
-            Info: Currently available display devices:
-            [
-              {
-                "device_id": "{64243705-4020-5895-b923-adc862c3457e}",
-                "display_name": "",
-                "friendly_name": "IDD HDR",
-                "info": null
-              },
-              {
-                "device_id": "{77f67f3e-754f-5d31-af64-ee037e18100a}",
-                "display_name": "",
-                "friendly_name": "SunshineHDR",
-                "info": null
-              },
-              {
-                "device_id": "{daeac860-f4db-5208-b1f5-cf59444fb768}",
-                "display_name": "\\\\.\\DISPLAY1",
-                "friendly_name": "ROG PG279Q",
-                "info": {
-                  "hdr_state": null,
-                  "origin_point": {
-                    "x": 0,
-                    "y": 0
-                  },
-                  "primary": true,
-                  "refresh_rate": {
-                    "type": "rational",
-                    "value": {
-                      "denominator": 1000,
-                      "numerator": 119998
-                    }
-                  },
-                  "resolution": {
-                    "height": 1440,
-                    "width": 2560
-                  },
-                  "resolution_scale": {
-                    "type": "rational",
-                    "value": {
-                      "denominator": 100,
-                      "numerator": 100
-                    }
-                  }
-                }
-              }
-            ]
-            @endcode
-            You need to use the `device_id` value.
             }
         </td>
     </tr>
@@ -1412,21 +1210,9 @@ alias; new configurations should use the key above.
         <td colspan="2">Sunshine will select the default display.</td>
     </tr>
     <tr>
-        <td>Example (Linux)</td>
+        <td>Example</td>
         <td colspan="2">@code{}
             output_name = 0
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example (macOS)</td>
-        <td colspan="2">@code{}
-            output_name = 3
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example (Windows)</td>
-        <td colspan="2">@code{}
-            output_name = {daeac860-f4db-5208-b1f5-cf59444fb768}
             @endcode</td>
     </tr>
 </table>
@@ -1837,358 +1623,51 @@ alias; new configurations should use the key above.
 
 ### dd_configuration_option
 
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Perform mandatory verification and additional configuration for the display device.
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            disabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            dd_configuration_option = ensure_only_display
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="5">Choices</td>
-        <td>disabled</td>
-        <td>Perform no additional configuration (disables all `dd_` configuration options).</td>
-    </tr>
-    <tr>
-        <td>verify_only</td>
-        <td>Verify that display is active only (this is a mandatory step without any extra steps to verify display state).</td>
-    </tr>
-    <tr>
-        <td>ensure_active</td>
-        <td>Activate the display if it's currently inactive.</td>
-    </tr>
-    <tr>
-        <td>ensure_primary</td>
-        <td>Activate the display if it's currently inactive and make it primary.</td>
-    </tr>
-    <tr>
-        <td>ensure_only_display</td>
-        <td>Activate the display if it's currently inactive and disable all others.</td>
-    </tr>
-</table>
+Accepted for existing configurations. The disabled value still lets Hermes
+remove saved legacy display state at startup. Use
+[virtual_display_backend](#virtual_display_backend) for new Linux virtual
+displays.
 
 ### dd_resolution_option
 
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Perform additional resolution configuration for the display device.
-            @note{"Optimize game settings" must be enabled in Moonlight for this option to work.}
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}auto@endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            dd_resolution_option = manual
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="3">Choices</td>
-        <td>disabled</td>
-        <td>Perform no additional configuration.</td>
-    </tr>
-    <tr>
-        <td>auto</td>
-        <td>Change resolution to the requested resolution from the client.</td>
-    </tr>
-    <tr>
-        <td>manual</td>
-        <td>Change resolution to the user specified one (set via [dd_manual_resolution](#dd_manual_resolution)).</td>
-    </tr>
-</table>
+Legacy display resolution setting. The Linux display backend uses the
+resolution requested by the client.
 
 ### dd_manual_resolution
 
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Specify manual resolution to be used.
-            @note{[dd_resolution_option](#dd_resolution_option) must be set to `manual`}
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">n/a</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            dd_manual_resolution = 1920x1080
-            @endcode</td>
-    </tr>
-</table>
+Legacy companion setting for [dd_resolution_option](#dd_resolution_option).
 
 ### dd_refresh_rate_option
 
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Perform additional refresh rate configuration for the display device.
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}auto@endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            dd_refresh_rate_option = manual
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="3">Choices</td>
-        <td>disabled</td>
-        <td>Perform no additional configuration.</td>
-    </tr>
-    <tr>
-        <td>auto</td>
-        <td>Change refresh rate to the requested FPS value from the client.</td>
-    </tr>
-    <tr>
-        <td>manual</td>
-        <td>Change refresh rate to the user specified one (set via [dd_manual_refresh_rate](#dd_manual_refresh_rate)).</td>
-    </tr>
-</table>
+Legacy display refresh-rate setting. The Linux display backend uses the
+refresh rate requested by the client.
 
 ### dd_manual_refresh_rate
 
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Specify manual refresh rate to be used.
-            @note{[dd_refresh_rate_option](#dd_refresh_rate_option) must be set to `manual`}
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">n/a</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            dd_manual_resolution = 120
-            dd_manual_resolution = 59.95
-            @endcode</td>
-    </tr>
-</table>
+Legacy companion setting for [dd_refresh_rate_option](#dd_refresh_rate_option).
 
 ### dd_hdr_option
 
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Perform additional HDR configuration for the display device.
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}auto@endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            dd_hdr_option = disabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Choices</td>
-        <td>disabled</td>
-        <td>Perform no additional configuration.</td>
-    </tr>
-    <tr>
-        <td>auto</td>
-        <td>Change HDR to the requested state from the client if the display supports it.</td>
-    </tr>
-</table>
+Legacy display HDR toggle. See [Hermes-KMS HDR10](hermes_kms_hdr.md) for
+capture requirements.
 
 ### dd_wa_hdr_toggle_delay
 
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            When using virtual display device (VDD) for streaming, it might incorrectly display HDR color. Sunshine can try to mitigate this issue, by turning HDR off and then on again.<br>
-            If the value is set to 0, the workaround is disabled (default). If the value is between 0 and 3000 milliseconds, Sunshine will turn off HDR, wait for the specified amount of time and then turn HDR on again. The recommended delay time is around 500 milliseconds in most cases.<br>
-            DO NOT use this workaround unless you actually have issues with HDR as it directly impacts stream start time!
-            @note{This option works independently of [dd_hdr_option](#dd_hdr_option)}
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            0
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            dd_wa_hdr_toggle_delay = 500
-            @endcode</td>
-    </tr>
-</table>
+Legacy delay for the display HDR toggle.
 
 ### dd_config_revert_delay
 
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Additional delay in milliseconds to wait before reverting configuration when the app has been closed or the last session terminated.
-            Main purpose is to provide a smoother transition when quickly switching between apps.
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}3000@endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            dd_config_revert_delay = 1500
-            @endcode</td>
-    </tr>
-</table>
-
+Legacy display reconfiguration retry delay.
 
 ### dd_config_revert_on_disconnect
 
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            When enabled, display configuration is reverted upon disconnect of all clients instead of app close or last session termination.
-            This can be useful for returning to physical usage of the host machine without closing the active app.
-            @warning{Some applications may not function properly when display configuration is changed while active.}
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}disabled@endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            dd_config_revert_on_disconnect = enabled
-            @endcode</td>
-    </tr>
-</table>
+Controls when the stream requests display-configuration reversion. The default
+is `disabled`. Linux compositor layout handling is described under
+[isolated_virtual_display_option](#isolated_virtual_display_option).
 
 ### dd_mode_remapping
 
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Remap the requested resolution and FPS to another display mode.<br>
-            Depending on the [dd_resolution_option](#dd_resolution_option) and
-            [dd_refresh_rate_option](#dd_refresh_rate_option) values, the following mapping
-            groups are available:
-            <ul>
-                <li>`mixed` - both options are set to `auto`.</li>
-                <li>
-                  `resolution_only` - only [dd_resolution_option](#dd_resolution_option) is set to `auto`.
-                </li>
-                <li>
-                  `refresh_rate_only` - only [dd_refresh_rate_option](#dd_refresh_rate_option) is set to `auto`.
-                </li>
-            </ul>
-            For each of those groups, a list of fields can be configured to perform remapping:
-            <ul>
-                <li>
-                  `requested_resolution` - resolution that needs to be matched in order to use this remapping entry.
-                </li>
-                <li>`requested_fps` - FPS that needs to be matched in order to use this remapping entry.</li>
-                <li>`final_resolution` - resolution value to be used if the entry was matched.</li>
-                <li>`final_refresh_rate` - refresh rate value to be used if the entry was matched.</li>
-            </ul>
-            If `requested_*` field is left empty, it will match <b>everything</b>.<br>
-            If `final_*` field is left empty, the original value will not be remapped and either a requested, manual
-            or current value is used. However, at least one `final_*` must be set, otherwise the entry is considered
-            invalid.<br>
-            @note{"Optimize game settings" must be enabled on client side for ANY entry with `resolution`
-            field to be considered.}
-            @note{First entry to be matched in the list is the one that will be used.}
-            @tip{`requested_resolution` and `final_resolution` can be omitted for `refresh_rate_only` group.}
-            @tip{`requested_fps` and `final_refresh_rate` can be omitted for `resolution_only` group.}
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            dd_mode_remapping = {
-              "mixed": [],
-              "resolution_only": [],
-              "refresh_rate_only": []
-            }
-            @endcode
-        </td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            dd_mode_remapping = {
-              "mixed": [
-                {
-                  "requested_fps": "60",
-                  "final_refresh_rate": "119.95",
-                  "requested_resolution": "1920x1080",
-                  "final_resolution": "2560x1440"
-                },
-                {
-                  "requested_fps": "60",
-                  "final_refresh_rate": "120",
-                  "requested_resolution": "",
-                  "final_resolution": ""
-                }
-              ],
-              "resolution_only": [
-                {
-                  "requested_resolution": "1920x1080",
-                  "final_resolution": "2560x1440"
-                }
-              ],
-              "refresh_rate_only": [
-                {
-                  "requested_fps": "60",
-                  "final_refresh_rate": "119.95"
-                }
-              ]
-            }@endcode
-        </td>
-    </tr>
-</table>
+Legacy resolution and refresh-rate remapping rules.
 
 ### headless_mode
 
@@ -2319,13 +1798,9 @@ alias; new configurations should use the key above.
     <tr>
         <td>enabled</td>
         <td>
-            <b>Windows:</b> change the position of the virtual display (and other
-            displays if there is a hole).
-            <br>
-            <b>Linux:</b> disable the physical outputs for the duration of the
-            session and restore the previous layout when it ends. Windows already
-            on the desktop, including a running fullscreen game, move onto the
-            virtual display.
+            Disable the physical outputs during the session and restore the
+            previous layout when it ends. Open windows, including a running
+            fullscreen game, move onto the virtual display.
         </td>
     </tr>
 </table>
@@ -3062,38 +2537,23 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="6">Choices</td>
+        <td rowspan="4">Choices</td>
         <td>nvfbc</td>
         <td>Use NVIDIA Frame Buffer Capture to capture direct to GPU memory. This is usually the fastest method for
-            NVIDIA cards. NvFBC does not have native Wayland support and does not work with XWayland.
-            @note{Applies to Linux only.}</td>
+            NVIDIA cards. NvFBC does not have native Wayland support and does not work with XWayland.</td>
     </tr>
     <tr>
         <td>wlr</td>
         <td>Capture for wlroots based Wayland compositors via wlr-screencopy-unstable-v1. It is possible to capture
-            virtual displays in e.g. Hyprland using this method.
-            @note{Applies to Linux only.}</td>
+            virtual displays in e.g. Hyprland using this method.</td>
     </tr>
     <tr>
         <td>kms</td>
-        <td>DRM/KMS screen capture from the kernel. This requires that Sunshine has `cap_sys_admin` capability.
-            @note{Applies to Linux only.}</td>
+        <td>DRM/KMS screen capture from the kernel. This requires that Sunshine has `cap_sys_admin` capability.</td>
     </tr>
     <tr>
         <td>x11</td>
-        <td>Uses XCB. This is the slowest and most CPU intensive so should be avoided if possible.
-            @note{Applies to Linux only.}</td>
-    </tr>
-    <tr>
-        <td>ddx</td>
-        <td>Use DirectX Desktop Duplication API to capture the display. This is well-supported on Windows machines.
-            @note{Applies to Windows only.}</td>
-    </tr>
-    <tr>
-        <td>wgc</td>
-        <td>(beta feature) Use Windows.Graphics.Capture to capture the display.
-            @note{Applies to Windows only.}
-            @attention{This capture method is not compatible with the Sunshine service.}</td>
+        <td>Uses XCB. This is the slowest and most CPU intensive so should be avoided if possible.</td>
     </tr>
 </table>
 
@@ -3117,17 +2577,9 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="5">Choices</td>
+        <td rowspan="3">Choices</td>
         <td>nvenc</td>
         <td>For NVIDIA graphics cards</td>
-    </tr>
-    <tr>
-        <td>quicksync</td>
-        <td>For Intel graphics cards</td>
-    </tr>
-    <tr>
-        <td>amdvce</td>
-        <td>For AMD graphics cards</td>
     </tr>
     <tr>
         <td>vaapi</td>
@@ -3297,88 +2749,6 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     </tr>
 </table>
 
-### nvenc_realtime_hags
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Use realtime gpu scheduling priority in NVENC when hardware accelerated gpu scheduling (HAGS) is enabled
-            in Windows. Currently, NVIDIA drivers may freeze in encoder when HAGS is enabled, realtime priority is used
-            and VRAM utilization is close to maximum. Disabling this option lowers the priority to high, sidestepping
-            the freeze at the cost of reduced capture performance when the GPU is heavily loaded.
-            @note{This option only applies when using NVENC [encoder](#encoder).}
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            enabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            nvenc_realtime_hags = enabled
-            @endcode</td>
-    </tr>
-</table>
-
-### nvenc_latency_over_power
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Adaptive P-State algorithm which NVIDIA drivers employ doesn't work well with low latency streaming,
-            so Sunshine requests high power mode explicitly.
-            @note{This option only applies when using NVENC [encoder](#encoder).}
-            @warning{Disabling this is not recommended since this can lead to significantly increased encoding latency.}
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            enabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            nvenc_latency_over_power = enabled
-            @endcode</td>
-    </tr>
-</table>
-
-### nvenc_opengl_vulkan_on_dxgi
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Sunshine can't capture fullscreen OpenGL and Vulkan programs at full frame rate unless they present on
-            top of DXGI. With this option enabled Sunshine changes global Vulkan/OpenGL present method to
-            "Prefer layered on DXGI Swapchain". This is system-wide setting that is reverted on Sunshine program exit.
-            @note{This option only applies when using NVENC [encoder](#encoder).}
-            @note{Applies to Windows only.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            enabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            nvenc_opengl_vulkan_on_dxgi = enabled
-            @endcode</td>
-    </tr>
-</table>
-
 ### nvenc_h264_cavlc
 
 <table>
@@ -3426,471 +2796,6 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
         <td>Example</td>
         <td colspan="2">@code{}
             nvenc_intra_refresh = enabled
-            @endcode</td>
-    </tr>
-</table>
-
-## Intel QuickSync Encoder
-
-### qsv_preset
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            The encoder preset to use.
-            @note{This option only applies when using quicksync [encoder](#encoder).}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            medium
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            qsv_preset = medium
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="7">Choices</td>
-        <td>veryfast</td>
-        <td>fastest (lowest quality)</td>
-    </tr>
-    <tr>
-        <td>faster</td>
-        <td>faster (lower quality)</td>
-    </tr>
-    <tr>
-        <td>fast</td>
-        <td>fast (low quality)</td>
-    </tr>
-    <tr>
-        <td>medium</td>
-        <td>medium (default)</td>
-    </tr>
-    <tr>
-        <td>slow</td>
-        <td>slow (good quality)</td>
-    </tr>
-    <tr>
-        <td>slower</td>
-        <td>slower (better quality)</td>
-    </tr>
-    <tr>
-        <td>veryslow</td>
-        <td>slowest (best quality)</td>
-    </tr>
-</table>
-
-### qsv_coder
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            The entropy encoding to use.
-            @note{This option only applies when using H.264 with the quicksync
-            [encoder](#encoder).}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            auto
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            qsv_coder = auto
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="3">Choices</td>
-        <td>auto</td>
-        <td>let ffmpeg decide</td>
-    </tr>
-    <tr>
-        <td>cabac</td>
-        <td>context adaptive binary arithmetic coding - higher quality</td>
-    </tr>
-    <tr>
-        <td>cavlc</td>
-        <td>context adaptive variable-length coding - faster decode</td>
-    </tr>
-</table>
-
-### qsv_slow_hevc
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            This options enables use of HEVC on older Intel GPUs that only support low power encoding for H.264.
-            @note{This option only applies when using quicksync [encoder](#encoder).}
-            @caution{Streaming performance may be significantly reduced when this option is enabled.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            disabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            qsv_slow_hevc = disabled
-            @endcode</td>
-    </tr>
-</table>
-
-## AMD AMF Encoder
-
-### amd_usage
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            The encoder usage profile is used to set the base set of encoding parameters.
-            @note{This option only applies when using amdvce [encoder](#encoder).}
-            @note{The other AMF options that follow will override a subset of the settings applied by your usage
-            profile, but there are hidden parameters set in usage profiles that cannot be overridden elsewhere.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            ultralowlatency
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            amd_usage = ultralowlatency
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="5">Choices</td>
-        <td>transcoding</td>
-        <td>transcoding (slowest)</td>
-    </tr>
-    <tr>
-        <td>webcam</td>
-        <td>webcam (slow)</td>
-    </tr>
-    <tr>
-        <td>lowlatency_high_quality</td>
-        <td>low latency, high quality (fast)</td>
-    </tr>
-    <tr>
-        <td>lowlatency</td>
-        <td>low latency (faster)</td>
-    </tr>
-    <tr>
-        <td>ultralowlatency</td>
-        <td>ultra low latency (fastest)</td>
-    </tr>
-</table>
-
-### amd_rc
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            The encoder rate control.
-            @note{This option only applies when using amdvce [encoder](#encoder).}
-            @warning{The `vbr_latency` option generally works best, but some bitrate overshoots may still occur.
-            Enabling HRD allows all bitrate based rate controls to better constrain peak bitrate, but may result in
-            encoding artifacts depending on your card.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            vbr_latency
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            amd_rc = vbr_latency
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="4">Choices</td>
-        <td>cqp</td>
-        <td>constant qp mode</td>
-    </tr>
-    <tr>
-        <td>cbr</td>
-        <td>constant bitrate</td>
-    </tr>
-    <tr>
-        <td>vbr_latency</td>
-        <td>variable bitrate, latency constrained</td>
-    </tr>
-    <tr>
-        <td>vbr_peak</td>
-        <td>variable bitrate, peak constrained</td>
-    </tr>
-</table>
-
-### amd_enforce_hrd
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Enable Hypothetical Reference Decoder (HRD) enforcement to help constrain the target bitrate.
-            @note{This option only applies when using amdvce [encoder](#encoder).}
-            @warning{HRD is known to cause encoding artifacts or negatively affect encoding quality on certain cards.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            disabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            amd_enforce_hrd = disabled
-            @endcode</td>
-    </tr>
-</table>
-
-### amd_quality
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            The quality profile controls the tradeoff between speed and quality of encoding.
-            @note{This option only applies when using amdvce [encoder](#encoder).}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            balanced
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            amd_quality = balanced
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="3">Choices</td>
-        <td>speed</td>
-        <td>prefer speed</td>
-    </tr>
-    <tr>
-        <td>balanced</td>
-        <td>balanced</td>
-    </tr>
-    <tr>
-        <td>quality</td>
-        <td>prefer quality</td>
-    </tr>
-</table>
-
-### amd_preanalysis
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Preanalysis can increase encoding quality at the cost of latency.
-            @note{This option only applies when using amdvce [encoder](#encoder).}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            disabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            amd_preanalysis = disabled
-            @endcode</td>
-    </tr>
-</table>
-
-### amd_vbaq
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Variance Based Adaptive Quantization (VBAQ) can increase subjective visual quality by prioritizing
-            allocation of more bits to smooth areas compared to more textured areas.
-            @note{This option only applies when using amdvce [encoder](#encoder).}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            enabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            amd_vbaq = enabled
-            @endcode</td>
-    </tr>
-</table>
-
-### amd_coder
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            The entropy encoding to use.
-            @note{This option only applies when using H.264 with the amdvce
-            [encoder](#encoder).}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            auto
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            amd_coder = auto
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="3">Choices</td>
-        <td>auto</td>
-        <td>let ffmpeg decide</td>
-    </tr>
-    <tr>
-        <td>cabac</td>
-        <td>context adaptive binary arithmetic coding - faster decode</td>
-    </tr>
-    <tr>
-        <td>cavlc</td>
-        <td>context adaptive variable-length coding - higher quality</td>
-    </tr>
-</table>
-
-## VideoToolbox Encoder
-
-### vt_coder
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            The entropy encoding to use.
-            @note{This option only applies when using macOS.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            auto
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            vt_coder = auto
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="3">Choices</td>
-        <td>auto</td>
-        <td>let ffmpeg decide</td>
-    </tr>
-    <tr>
-        <td>cabac</td>
-        <td>context adaptive binary arithmetic coding - faster decode</td>
-    </tr>
-    <tr>
-        <td>cavlc</td>
-        <td>context adaptive variable-length coding - higher quality</td>
-    </tr>
-</table>
-
-### vt_software
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Force Video Toolbox to use software encoding.
-            @note{This option only applies when using macOS.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            auto
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            vt_software = auto
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="4">Choices</td>
-        <td>auto</td>
-        <td>let ffmpeg decide</td>
-    </tr>
-    <tr>
-        <td>disabled</td>
-        <td>disable software encoding</td>
-    </tr>
-    <tr>
-        <td>allowed</td>
-        <td>allow software encoding</td>
-    </tr>
-    <tr>
-        <td>forced</td>
-        <td>force software encoding</td>
-    </tr>
-</table>
-
-### vt_realtime
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Realtime encoding.
-            @note{This option only applies when using macOS.}
-            @warning{Disabling realtime encoding might result in a delayed frame encoding or frame drop.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            enabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            vt_realtime = enabled
             @endcode</td>
     </tr>
 </table>

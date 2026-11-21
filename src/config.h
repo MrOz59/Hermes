@@ -40,9 +40,6 @@ namespace config {
     } sw;
 
     nvenc::nvenc_config nv;
-    bool nv_realtime_hags;
-    bool nv_opengl_vulkan_on_dxgi;
-    bool nv_sunshine_high_power_mode;
 
     struct {
       int preset;
@@ -51,35 +48,6 @@ namespace config {
       int aq;
       int vbv_percentage_increase;
     } nv_legacy;
-
-    struct {
-      std::optional<int> qsv_preset;
-      std::optional<int> qsv_cavlc;
-      bool qsv_slow_hevc;
-    } qsv;
-
-    struct {
-      std::optional<int> amd_usage_h264;
-      std::optional<int> amd_usage_hevc;
-      std::optional<int> amd_usage_av1;
-      std::optional<int> amd_rc_h264;
-      std::optional<int> amd_rc_hevc;
-      std::optional<int> amd_rc_av1;
-      std::optional<int> amd_enforce_hrd;
-      std::optional<int> amd_quality_h264;
-      std::optional<int> amd_quality_hevc;
-      std::optional<int> amd_quality_av1;
-      std::optional<int> amd_preanalysis;
-      std::optional<int> amd_vbaq;
-      int amd_coder;
-    } amd;
-
-    struct {
-      int vt_allow_sw;
-      int vt_require_sw;
-      int vt_realtime;
-      int vt_coder;
-    } vt;
 
     struct {
       bool strict_rc_buffer;
@@ -163,10 +131,8 @@ namespace config {
 
   struct audio_t {
     std::string sink;
-    std::string virtual_sink;
     bool stream;
     bool stream_mic;
-    bool install_steam_drivers;
     bool keep_default;
     bool auto_capture;
   };
@@ -220,7 +186,6 @@ namespace config {
     bool mouse;
     bool controller;
 
-    bool always_send_scancodes;
 
     bool high_resolution_scrolling;
     bool native_pen_touch;

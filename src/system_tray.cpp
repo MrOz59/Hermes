@@ -5,28 +5,11 @@
 // macros
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
 
-  #if defined(_WIN32)
-    #define WIN32_LEAN_AND_MEAN
-    #include <accctrl.h>
-    #include <aclapi.h>
-    #include "platform/windows/utils.h"
-    #define TRAY_ICON WEB_DIR "images/hermes.ico"
-    #define TRAY_ICON_PLAYING WEB_DIR "images/hermes-playing.ico"
-    #define TRAY_ICON_PAUSING WEB_DIR "images/hermes-pausing.ico"
-    #define TRAY_ICON_LOCKED WEB_DIR "images/hermes-locked.ico"
-  #elif defined(__linux__) || defined(linux) || defined(__linux)
     // Use absolute paths for tray icons to ensure they work with all icon themes
     #define TRAY_ICON "/usr/share/icons/hicolor/scalable/status/" SUNSHINE_TRAY_PREFIX "-tray.svg"
     #define TRAY_ICON_PLAYING "/usr/share/icons/hicolor/scalable/status/" SUNSHINE_TRAY_PREFIX "-playing.svg"
     #define TRAY_ICON_PAUSING "/usr/share/icons/hicolor/scalable/status/" SUNSHINE_TRAY_PREFIX "-pausing.svg"
     #define TRAY_ICON_LOCKED "/usr/share/icons/hicolor/scalable/status/" SUNSHINE_TRAY_PREFIX "-locked.svg"
-  #elif defined(__APPLE__) || defined(__MACH__)
-    #define TRAY_ICON WEB_DIR "images/logo-hermes-16.png"
-    #define TRAY_ICON_PLAYING WEB_DIR "images/hermes-playing-16.png"
-    #define TRAY_ICON_PAUSING WEB_DIR "images/hermes-pausing-16.png"
-    #define TRAY_ICON_LOCKED WEB_DIR "images/hermes-locked-16.png"
-    #include <dispatch/dispatch.h>
-  #endif
 
   #define TRAY_MSG_NO_APP_RUNNING "Reload Apps"
 
@@ -50,15 +33,12 @@
   // local includes
   #include "config.h"
   #include "confighttp.h"
-  #include "display_device.h"
   #include "logging.h"
   #include "platform/common.h"
   #include "process.h"
   #include "network.h"
   #include "src/entry_handler.h"
-  #ifdef __linux__
-    #include "platform/linux/misc.h"
-  #endif
+  #include "platform/linux/misc.h"
 
 using namespace std::literals;
 
@@ -66,7 +46,7 @@ using namespace std::literals;
 namespace system_tray {
   static std::atomic tray_initialized = false;
 
-  // Threading variables for all platforms
+  // Tray thread state
   static std::thread tray_thread;
   static std::atomic tray_thread_running = false;
   static std::atomic tray_thread_should_exit = false;
@@ -82,12 +62,6 @@ namespace system_tray {
     proc::proc.terminate();
   }
 
-  void tray_reset_display_device_config_cb([[maybe_unused]] struct tray_menu *item) {
-    BOOST_LOG(info) << "Resetting display device config from system tray"sv;
-
-    std::ignore = display_device::reset_persistence();
-  }
-
   void tray_restart_cb([[maybe_unused]] struct tray_menu *item) {
     BOOST_LOG(info) << "Restarting from system tray"sv;
 
@@ -99,19 +73,7 @@ namespace system_tray {
     BOOST_LOG(info) << "Quitting from system tray"sv;
 
     proc::proc.terminate();
-
-  #ifdef _WIN32
-    // If we're running in a service, return a special status to
-    // tell it to terminate too, otherwise it will just respawn us.
-    if (GetConsoleWindow() == nullptr) {
-      lifetime::exit_sunshine(ERROR_SHUTDOWN_IN_PROGRESS, true);
-      return;
-    }
-  #endif
-
-  #ifdef __linux__
     platf::request_user_service_stop();
-  #endif
 
     lifetime::exit_sunshine(0, true);
   }
@@ -136,10 +98,6 @@ namespace system_tray {
         //       { .text = nullptr } } },
         // { .text = "-" },
         { .text = TRAY_MSG_NO_APP_RUNNING, .cb = tray_force_stop_cb },
-  // Currently display device settings are only supported on Windows
-  #ifdef _WIN32
-        {.text = "Reset Display Device Config", .cb = tray_reset_display_device_config_cb},
-  #endif
         {.text = "Restart", .cb = tray_restart_cb},
         {.text = "Quit", .cb = tray_quit_cb},
         {.text = nullptr}
@@ -149,67 +107,6 @@ namespace system_tray {
   };
 
   int init_tray() {
-  #ifdef _WIN32
-    // If we're running as SYSTEM, Explorer.exe will not have permission to open our thread handle
-    // to monitor for thread termination. If Explorer fails to open our thread, our tray icon
-    // will persist forever if we terminate unexpectedly. To avoid this, we will modify our thread
-    // DACL to add an ACE that allows SYNCHRONIZE access to Everyone.
-    {
-      PACL old_dacl;
-      PSECURITY_DESCRIPTOR sd;
-      auto error = GetSecurityInfo(GetCurrentThread(), SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &old_dacl, nullptr, &sd);
-      if (error != ERROR_SUCCESS) {
-        BOOST_LOG(warning) << "GetSecurityInfo() failed: "sv << error;
-        return 1;
-      }
-
-      auto free_sd = util::fail_guard([sd]() {
-        LocalFree(sd);
-      });
-
-      SID_IDENTIFIER_AUTHORITY sid_authority = SECURITY_WORLD_SID_AUTHORITY;
-      PSID world_sid;
-      if (!AllocateAndInitializeSid(&sid_authority, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &world_sid)) {
-        error = GetLastError();
-        BOOST_LOG(warning) << "AllocateAndInitializeSid() failed: "sv << error;
-        return 1;
-      }
-
-      auto free_sid = util::fail_guard([world_sid]() {
-        FreeSid(world_sid);
-      });
-
-      EXPLICIT_ACCESS ea {};
-      ea.grfAccessPermissions = SYNCHRONIZE;
-      ea.grfAccessMode = GRANT_ACCESS;
-      ea.grfInheritance = NO_INHERITANCE;
-      ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-      ea.Trustee.ptstrName = (LPSTR) world_sid;
-
-      PACL new_dacl;
-      error = SetEntriesInAcl(1, &ea, old_dacl, &new_dacl);
-      if (error != ERROR_SUCCESS) {
-        BOOST_LOG(warning) << "SetEntriesInAcl() failed: "sv << error;
-        return 1;
-      }
-
-      auto free_new_dacl = util::fail_guard([new_dacl]() {
-        LocalFree(new_dacl);
-      });
-
-      error = SetSecurityInfo(GetCurrentThread(), SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, new_dacl, nullptr);
-      if (error != ERROR_SUCCESS) {
-        BOOST_LOG(warning) << "SetSecurityInfo() failed: "sv << error;
-        return 1;
-      }
-    }
-
-    // Wait for the shell to be initialized before registering the tray icon.
-    // This ensures the tray icon works reliably after a logoff/logon cycle.
-    while (GetShellWindow() == nullptr) {
-      Sleep(1000);
-    }
-  #endif
 
     if (tray_init(&tray) < 0) {
       BOOST_LOG(warning) << "Failed to create system tray"sv;
@@ -261,10 +158,6 @@ namespace system_tray {
     static char force_close_msg[256];
     snprintf(msg, std::size(msg), "%s launched.", app_name.c_str());
     snprintf(force_close_msg, std::size(force_close_msg), "Force close [%s]", app_name.c_str());
-  #ifdef _WIN32
-    strncpy(msg, utf8ToAcp(msg).c_str(), std::size(msg) - 1);
-    strncpy(force_close_msg, utf8ToAcp(force_close_msg).c_str(), std::size(force_close_msg) - 1);
-  #endif
     tray.notification_text = msg;
     tray.notification_icon = TRAY_ICON_PLAYING;
     tray.tooltip = PROJECT_NAME;
@@ -285,9 +178,6 @@ namespace system_tray {
     tray_update(&tray);
     char msg[256];
     snprintf(msg, std::size(msg), "Streaming paused for %s", app_name.c_str());
-  #ifdef _WIN32
-    strncpy(msg, utf8ToAcp(msg).c_str(), std::size(msg) - 1);
-  #endif
     tray.icon = TRAY_ICON_PAUSING;
     tray.notification_title = "Stream Paused";
     tray.notification_text = msg;
@@ -309,9 +199,6 @@ namespace system_tray {
     tray_update(&tray);
     char msg[256];
     snprintf(msg, std::size(msg), "Streaming stopped for %s", app_name.c_str());
-  #ifdef _WIN32
-    strncpy(msg, utf8ToAcp(msg).c_str(), std::size(msg) - 1);
-  #endif
     tray.icon = TRAY_ICON;
     tray.notification_icon = TRAY_ICON;
     tray.notification_title = "Application Stopped";
@@ -335,9 +222,6 @@ namespace system_tray {
     tray_update(&tray);
     char msg[256];
     snprintf(msg, std::size(msg), "Application %s exited too fast with code %d. Click here to terminate the stream.", app_name.c_str(), exit_code);
-  #ifdef _WIN32
-    strncpy(msg, utf8ToAcp(msg).c_str(), std::size(msg) - 1);
-  #endif
     tray.icon = TRAY_ICON;
     tray.notification_icon = TRAY_ICON;
     tray.notification_title = "Launch Error";
@@ -364,9 +248,6 @@ namespace system_tray {
 
     char msg[512];
     snprintf(msg, std::size(msg), "%s", reason.c_str());
-  #ifdef _WIN32
-    strncpy(msg, utf8ToAcp(msg).c_str(), std::size(msg) - 1);
-  #endif
     tray.icon = TRAY_ICON;
     tray.notification_icon = TRAY_ICON;
     tray.notification_title = "Stream could not start";
@@ -413,9 +294,6 @@ namespace system_tray {
     tray_update(&tray);
     char msg[256];
     snprintf(msg, std::size(msg), "Device %s paired Succesfully. Please make sure you have access to the device.", device_name.c_str());
-  #ifdef _WIN32
-    strncpy(msg, utf8ToAcp(msg).c_str(), std::size(msg) - 1);
-  #endif
     tray.notification_title = "Device Paired Succesfully";
     tray.notification_text = msg;
     tray.notification_icon = TRAY_ICON;
@@ -437,9 +315,6 @@ namespace system_tray {
     tray_update(&tray);
     char msg[256];
     snprintf(msg, std::size(msg), "%s has connected to the session.", client_name.c_str());
-  #ifdef _WIN32
-    strncpy(msg, utf8ToAcp(msg).c_str(), std::size(msg) - 1);
-  #endif
     tray.notification_title = "Client Connected";
     tray.notification_text = msg;
     tray.notification_icon = TRAY_ICON;
@@ -483,12 +358,7 @@ namespace system_tray {
       return 1;
     }
 
-  #ifdef _WIN32
-    std::string tmp_str = "Open " PROJECT_NAME " (" + config::nvhttp.sunshine_name + ":" + std::to_string(net::map_port(confighttp::PORT_HTTPS)) + ")";
-    static const std::string title_str = utf8ToAcp(tmp_str);
-  #else
     static const std::string title_str = "Open " PROJECT_NAME " (" + config::nvhttp.sunshine_name + ":" + std::to_string(net::map_port(confighttp::PORT_HTTPS)) + ")";
-  #endif
     tray.menu[0].text = title_str.c_str();
 
     if (config::sunshine.hide_tray_controls) {

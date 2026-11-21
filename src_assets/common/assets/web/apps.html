@@ -206,7 +206,7 @@
           <div id="appImagePathHelp" class="form-text">{{ $t('apps.image_desc') }}</div>
         </div>
         <!-- gamepad override -->
-        <div class="mb-3" v-if="platform !== 'macos'">
+        <div class="mb-3">
           <label for="gamepad" class="form-label">{{ $t('config.gamepad') }}</label>
           <select id="gamepad" class="form-select" v-model="editForm.gamepad">
             <option value="">{{ $t('_common.default_global') }}</option>
@@ -219,10 +219,6 @@
               <option value="xone">{{ $t("config.gamepad_xone") }}</option>
             </template>
 
-            <template v-if="platform === 'windows'">
-              <option value="ds4">{{ $t('config.gamepad_ds4') }}</option>
-              <option value="x360">{{ $t('config.gamepad_x360') }}</option>
-            </template>
 
           </select>
           <div class="form-text">{{ $t('config.gamepad_desc') }}</div>
@@ -237,15 +233,6 @@
             <b>{{ $t('_common.note') }}</b> {{ $t('apps.cmd_note') }}
           </div>
         </div>
-        <!-- elevation -->
-        <Checkbox v-if="platform === 'windows'"
-                  class="mb-3"
-                  id="appElevation"
-                  label="_common.run_as"
-                  desc="apps.run_as_desc"
-                  v-model="editForm.elevated"
-                  default="false"
-        ></Checkbox>
         <!-- detached -->
         <div class="mb-3">
           <label class="form-label">{{ $t('apps.detached_cmds') }}</label>
@@ -294,9 +281,6 @@
                 <tr>
                   <th scope="col"><i class="fas fa-play"></i> {{ $t('_common.do_cmd') }}</th>
                   <th scope="col"><i class="fas fa-undo"></i> {{ $t('_common.undo_cmd') }}</th>
-                  <th scope="col" v-if="platform === 'windows'">
-                    <i class="fas fa-shield-alt"></i> {{ $t('_common.run_as') }}
-                  </th>
                   <th scope="col"></th>
                 </tr>
               </thead>
@@ -307,13 +291,6 @@
                   </td>
                   <td>
                     <input type="text" class="form-control monospace" v-model="c.undo" />
-                  </td>
-                  <td v-if="platform === 'windows'" class="align-middle">
-                    <Checkbox :id="type + '-cmd-admin-' + i"
-                              label="_common.elevated"
-                              desc=""
-                              v-model="c.elevated"
-                    ></Checkbox>
                   </td>
                   <td class="text-end">
                     <button class="btn btn-danger mx-2" @click="editForm[type + '-cmd'].splice(i,1)">
@@ -478,12 +455,6 @@
                   v-model="editForm['per-client-app-identity']"
                   default="false"
         ></Checkbox>
-        <!-- resolution scale factor -->
-        <div class="mb-3" v-if="platform === 'windows'">
-          <label for="resolutionScaleFactor" class="form-label">{{ $t('apps.resolution_scale_factor') }}: {{editForm['scale-factor']}}%</label>
-          <input type="range" step="1" min="20" max="200" class="form-range" id="resolutionScaleFactor" v-model="editForm['scale-factor']"/>
-          <div class="form-text">{{ $t('apps.resolution_scale_factor_desc') }}</div>
-        </div>
         <div class="env-hint alert alert-info overflow-auto">
           <div class="form-text">
             <h4>{{ $t('apps.env_vars_about') }}</h4>
@@ -552,19 +523,9 @@
             </tr>
           </table>
 
-          <template v-if="platform === 'windows'">
-            <div class="form-text"><b>{{ $t('apps.env_rtss_cli_example') }}</b>
-              <pre>cmd /C \path\to\rtss-cli.exe limit:set %APOLLO_CLIENT_FPS%</pre>
-            </div>
-          </template>
           <template v-if="platform === 'linux'">
             <div class="form-text"><b>{{ $t('apps.env_xrandr_example') }}</b>
               <pre>sh -c "xrandr --output HDMI-1 --mode \"${APOLLO_CLIENT_WIDTH}x${APOLLO_CLIENT_HEIGHT}\" --rate ${APOLLO_CLIENT_FPS}"</pre>
-            </div>
-          </template>
-          <template v-if="platform === 'macos'">
-            <div class="form-text"><b>{{ $t('apps.env_displayplacer_example') }}</b>
-              <pre>sh -c "displayplacer "id:&lt;screenId&gt; res:${APOLLO_CLIENT_WIDTH}x${APOLLO_CLIENT_HEIGHT} hz:${APOLLO_CLIENT_FPS} scaling:on origin:(0,0) degree:0""</pre>
             </div>
           </template>
 
@@ -885,10 +846,6 @@
           do: "",
           undo: ""
         };
-
-        if (this.platform === 'windows') {
-          template.elevated = false;
-        }
 
         if (idx < 0) {
           cmdArr.push(template);

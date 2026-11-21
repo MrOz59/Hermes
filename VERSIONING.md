@@ -16,7 +16,7 @@ else (e.g. `0.1.0`). Everything derives from it:
 
 | Consumer            | How it reads the version                                  |
 |---------------------|-----------------------------------------------------------|
-| CMake / C++ build   | `CMakeLists.txt` reads `VERSION` into `project(... VERSION)`; exposed to C++ as the `PROJECT_VERSION` macro (boot log + WebUI/API). |
+| mcpp / C++ build    | [The version generator](mcpp/host/generate-version.py) reads `VERSION` and generates the `PROJECT_VERSION` macro for the boot log and Web UI/API. |
 | WebUI               | `package.json` `version` field (kept in sync by the bump script). |
 | `.deb` / `.rpm`     | The CI packaging steps use the build version computed by the `version` job. |
 | Arch package        | CI rewrites `pkgver` in the `PKGBUILD` to the build version before `makepkg`. |
@@ -44,7 +44,7 @@ scripts/bump-version.sh 1.4.2    # or set it explicitly
 
 The script:
 
-1. updates `VERSION` and `package.json`,
+1. updates `VERSION`, `package.json`, and the Arch `pkgver` in `PKGBUILD`,
 2. moves the `[Unreleased]` changelog entries into a new dated
    `## [X.Y.Z] - YYYY-MM-DD` section,
 3. commits as `Release vX.Y.Z`, and
@@ -89,8 +89,8 @@ commits, not a 0.5.1 pre-release. It is also the one separator that Arch
 `pkgver`, `dpkg` and `rpm` all accept.
 
 The `version` job in [`build.yml`](.github/workflows/build.yml) computes it once
-and every package job reads it, passing `BRANCH` and `BUILD_VERSION` into the
-build so `cmake/prep/build_version.cmake` takes the version from the environment
-instead of deriving it from the checkout. A local `makepkg` sets neither and
-keeps the bare `pkgver`; a local `cmake` build off a feature branch still gets
-the branch-derived `X.Y.Z.<short>` (and `.dirty`) suffix it always did.
+and every package job passes it to mcpp as `BUILD_VERSION` along with
+`BRANCH`. The version generator uses that supplied value. A local `makepkg`
+defaults to `BRANCH=local` and uses `pkgver` as `BUILD_VERSION`. An mcpp build
+from a checkout without both variables set appends `.<short-commit>` to the
+version on a feature branch and `.dirty` if Git detects tracked worktree changes.

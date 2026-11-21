@@ -1,4 +1,10 @@
-import std;
+#include <array>
+#include <cstdlib>
+#include <filesystem>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
 import mcpp;
 
 #include "../wayland-actions.hpp"

@@ -84,7 +84,7 @@ jobs:
   # ===========================================
   # Unit / integration tests (Arch container)
   # ===========================================
-  # Builds with -DBUILD_TESTS=ON and runs the GoogleTest suite via ctest.
+  # Builds the full GoogleTest suite with mcpp.
   # Hardware-dependent cases self-skip with GTEST_SKIP on headless runners.
   test:
     runs-on: ubuntu-latest
@@ -99,9 +99,9 @@ jobs:
             base-devel \
             git \
             git-lfs \
-            cmake \
             ninja \
-            boost \
+            python \
+            nlohmann-json \
             openssl \
             opus \
             ffmpeg \
@@ -111,6 +111,8 @@ jobs:
             libxrandr \
             libxfixes \
             libxcb \
+            libxext \
+            libxtst \
             libva \
             libvdpau \
             libcap \
@@ -142,42 +144,48 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
+      - name: Prepare mcpp and native test inputs
+        shell: bash
+        run: |
+          export MCPP_HOME="$RUNNER_TEMP/hermes-mcpp"
+          export MCPP_TOOLCHAIN="path:$RUNNER_TEMP/hermes-gcc"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/hermes-runtime"
+          install -d -m 700 "$XDG_RUNTIME_DIR"
+
+          scripts/prepare-mcpp-ci.sh
+          scripts/prepare-mcpp-linux-sdk.sh
+          printf 'MCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\nXDG_RUNTIME_DIR=%s\n' \
+            "$MCPP_HOME" "$MCPP_TOOLCHAIN" "$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          printf '%s\n' "$MCPP_HOME/bin" >> "$GITHUB_PATH"
+
       - name: Build pinned PyroWave SDK
         run: bash scripts/build-pyrowave-sdk.sh
 
-      - name: Configure CMake (with tests)
-        run: |
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr \
-            -DSUNSHINE_ENABLE_WAYLAND=ON \
-            -DSUNSHINE_ENABLE_X11=ON \
-            -DSUNSHINE_ENABLE_DRM=ON \
-            -DSUNSHINE_ENABLE_CUDA=OFF \
-            -DBUILD_TESTS=ON \
-            -DSUNSHINE_REQUIRE_PYROWAVE=ON
-
-      - name: Build tests
-        run: cmake --build build --target test_sunshine -j$(nproc)
-
-      # The Web UI had no test of any kind, which is how a computed feeding the
-      # root render came to blank the whole home page over one field of the
-      # wrong type. These run on their own vitest config: vite.config.js is
-      # driven by the CMake environment and builds the pages through ejs,
-      # neither of which a unit test needs.
+      # Vitest exercises the Web UI without running the Vite asset build.
       - name: Run the Web UI tests
-        # npm install rather than npm ci: package-lock.json is gitignored here,
-        # and the web-ui CMake target installs the same way.
+        # The checkout keeps package-lock.json outside version control.
         run: |
           npm install
           npm test
 
+      - name: Compile the full Linux test suite
+        shell: bash
+        env:
+          HERMES_MCPP_QT_MOC: /usr/lib/qt6/moc
+        run: |
+          export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/build/pyrowave-sdk/install"
+          mcpp test --no-run --no-programs --offline -p hermes-host \
+            --features tray,pyrowave,web-assets,xtest --profile coverage \
+            --message-format json > "$RUNNER_TEMP/hermes-test-build.jsonl"
+          test_binary="$(jq -ser '[.[] | select(.status == "built") | .launch.argv[0]] |
+            if length == 1 then .[0] else error("expected the Hermes test executable") end' \
+            "$RUNNER_TEMP/hermes-test-build.jsonl")"
+          test -x "$test_binary"
+          echo "HERMES_TEST_BINARY=$test_binary" >> "$GITHUB_ENV"
+
       - name: Run tests
-        # The suite is a single GoogleTest binary (no ctest registration);
-        # run it directly as documented in docs/contributing.md. Run under
-        # xvfb so platf::init() finds an X11 capture source on the headless
-        # runner (otherwise the platform-dependent suites fail their setup).
-        run: xvfb-run -a ./build/tests/test_sunshine --gtest_color=yes
+        # Xvfb supplies the X11 capture source for the headless platform suites.
+        run: xvfb-run -a "$HERMES_TEST_BINARY" --gtest_color=yes
 
       # The hard part of this project is what a compositor does with the
       # outputs Hermes asks it for, and until now no test could see one: every
@@ -193,12 +201,9 @@ jobs:
       # a 1080p output beside it.
       - name: Start a headless compositor
         run: |
-          # Arch ships sway with a file capability. execve() of a file whose
-          # permitted set holds a capability the process cannot receive fails
-          # outright with EPERM, and a container does not get SYS_NICE by
-          # default, so sway would never start. It does not need the capability
-          # here.
-          setcap -r /usr/bin/sway 2>/dev/null || true
+          # The headless fixture does not need Arch's installed SYS_NICE capability.
+          fixture="$RUNNER_TEMP/hermes-sway"
+          install -m 755 /usr/bin/sway "$fixture"
 
           # Not named wayland-anything: the search below looks for 'wayland-*'
           # and find reports its own starting point first, so a runtime
@@ -208,7 +213,7 @@ jobs:
           export XDG_RUNTIME_DIR=/tmp/hermes-test-runtime
           mkdir -p "${XDG_RUNTIME_DIR}"
           chmod 700 "${XDG_RUNTIME_DIR}"
-          echo 'exec sleep infinity' > /tmp/sway-fixture.config
+          printf '%s\n' 'xwayland disable' > /tmp/sway-fixture.config
 
           # WLR_BACKENDS is plural; the singular form is ignored silently and
           # wlroots then autodetects DRM and fails for lack of a seat.
@@ -217,7 +222,7 @@ jobs:
           WLR_LIBINPUT_NO_DEVICES=1 \
           WLR_RENDERER=pixman \
           XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
-            sway -c /tmp/sway-fixture.config > /tmp/sway.log 2>&1 &
+            "$fixture" -c /tmp/sway-fixture.config > /tmp/sway.log 2>&1 &
 
           for _ in $(seq 1 60); do
             socket="$(find "${XDG_RUNTIME_DIR}" -mindepth 1 -maxdepth 1 -type s -name 'wayland-*' | head -n1)"
@@ -261,7 +266,7 @@ jobs:
         # what it always did: platf::init() prefers Wayland when both are set,
         # which would silently move the platform suites off X11.
         run: |
-          ./build/tests/test_sunshine --gtest_color=yes --gtest_filter='Wayland*' \
+          "$HERMES_TEST_BINARY" --gtest_color=yes --gtest_filter='Wayland*' \
             --gtest_output=json:/tmp/wayland-tests.json
 
           # Every case in this suite skips itself when it cannot reach a
@@ -282,77 +287,6 @@ jobs:
           echo "The live layout suite ran against the compositor."
 
   # ===========================================
-  # Windows Build
-  # ===========================================
-  # Temporarily disabled: Hermes targets Linux hosts, and the Windows build
-  # currently fails on a pre-existing Boost.Process v1 inline-namespace
-  # incompatibility with the MSYS2 GCC toolchain (unrelated to Hermes). Set
-  # `if: false` to skip rather than fail the run; remove to re-enable.
-  build-windows:
-    if: false
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: UCRT64
-          update: true
-          install: >-
-            mingw-w64-ucrt-x86_64-toolchain
-            mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-boost
-            mingw-w64-ucrt-x86_64-openssl
-            mingw-w64-ucrt-x86_64-opus
-            mingw-w64-ucrt-x86_64-ffmpeg
-            mingw-w64-ucrt-x86_64-curl
-            mingw-w64-ucrt-x86_64-miniupnpc
-            mingw-w64-ucrt-x86_64-nlohmann-json
-            mingw-w64-ucrt-x86_64-onevpl
-            mingw-w64-ucrt-x86_64-MinHook
-            mingw-w64-ucrt-x86_64-nodejs
-            mingw-w64-ucrt-x86_64-qt6-base
-            mingw-w64-ucrt-x86_64-qt6-svg
-            git
-
-      - name: Configure CMake
-        shell: msys2 {0}
-        run: |
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DSUNSHINE_ENABLE_WAYLAND=OFF \
-            -DSUNSHINE_ENABLE_X11=OFF \
-            -DSUNSHINE_ENABLE_DRM=OFF \
-            -DSUNSHINE_ENABLE_CUDA=ON \
-            -DFETCHCONTENT_FULLY_DISCONNECTED=OFF
-
-      - name: Build
-        shell: msys2 {0}
-        run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(nproc)
-
-      - name: Package
-        shell: msys2 {0}
-        run: |
-          mkdir -p package/apollo
-          cp build/sunshine*.exe package/apollo/apollo.exe 2>/dev/null || cp build/apollo*.exe package/apollo/ 2>/dev/null || true
-          cp -r build/assets/web package/apollo/ 2>/dev/null || true
-          
-      - name: Upload Windows Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: apollo-windows-x64
-          path: package/
-          retention-days: 30
-          if-no-files-found: ignore
-
-  # ===========================================
   # Arch Linux Package (PKGBUILD)
   # ===========================================
   build-arch-pkg:
@@ -363,9 +297,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
-    # Defining both BRANCH and BUILD_VERSION makes cmake/prep/build_version.cmake
-    # take the version verbatim from the environment instead of deriving it from
-    # the git checkout.
+    # The native build uses this release version for binary metadata.
     env:
       BRANCH: ${{ github.ref_name }}
       BUILD_VERSION: ${{ needs.version.outputs.build_version }}
@@ -385,8 +317,7 @@ jobs:
       - name: Setup Arch Linux
         run: |
           pacman -Syu --noconfirm
-          # nvcc does not come from pacman here - the CUDA step below explains
-          # why - but the build still fails without it (CUDA_FAIL_ON_MISSING=ON).
+          # The PKGBUILD requires the pinned CUDA toolkit for releases.
           # wget and zstd are what the two CUDA scripts need to fetch and unpack.
           pacman -S --noconfirm --needed \
             base-devel \
@@ -394,9 +325,11 @@ jobs:
             zstd \
             git \
             git-lfs \
-            cmake \
             ninja \
-            boost \
+            jq \
+            nlohmann-json \
+            patchelf \
+            python \
             openssl \
             opus \
             ffmpeg \
@@ -406,6 +339,8 @@ jobs:
             libxrandr \
             libxfixes \
             libxcb \
+            libxext \
+            libxtst \
             libva \
             libvdpau \
             libcap \
@@ -476,11 +411,8 @@ jobs:
       # refuses to run as root, hence the `builder` user created above.
       - name: Build package with makepkg
         run: |
-          # nvcc is not on the default PATH, and CMake's check_language(CUDA)
-          # has to find it or NVENC is silently left out. CUDAHOSTCXX is what
-          # points nvcc at a compiler it accepts; the PKGBUILD takes both from
-          # the environment, so a local `makepkg` against Arch's own toolkit
-          # still works unchanged.
+          # The pinned nvcc and compatible host compiler are both needed
+          # by the PKGBUILD's native CUDA feature.
           # `su` does not carry the job environment across, so the build vars
           # are passed explicitly rather than inherited.
           su builder -c "export PATH=/usr/local/cuda/bin:\$PATH \
@@ -490,9 +422,7 @@ jobs:
             COMMIT='${COMMIT}'; \
             makepkg -sf --noconfirm"
 
-      # The detached desktop needs the private KWin transport, which CMake
-      # leaves out without PipeWire and plasma-wayland-protocols (screencast
-      # v6). Arch tracks Plasma closely, so its package must have it.
+      # The Arch package must include the private KWin transport.
       - name: Check the detached desktop transport
         run: |
           pkg="$(ls hermes-streaming-[0-9]*.pkg.tar.zst | head -n1)"
@@ -557,10 +487,12 @@ jobs:
             wget \
             xz-utils \
             build-essential \
-            cmake \
             ninja-build \
             libssl-dev \
-            libboost-all-dev \
+            nlohmann-json3-dev \
+            patchelf \
+            pkg-config \
+            python3 \
             libpulse-dev \
             libopus-dev \
             libavcodec-dev \
@@ -576,6 +508,7 @@ jobs:
             libx11-dev \
             libxrandr-dev \
             libxfixes-dev \
+            libxtst-dev \
             libxcb1-dev \
             libxcb-shm0-dev \
             libxcb-xfixes0-dev \
@@ -628,39 +561,51 @@ jobs:
 
       # Install the CUDA toolkit so the .deb ships NVIDIA NVENC, matching the
       # Arch and RPM packages. Only nvcc, its runtime and the headers it needs
-      # are fetched, never the driver stack; CMake links libcudart statically,
+      # are fetched, never the driver stack. Hermes links libcudart statically,
       # so nothing of the toolkit follows into the package. Runs after the
       # checkout because both halves are scripts out of the tree.
       - name: Install CUDA toolkit
         run: |
           host_cxx="$(scripts/install_cuda_host_gcc.sh "${CUDA_HOST_GCC}")"
-          scripts/install_cuda_redist.sh "${CUDA_VERSION}"
+          scripts/install_cuda_redist.sh "${CUDA_VERSION}" "$PWD/.toolchain/cuda-12.9"
           echo "CUDAHOSTCXX=${host_cxx}" >> "${GITHUB_ENV}"
-          echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
+
+      - name: Prepare native build inputs
+        shell: bash
+        run: |
+          export MCPP_HOME="$PWD/.mcpp/local-home"
+          export MCPP_TOOLCHAIN="path:$PWD/.toolchain"
+          bash scripts/prepare-mcpp-ci.sh "${CUDA_HOST_GCC}"
+          bash scripts/prepare-mcpp-linux-sdk.sh
+          npm install --no-audit --no-fund
+          {
+            echo "MCPP_HOME=${MCPP_HOME}"
+            echo "MCPP_TOOLCHAIN=${MCPP_TOOLCHAIN}"
+          } >> "$GITHUB_ENV"
 
       - name: Build pinned PyroWave SDK
         run: bash scripts/build-pyrowave-sdk.sh
 
-      - name: Configure CMake
+      - name: Build Hermes and Linux tools with mcpp
+        shell: bash
         run: |
-          # SUNSHINE_ASSETS_DIR is baked into the binary at compile time and must
-          # match where the package actually puts the assets (/usr/share/hermes).
-          # Without it the default is `assets`, which unix.cmake turns into
-          # /usr/assets, and the Web UI 404s on every page it tries to serve.
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_INSTALL_PREFIX=/usr \
-            -DCMAKE_INSTALL_LIBDIR="lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)" \
-            -DSUNSHINE_ASSETS_DIR=share/hermes \
-            -DSUNSHINE_ENABLE_WAYLAND=ON \
-            -DSUNSHINE_ENABLE_X11=ON \
-            -DSUNSHINE_ENABLE_DRM=ON \
-            -DCUDA_FAIL_ON_MISSING=ON \
-            -DSUNSHINE_REQUIRE_PYROWAVE=ON \
-            -DSUNSHINE_BUNDLE_PYROWAVE=ON
+          export HERMES_MCPP_QT_MOC=/usr/lib/qt6/libexec/moc
+          export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/build/pyrowave-sdk/install"
+          export HERMES_MCPP_PYROWAVE_RUNPATH="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/hermes"
 
-      - name: Build
-        run: cmake --build build --config ${{env.BUILD_TYPE}} -j$(nproc)
+          features=cuda,package-assets,xtest,pyrowave,tray
+          tools=(-p hermes-kms-card-broker -p hermes-session-broker -p hermes-gamemode)
+          protocols=/usr/share/plasma-wayland-protocols
+          if [[ -r "$protocols/fake-input.xml" ]] &&
+             grep -Eq 'name="zkde_screencast_unstable_v1"[[:space:]]+version="([6-9]|[1-9][0-9]+)"' "$protocols/zkde-screencast-unstable-v1.xml"; then
+            features+=,kwin
+            tools+=(-p hermes-detached-session)
+          fi
+
+          "$MCPP_HOME/bin/mcpp" build --offline --release -p hermes-host --features "$features"
+          host_result="$(python3 -c 'import json; print(json.load(open("target/.last-result.json"))["data"]["result"])')"
+          echo "HERMES_HOST_RESULT=${host_result}" >> "$GITHUB_ENV"
+          "$MCPP_HOME/bin/mcpp" build --offline --release "${tools[@]}"
 
       - name: Create DEB Package
         shell: bash
@@ -673,7 +618,10 @@ jobs:
           # by hand is what left the .deb without icons and with a cut-down
           # copy of the systemd unit, and the .rpm without a menu entry at
           # all (#52).
-          packaging/linux/stage-install.sh build "${PKGDIR}" > /dev/null
+          LIBDIR="lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
+          packaging/linux/stage-install.sh --mcpp "${PKGDIR}" \
+            --result "$HERMES_HOST_RESULT" --result target/.last-result.json \
+            --pyrowave-prefix build/pyrowave-sdk/install --libdir "$LIBDIR" --tray > /dev/null
           mkdir -p ${PKGDIR}/DEBIAN
 
           # Derive the dependencies from what the binary actually links, the
@@ -689,8 +637,6 @@ jobs:
           #
           # dpkg-shlibdeps reads debian/control for the package name, so give it
           # a throwaway one rather than a full debian/ source tree.
-          LIBDIR="$(bash scripts/cmake-install-libdir.sh build/CMakeCache.txt)"
-          test -n "${LIBDIR}"
           CODEC_LIB_PATH="$(readlink -f "${PKGDIR}/usr/${LIBDIR}/hermes")"
           # The session broker is a separate executable with its own dependencies
           # (notably libacl). Scan every staged ELF, including the private codec,
@@ -764,8 +710,8 @@ jobs:
           apt-get install -y ./hermes_*_ubuntu${{ matrix.ubuntu }}_amd64.deb
           bash scripts/tests/package-loader-smoke.sh "/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/hermes"
 
-      # Older Plasma protocol packages lack screencast v6; CMake then leaves
-      # the detached desktop out. Say which way this package went.
+      # The detached desktop is omitted when the distro's screen-cast
+      # protocol predates version 6.
       - name: Report the detached desktop transport
         run: |
           if dpkg-deb -c hermes_*_ubuntu${{ matrix.ubuntu }}_amd64.deb | grep -q '/usr/bin/hermes-detached-session$'; then
@@ -819,7 +765,18 @@ jobs:
         run: |
           dnf install -y \
             git \
-            cmake \
+            curl \
+            python3 \
+            libstdc++-static \
+            patchelf \
+            pkgconf-pkg-config \
+            json-devel \
+            systemd \
+            libXext-devel \
+            libXtst-devel \
+            libXcomposite-devel \
+            libXinerama-devel \
+            libXi-devel \
             ninja-build \
             gcc-c++ \
             boost-devel \
@@ -876,40 +833,43 @@ jobs:
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
-      # Install the CUDA toolkit so the .rpm ships NVIDIA NVENC, matching the
-      # Arch and DEB packages. cmake/compile_definitions/linux.cmake reads the
-      # toolkit's version and narrows the architecture list on its own, so which
-      # toolkit lands here is what decides the package's GPU coverage - see the
-      # matrix above. Runs after the checkout because the redistributable path
-      # needs a script out of the tree.
+      # Use the CUDA release that preserves the GPU coverage of the RPM builds.
       - name: Install CUDA toolkit
         run: |
           host_cxx="$(scripts/install_cuda_host_gcc.sh "${CUDA_HOST_GCC}")"
-          scripts/install_cuda_redist.sh "${CUDA_VERSION}"
+          scripts/install_cuda_redist.sh "${CUDA_VERSION}" "$PWD/.toolchain/cuda-12.9"
           echo "CUDAHOSTCXX=${host_cxx}" >> "${GITHUB_ENV}"
-          echo "/usr/local/cuda/bin" >> "${GITHUB_PATH}"
+
+      - name: Prepare native build inputs
+        shell: bash
+        run: |
+          export MCPP_HOME="$PWD/.mcpp/local-home"
+          export MCPP_TOOLCHAIN="path:$PWD/.toolchain"
+          scripts/prepare-mcpp-ci.sh
+          scripts/prepare-mcpp-linux-sdk.sh
+          npm install --no-audit --no-fund
+          printf 'MCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\n' "$MCPP_HOME" "$MCPP_TOOLCHAIN" >> "$GITHUB_ENV"
 
       - name: Build pinned PyroWave SDK
         run: bash scripts/build-pyrowave-sdk.sh
 
-      - name: Configure CMake
+      - name: Build Hermes and Linux tools with mcpp
+        shell: bash
         run: |
-          # Must match where the RPM installs the assets (/usr/share/hermes);
-          # see the DEB job for why the default would break the Web UI.
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr \
-            -DCMAKE_INSTALL_LIBDIR="$(rpm --eval '%{_lib}')" \
-            -DSUNSHINE_ASSETS_DIR=share/hermes \
-            -DSUNSHINE_ENABLE_WAYLAND=ON \
-            -DSUNSHINE_ENABLE_X11=ON \
-            -DSUNSHINE_ENABLE_DRM=ON \
-            -DCUDA_FAIL_ON_MISSING=ON \
-            -DSUNSHINE_REQUIRE_PYROWAVE=ON \
-            -DSUNSHINE_BUNDLE_PYROWAVE=ON
-
-      - name: Build
-        run: cmake --build build -j$(nproc)
+          export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/build/pyrowave-sdk/install"
+          export HERMES_MCPP_PYROWAVE_RUNPATH="$(rpm --eval '%{_libdir}')/hermes"
+          features=cuda,package-assets,xtest,pyrowave,tray
+          tools=(-p hermes-kms-card-broker -p hermes-session-broker -p hermes-gamemode)
+          protocols=/usr/share/plasma-wayland-protocols
+          if [[ -r "$protocols/fake-input.xml" ]] &&
+             grep -Eq 'name="zkde_screencast_unstable_v1"[[:space:]]+version="([6-9]|[1-9][0-9]+)"' "$protocols/zkde-screencast-unstable-v1.xml"; then
+            features+=,kwin
+            tools+=(-p hermes-detached-session)
+          fi
+          "$MCPP_HOME/bin/mcpp" build --offline --release -p hermes-host --features "$features"
+          host_result="$(python3 -c 'import json; print(json.load(open("target/.last-result.json"))["data"]["result"])')"
+          echo "HERMES_HOST_RESULT=${host_result}" >> "$GITHUB_ENV"
+          "$MCPP_HOME/bin/mcpp" build --offline --release "${tools[@]}"
 
       - name: Create RPM Package
         run: |
@@ -920,10 +880,12 @@ jobs:
           # else: no menu entries, no icons, not even the systemd unit, so it
           # installed and then could not be found or started (#52). Stage the
           # project's own install instead, as every other package does.
-          packaging/linux/stage-install.sh build "hermes-${VERSION}" > /dev/null
+          packaging/linux/stage-install.sh --mcpp "hermes-${VERSION}" \
+            --result "$HERMES_HOST_RESULT" --result target/.last-result.json \
+            --pyrowave-prefix build/pyrowave-sdk/install --libdir "$(rpm --eval '%{_lib}')" --tray > /dev/null
           tar -czf ~/rpmbuild/SOURCES/hermes-${VERSION}.tar.gz hermes-${VERSION}
 
-          # %files is generated from that tree, so a file CMake starts or stops
+          # %files is generated from that tree, so a file the stager starts or stops
           # installing cannot silently fall in or out of the package.
           FILE_LIST="$(cd hermes-${VERSION} && {
             find . -type d -path './usr/share/hermes*' -printf '%%dir /%P\n'
@@ -978,7 +940,7 @@ jobs:
           dnf install -y ./hermes-*.rpm
           bash scripts/tests/package-loader-smoke.sh "$(rpm --eval '%{_libdir}')/hermes"
 
-      # Older Plasma protocol packages lack screencast v6; CMake then leaves
+      # Older Plasma protocol packages lack screencast v6. The build then leaves
       # the detached desktop out. Say which way this package went.
       - name: Report the detached desktop transport
         run: |

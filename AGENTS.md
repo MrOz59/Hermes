@@ -43,8 +43,8 @@ label it an assumption or an unverified hypothesis.
 1. Confirm the repository, current checkout/branch, working-tree changes,
    and requested scope. Stop before editing if changes would land on `main`
    or another branch unintentionally.
-2. Read the relevant code and its callers, current tests, CMake target
-   definitions, and recent related changes. Trace real dependency edges
+2. Read the relevant code and its callers, current tests, mcpp package
+   manifests, and recent related changes. Trace real dependency edges
    rather than inferring architecture from filenames.
 3. Identify the smallest useful change and write a short plan covering:
    existing problem, proposed boundary, files likely to change, behavior
@@ -73,7 +73,7 @@ within the approved scope rather than merely producing suggestions.
 - Import unrelated Sunshine/Apollo/other-fork features.
 - Change protocols, endpoints, config keys/defaults, serialized data,
   device behavior, packaging, installation paths, or public ABI/contracts.
-- Upgrade compilers, dependencies, CMake minimum, CUDA toolkit, language
+- Upgrade compilers, dependencies, the mcpp minimum, the CUDA toolkit, language
   standards, or CI runner images as a side effect of a refactor.
 - Remove platform-specific fallback paths, tests, feature flags, or
   compatibility shims to make a new design look cleaner.
@@ -143,57 +143,23 @@ default.
 
 ## Language, compiler, and build constraints
 
-Read `CMakeLists.txt`, `cmake/targets/common.cmake`, relevant
-`cmake/targets/*.cmake`, `cmake/prep/*.cmake`, and
-`.github/workflows/build.yml` before changing build logic.
+Read the workspace `mcpp.toml`, the relevant package manifest and build
+program, and `.github/workflows/build.yml` before changing build logic.
 
-At creation of this file, the observed configuration is:
-
-- Root minimum CMake version: **3.20**.
-- Main `sunshine` target: **C++23**.
-- CUDA language standard: **C++17**; the CUDA build has its own NVCC and
-  host-compiler compatibility constraints.
-- CI has headless tests plus Linux distribution/build/package paths.
-
-These are **facts to re-check**, not permanent assumptions.
-
-C++ Modules were introduced in C++20; **C++26 is not a prerequisite**.
-The normal CMake `FILE_SET CXX_MODULES` route requires newer CMake, and
-compiler/build-generator/tooling support varies. Do not enable modules across
-all targets, force C++26, or bump the project minimum just because a prototype
-works locally. Keep the legacy header/source path until relevant supported
-builders can migrate safely. Do not alter CUDA compilation flags as collateral
-damage from changing ordinary C++ code.
+- The Linux host uses **C++23**.
+- CUDA uses **C++17** with its own NVCC and compatible host compiler.
+- Prefer explicit module boundaries and ordinary source and header paths
+  where the supported toolchains require them. C++20 provides named modules.
+  Do not force C++26 or change CUDA flags for unrelated C++ work.
 
 ## Testing and evidence
 
 Choose tests based on the files and behavior actually touched. Start from
-the existing CI workflow and tests, not from invented commands.
-
-The current CI contains an Arch-based, CUDA-disabled host test path,
-including the following commands after prerequisites are available:
-
-```sh
-cmake -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX=/usr \
-  -DSUNSHINE_ENABLE_WAYLAND=ON \
-  -DSUNSHINE_ENABLE_X11=ON \
-  -DSUNSHINE_ENABLE_DRM=ON \
-  -DSUNSHINE_ENABLE_CUDA=OFF \
-  -DBUILD_TESTS=ON \
-  -DSUNSHINE_REQUIRE_PYROWAVE=ON
-
-cmake --build build --target test_sunshine -j"$(nproc)"
-xvfb-run -a ./build/tests/test_sunshine --gtest_color=yes
-```
-
-This is **not** guaranteed to work on every machine: dependencies, submodules,
-the pinned PyroWave SDK, and the X11 test environment must be available.
-Check the current workflow for the real setup steps before running. The
-GoogleTest binary is run directly in CI; do not claim `ctest` covers it
-unless registration has been verified. There are separate Web UI tests
-(`npm test`) when UI-related code changes.
+the existing CI workflow and test suites. See
+[`docs/modularization/mcpp-migration.md`](docs/modularization/mcpp-migration.md)
+for building and testing with the local toolchain and SDK. Run the native
+GoogleTest suite from the repository root with its required build features and
+a virtual display where appropriate. Use `npm test` for Web UI tests.
 
 - Add characterization tests before changing behavior that is difficult
   to reason about.

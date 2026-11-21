@@ -30,12 +30,12 @@ else {
     // doing anything else with the paths.
     if (process.env.SUNSHINE_SOURCE_ASSETS_DIR) {
         let path = resolve(fs.realpathSync(process.env.SUNSHINE_SOURCE_ASSETS_DIR), "common/assets/web");
-        console.log("Using srcdir from Cmake: " + path);
+        console.log("Web asset source directory: " + path);
         assetsSrcPath = path;
     }
     if (process.env.SUNSHINE_ASSETS_DIR) {
         let path = resolve(fs.realpathSync(process.env.SUNSHINE_ASSETS_DIR), "assets/web");
-        console.log("Using destdir from Cmake: " + path);
+        console.log("Web asset output directory: " + path);
         assetsDstPath = path;
     }
 }

@@ -2383,10 +2383,9 @@ Incomplete enumeration, duplicate wildcard entries, changed destinations, or inc
 the rule untouched. This compatibility check never adopts a pre-existing mapping.
 
 UPnP makes the configured streaming ports reachable from outside the LAN. The existing
-`origin_web_ui_allowed` policy still controls whether the Web UI port is mapped. Keep MiniUPnPc updated:
-the bundled Flatpak source includes upstream XML bounds fixes for CVE-2026-110655 and CVE-2026-110656;
-native packages must obtain the corresponding fixes from their distribution. The patches are derived
-from upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
+`origin_web_ui_allowed` policy still controls whether the Web UI port is mapped. Keep MiniUPnPc updated
+through your distribution to receive the XML bounds fixes for CVE-2026-110655 and CVE-2026-110656.
+The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
 `64ef08a12aabab57be0bf7e40f047c8f14dedf9c`, also backported by ProsperoSunshine.
 
 ### address_family

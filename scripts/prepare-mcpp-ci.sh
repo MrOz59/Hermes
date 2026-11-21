@@ -86,16 +86,30 @@ done
 registry="$MCPP_HOME/registry"
 ninja_dir="$registry/data/xpkgs/xim-x-ninja/$(ninja --version)"
 patchelf_dir="$registry/data/xpkgs/xim-x-patchelf/0.18.0/bin"
-if [[ $(patchelf --version) != "patchelf 0.18.0" ]]; then
-    echo "The pinned mcpp release expects patchelf 0.18.0" >&2
-    exit 1
+patchelf_bin="$(command -v patchelf || true)"
+if [[ -z $patchelf_bin || $("$patchelf_bin" --version) != "patchelf 0.18.0" ]]; then
+    patchelf_prefix="$MCPP_HOME/bootstrap/patchelf-0.18.0"
+    patchelf_bin="$patchelf_prefix/bin/patchelf"
+    if [[ ! -x $patchelf_bin ]]; then
+        mkdir -p "$patchelf_prefix"
+        (
+            archive_tmp="$(mktemp "$patchelf_prefix/patchelf.XXXXXX")"
+            trap 'rm -f -- "$archive_tmp"' EXIT
+            curl -fLsS --retry 3 \
+                https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-x86_64.tar.gz \
+                -o "$archive_tmp"
+            printf '%s  %s\n' ce84f2447fb7a8679e58bc54a20dc2b01b37b5802e12c57eece772a6f14bf3f0 "$archive_tmp" | sha256sum -c -
+            tar -xzf "$archive_tmp" -C "$patchelf_prefix"
+        )
+    fi
+    [[ $("$patchelf_bin" --version) == "patchelf 0.18.0" ]]
 fi
 subos="$registry/subos/default"
 mkdir -p "$subos/bin" "$ninja_dir" "$patchelf_dir"
 ln -sfnT default "$registry/subos/current"
 ln -sfnT ../../../bin/xlings "$subos/bin/xlings"
 ln -sfnT "$(command -v ninja)" "$ninja_dir/ninja"
-ln -sfnT "$(command -v patchelf)" "$patchelf_dir/patchelf"
+ln -sfnT "$patchelf_bin" "$patchelf_dir/patchelf"
 printf '{"subos_info":{"runtime":"host","runtime_source":"host","host_glibc":"%s","runtime_abi":"linux-x86_64-glibc","schema_version":1},"workspace":{}}\n' \
     "$(getconf GNU_LIBC_VERSION | cut -d ' ' -f2)" > "$subos/.xlings.json"
 cat > "$MCPP_HOME/config.toml" <<'CONFIG'

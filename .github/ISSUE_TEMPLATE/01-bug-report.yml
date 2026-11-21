@@ -100,7 +100,7 @@ body:
         - .deb package
         - .rpm package
         - Container image (packaging/container, Podman or Docker)
-        - Built from source with CMake
+        - Built from source with mcpp
         - Other or not sure
     validations:
       required: true

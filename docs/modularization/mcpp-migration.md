@@ -143,6 +143,6 @@ The full Xvfb test suite with KWin, Qt tray, PyroWave, XTest, and the SDL2
 helper enabled passed 658 cases and skipped 30. A separate headless Sway
 pass completed all three live Wayland layout cases and passed 11 cases
 overall, with six skips. The skips include live GPU and kernel-input cases.
-The Linux migration still needs CUDA and release workflow verification.
-CI, downstream build entry points, and macOS and Windows need their own
-validation before removing CMake.
+The CUDA release build linked against the CUDA 12.9.1 toolkit using GCC 14
+for its CUDA translation unit. The release workflows and downstream Linux
+build entry points still need verification.

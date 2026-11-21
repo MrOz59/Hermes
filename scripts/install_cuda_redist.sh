@@ -11,7 +11,7 @@
 # toolkit its GPU coverage needs rather than the one its release happens to ship.
 #
 # Only the components the build actually uses are fetched: nvcc, the runtime
-# (CMake links libcudart_static.a, so nothing follows into the package) and the
+# (Hermes links libcudart_static.a, so nothing follows into the package) and the
 # CCCL headers the runtime headers include. That is roughly 84 MB against the
 # 4 GB of the monolithic runfile installer.
 #
@@ -64,8 +64,7 @@ done
 # glibc 2.41 added the C23 rsqrt/sinpi/cospi family and declared it noexcept.
 # CUDA 12's crt/math_functions.h declares the same six names without an
 # exception specification, and nvcc's frontend rejects the pair - which kills
-# every translation unit that reaches <cmath>, so nothing compiles at all, not
-# even CMake's compiler-identification probe. Upstream Sunshine carries the same
+# every translation unit that reaches <cmath>. Upstream Sunshine carries the same
 # fix as a line-numbered patch file; matching on the declarations survives a
 # toolkit bump, where a patch file would not.
 math_functions="${prefix}/include/crt/math_functions.h"
@@ -81,7 +80,7 @@ if [ -f "${math_functions}" ]; then
 fi
 
 # The archives put their libraries in lib/, while everything that consumes a
-# CUDA install - CMake's FindCUDAToolkit included - looks for the lib64/ and
+# CUDA toolkits can look for the lib64/ and
 # targets/<arch>/ layout the regular installer creates.
 ln -sfn lib "${prefix}/lib64"
 mkdir -p "${prefix}/targets/x86_64-linux"

@@ -15,3 +15,10 @@ license = "GPL-3.0-only"
 
 [workspace.target.x86_64-linux-gnu]
 sysroot = "glibc@system"
+
+[workspace.profile.arch-package]
+opt = 3
+debug = true
+ndebug = true
+trim_paths = true
+split_debuginfo = "off"

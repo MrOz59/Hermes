@@ -28,8 +28,8 @@ log() {
     echo "$*" >&2
 }
 
-# Fail here, with something readable, rather than several layers into CMake's
-# compiler detection. This catches the ways a compiler can be present but not
+# Verify the compiler before asking nvcc to use it. This catches compilers
+# that are present but not
 # usable - most of all the unpacked Arch one, whose cc1plus resolves libisl and
 # libmpc against whatever the running system installed.
 verify() {

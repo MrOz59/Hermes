@@ -30,7 +30,7 @@ body:
         - .deb package
         - .rpm package
         - Container image (packaging/container, Podman or Docker)
-        - Building from source with CMake
+        - Building from source with mcpp
         - Something else
     validations:
       required: true
@@ -88,8 +88,8 @@ body:
         ```bash
         {
           echo "== os ==";    grep PRETTY_NAME /etc/os-release; uname -r
-          echo "== tools =="; cmake --version | head -1; gcc --version | head -1; node --version; npm --version
-          echo "== deps ==";  pacman -Q base-devel cmake git git-lfs nodejs npm cuda 2>&1
+          echo "== tools =="; mcpp --version; gcc --version | head -1; ninja --version; node --version; npm --version
+          echo "== deps ==";  pacman -Q base-devel ninja git git-lfs nodejs npm cuda 2>&1
           echo "== hermes =="
           pacman -Q hermes-streaming 2>/dev/null; ls -l /usr/bin/hermes 2>/dev/null
           echo "== git ==";   git -C . rev-parse --short HEAD 2>/dev/null; git -C . status --short | head -20

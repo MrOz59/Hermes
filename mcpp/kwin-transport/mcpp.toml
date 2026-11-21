@@ -24,7 +24,7 @@ kind = "lib"
 libraries = ["wayland-client", "../../.toolchain/fedora/usr/lib64/libpipewire-0.3.so"]
 link_library_dirs = ["../../.toolchain/fedora/usr/lib64"]
 
-# This library uses no named modules and CMake compiles it as GNU C++20.
+# Preserve the transport library's GNU C++20 language mode.
 # mcpp otherwise inherits the root's language standard across dependencies.
 [[build.flags]]
 glob = "../../src/platform/linux/kwin_session.cpp"

@@ -448,8 +448,7 @@ socket to the compositor automatically.
 
 > [!CAUTION]
 > Because Flatpak packages run in a sandboxed environment and do not normally have access to the
-> host, a Flatpak build requires commands to be prefixed with `flatpak-spawn --host`. Hermes
-> publishes no Flatpak of its own; this applies to a Flatpak you build from `packaging/linux/flatpak`.
+> host. A downstream Flatpak with host access may require `flatpak-spawn --host` before a host command.
 
 #### Windows
 **Elevating Commands (Windows)**

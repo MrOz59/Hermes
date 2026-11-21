@@ -49,7 +49,7 @@ A successful modularization should make it easier to:
 - Introducing focused tests around the boundaries being refactored.
 - Evaluating **C++ Modules** for suitable components, gradually and only after
   architectural boundaries are clear.
-- Adjusting CMake and CI as required to support these changes safely.
+- Adjusting the mcpp build and CI as required to support these changes safely.
 
 **Out of scope for this workstream**
 
@@ -145,9 +145,8 @@ whole project to C++26. Hermes currently configures its main target as C++23.
 - [ ] Keep a practical fallback if supported build environments cannot
       consume the module reliably.
 
-The top-level build currently declares **CMake 3.20**. A conventional CMake
-`FILE_SET CXX_MODULES` integration needs a newer CMake (3.28 or later), so any
-minimum-version change needs a separate compatibility assessment.
+Hermes uses [mcpp for its Linux build](docs/building.md). Verify module
+changes against the supported compiler and CI configurations.
 
 **Exit condition:** the pilot is reproducible in the supported build matrix
 and provides a demonstrated benefit. If not, retain conventional C++ units.

@@ -23,15 +23,9 @@ internals — the Web UI, localization and the test suites.
 
 #### Building
 
-@tabs{
-  @tab{CMake | ```bash
-    cmake -B build -G Ninja -S . --target web-ui
-    ninja -C build web-ui
-    ```}
-  @tab{Manual | ```bash
-    npm run dev
-    ```}
-}
+Run `npm run dev` for front-end development. Use the
+[`web-assets` build feature](building.md#build-locally) to build and stage the
+production pages with the Hermes executable.
 
 ### Localization
 The strings Hermes ships are inherited from Sunshine's localization, and the default language is `en` (English).
@@ -131,41 +125,23 @@ runs both on every push and pull request. Nothing else is gated: this fork has n
 clang-format lint job and no coverage upload, so run these locally before opening a PR.
 
 #### C++ unit tests
-Hermes uses [Google Test](https://github.com/google/googletest), included as a submodule. The test sources are in
-`./tests`. They are built by the normal build process when `BUILD_TESTS` is `ON`, and can be turned off with `OFF`.
 
-Configure and build the same way CI does:
-
-```bash
-cmake -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DSUNSHINE_ENABLE_WAYLAND=ON \
-  -DSUNSHINE_ENABLE_X11=ON \
-  -DSUNSHINE_ENABLE_DRM=ON \
-  -DSUNSHINE_ENABLE_CUDA=OFF \
-  -DBUILD_TESTS=ON
-cmake --build build --target test_sunshine -j$(nproc)
-```
-
-The suite is a single GoogleTest binary with no ctest registration, so run it directly. On a headless machine run it
-under `xvfb`, so `platf::init()` finds an X11 capture source — without one the platform-dependent suites fail their
-setup rather than skipping:
+Hermes uses [GoogleTest](https://github.com/google/googletest), included as a
+submodule. The suite compiles the host sources with test hooks and coverage
+instrumentation. Prepare the [local mcpp toolchain](modularization/mcpp-migration.md)
+and run from the repository root.
 
 ```bash
-xvfb-run -a ./build/tests/test_sunshine --gtest_color=yes
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  xvfb-run -a mcpp test --offline -p hermes-host --features kwin,web-assets \
+  --profile coverage -- --gtest_color=yes
 ```
 
-To see all available options, run the tests with the `--help` flag.
-
-```bash
-./build/tests/test_sunshine --help
-```
-
-Cases that need hardware the machine does not have skip themselves. The Wayland suites need a compositor on
-`WAYLAND_DISPLAY`; CI starts a headless wlroots compositor for them, and without one they skip.
-
-> [!TIP]
-> See the googletest [FAQ](https://google.github.io/googletest/faq.html) for more information on how to use Google Test.
+Xvfb supplies an X11 capture source on a headless machine. Pass GoogleTest
+options after `--`, such as `--gtest_filter='SessionBroker*'`. Wayland cases
+use the compositor identified by `WAYLAND_DISPLAY`. CI runs a second pass
+against a headless compositor to exercise output layout and scaling.
+Cases that need unavailable hardware report a skip.
 
 #### Network lifecycle tests without a GPU
 
@@ -194,8 +170,9 @@ LeakSanitizer's process inspection, `ASAN_OPTIONS=detect_leaks=0` allows the oth
 sanitizers to run; leak detection must still run on an unrestricted CI runner.
 
 #### Web UI tests
-The Web UI is tested with [Vitest](https://vitest.dev), on its own config: `vite.config.js` is driven by the CMake
-environment and builds the pages through ejs, neither of which a unit test needs.
+The Web UI uses [Vitest](https://vitest.dev) with a separate test configuration.
+The production Vite configuration takes its source and output paths from the
+build and renders the pages through EJS.
 
 ```bash
 npm install

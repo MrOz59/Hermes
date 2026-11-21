@@ -6,6 +6,10 @@ source dependencies, not independently implemented modules or a proposed
 directory layout. Implementation and verification in this workstream are
 AI-assisted and require maintainer review before integration.
 
+For the active Linux build and verification commands, see the
+[mcpp build guide](mcpp-migration.md). The commands below describe the recorded
+baseline checkout.
+
 ## Build and test baseline
 
 The existing build has these constraints:

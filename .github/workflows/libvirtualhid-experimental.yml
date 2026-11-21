@@ -98,7 +98,7 @@ jobs:
                 owner, repo, base: run.head_sha, head: context.sha
               });
               // Only this runtime harness and these migration notes may differ.
-              // Source, dependency, CMake or compiled test changes rebuild.
+              // Source, dependency, build or compiled test changes rebuild.
               const runtimeOnly = new Set([
                 '.github/workflows/libvirtualhid-experimental.yml',
                 'scripts/session-broker-test.sh',
@@ -186,10 +186,10 @@ jobs:
           # Refresh/upgrade and install in one transaction, with a bounded retry.
           for attempt in 1 2 3; do
             if pacman -Syu --noconfirm --needed \
-              base-devel git cmake ninja boost openssl opus ffmpeg \
+              base-devel git ninja python jq nlohmann-json openssl opus ffmpeg \
               libdrm wayland libx11 libxrandr libxfixes libxcb \
               libxi libxtst libxss libxcursor libxkbcommon wayland-protocols \
-              libva libvdpau libcap curl libevdev libinput sdl2 systemd \
+              libva libvdpau libcap curl libevdev libinput sdl2 sdl3 systemd \
               miniupnpc libpulse qt6-base qt6-svg npm nodejs \
               icu numactl acl util-linux pipewire pipewire-pulse wireplumber; then
               break
@@ -209,51 +209,66 @@ jobs:
       - name: Allow checkout path
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Configure Hermes
+      - name: Prepare the mcpp build and pinned test sources
+        shell: bash
         run: |
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DSUNSHINE_ENABLE_WAYLAND=ON \
-            -DSUNSHINE_ENABLE_X11=ON \
-            -DSUNSHINE_ENABLE_DRM=ON \
-            -DSUNSHINE_ENABLE_CUDA=OFF \
-            -DBUILD_TESTS=ON
+          export MCPP_HOME="$RUNNER_TEMP/hermes-input-mcpp"
+          export MCPP_TOOLCHAIN="path:$RUNNER_TEMP/hermes-input-gcc"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/hermes-input-runtime"
+          install -d -m 700 "$XDG_RUNTIME_DIR"
+          scripts/prepare-mcpp-ci.sh
+          scripts/prepare-mcpp-linux-sdk.sh
+          pkg-config --atleast-version=2.24 sdl2
+          pkg-config --atleast-version=3.4.12 sdl3
+          git -C .toolchain/libvirtualhid submodule update --init --depth 1 third-party/lizardbyte-common
+          git -C .toolchain/libvirtualhid/third-party/lizardbyte-common submodule update --init --depth 1 third-party/googletest
+          npm install
+          printf 'MCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\nXDG_RUNTIME_DIR=%s\n' \
+            "$MCPP_HOME" "$MCPP_TOOLCHAIN" "$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          printf '%s\n' "$MCPP_HOME/bin" >> "$GITHUB_PATH"
 
       - name: Compile Hermes and input tests
         id: compile
-        run: cmake --build build --target sunshine test_sunshine hermes-session-broker -j2
+        shell: bash
+        env:
+          HERMES_MCPP_QT_MOC: /usr/lib/qt6/moc
+        run: |
+          mcpp build --offline --release -p hermes-host --features tray,web-assets,xtest -j2
+          mcpp build --offline --release -p hermes-session-broker -j2
+
+          test_report="$RUNNER_TEMP/hermes-input-tests.jsonl"
+          mcpp test --offline --no-run --no-programs -p hermes-host \
+            --profile coverage --features tray,web-assets,xtest,sdl-hid-tests \
+            --message-format json > "$test_report"
+          hermes_tests="$(jq -ser '[.[] | select(.status == "built") | .launch.argv[0]] |
+            if length == 1 then .[0] else error("expected one Hermes test executable") end' "$test_report")"
+          install -Dm755 "$hermes_tests" build/tests/test_sunshine
+
+          build_test_program() {
+            local package=$1 profile=$2 name=$3 result binary
+            (cd "$package" && mcpp build --offline --profile "$profile" -j2)
+            result="$(jq -er '.data.result' "$package/target/.last-result.json")"
+            binary="$(jq -er --arg name "$name" '.data.artifacts[] | select(.name == $name) | .path' "$result")"
+            install -Dm755 "$binary" "build/tests/$name"
+          }
+          build_test_program mcpp/hid-consumer release hermes-hid-consumer
+          build_test_program mcpp/libvirtualhid-tests coverage test_libvirtualhid
 
       - name: Test Hermes input translation and per-client feedback
-        working-directory: build/tests
         env:
           HERMES_TEST_REQUIRE_UNIX_SOCKETS: "1"
-        run: ./test_sunshine --gtest_color=yes --gtest_filter='ProcessGroupTest.*:ServiceLifecycleTest.*:VirtualHidInputTest.*:SessionBrokerLockTest.*:SessionBrokerWorkersTest.*:SessionBrokerClientTest.*:SessionBrokerPolicyTest.*:SessionInputAccessTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*:GamescopeSession.*:ClientMicRouterTest.*:IsolatedRuntimeConcurrencyTest.*'
+        run: build/tests/test_sunshine --gtest_color=yes --gtest_filter='ProcessGroupTest.*:ServiceLifecycleTest.*:VirtualHidInputTest.*:SessionBrokerLockTest.*:SessionBrokerWorkersTest.*:SessionBrokerClientTest.*:SessionBrokerPolicyTest.*:SessionInputAccessTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*:GamescopeSession.*:ClientMicRouterTest.*:IsolatedRuntimeConcurrencyTest.*'
 
       - name: Test concurrent private audio servers and resumed capture
         if: "!cancelled() && steps.compile.outcome == 'success'"
         timeout-minutes: 3
         env:
           HERMES_TEST_REQUIRE_PRIVATE_AUDIO: "1"
-        run: ./build/tests/test_sunshine --gtest_color=yes --gtest_filter='SessionAudioLiveTest.*'
-
-      - name: Configure pinned libvirtualhid tests
-        run: |
-          cmake -S build/_deps/hermes_libvirtualhid-src \
-            -B cmake-build-libvirtualhid-tests -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_TESTS=ON \
-            -DBUILD_DOCS=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DLIBVIRTUALHID_BUILD_TOOLS=OFF \
-            -DLIBVIRTUALHID_INSTALL=OFF \
-            -DLIBVIRTUALHID_ENABLE_PACKAGING=OFF
-
-      - name: Compile libvirtualhid tests
-        run: cmake --build cmake-build-libvirtualhid-tests --target test_libvirtualhid -j2
+        run: build/tests/test_sunshine --gtest_color=yes --gtest_filter='SessionAudioLiveTest.*'
 
       - name: Test state adapters and isolated-session identity
         run: |
-          cmake-build-libvirtualhid-tests/tests/test_libvirtualhid \
+          build/tests/test_libvirtualhid \
             --gtest_color=yes \
             --gtest_filter='-LinuxConsumerTest.*:LinuxRuntimeTest.*'
 
@@ -266,7 +281,7 @@ jobs:
           path: |
             build/tests/test_sunshine
             build/tests/hermes-hid-consumer
-            cmake-build-libvirtualhid-tests/tests/test_libvirtualhid
+            build/tests/test_libvirtualhid
           if-no-files-found: error
           retention-days: 3
 
@@ -347,9 +362,9 @@ jobs:
                 curl libevdev libinput sdl2 systemd miniupnpc libpulse qt6-base \
                 qt6-svg icu numactl acl util-linux kmod libpipewire
               chmod +x build/tests/test_sunshine build/tests/hermes-hid-consumer \
-                cmake-build-libvirtualhid-tests/tests/test_libvirtualhid
+                build/tests/test_libvirtualhid
               for binary in build/tests/test_sunshine build/tests/hermes-hid-consumer \
-                cmake-build-libvirtualhid-tests/tests/test_libvirtualhid; do
+                build/tests/test_libvirtualhid; do
                 hermes_dependencies=$(ldd "$binary")
                 if grep -q "not found" <<< "$hermes_dependencies"; then
                   echo "Missing runtime dependencies for $binary:"
@@ -358,8 +373,9 @@ jobs:
                 fi
               done
               /usr/lib/systemd/systemd-udevd --daemon
+              export HERMES_TEST_HID_CONSUMER_PATH="$PWD/build/tests/hermes-hid-consumer"
               scripts/vm-isolated-input-test.sh "$PWD/build/tests/test_sunshine"
-              cmake-build-libvirtualhid-tests/tests/test_libvirtualhid \
+              build/tests/test_libvirtualhid \
                 --gtest_color=yes \
                 --gtest_filter="LinuxRuntimeTest.*:LinuxConsumerTest.InputEventPreference*"
             '

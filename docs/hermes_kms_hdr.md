@@ -70,15 +70,24 @@ cursor cannot be blended into PQ samples without colour conversion.
 
 ## Tests and release gates
 
-`test_sunshine --gtest_filter='HermesColor.*:HermesCursorComposition.*:HermesScanout.*'`
-covers metadata validation/lifetime, cursor pixels and capture startup.
+Run these commands from the repository root after completing the
+[local mcpp setup](modularization/mcpp-migration.md). This filter covers metadata
+validation and lifetime, cursor pixels, and capture startup.
+
+```sh
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  mcpp test --offline -p hermes-host --features kwin,web-assets --profile coverage \
+  -- --gtest_filter='HermesColor.*:HermesCursorComposition.*:HermesScanout.*'
+```
 
 The opt-in GPU test exercises the actual upload and conversion code with known
 synthetic images; it does not capture the desktop or change display settings:
 
 ```sh
-HERMES_HDR_TEST_RENDER_NODE=/dev/dri/renderDN \
-  test_sunshine --gtest_filter='HermesHdrGpu.*'
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  HERMES_HDR_TEST_RENDER_NODE=/dev/dri/renderDN \
+  mcpp test --offline -p hermes-host --features kwin,web-assets --profile coverage \
+  -- --gtest_filter='HermesHdrGpu.*'
 ```
 
 It checks all four ten-bit layouts, padded strides, unpack state restoration,
@@ -91,7 +100,10 @@ On an NVIDIA GPU, a CUDA build also runs the converter itself and a one-frame
 HEVC Main10 encode, keeping the bitstream for `ffprobe`:
 
 ```sh
-HERMES_HDR_TEST_CUDA=1 test_sunshine --gtest_filter='HermesHdrCuda.*'
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  HERMES_HDR_TEST_CUDA=1 \
+  mcpp test --offline -p hermes-host --features cuda,kwin,web-assets --profile coverage \
+  -- --gtest_filter='HermesHdrCuda.*'
 ```
 
 Before release, validate live KDE HDR toggles, metadata-only updates, reconnects,

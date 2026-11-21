@@ -1,0 +1,65 @@
+[package]
+name = "hermes-libvirtualhid-tests"
+version = "0.7.0"
+description = "Linux tests for the pinned Hermes libvirtualhid dependency"
+standard = "c++23"
+
+[build]
+cxx_runtime = "host-coupled"
+sources = [
+    "../../.toolchain/libvirtualhid/tests/unit/test_gamepad_adapter.cpp",
+    "../../.toolchain/libvirtualhid/tests/unit/test_gamepad_lifecycle.cpp",
+    "../../.toolchain/libvirtualhid/tests/unit/test_license.cpp",
+    "../../.toolchain/libvirtualhid/tests/unit/test_profiles.cpp",
+    "../../.toolchain/libvirtualhid/tests/unit/test_report.cpp",
+    "../../.toolchain/libvirtualhid/tests/unit/test_runtime.cpp",
+    "../../.toolchain/libvirtualhid/tests/unit/test_windows_broker_validation.cpp",
+    "../../.toolchain/libvirtualhid/tests/unit/test_windows_vhf_input_report_queue.cpp",
+    "../../.toolchain/libvirtualhid/tests/unit/test_windows_protocol.cpp",
+    "../../.toolchain/libvirtualhid/tests/fixtures/linux_backend_test_hooks.cpp",
+    "../../.toolchain/libvirtualhid/tests/unit/test_linux_backend.cpp",
+    "../../.toolchain/libvirtualhid/tests/unit/test_linux_consumers.cpp",
+    "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/tests/support/testing.cpp",
+    "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/src/common/env.cpp",
+    "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/third-party/googletest/googletest/src/gtest-all.cc",
+    "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/third-party/googletest/googlemock/src/gmock-all.cc",
+]
+include_dirs = [
+    "../../.toolchain/libvirtualhid/src",
+    "../../.toolchain/libvirtualhid/src/platform/windows/broker",
+    "../../.toolchain/libvirtualhid/src/platform/windows/shared",
+    "../../.toolchain/libvirtualhid/tests/fixtures/include",
+    "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/src/include",
+    "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/tests/support/include",
+    "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/third-party/googletest/googletest",
+    "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/third-party/googletest/googletest/include",
+    "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/third-party/googletest/googlemock",
+    "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/third-party/googletest/googlemock/include",
+    "../../.toolchain/fedora/usr/include",
+    "../../.toolchain/fedora/usr/include/SDL2",
+    "/usr/include/SDL2",
+    "../../.toolchain/fedora/usr/include/libevdev-1.0",
+    "../../.toolchain/linux-headers-7.3.5/include",
+]
+defines = ["LIBVIRTUALHID_HAVE_XTEST=1"]
+cxxflags = ["-pthread"]
+ldflags = ["-pthread"]
+
+[dependencies]
+hermes-libvirtualhid = { path = "../libvirtualhid", features = ["xtest"] }
+hermes-libvirtualhid-sdl3-consumer = { path = "../libvirtualhid-sdl3-consumer", tools = ["test_linux_sdl3_xbox_consumer"] }
+
+[runtime]
+libraries = ["input", "SDL2", "X11", "Xtst"]
+link_library_dirs = ["../../.toolchain/fedora/usr/lib64"]
+
+[targets.test_libvirtualhid]
+kind = "bin"
+main = "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/third-party/googletest/googlemock/src/gmock_main.cc"
+
+[profile.coverage]
+opt = 0
+debug = true
+split_debuginfo = "off"
+cxxflags = ["-fprofile-arcs", "-ftest-coverage", "-ggdb"]
+ldflags = ["-fprofile-arcs", "-ftest-coverage"]

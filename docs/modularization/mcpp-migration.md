@@ -10,14 +10,20 @@ and PyroWave also have native build features.
 
 Use Fedora GCC and glibc for the native ABI. The current build was verified
 with GCC 16.2.1, glibc 2.44, GNU Binutils 2.47, exported Linux 7.3.5 UAPI
-headers, and Ninja 1.13.2. The compiler adapter in `.toolchain/bin` normalizes
-Fedora GCC's mcpp detection probes, points GCC at the local GNU assembler and
-linker, and uses the locally extracted `.toolchain/static/libstdc++.a` when
-mcpp builds its native build programs. The application links against Fedora's
-shared C++ runtime.
+headers, and Ninja 1.13.2. The compiler adapter in `.toolchain/bin` points
+GCC at the local GNU assembler and linker and uses the locally extracted
+`.toolchain/static/libstdc++.a` for mcpp build programs. The application
+links against Fedora's shared C++ runtime.
 
-The mcpp home at `.mcpp/local-home` supplies Ninja and patchelf through
-project-local links. Put the following development inputs in `.toolchain/`.
+CI pins mcpp 2026.11.21.1, which recognizes Fedora GCC's version and target
+directly. CI still adapts GCC 14's module scanner flags. With that release,
+add `allow_host_tools = ["ninja"]` to `[build]` in `.mcpp/local-home/config.toml`
+to use the Ninja on `PATH`. The same table accepts `offline = true` as a
+default for builds. Patchelf remains an input to PyroWave package staging
+when its bundled library requires a RUNPATH adjustment.
+[mcpp release notes](https://github.com/mcpp-community/mcpp/releases/tag/v2026.11.21.1)
+
+Put the following development inputs in `.toolchain/`.
 
 | Location | Build input |
 | --- | --- |

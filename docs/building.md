@@ -1,6 +1,6 @@
 # Building
 
-Hermes builds for Linux. The native mcpp build uses C++23 for the host and
+Hermes builds for Linux. The native mcpp build uses C++26 for the host and
 was verified on Linux x86-64 with GCC 16.2.1.
 
 ## Build locally
@@ -30,8 +30,8 @@ features and shows how to build the session and card brokers separately.
 ### CUDA
 
 Enable `cuda` for NVFBC capture. The release build uses CUDA 12.9.1 with
-GCC 14 for CUDA translation units. A separate host compiler builds the rest
-of Hermes. See the [local CUDA setup](modularization/mcpp-migration.md#build-and-check)
+GCC 14 for the CUDA translation unit in C++20, the newest dialect supported
+by the pinned nvcc. A separate host compiler builds the rest of Hermes. See the [local CUDA setup](modularization/mcpp-migration.md#build-and-check)
 for the project-local toolkit and compiler paths.
 
 ## Packages

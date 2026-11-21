@@ -22,7 +22,6 @@ extern "C" {
 }
 
 // local includes
-#include "client_link_monitor.h"
 #include "client_mic_router.h"
 #include "config.h"
 #include "crypto.h"
@@ -38,6 +37,8 @@ extern "C" {
 #include "system_tray.h"
 #include "thread_safe.h"
 #include "utility.h"
+
+import hermes.client_link_monitor;
 
 #define IDX_START_A 0
 #define IDX_START_B 1

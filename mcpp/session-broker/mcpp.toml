@@ -1,6 +1,6 @@
 [package]
 name = "hermes-session-broker"
-standard = "c++20"
+standard = "c++26"
 
 [build]
 sources = ["../../tools/session-broker-input.cpp"]

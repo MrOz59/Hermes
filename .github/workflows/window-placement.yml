@@ -19,8 +19,12 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Install GCC 14 for C++26
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-14
       - name: Compile the production KWin script generator
-        run: g++ -std=c++23 -Wall -Wextra -Werror -I. tests/window_placement/script.cc -o /tmp/hermes-placement-script
+        run: g++-14 -std=c++2c -Wall -Wextra -Werror -I. tests/window_placement/script.cc -o /tmp/hermes-placement-script
       - name: Preserve unrelated local windows and fullscreen state
         env:
           HERMES_PLACEMENT_SCRIPT_GENERATOR: /tmp/hermes-placement-script

@@ -2,7 +2,7 @@
 name = "hermes-kwin-transport"
 version = "0.7.0"
 license = "GPL-3.0-only"
-standard = "gnu++20"
+standard = "gnu++26"
 
 [build]
 sources = [
@@ -24,12 +24,12 @@ kind = "lib"
 libraries = ["wayland-client", "../../.toolchain/fedora/usr/lib64/libpipewire-0.3.so"]
 link_library_dirs = ["../../.toolchain/fedora/usr/lib64"]
 
-# Preserve the transport library's GNU C++20 language mode.
+# Preserve the transport library's GNU C++26 language mode.
 # mcpp otherwise inherits the root's language standard across dependencies.
 [[build.flags]]
 glob = "../../src/platform/linux/kwin_session.cpp"
-cxxflags = ["-std=gnu++20"]
+cxxflags = ["-std=gnu++26"]
 
 [[build.flags]]
 glob = "../../src/platform/linux/pipewire_session.cpp"
-cxxflags = ["-std=gnu++20"]
+cxxflags = ["-std=gnu++26"]

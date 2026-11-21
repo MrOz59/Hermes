@@ -146,11 +146,11 @@ default.
 Read the workspace `mcpp.toml`, the relevant package manifest and build
 program, and `.github/workflows/build.yml` before changing build logic.
 
-- The Linux host uses **C++23**.
-- CUDA uses **C++17** with its own NVCC and compatible host compiler.
+- First-party Linux C++ targets use **C++26**.
+- CUDA uses **C++20** with its own NVCC and compatible host compiler.
 - Prefer explicit module boundaries and ordinary source and header paths
   where the supported toolchains require them. C++20 provides named modules.
-  Do not force C++26 or change CUDA flags for unrelated C++ work.
+  Keep CUDA and external dependency compilation separate from the host's C++ standard.
 
 ## Testing and evidence
 

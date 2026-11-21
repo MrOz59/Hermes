@@ -2,7 +2,7 @@
 name = "hermes-hid-consumer"
 version = "0.7.0"
 description = "Unprivileged SDL2 consumer for the isolated-input VM tests"
-standard = "gnu++23"
+standard = "gnu++26"
 
 [build]
 sources = []

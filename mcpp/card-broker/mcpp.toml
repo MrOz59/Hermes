@@ -1,6 +1,6 @@
 [package]
 name = "hermes-kms-card-broker"
-standard = "c++20"
+standard = "c++26"
 
 [build]
 sources = []

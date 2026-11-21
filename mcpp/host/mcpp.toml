@@ -3,7 +3,7 @@ name = "hermes-host"
 version = "0.7.0"
 description = "Hermes Linux streaming host"
 license = "GPL-3.0-only"
-standard = "gnu++23"
+standard = "gnu++26"
 
 [build]
 cxx_runtime = "host-coupled"
@@ -11,6 +11,7 @@ c_standard = "gnu23"
 sources = [
     "../../src/audio.cpp",
     "../../src/cbs.cpp",
+    "../../src/client_link_monitor.cppm",
     "../../src/config.cpp",
     "../../src/confighttp.cpp",
     "../../src/crypto.cpp",

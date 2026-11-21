@@ -1,15 +1,17 @@
 /**
- * @file src/client_link_monitor.h
+ * @file src/client_link_monitor.cppm
  * @brief Detects a streaming client going silent on the control connection.
  */
-#pragma once
+module;
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <optional>
 
-namespace stream {
+export module hermes.client_link_monitor;
+
+export namespace stream {
 
   /**
    * How long a client goes without sending anything on the control connection.
@@ -45,7 +47,7 @@ namespace stream {
      * Record a message from the client.
      * @return The silence this message ended, when it is long enough to report.
      */
-    std::optional<std::chrono::milliseconds> on_message(clock::time_point now) {
+    inline std::optional<std::chrono::milliseconds> on_message(clock::time_point now) {
       const auto previous = last_heard;
       last_heard = now;
       if (!armed || !previous) {
@@ -69,7 +71,7 @@ namespace stream {
     }
 
     /// The client sends periodic pings, so its silences mean something.
-    void on_periodic_ping() {
+    inline void on_periodic_ping() {
       armed = true;
     }
 
@@ -77,7 +79,7 @@ namespace stream {
      * The silence that ended within attribution_window of `now`, if any.
      * Called when the client asks for a key frame.
      */
-    std::optional<std::chrono::milliseconds> silence_before(clock::time_point now) const {
+    inline std::optional<std::chrono::milliseconds> silence_before(clock::time_point now) const {
       if (!last_silence_end || now - *last_silence_end > attribution_window) {
         return std::nullopt;
       }
@@ -85,21 +87,21 @@ namespace stream {
     }
 
     /// How long ago the most recent silence ended, relative to `now`.
-    std::chrono::milliseconds since_last_silence(clock::time_point now) const {
+    inline std::chrono::milliseconds since_last_silence(clock::time_point now) const {
       return last_silence_end ?
                std::chrono::duration_cast<std::chrono::milliseconds>(now - *last_silence_end) :
                std::chrono::milliseconds::max();
     }
 
-    std::uint64_t silence_count() const {
+    inline std::uint64_t silence_count() const {
       return silences.load(std::memory_order_relaxed);
     }
 
-    std::chrono::milliseconds longest_silence() const {
+    inline std::chrono::milliseconds longest_silence() const {
       return std::chrono::milliseconds {longest_ms.load(std::memory_order_relaxed)};
     }
 
-    std::chrono::milliseconds total_silence() const {
+    inline std::chrono::milliseconds total_silence() const {
       return std::chrono::milliseconds {total_ms.load(std::memory_order_relaxed)};
     }
 

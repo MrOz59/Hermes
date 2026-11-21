@@ -2,7 +2,7 @@
 name = "hermes-libvirtualhid-tests"
 version = "0.7.0"
 description = "Linux tests for the pinned Hermes libvirtualhid dependency"
-standard = "c++23"
+standard = "c++26"
 
 [build]
 cxx_runtime = "host-coupled"
@@ -13,9 +13,6 @@ sources = [
     "../../.toolchain/libvirtualhid/tests/unit/test_profiles.cpp",
     "../../.toolchain/libvirtualhid/tests/unit/test_report.cpp",
     "../../.toolchain/libvirtualhid/tests/unit/test_runtime.cpp",
-    "../../.toolchain/libvirtualhid/tests/unit/test_windows_broker_validation.cpp",
-    "../../.toolchain/libvirtualhid/tests/unit/test_windows_vhf_input_report_queue.cpp",
-    "../../.toolchain/libvirtualhid/tests/unit/test_windows_protocol.cpp",
     "../../.toolchain/libvirtualhid/tests/fixtures/linux_backend_test_hooks.cpp",
     "../../.toolchain/libvirtualhid/tests/unit/test_linux_backend.cpp",
     "../../.toolchain/libvirtualhid/tests/unit/test_linux_consumers.cpp",
@@ -26,8 +23,6 @@ sources = [
 ]
 include_dirs = [
     "../../.toolchain/libvirtualhid/src",
-    "../../.toolchain/libvirtualhid/src/platform/windows/broker",
-    "../../.toolchain/libvirtualhid/src/platform/windows/shared",
     "../../.toolchain/libvirtualhid/tests/fixtures/include",
     "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/src/include",
     "../../.toolchain/libvirtualhid/third-party/lizardbyte-common/tests/support/include",

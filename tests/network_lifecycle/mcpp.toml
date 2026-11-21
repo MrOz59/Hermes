@@ -1,7 +1,7 @@
 [package]
 name = "hermes-network-lifecycle"
 description = "Hermes standalone Linux network lifecycle tests"
-standard = "c++23"
+standard = "c++26"
 
 [build]
 cxx_runtime = "host-coupled"

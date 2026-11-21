@@ -1,6 +1,6 @@
 [package]
 name = "hermes-detached-session"
-standard = "c++20"
+standard = "c++26"
 
 [build]
 sources = []

@@ -1,6 +1,6 @@
 [package]
 name = "hermes-gamemode"
-standard = "c++20"
+standard = "c++26"
 
 [build]
 sources = []

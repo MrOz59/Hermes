@@ -58,10 +58,12 @@ The `cuda` feature follows Hermes's CUDA 12.9 release policy to preserve its
 supported GPU architectures. Use
 `scripts/install_cuda_redist.sh 12.9.1 "$PWD/.toolchain/cuda-12.9"` to
 provision a local toolkit. Its device compiler compiles only `cuda.cu`
-using C++17 and a compatible GCC 14 host compiler. An extracted Fedora GCC
+using C++20, the latest mode supported by CUDA 12.9 nvcc, and a compatible
+GCC 14 host compiler. An extracted Fedora GCC
 14.4.1 can live at `.toolchain/cuda-gcc14/usr/bin/g++-14`. Set
 `CUDAHOSTCXX` or `HERMES_MCPP_CUDA_PREFIX` for alternative locations. The
-main host continues to use its configured C++23 toolchain.
+main host uses its C++26 toolchain. The pinned upstream PyroWave and Granite
+build actions retain their original C++14 and C99 modes.
 
 Use `pyrowave` with the matching upstream shared SDK at `.toolchain/pyrowave`
 or set `HERMES_MCPP_PYROWAVE_PREFIX` to its install prefix. The SDK needs

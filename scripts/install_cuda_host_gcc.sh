@@ -10,7 +10,7 @@
 # fails just as hard, a few thousand errors further in. An older GCC, with its
 # own headers, is the only thing that works.
 #
-# Only src/platform/linux/cuda.cu goes through nvcc, at C++17 against a handful
+# Only src/platform/linux/cuda.cu goes through nvcc, at C++20 against a handful
 # of standard headers, so pointing CUDAHOSTCXX here leaves every other
 # translation unit on the compiler the release ships.
 #
@@ -40,9 +40,9 @@ verify() {
     printf '#include <memory>\n#include <string>\n#include <vector>\nint main() { std::vector<std::string> v{"x"}; return static_cast<int>(v.size()) - 1; }\n' \
         > "${probe}/probe.cpp"
 
-    if ! "${cxx}" -std=c++17 -o "${probe}/probe" "${probe}/probe.cpp" >&2; then
+    if ! "${cxx}" -std=c++20 -o "${probe}/probe" "${probe}/probe.cpp" >&2; then
         rm -rf "${probe}"
-        log "${cxx} cannot compile a trivial C++17 program; see the errors above."
+        log "${cxx} cannot compile a trivial C++20 program; see the errors above."
         exit 1
     fi
 

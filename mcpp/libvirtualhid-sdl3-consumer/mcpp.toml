@@ -2,7 +2,7 @@
 name = "hermes-libvirtualhid-sdl3-consumer"
 version = "0.7.0"
 description = "SDL3 gamepad consumer for the pinned libvirtualhid tests"
-standard = "c++23"
+standard = "c++26"
 
 [build]
 cxx_runtime = "host-coupled"

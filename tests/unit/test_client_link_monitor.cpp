@@ -4,7 +4,7 @@
  */
 #include "../tests_common.h"
 
-#include <src/client_link_monitor.h>
+import hermes.client_link_monitor;
 
 namespace {
   using namespace std::chrono_literals;

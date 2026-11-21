@@ -23,8 +23,6 @@ int main() {
     throw std::runtime_error("Qt 6 moc is required at " + moc.string());
   }
 
-  // The tray submodule uses C++17 and does not import any named modules.
-  mcpp::cxxflag("-std=gnu++17");
   for (const char *flag : {"-DQT_CORE_LIB", "-DQT_GUI_LIB", "-DQT_WIDGETS_LIB", "-DQT_SVG_LIB"}) {
     mcpp::cxxflag(flag);
   }

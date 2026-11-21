@@ -1,8 +1,5 @@
 # Docker
 
-There are two unrelated sets of container files in this repository, and only one
-of them produces something you can run.
-
 ## Running Hermes in a container
 
 `packaging/container` holds a **runtime** image: Hermes on a headless Wayland
@@ -31,15 +28,6 @@ means one container each.
 See `packaging/container/README.md` for the details, including what the host has
 to expose and where it came from.
 
-## Build images
-
-`docker/` at the repository root holds **build** images inherited from upstream
-Sunshine — Arch, Debian trixie, Ubuntu 22.04 and 24.04, plus a CLion toolchain.
-They compile the project inside a distribution container and produce no runnable
-host. They are not what CI builds the released packages with: that is
-`.github/workflows/build.yml`, which builds in the distribution containers named
-there.
-
 > [!NOTE]
 > Hermes publishes no container images. `lizardbyte/sunshine` on Docker Hub and
 > ghcr.io is upstream Sunshine, a different program.
@@ -48,7 +36,7 @@ there.
 
 | Previous                       |                                                 Next |
 |:-------------------------------|-----------------------------------------------------:|
-| [Changelog](docs/changelog.md) | [Third-Party Packages](docs/third_party_packages.md) |
+| [Changelog](changelog.md) | [Third-Party Packages](third_party_packages.md) |
 
 </div>
 

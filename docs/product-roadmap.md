@@ -10,7 +10,7 @@ Legend: `[x]` works · `[~]` works with a caveat named beside it · `[ ]` not st
 **Where the work lives.** Everything described in this file is committed to
 `main` and has shipped: Foundation, Tier 1 and Tier 2 in v0.5.1 and earlier,
 everything from "Isolation and multi-user" through "Game Mode" in v0.6.0,
-alongside Hermes-KMS v0.4.0. Work merged since then sits under [Unreleased] in
+alongside Hermes-KMS v0.4.0. Work merged since then sits under [Unreleased](../CHANGELOG.md#unreleased) in
 the changelog. The priorities themselves are being re-evaluated in
 [#57](https://github.com/MrOz59/Hermes/issues/57); this file records what
 exists, not the order of what comes next.
@@ -24,7 +24,7 @@ experimental status.
 **What "tested" means here.** Anything touching seats, accounts, polkit or DRM
 master is verified in a virtme-ng guest, not on a desktop — the note beside each
 item says which. Per-compositor capture is verified against the compositors named
-in `docs/compatibility.md` and nowhere else.
+in the [compatibility guide](compatibility.md) and nowhere else.
 
 ## Foundation (already in place)
 

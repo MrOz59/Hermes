@@ -887,47 +887,13 @@ jobs:
 
           # %files is generated from that tree, so a file the stager starts or stops
           # installing cannot silently fall in or out of the package.
-          FILE_LIST="$(cd hermes-${VERSION} && {
+          (cd "hermes-${VERSION}" && {
             find . -type d -path './usr/share/hermes*' -printf '%%dir /%P\n'
             find . \( -type f -o -type l \) -printf '/%P\n'
-          } | sort)"
+          } | sort) > ~/rpmbuild/SOURCES/hermes-${VERSION}.files
 
-          cat > ~/rpmbuild/SPECS/hermes.spec << EOF
-          Name:           hermes
-          Version:        ${VERSION}
-          Release:        1%{?dist}
-          Summary:        Self-hosted game stream host with Linux virtual display support
-          License:        GPLv3
-          URL:            https://github.com/MrOz59/Hermes
-          Source0:        hermes-%{version}.tar.gz
-          # PyroWave loads Vulkan through volk; ELF scanning cannot guarantee it.
-          Requires:       vulkan-loader, libcap
-
-          # The binary is built by the job above and only copied in %install, so
-          # there are no sources for a debuginfo package to point at. Left on,
-          # rpmbuild would emit a second .rpm that ships as a release asset.
-          %global debug_package %{nil}
-
-          %description
-          Hermes is an Apollo-derived game streaming server with low-latency
-          Linux virtual displays via Hermes-KMS (EVDI also supported).
-
-          %prep
-          %setup -q
-
-          %install
-          mkdir -p %{buildroot}
-          cp -a usr %{buildroot}/
-
-          %files
-          %defattr(-,root,root,-)
-          ${FILE_LIST}
-
-          %post
-          setcap cap_sys_admin,cap_mknod,cap_sys_chroot+p /usr/bin/hermes || true
-          EOF
-
-          rpmbuild -bb ~/rpmbuild/SPECS/hermes.spec
+          rpmbuild --define "hermes_version ${VERSION}" \
+            --define 'hermes_bundled_pyrowave 1' -bb packaging/linux/rpm/hermes.spec
           cp ~/rpmbuild/RPMS/*/*.rpm .
 
       # The release jobs collect artifacts/**/*, so each leg needs its own

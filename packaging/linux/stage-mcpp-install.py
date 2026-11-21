@@ -156,6 +156,7 @@ def stage_payload(root, args, substitutions):
     assets = share / "hermes"
     misc = REPO / "src_assets/linux/misc"
     templates = REPO / "packaging/linux"
+    brand_icon = REPO / "src_assets/common/branding/hermes.svg"
     icons = share / "icons/hicolor/scalable"
     udev = root / pkg_directory("udev", "udev_dir") / "rules.d"
     user_units = root / pkg_directory("systemd", "systemd_user_unit_dir")
@@ -199,9 +200,9 @@ def stage_payload(root, args, substitutions):
     if args.gamemode:
         install(args.gamemode, binaries / "hermes-gamemode", mode=0o755)
         desktop = f"{FQDN}.GameMode.desktop"
-        render(desktop, share / "applications" / desktop)
+        render(f"desktop/{desktop}", share / "applications" / desktop)
     if args.tray:
-        install(REPO / "hermes.svg", icons / "status/hermes-tray.svg")
+        install(brand_icon, icons / "status/hermes-tray.svg")
         tray_images = REPO / "src_assets/common/assets/web/public/images"
         for name in ("hermes-playing.svg", "hermes-pausing.svg", "hermes-locked.svg"):
             install(tray_images / name, icons / "status" / name)
@@ -213,11 +214,11 @@ def stage_payload(root, args, substitutions):
     for name in ("60-hermes.conf", "61-hermes-evdi.conf"):
         install(misc / name, modules / name)
     install(misc / "hermes-evdi-modprobe.conf", modules.parent / "modprobe.d/hermes-evdi.conf")
-    install(REPO / "hermes.svg", icons / "apps/hermes.svg")
+    install(brand_icon, icons / "apps/hermes.svg")
     for desktop in (f"{FQDN}.desktop", f"{FQDN}.terminal.desktop"):
-        render(desktop, share / "applications" / desktop)
-    render(f"{FQDN}.metainfo.xml", share / "metainfo" / f"{FQDN}.metainfo.xml")
-    render("sunshine.service.in", user_units / "hermes.service")
+        render(f"desktop/{desktop}", share / "applications" / desktop)
+    render(f"desktop/{FQDN}.metainfo.xml", share / "metainfo" / f"{FQDN}.metainfo.xml")
+    render("systemd/hermes.service.in", user_units / "hermes.service")
     stage_pyrowave(root, args, install)
 
 

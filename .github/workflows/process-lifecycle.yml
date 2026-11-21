@@ -8,7 +8,7 @@ on:
       - 'src/platform/linux/process_group.h'
       - 'src/platform/linux/service_lifecycle.h'
       - 'src/platform/linux/misc.*'
-      - 'packaging/linux/sunshine.service.in'
+      - 'packaging/linux/systemd/hermes.service.in'
       - 'tests/unit/platform/test_process_group.cpp'
       - '.github/workflows/process-lifecycle.yml'
   workflow_dispatch:

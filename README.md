@@ -87,6 +87,8 @@ reducing coupling.
 
 ## Modernization research (21 November 2026)
 
+- [Implementation sequence](docs/modularization/implementation-sequence.md) breaks the work into reviewable changes, starting with routing and progressing to session ownership, platform interfaces and the capture path.
+- [Adopting mcpp in Hermes](docs/modularization/mcpp-adoption.md) examines Usman's proposal, the benefits worth testing, failure modes specific to Hermes, and when to keep mcpp for contributors or adopt it for production.
 - [Architecture and branch divergence](docs/modularization/architecture-review.md) traces the route decision, resource owners, and a behavior change on `main` that the first extraction must account for.
 - [CMake, mcpp, and Xmake for Hermes](docs/modularization/build-system-review.md) compares the proposed tools against the host, CUDA, generated sources, and distribution packages.
 - [Pilot and validation plan](docs/modularization/validation-plan.md) records the successful branch CI reference and defines comparable experiments and adoption criteria. The build-system decision remains open.

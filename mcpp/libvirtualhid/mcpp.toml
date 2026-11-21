@@ -2,7 +2,7 @@
 name = "hermes-libvirtualhid"
 version = "0.0.0"
 description = "Hermes' pinned libvirtualhid fork, Linux uhid backend"
-standard = "c++23"
+standard = "c++26"
 
 [build]
 sources = [
@@ -34,7 +34,7 @@ ldflags = ["-pthread"]
 # Upstream disables GNU language extensions for its compiled library units.
 [[build.flags]]
 glob = "../../.toolchain/libvirtualhid/src/**/*.cpp"
-cxxflags = ["-std=c++23"]
+cxxflags = ["-std=c++26"]
 
 [runtime]
 libraries = ["evdev"]

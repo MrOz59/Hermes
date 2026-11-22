@@ -29,7 +29,7 @@ Put the following development inputs in `.toolchain/`.
 | --- | --- |
 | `linux-headers-7.3.5/include` | Exported Linux userspace headers |
 | `fedora/usr` | Extracted Fedora development RPMs for the native libraries and `bin/wayland-scanner`. For libraries already on the workstation, the unversioned linker names can resolve to the matching installed SONAMEs. |
-| `boost/boost` and `boost/stage/lib` | Boost 1.89.0 headers and libraries. The host uses static archives with the glibc iconv backend for Boost.Locale. The focused networking target uses shared Boost.Log. |
+| `boost/boost` and `boost/stage/lib` | Boost 1.92.0 headers and libraries. The host uses static archives with the glibc iconv backend for Boost.Locale. The focused networking target uses shared Boost.Log. |
 | `json-include/nlohmann` | nlohmann/json 3.11.3 headers |
 | `libvirtualhid` | Hermes' libvirtualhid fork at commit `14ee6c4717d32b678c2983bfa6c54019b944d421` |
 | `acl/include` and `acl/lib` | libacl development files for the session broker |

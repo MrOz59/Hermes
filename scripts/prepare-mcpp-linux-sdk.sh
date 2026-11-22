@@ -41,18 +41,18 @@ if pkg-config --exists Qt6Core; then
     ln -sfnT "$lib_dir" "$sdk/qt6/lib64"
 fi
 
-boost_archive="$sdk/boost_1_89_0.tar.bz2"
-boost_hash=85a33fa22621b4f314f8e85e1a5e2a9363d22e4f4992925d4bb3bc631b5a0c7a
+boost_archive="$sdk/boost_1_92_0.tar.bz2"
+boost_hash=5c1d40cb8e19adbf740a4ec2da35b3e58f3f5804b1dce44deb53df72193cbc6c
 if [[ ! -f $boost_archive ]]; then
     download="$(mktemp "$boost_archive.XXXXXX")"
     trap 'rm -f "$download"' EXIT
     curl -fLsS --retry 3 \
-        https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.bz2 -o "$download"
+        https://archives.boost.io/release/1.92.0/source/boost_1_92_0.tar.bz2 -o "$download"
     printf '%s  %s\n' "$boost_hash" "$download" | sha256sum --check
     mv -T "$download" "$boost_archive"
 fi
 printf '%s  %s\n' "$boost_hash" "$boost_archive" | sha256sum --check
-if ! grep -qx '#define BOOST_VERSION 108900' "$sdk/boost/boost/version.hpp" 2>/dev/null; then
+if ! grep -qx '#define BOOST_VERSION 109200' "$sdk/boost/boost/version.hpp" 2>/dev/null; then
     mkdir -p "$sdk/boost"
     tar -xjf "$boost_archive" --strip-components=1 -C "$sdk/boost"
 fi

@@ -159,7 +159,7 @@ jobs:
           printf '%s\n' "$MCPP_HOME/bin" >> "$GITHUB_PATH"
 
       - name: Build pinned PyroWave SDK
-        run: bash scripts/build-pyrowave-sdk.sh
+        run: bash scripts/build-pyrowave-sdk.sh target/pyrowave-sdk
 
       # Vitest exercises the Web UI without running the Vite asset build.
       - name: Run the Web UI tests
@@ -173,7 +173,7 @@ jobs:
         env:
           HERMES_MCPP_QT_MOC: /usr/lib/qt6/moc
         run: |
-          export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/build/pyrowave-sdk/install"
+          export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/target/pyrowave-sdk/install"
           mcpp test --no-run --no-programs --offline -p hermes-host \
             --features tray,pyrowave,web-assets,xtest --profile coverage \
             --message-format json > "$RUNNER_TEMP/hermes-test-build.jsonl"
@@ -585,13 +585,13 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build pinned PyroWave SDK
-        run: bash scripts/build-pyrowave-sdk.sh
+        run: bash scripts/build-pyrowave-sdk.sh target/pyrowave-sdk
 
       - name: Build Hermes and Linux tools with mcpp
         shell: bash
         run: |
           export HERMES_MCPP_QT_MOC=/usr/lib/qt6/libexec/moc
-          export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/build/pyrowave-sdk/install"
+          export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/target/pyrowave-sdk/install"
           export HERMES_MCPP_PYROWAVE_RUNPATH="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/hermes"
 
           features=cuda,package-assets,xtest,pyrowave,tray
@@ -612,7 +612,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${BUILD_VERSION}"
-          PKGDIR="hermes_${VERSION}_amd64"
+          PKGDIR="target/hermes_${VERSION}_amd64"
 
           # Everything the package ships comes from the project's own install
           # rules, as the Arch package already does. Assembling the tree here
@@ -622,7 +622,7 @@ jobs:
           LIBDIR="lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
           packaging/linux/stage-install.sh --mcpp "${PKGDIR}" \
             --result "$HERMES_HOST_RESULT" --result target/.last-result.json \
-            --pyrowave-prefix build/pyrowave-sdk/install --libdir "$LIBDIR" --tray > /dev/null
+            --pyrowave-prefix target/pyrowave-sdk/install --libdir "$LIBDIR" --tray > /dev/null
           mkdir -p ${PKGDIR}/DEBIAN
 
           # Derive the dependencies from what the binary actually links, the
@@ -649,13 +649,13 @@ jobs:
             fi
           done < <(find "${PKGDIR}/usr/bin" "${CODEC_LIB_PATH}" -type f -print0)
           (( ${#ELF_ARGS[@]} > 0 ))
-          mkdir -p .shlibdeps/debian
+          mkdir -p target/deb-shlibdeps/debian
           printf 'Source: hermes\nPackage: hermes\nArchitecture: amd64\n' \
-            > .shlibdeps/debian/control
-          DEB_DEPENDS="$(cd .shlibdeps \
+            > target/deb-shlibdeps/debian/control
+          DEB_DEPENDS="$(cd target/deb-shlibdeps \
             && dpkg-shlibdeps -O --ignore-missing-info -l"${CODEC_LIB_PATH}" "${ELF_ARGS[@]}" \
             | sed 's/^shlibs:Depends=//')"
-          rm -rf .shlibdeps
+          rm -rf target/deb-shlibdeps
           if [ -z "${DEB_DEPENDS}" ]; then
             echo "dpkg-shlibdeps produced no dependencies" >&2
             exit 1
@@ -854,12 +854,12 @@ jobs:
           printf 'MCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\n' "$MCPP_HOME" "$MCPP_TOOLCHAIN" >> "$GITHUB_ENV"
 
       - name: Build pinned PyroWave SDK
-        run: bash scripts/build-pyrowave-sdk.sh
+        run: bash scripts/build-pyrowave-sdk.sh target/pyrowave-sdk
 
       - name: Build Hermes and Linux tools with mcpp
         shell: bash
         run: |
-          export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/build/pyrowave-sdk/install"
+          export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/target/pyrowave-sdk/install"
           export HERMES_MCPP_PYROWAVE_RUNPATH="$(rpm --eval '%{_libdir}')/hermes"
           features=cuda,package-assets,xtest,pyrowave,tray
           tools=(-p hermes-kms-card-broker -p hermes-session-broker -p hermes-gamemode)
@@ -883,14 +883,14 @@ jobs:
           # else: no menu entries, no icons, not even the systemd unit, so it
           # installed and then could not be found or started (#52). Stage the
           # project's own install instead, as every other package does.
-          packaging/linux/stage-install.sh --mcpp "hermes-${VERSION}" \
+          packaging/linux/stage-install.sh --mcpp "target/hermes-${VERSION}" \
             --result "$HERMES_HOST_RESULT" --result target/.last-result.json \
-            --pyrowave-prefix build/pyrowave-sdk/install --libdir "$(rpm --eval '%{_lib}')" --tray > /dev/null
-          tar -czf ~/rpmbuild/SOURCES/hermes-${VERSION}.tar.gz hermes-${VERSION}
+            --pyrowave-prefix target/pyrowave-sdk/install --libdir "$(rpm --eval '%{_lib}')" --tray > /dev/null
+          tar -czf ~/rpmbuild/SOURCES/hermes-${VERSION}.tar.gz -C target "hermes-${VERSION}"
 
           # %files is generated from that tree, so a file the stager starts or stops
           # installing cannot silently fall in or out of the package.
-          (cd "hermes-${VERSION}" && {
+          (cd "target/hermes-${VERSION}" && {
             find . -type d -path './usr/share/hermes*' -printf '%%dir /%P\n'
             find . \( -type f -o -type l \) -printf '/%P\n'
           } | sort) > ~/rpmbuild/SOURCES/hermes-${VERSION}.files
@@ -899,7 +899,7 @@ jobs:
             --define 'hermes_bundled_pyrowave 1' -bb packaging/linux/rpm/hermes.spec
           cp ~/rpmbuild/RPMS/*/*.rpm .
 
-      # The release jobs collect artifacts/**/*, so each leg needs its own
+      # The release jobs collect target/release-artifacts/**/*, so each leg needs its own
       # artifact name; the packages themselves are already distinct, since
       # %{?dist} stamps the release as .fc43 / .fc44 / .fc45.
       - name: Install and test RPM with file capabilities
@@ -946,16 +946,16 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts/
+          path: target/release-artifacts/
 
       - name: List artifacts
-        run: find artifacts/ -type f
+        run: find target/release-artifacts/ -type f
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/**/*
+            target/release-artifacts/**/*
           draft: false
           prerelease: false
           generate_release_notes: true
@@ -982,10 +982,10 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts/
+          path: target/release-artifacts/
 
       - name: List artifacts
-        run: find artifacts/ -type f
+        run: find target/release-artifacts/ -type f
 
       # Moved through the API rather than with `git push`. The push is
       # authenticated as the github-actions App, and GitHub refuses a ref push
@@ -1031,7 +1031,7 @@ jobs:
             > `main` and may be unstable. For tagged releases see the
             > non-prerelease entries.
           files: |
-            artifacts/**/*
+            target/release-artifacts/**/*
           draft: false
           prerelease: true
         env:
@@ -1049,7 +1049,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: artifacts/
+          path: target/release-artifacts/
       - name: Prepare verified candidate payloads
         env:
           BUILD_VERSION: ${{ needs.version.outputs.build_version }}
@@ -1068,12 +1068,12 @@ jobs:
           fi
           current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${GITHUB_REF_NAME}" --jq .object.sha)"
           test "$current_sha" = "$GITHUB_SHA"
-          mkdir payload
-          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) -exec cp -t payload -- {} +
-          test "$(find payload -name '*.deb' | wc -l)" -eq 2
+          mkdir -p target/release-payload
+          find target/release-artifacts/ -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) -exec cp -t target/release-payload -- {} +
+          test "$(find target/release-payload -name '*.deb' | wc -l)" -eq 2
           # One per build-rpm matrix row.
-          test "$(find payload -name '*.rpm' | wc -l)" -eq 3
-          test "$(find payload -name 'hermes-streaming-*.pkg.tar.zst' | wc -l)" -ge 1
+          test "$(find target/release-payload -name '*.rpm' | wc -l)" -eq 3
+          test "$(find target/release-payload -name 'hermes-streaming-*.pkg.tar.zst' | wc -l)" -ge 1
           notes="docs/${tag}-notes.md"
           test -s "$notes"
           export RC_TAG="$tag"
@@ -1081,7 +1081,7 @@ jobs:
           python3 - <<'PYTHON'
           import hashlib, json, os
           from pathlib import Path
-          payload = Path('payload')
+          payload = Path('target/release-payload')
           files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(payload.iterdir())}
           manifest = {
               'tag': os.environ['RC_TAG'],
@@ -1093,7 +1093,7 @@ jobs:
           }
           (payload / 'RC_MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n')
           PYTHON
-          (cd payload && sha256sum *.deb *.rpm *.pkg.tar.zst RC_MANIFEST.json > SHA256SUMS)
+          (cd target/release-payload && sha256sum *.deb *.rpm *.pkg.tar.zst RC_MANIFEST.json > SHA256SUMS)
           printf 'RC_TAG=%s\n' "$tag" >> "$GITHUB_ENV"
       - name: Publish tested release candidate
         uses: softprops/action-gh-release@v2
@@ -1105,4 +1105,4 @@ jobs:
           make_latest: false
           fail_on_unmatched_files: true
           body_path: ${{ env.RC_NOTES }}
-          files: payload/*
+          files: target/release-payload/*

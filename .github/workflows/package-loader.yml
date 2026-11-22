@@ -17,7 +17,7 @@ jobs:
       - name: Install fixture dependencies
         run: |
           if command -v dnf >/dev/null; then
-            dnf install -y git gcc binutils libcap util-linux shadow-utils python3 pkgconf-pkg-config patchelf
+            dnf install -y git gcc binutils diffutils libcap util-linux shadow-utils python3 pkgconf-pkg-config patchelf
           else
             apt-get update
             # libc6-dev is only a Recommends of gcc, and the ubuntu:26.04 image

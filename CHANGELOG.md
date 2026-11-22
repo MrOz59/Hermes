@@ -98,6 +98,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 
 ### Fixed
+- A game that starts Steam from a detached command (games added with Import
+  Games, `setsid steam steam://rungameid/<id>`) now starts in an isolated
+  session's stream (from PunkUnity). Hermes recognised Steam only when `cmd`
+  began with `steam`, so it left the desktop's Steam running; the session's
+  request went to it, and the game opened on the host's desktop and kept
+  running after the stream ended.
 - The Gamescope Steam Session app no longer ends within a second when a Steam
   is already running (from PunkUnity). Gamescope's own client is a new
   `steam -bigpicture`; Steam runs once per user, so it handed the request to

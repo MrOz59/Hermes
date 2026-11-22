@@ -11,6 +11,7 @@ namespace {
   using boost::program_options::split_unix;
   using platf::window_placement::gamescope_runs_steam;
   using platf::window_placement::launches_gamescope;
+  using platf::window_placement::launches_steam;
   using platf::window_placement::opens_big_picture;
 }
 
@@ -67,4 +68,28 @@ TEST(WindowPlacement, RecognizesAGamescopeThatStartsSteam) {
     EXPECT_FALSE(gamescope_runs_steam(split_unix(command))) << command;
   }
 }
+
+TEST(WindowPlacement, RecognizesEveryWayAnAppStartsSteam) {
+  // Games added from the library launch Steam as a detached setsid command;
+  // in an isolated session that has to count as Steam, or the request goes
+  // to the desktop's Steam and the game starts outside the stream.
+  for (const auto *command : {
+         "setsid steam steam://rungameid/2358720",
+         "steam -applaunch 588650",
+         "\"/usr/bin/steam\" -silent",
+         "setsid flatpak run com.valvesoftware.Steam steam://rungameid/2358720",
+         "xdg-open steam://rungameid/2358720",
+       }) {
+    EXPECT_TRUE(launches_steam(split_unix(command))) << command;
+  }
+  for (const auto *command : {
+         "setsid lutris lutris:rungameid/3",
+         "steamtinkerlaunch",
+         "konsole -e steam-runtime-check",
+         "",
+       }) {
+    EXPECT_FALSE(launches_steam(split_unix(command))) << command;
+  }
+}
+
 #endif

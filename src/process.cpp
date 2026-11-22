@@ -332,6 +332,25 @@ namespace proc {
       return platf::gamescope::steam_mode_for("auto", app.cmd);
     }
 
+    /**
+     * @brief Whether an app run in an isolated session starts Steam.
+     *
+     * Its command or any detached command counts: games added from the
+     * library and the Big Picture app start Steam as a detached
+     * `setsid steam steam://…`. Inside an isolated session that request
+     * would go to the desktop's Steam, and the game with it.
+     */
+    bool session_runs_steam(const ctx_t &app) {
+      const auto starts_steam = [](const std::string &command) {
+        try {
+          return platf::window_placement::launches_steam(boost::program_options::split_unix(command));
+        } catch (const std::exception &) {
+          return false;
+        }
+      };
+      return runs_steam(app) || starts_steam(app.cmd) || std::ranges::any_of(app.detached, starts_steam);
+    }
+
     std::string read_proc_line(pid_t pid, const char *file) {
       std::ifstream stream {"/proc/" + std::to_string(pid) + "/" + file};
       std::string line;
@@ -1955,7 +1974,7 @@ namespace proc {
     }
 
     // Only a session of the Hermes user shares its Steam instance.
-    if (!runtime->account && (app.stop_desktop_steam == "on" || (app.stop_desktop_steam != "off" && runs_steam(app)))) {
+    if (!runtime->account && (app.stop_desktop_steam == "on" || (app.stop_desktop_steam != "off" && session_runs_steam(app)))) {
       stop_desktop_steam();
       if (launch_was_cancelled()) {
         return 503;

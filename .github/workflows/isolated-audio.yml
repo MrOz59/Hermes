@@ -47,7 +47,7 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed base-devel git boost gtest nlohmann-json \
             ffmpeg libpulse libpipewire pipewire pipewire-pulse wireplumber
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Initialize only the platform header dependency
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"

@@ -59,7 +59,7 @@ jobs:
       build_version: ${{ steps.compute.outputs.build_version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       - name: Compute build version
         id: compute
@@ -125,8 +125,6 @@ jobs:
             libpulse \
             qt6-base \
             qt6-svg \
-            npm \
-            nodejs \
             icu \
             numactl \
             xorg-server-xvfb \
@@ -136,10 +134,15 @@ jobs:
             jq
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
           fetch-depth: 0
+
+      - name: Set up the pinned Node.js runtime
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .node-version
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -306,7 +309,7 @@ jobs:
       # rather than the download; pacman keeps them in /var/cache/pacman/pkg.
       # The CUDA toolkit is no longer among them - see the CUDA step below.
       - name: Cache pacman packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6.1.0
         with:
           path: /var/cache/pacman/pkg
           key: pacman-arch-cuda-${{ hashFiles('.github/workflows/build.yml') }}
@@ -363,12 +366,17 @@ jobs:
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
           fetch-depth: 0
           persist-credentials: false
-          
+
+      - name: Set up the pinned Node.js runtime
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .node-version
+
       # makepkg cannot take pkgver from the environment, so rewrite it in the
       # CI checkout. This keeps the package filename, the pacman version and
       # the version the binary reports all in agreement.
@@ -407,7 +415,7 @@ jobs:
 
       - name: Restore cached AUR GCC 14 packages
         id: gcc14-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6.1.0
         with:
           path: target/arch-cuda-host-gcc/packages
           key: ${{ steps.gcc14-abi.outputs.key }}
@@ -430,7 +438,7 @@ jobs:
 
       - name: Save verified AUR GCC 14 packages
         if: steps.gcc14-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6.1.0
         with:
           path: target/arch-cuda-host-gcc/packages
           key: ${{ steps.gcc14-abi.outputs.key }}
@@ -450,7 +458,8 @@ jobs:
           # by the PKGBUILD's native CUDA feature.
           # Pass the package inputs explicitly. The runner's command file
           # is owned by root and is unavailable to makepkg.
-          su builder -c "export PATH=/usr/local/cuda/bin:\$PATH \
+          node_bin="$(dirname "$(command -v node)")"
+          su builder -c "export PATH='/usr/local/cuda/bin:${node_bin}':\$PATH \
             CUDAHOSTCXX='${CUDA_HOST_CXX}' \
             BRANCH='${BRANCH}' \
             BUILD_VERSION='${BUILD_VERSION}' \
@@ -469,7 +478,7 @@ jobs:
           fi
 
       - name: Upload Arch Package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: hermes-streaming-arch-pkg
           # Both the package and its symbols. The -debug package is what makes a
@@ -565,10 +574,6 @@ jobs:
             dpkg-dev \
             debhelper
 
-      # Node comes from setup-node, not apt: Ubuntu 24.04 still ships Node 18,
-      # which went EOL in April 2025, while 26.04 ships 22. Pinning one version
-      # keeps both packages' Web UI built by the same toolchain - the same major
-      # the Fedora containers provide.
       - name: Check candidate upgrade ordering
         run: |
           case "$BRANCH" in
@@ -581,16 +586,16 @@ jobs:
               ;;
           esac
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
           fetch-depth: 0
+
+      - name: Set up the pinned Node.js runtime
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .node-version
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -756,7 +761,7 @@ jobs:
           fi
 
       - name: Upload DEB Package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: hermes-deb-ubuntu${{ matrix.ubuntu }}
           # Only the Hermes package, not build-time debs (e.g. cuda-keyring).
@@ -845,9 +850,7 @@ jobs:
             qt6-qtbase-devel \
             qt6-qtsvg-devel \
             rpm-build \
-            wget \
-            nodejs \
-            npm
+            wget
 
       - name: Check candidate upgrade ordering
         run: |
@@ -862,10 +865,15 @@ jobs:
           esac
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
           fetch-depth: 0
+
+      - name: Set up the pinned Node.js runtime
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .node-version
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -941,7 +949,7 @@ jobs:
           fi
 
       - name: Upload RPM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: hermes-rpm-fc${{ matrix.fedora }}
           path: ${{ steps.rpm.outputs.path }}
@@ -965,7 +973,7 @@ jobs:
     
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.2
         with:
           path: target/release-artifacts/
 
@@ -973,7 +981,7 @@ jobs:
         run: find target/release-artifacts/ -type f
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3.0.4
         with:
           files: |
             target/release-artifacts/**/*
@@ -998,10 +1006,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.2
         with:
           path: target/release-artifacts/
 
@@ -1037,7 +1045,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish nightly release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3.0.4
         with:
           tag_name: nightly
           name: "Hermes nightly (v${{ needs.version.outputs.build_version }})"
@@ -1067,8 +1075,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           path: target/release-artifacts/
       - name: Prepare verified candidate payloads
@@ -1117,7 +1125,7 @@ jobs:
           (cd target/release-payload && sha256sum *.deb *.rpm *.pkg.tar.zst RC_MANIFEST.json > SHA256SUMS)
           printf 'RC_TAG=%s\n' "$tag" >> "$GITHUB_ENV"
       - name: Publish tested release candidate
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.4
         with:
           tag_name: ${{ env.RC_TAG }}
           target_commitish: ${{ github.sha }}

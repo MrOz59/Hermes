@@ -10,10 +10,10 @@
   },
   "type": "module",
   "dependencies": {
-    "@intlify/core-base": "11.1.12",
+    "@intlify/core-base": "11.4.23",
     "@lizardbyte/shared-web": "2025.922.181114",
-    "vue": "3.5.22",
-    "vue-i18n": "11.1.12"
+    "vue": "3.5.46",
+    "vue-i18n": "11.4.23"
   },
   "devDependencies": {
     "@codecov/vite-plugin": "1.9.1",

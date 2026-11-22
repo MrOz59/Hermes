@@ -24,6 +24,6 @@ jobs:
             # no longer installs those; without it the linker misses crti.o.
             apt-get install -y git gcc libc6-dev binutils libcap2-bin util-linux passwd python3 pkg-config patchelf
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Test the native mcpp staging rule with capabilities
         run: bash scripts/tests/mcpp-pyrowave-runtime-loader.sh

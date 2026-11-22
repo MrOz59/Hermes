@@ -6,6 +6,7 @@ members = [
     "mcpp/detached-session",
     "mcpp/gamemode",
     "tests/network_lifecycle",
+    "tests/display_restore",
 ]
 
 [workspace.package]

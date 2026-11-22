@@ -1,6 +1,5 @@
 [package]
 name = "hermes-monitor-restore"
-version = "0.7.0"
 description = "Standalone Linux monitor restoration and process cleanup regressions"
 standard = "c++26"
 

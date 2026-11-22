@@ -9,6 +9,7 @@ on:
       - 'src/platform/linux/process_group.h'
       - 'src/process.cpp'
       - 'tests/display_restore/**'
+      - 'mcpp.toml'
       - 'scripts/prepare-mcpp-ci.sh'
       - '.github/workflows/monitor-restore.yml'
   workflow_dispatch:
@@ -34,8 +35,6 @@ jobs:
           printf 'MCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\n' "$MCPP_HOME" "$MCPP_TOOLCHAIN" >> "$GITHUB_ENV"
           printf '%s\n' "$MCPP_HOME/bin" >> "$GITHUB_PATH"
       - name: Compile production restoration and subprocess helpers with sanitizers
-        working-directory: tests/display_restore
-        run: mcpp build --offline --profile sanitize
+        run: mcpp build --offline --profile sanitize -p hermes-monitor-restore
       - name: Verify partial recovery, retries, headless layouts and real helper timeouts
-        working-directory: tests/display_restore
-        run: mcpp run --offline --profile sanitize hermes-monitor-restore
+        run: mcpp run --offline --profile sanitize -p hermes-monitor-restore hermes-monitor-restore

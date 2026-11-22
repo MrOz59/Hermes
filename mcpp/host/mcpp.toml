@@ -1,6 +1,5 @@
 [package]
 name = "hermes-host"
-version = "0.7.0"
 description = "Hermes Linux streaming host"
 license = "GPL-3.0-only"
 standard = "gnu++26"

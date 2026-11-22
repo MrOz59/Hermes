@@ -1,0 +1,23 @@
+[package]
+name = "hermes-monitor-restore"
+version = "0.7.0"
+description = "Standalone Linux monitor restoration and process cleanup regressions"
+standard = "c++26"
+
+[build]
+sources = []
+include_dirs = ["../.."]
+cxx_runtime = "host-coupled"
+cxxflags = ["-Wall", "-Wextra", "-Werror", "-pedantic", "-pthread"]
+ldflags = ["-pthread"]
+
+[targets.hermes-monitor-restore]
+kind = "bin"
+main = "monitor_restore.cc"
+
+[profile.sanitize]
+opt = 0
+debug = true
+split_debuginfo = "off"
+cxxflags = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+ldflags = ["-fsanitize=address,undefined"]

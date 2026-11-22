@@ -76,5 +76,6 @@ write_file_test_*.txt
 # mcpp build output and local toolchain
 /target/
 /mcpp/*/target/
+/tests/display_restore/target/
 /.mcpp/
 /.toolchain/

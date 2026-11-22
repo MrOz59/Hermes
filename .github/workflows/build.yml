@@ -349,6 +349,8 @@ jobs:
             acl \
             curl \
             libevdev \
+            libisl \
+            libmpc \
             systemd \
             miniupnpc \
             libpulse \
@@ -402,46 +404,14 @@ jobs:
           chown -R builder:builder .
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
-      - name: Identify the GCC 14 cache
-        id: gcc14-abi
-        shell: bash
-        run: |
-          runtime="$(pacman -Q gcc glibc binutils libisl libmpc libstdc++ libgcc)"
-          abi="$({
-            printf '%s\n' "$runtime"
-            sha256sum /etc/makepkg.conf
-          } | sha256sum | cut -d ' ' -f 1)"
-          printf 'key=arch-cuda-gcc14-%s-%s\n' "$abi" "${{ hashFiles('scripts/install_cuda_host_gcc.sh') }}" >> "$GITHUB_OUTPUT"
-
-      - name: Restore cached AUR GCC 14 packages
-        id: gcc14-cache
-        uses: actions/cache/restore@v6.1.0
-        with:
-          path: target/arch-cuda-host-gcc/packages
-          key: ${{ steps.gcc14-abi.outputs.key }}
-
-      - name: Install official Arch dependencies for the AUR build
-        if: steps.gcc14-cache.outputs.cache-hit != 'true'
-        run: pacman -S --noconfirm --needed doxygen gcc-ada gcc-d libisl libmpc
-
-      - name: Prepare the CUDA-only GCC 14 compiler
+      - name: Download the CUDA-only GCC 14 compiler
         shell: bash
         run: |
           compiler_root="$PWD/target/arch-cuda-host-gcc"
-          useradd --create-home --user-group cuda-gcc-builder
-          install -d -m 0755 "$compiler_root"
-          chown -R cuda-gcc-builder:cuda-gcc-builder "$compiler_root"
-          host_cxx="$(runuser -u cuda-gcc-builder -- env -i \
-            HOME=/home/cuda-gcc-builder PATH=/usr/bin:/bin LANG=C.UTF-8 \
+          host_cxx="$(runuser -u builder -- env -i \
+            HOME=/home/builder PATH=/usr/bin:/bin LANG=C.UTF-8 \
             bash scripts/install_cuda_host_gcc.sh "$CUDA_HOST_GCC" "$compiler_root")"
           echo "CUDA_HOST_CXX=${host_cxx}" >> "$GITHUB_ENV"
-
-      - name: Save verified AUR GCC 14 packages
-        if: steps.gcc14-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6.1.0
-        with:
-          path: target/arch-cuda-host-gcc/packages
-          key: ${{ steps.gcc14-abi.outputs.key }}
 
       # Keep CUDA 12.9's older GPU coverage. The unprivileged package build
       # uses the toolkit from /usr/local and the CUDA-only compiler under target.

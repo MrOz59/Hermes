@@ -96,48 +96,40 @@ case "${ID}" in
 
     arch)
         if [[ ${gcc_major} != 14 || $(uname -m) != x86_64 ]]; then
-            log "The pinned AUR CUDA host compiler is GCC 14 for x86_64."
+            log "The pinned Arch CUDA host compiler is GCC 14 for x86_64."
             exit 1
         fi
         if (( EUID == 0 )); then
-            log "Build and unpack the AUR CUDA host compiler as an unprivileged user."
+            log "Unpack the Arch CUDA host compiler as an unprivileged user."
             exit 1
         fi
         work_dir="$(realpath -m -- "${2:?pass the Arch CI workspace directory}")"
-        revision=87e62884e433543b59aaa2a28dcceb2e6f314054
         version=14.4.1+r175+gafa9b4ecc082-1
-        packages="${work_dir}/packages"
-        gcc_archive="${packages}/gcc14-${version}-x86_64.pkg.tar.zst"
-        runtime_archive="${packages}/gcc14-libs-${version}-x86_64.pkg.tar.zst"
-        prefix="${work_dir}/prefix"
-        mkdir -p "${packages}" "${prefix}"
-
-        if [[ ! -f ${gcc_archive} || ! -f ${runtime_archive} ]]; then
-            recipe="$(mktemp -d "${work_dir}/aur-recipe.XXXXXX")"
-            trap 'rm -rf -- "${recipe}"' EXIT
-            git -C "${recipe}" init -q
-            git -C "${recipe}" fetch --depth 1 https://aur.archlinux.org/gcc14.git "${revision}" >&2
-            git -C "${recipe}" checkout -q --detach "${revision}"
-            log "Building AUR gcc14 ${version} at ${revision}"
-            # makepkg verifies the pinned GCC source and launcher checksums.
-            # The runner provisions official dependencies before entering this step.
-            (
-                cd "${recipe}"
-                # The compiler only drives nvcc. Skip split debug output to
-                # keep the bootstrap within the hosted runner disk budget.
-                printf 'source /etc/makepkg.conf\nOPTIONS+=(!debug)\n' > ci-makepkg.conf
-                PKGDEST="${recipe}" makepkg --config ci-makepkg.conf --nocheck --noconfirm
-            ) >&2
-            install -m 0644 "${recipe}/${gcc_archive##*/}" "${gcc_archive}"
-            install -m 0644 "${recipe}/${runtime_archive##*/}" "${runtime_archive}"
-        else
-            log "Using cached Arch gcc14 ${version} packages"
-        fi
-
-        # Use only the versioned compiler and runtime files. Keeping these
-        # out of /usr leaves the runner's normal gcc and g++ available to mcpp.
+        repository=MrOz59/gcc-packages
+        tag="gcc14-${version}-cuda1"
+        release="https://github.com/${repository}/releases/download/${tag}"
+        mkdir -p "${work_dir}"
+        prefix="$(mktemp -d -- "${work_dir}/gcc14.XXXXXX")"
+        trap 'rm -rf -- "${prefix}"' EXIT
+        gcc_archive="gcc14-${version}-x86_64.pkg.tar.zst"
+        runtime_archive="gcc14-libs-${version}-x86_64.pkg.tar.zst"
         for archive in "${gcc_archive}" "${runtime_archive}"; do
-            tar --zstd -xf "${archive}" -C "${prefix}" usr
+            log "Downloading pinned Arch CUDA compiler package ${archive}"
+            curl --fail --location --silent --show-error --retry 3 \
+                --connect-timeout 15 --max-time 180 \
+                "${release}/${archive}" --output "${prefix}/${archive}"
+        done
+        # Pin both asset hashes from the tagged CUDA-specific release.
+        (
+            cd "${prefix}"
+            sha256sum --check >&2 <<CHECKSUMS
+8eaf0b50351cf8badf0fda4bc9daa45cdc08b00e689b70b00039c85be2a9835b  ${gcc_archive}
+3bdb4e6ff366bdf7cfc60ee1d20e4d7d33e95fb21afdb52f8577aa6df651ab8e  ${runtime_archive}
+CHECKSUMS
+        )
+        for archive in "${gcc_archive}" "${runtime_archive}"; do
+            tar --zstd -xf "${prefix}/${archive}" -C "${prefix}" usr
+            rm -- "${prefix}/${archive}"
         done
         host_cxx="${prefix}/usr/bin/g++-14"
         actual_version="$("${host_cxx}" -dumpfullversion)"
@@ -154,4 +146,7 @@ case "${ID}" in
 esac
 
 verify "${host_cxx}"
+if [[ ${ID} == arch ]]; then
+    trap - EXIT
+fi
 echo "${host_cxx}"

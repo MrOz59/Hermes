@@ -149,6 +149,11 @@ namespace config {
 
     int fec_percentage;
 
+    // Size FEC parity from the client's own loss reports instead of the fixed
+    // percentage above, never exceeding adaptive_fec_max_percentage.
+    bool adaptive_fec;
+    int adaptive_fec_max_percentage;
+
     // Video encryption settings for LAN and WAN streams
     int lan_encryption_mode;
     int wan_encryption_mode;

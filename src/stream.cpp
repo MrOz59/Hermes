@@ -39,6 +39,7 @@ extern "C" {
 #include "system_tray.h"
 #include "thread_safe.h"
 #include "utility.h"
+#include "adaptive_fec.h"
 #include "video_fec_budget.h"
 #include "video_loss_monitor.h"
 
@@ -477,6 +478,8 @@ namespace stream {
 
     /// Video the client reported losing on the way to it.
     video_loss_monitor_t video_loss;
+    /// Parity percentage for the next frame, from what the client reported losing.
+    adaptive_fec_t adaptive_fec;
   };
 
   // A client on a bad link can go silent every second; past this many the
@@ -1554,6 +1557,19 @@ namespace stream {
       }
 
       auto fecPercentage = config::stream.fec_percentage;
+      if (config::stream.adaptive_fec) {
+        // The client already reports what it lost (SS_FRAME_FEC_STATUS), so the host
+        // can size parity to the observed worst second instead of a fixed guess.
+        const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch())
+                              .count();
+        fecPercentage = session->adaptive_fec.percentage(session->video_loss.sent_packets(),
+                                                         session->video_loss.missing_packets(),
+                                                         session->video_loss.reported_blocks(),
+                                                         now_ms,
+                                                         config::stream.fec_percentage,
+                                                         config::stream.adaptive_fec_max_percentage);
+      }
 
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;

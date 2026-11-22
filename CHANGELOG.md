@@ -12,6 +12,16 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- Adaptive FEC parity (`adaptive_fec`, on by default; `adaptive_fec_max_percentage`,
+  50). The host already received the client's per-block FEC status
+  (`SS_FRAME_FEC_STATUS`) and only logged it when a stream ended; it now sizes
+  parity from the worst second of the last ten, asking for the smallest
+  redundancy that leaves a block unrecoverable less than 0.1% of the time.
+  Raising parity is immediate, lowering it waits five seconds so one clean
+  second cannot start a sawtooth, and a client that has never reported a loss
+  keeps `fec_percentage`. Parity is still counted against the bitrate budget at
+  the configured `fec_percentage`, so adaptive parity may briefly exceed it
+  under heavy loss.
 - Hermes names an application whose audio misses the stream (from PunkUnity).
   A stream follows the default sink unless an output was chosen for it, in
   the desktop's sound settings or remembered by the sound server for that

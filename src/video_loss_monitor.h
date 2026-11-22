@@ -86,6 +86,7 @@ namespace stream {
 
     /// Count one block's report.
     void on_report(const report_t &report) {
+      reports.fetch_add(1, std::memory_order_relaxed);
       missing.fetch_add(report.missing_packets(), std::memory_order_relaxed);
       if (!report.lost()) {
         repaired.fetch_add(1, std::memory_order_relaxed);
@@ -123,6 +124,12 @@ namespace stream {
       return missing.load(std::memory_order_relaxed);
     }
 
+    /// Blocks the client reported on. Zero means it never sent SS_FRAME_FEC_STATUS,
+    /// which is not the same as a link that lost nothing.
+    std::uint64_t reported_blocks() const {
+      return reports.load(std::memory_order_relaxed);
+    }
+
   private:
     std::optional<std::uint32_t> last_lost_frame;
 
@@ -130,6 +137,7 @@ namespace stream {
     std::atomic<std::uint64_t> lost_frames {0};
     std::atomic<std::uint64_t> missing {0};
     std::atomic<std::uint64_t> sent {0};
+    std::atomic<std::uint64_t> reports {0};
   };
 
 }  // namespace stream

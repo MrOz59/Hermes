@@ -159,7 +159,7 @@ jobs:
           printf '%s\n' "$MCPP_HOME/bin" >> "$GITHUB_PATH"
 
       - name: Build pinned PyroWave SDK
-        run: bash scripts/build-pyrowave-sdk.sh target/pyrowave-sdk
+        run: bash scripts/build-pyrowave-sdk.sh
 
       # Vitest exercises the Web UI without running the Vite asset build.
       - name: Run the Web UI tests
@@ -173,7 +173,6 @@ jobs:
         env:
           HERMES_MCPP_QT_MOC: /usr/lib/qt6/moc
         run: |
-          export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/target/pyrowave-sdk/install"
           mcpp test --no-run --no-programs --offline -p hermes-host \
             --features tray,pyrowave,web-assets,xtest --profile coverage \
             --message-format json > "$RUNNER_TEMP/hermes-test-build.jsonl"
@@ -621,13 +620,12 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build pinned PyroWave SDK
-        run: bash scripts/build-pyrowave-sdk.sh target/pyrowave-sdk
+        run: bash scripts/build-pyrowave-sdk.sh
 
       - name: Build Hermes and Linux tools with mcpp
         shell: bash
         run: |
           export HERMES_MCPP_QT_MOC=/usr/lib/qt6/libexec/moc
-          export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/target/pyrowave-sdk/install"
           export HERMES_MCPP_PYROWAVE_RUNPATH="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/hermes"
 
           features=cuda,package-assets,xtest,pyrowave,tray
@@ -658,7 +656,7 @@ jobs:
           LIBDIR="lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
           packaging/linux/stage-install.sh --mcpp "${PKGDIR}" \
             --result "$HERMES_HOST_RESULT" --result target/.last-result.json \
-            --pyrowave-prefix target/pyrowave-sdk/install --libdir "$LIBDIR" --tray > /dev/null
+            --libdir "$LIBDIR" --tray > /dev/null
           mkdir -p ${PKGDIR}/DEBIAN
 
           # Derive the dependencies from what the binary actually links, the
@@ -890,12 +888,11 @@ jobs:
           printf 'MCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\n' "$MCPP_HOME" "$MCPP_TOOLCHAIN" >> "$GITHUB_ENV"
 
       - name: Build pinned PyroWave SDK
-        run: bash scripts/build-pyrowave-sdk.sh target/pyrowave-sdk
+        run: bash scripts/build-pyrowave-sdk.sh
 
       - name: Build Hermes and Linux tools with mcpp
         shell: bash
         run: |
-          export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/target/pyrowave-sdk/install"
           export HERMES_MCPP_PYROWAVE_RUNPATH="$(rpm --eval '%{_libdir}')/hermes"
           features=cuda,package-assets,xtest,pyrowave,tray
           tools=(-p hermes-kms-card-broker -p hermes-session-broker -p hermes-gamemode)
@@ -911,45 +908,33 @@ jobs:
           "$MCPP_HOME/bin/mcpp" build --offline --release "${tools[@]}"
 
       - name: Create RPM Package
+        id: rpm
         run: |
-          VERSION="${BUILD_VERSION}"
-          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-
-          # The package used to be the binary and the asset tree, and nothing
-          # else: no menu entries, no icons, not even the systemd unit, so it
-          # installed and then could not be found or started (#52). Stage the
-          # project's own install instead, as every other package does.
-          packaging/linux/stage-install.sh --mcpp "target/hermes-${VERSION}" \
+          packaging/linux/stage-install.sh --mcpp target/hermes-payload \
             --result "$HERMES_HOST_RESULT" --result target/.last-result.json \
-            --pyrowave-prefix target/pyrowave-sdk/install --libdir "$(rpm --eval '%{_lib}')" --tray > /dev/null
-          tar -czf ~/rpmbuild/SOURCES/hermes-${VERSION}.tar.gz -C target "hermes-${VERSION}"
-
-          # %files is generated from that tree, so a file the stager starts or stops
-          # installing cannot silently fall in or out of the package.
-          (cd "target/hermes-${VERSION}" && {
-            find . -type d -path './usr/share/hermes*' -printf '%%dir /%P\n'
-            find . \( -type f -o -type l \) -printf '/%P\n'
-          } | sort) > ~/rpmbuild/SOURCES/hermes-${VERSION}.files
-
-          rpmbuild --define "hermes_version ${VERSION}" \
-            --define 'hermes_bundled_pyrowave 1' -bb packaging/linux/rpm/hermes.spec
-          cp ~/rpmbuild/RPMS/*/*.rpm .
+            --libdir "$(rpm --eval '%{_lib}')" --tray > /dev/null
+          artifact="$(packaging/linux/rpm/build-rpm.sh)"
+          printf 'path=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
 
       # The release jobs collect target/release-artifacts/**/*, so each leg needs its own
       # artifact name; the packages themselves are already distinct, since
       # %{?dist} stamps the release as .fc43 / .fc44 / .fc45.
       - name: Install and test RPM with file capabilities
         shell: bash
+        env:
+          HERMES_RPM: ${{ steps.rpm.outputs.path }}
         run: |
           dnf install -y util-linux
-          dnf install -y ./hermes-*.rpm
+          dnf install -y "$HERMES_RPM"
           bash scripts/tests/package-loader-smoke.sh "$(rpm --eval '%{_libdir}')/hermes"
 
       # Older Plasma protocol packages lack screencast v6. The build then leaves
       # the detached desktop out. Say which way this package went.
       - name: Report the detached desktop transport
+        env:
+          HERMES_RPM: ${{ steps.rpm.outputs.path }}
         run: |
-          if rpm -qlp hermes-*.rpm | grep -qx '/usr/bin/hermes-detached-session'; then
+          if rpm -qlp "$HERMES_RPM" | grep -qx '/usr/bin/hermes-detached-session'; then
             echo "::notice title=Detached desktop (Fedora ${{ matrix.fedora }})::KWin transport built; hermes-detached-session is packaged"
           else
             echo "::warning title=Detached desktop (Fedora ${{ matrix.fedora }})::KWin transport not built (plasma-wayland-protocols lacks screencast v6); Detached Desktop is unavailable in this package"
@@ -959,7 +944,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hermes-rpm-fc${{ matrix.fedora }}
-          path: "*.rpm"
+          path: ${{ steps.rpm.outputs.path }}
           retention-days: 30
           if-no-files-found: error
 

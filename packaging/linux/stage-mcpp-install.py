@@ -2,7 +2,9 @@
 """Stage the native Linux package payload from Hermes mcpp build artifacts."""
 
 import argparse
+import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -26,14 +28,18 @@ def pkg_directory(package, variable):
     return path.relative_to("/")
 
 
-def template_values(version_header):
-    # Use the metadata that actually went into this binary.
+def read_build_metadata(version_header):
+    values = {}
     for line in version_header.read_text(encoding="utf-8").splitlines():
-        if line.startswith("#define PROJECT_VERSION "):
-            version = json.loads(line.removeprefix("#define PROJECT_VERSION "))
-            break
-    else:
+        for macro in ("PROJECT_VERSION", "HERMES_BUILD_PYROWAVE_PREFIX", "HERMES_BUILD_PYROWAVE_SHA256"):
+            if line.startswith(prefix := f"#define {macro} "):
+                values[macro] = json.loads(line.removeprefix(prefix))
+    if "PROJECT_VERSION" not in values:
         raise ValueError(f"PROJECT_VERSION is missing from {version_header}")
+    return values
+
+
+def template_values(version):
 
     year, month, day = "1990", "01", "01"
     if release := re.fullmatch(r"(\d{4})\.(\d{3,4})\.\d+", version):
@@ -111,8 +117,17 @@ def stage_pyrowave(root, args, install):
             raise ValueError("Hermes was built without shared PyroWave")
         return
 
-    if not args.pyrowave_prefix or not args.libdir:
-        raise ValueError("pass --pyrowave-prefix and --libdir to stage the linked PyroWave runtime")
+    if not args.libdir:
+        raise ValueError("pass --libdir to stage the linked PyroWave runtime")
+    linked_prefix = args.build_metadata.get("HERMES_BUILD_PYROWAVE_PREFIX")
+    requested_prefix = args.pyrowave_prefix or os.environ.get("HERMES_MCPP_PYROWAVE_PREFIX")
+    prefix = (REPO / requested_prefix).resolve() if requested_prefix else None
+    if linked_prefix:
+        if prefix is not None and prefix != Path(linked_prefix):
+            raise ValueError(f"PyroWave stage prefix differs from the host-linked SDK at {linked_prefix}")
+        prefix = Path(linked_prefix)
+    elif prefix is None:
+        prefix = REPO / "target/pyrowave-sdk/install"
     if not args.libdir.parts or args.libdir.is_absolute() or ".." in args.libdir.parts:
         raise ValueError("--libdir must be relative to /usr")
     relative = Path("usr") / args.libdir / "hermes"
@@ -131,9 +146,15 @@ def stage_pyrowave(root, args, install):
     if runpath is None or runpath[1] != expected:
         raise ValueError(f"Hermes must have install RUNPATH {expected}")
 
-    source = args.pyrowave_prefix / "lib"
-    if not (source / dependency[1]).is_file():
-        raise ValueError(f"PyroWave SDK lacks {dependency[1]}")
+    source = prefix / "lib"
+    runtime = source / dependency[1]
+    if not runtime.is_file():
+        raise ValueError(f"PyroWave SDK at {prefix} lacks {dependency[1]}")
+    if linked_prefix:
+        with runtime.open("rb") as data:
+            digest = hashlib.file_digest(data, "sha256").hexdigest()
+        if digest != args.build_metadata["HERMES_BUILD_PYROWAVE_SHA256"]:
+            raise ValueError(f"PyroWave runtime differs from the library used to link Hermes: {runtime}")
     destination = root / relative
     destination.mkdir(parents=True, exist_ok=True)
     for path in source.glob("libpyrowave-shared.so*"):
@@ -144,7 +165,7 @@ def stage_pyrowave(root, args, install):
             (destination / path.name).symlink_to(link)
         else:
             install(path, destination / path.name)
-    licenses = args.pyrowave_prefix / "share/licenses/pyrowave"
+    licenses = prefix / "share/licenses/pyrowave"
     if licenses.is_dir():
         for path in licenses.iterdir():
             install(path, root / "usr/share/licenses/hermes/pyrowave" / path.name)
@@ -254,7 +275,8 @@ def main():
         for relative in ("apps.json", "web/index.html", "session-compositors/weston.conf"):
             if not (args.assets / relative).is_file():
                 raise ValueError(f"missing runtime asset {relative} in {args.assets}")
-        substitutions = template_values(args.version_header)
+        args.build_metadata = read_build_metadata(args.version_header)
+        substitutions = template_values(args.build_metadata["PROJECT_VERSION"])
         with tempfile.TemporaryDirectory(dir=args.root.parent, prefix="hermes-stage-") as work:
             root = Path(work) / "payload"
             stage_payload(root, args, substitutions)

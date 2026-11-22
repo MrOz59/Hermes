@@ -1,5 +1,6 @@
 """Generate the version macros consumed by Hermes's C++ sources."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -66,8 +67,13 @@ def depfile_word(value):
 
 
 def main():
-    root, header, depfile = map(Path, sys.argv[1:])
+    root, header, depfile, *libraries = map(Path, sys.argv[1:])
     values, dependencies = compute_metadata(root)
+    if libraries:
+        library, = libraries
+        values["HERMES_BUILD_PYROWAVE_PREFIX"] = str(library.parent.parent)
+        with library.open("rb") as data:
+            values["HERMES_BUILD_PYROWAVE_SHA256"] = hashlib.file_digest(data, "sha256").hexdigest()
     content = "#pragma once\n" + "".join(
         f"#define {macro} {json.dumps(value)}\n" for macro, value in values.items()
     )

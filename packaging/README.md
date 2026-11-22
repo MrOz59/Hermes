@@ -16,6 +16,9 @@ result manifests in `target/` and stages the files as they will appear under
 
 The Arch [`PKGBUILD`](../PKGBUILD) and [`hermes.install`](../hermes.install)
 stay at the repository root, where `makepkg` expects them. The
-[release workflow](../.github/workflows/build.yml) adds Debian package metadata
-and builds the Fedora package using [`linux/rpm/hermes.spec`](linux/rpm/hermes.spec). See [Stage a Fedora package payload](../docs/modularization/mcpp-migration.md#stage-a-fedora-package-payload)
-for the local staging commands.
+[release workflow](../.github/workflows/build.yml) adds Debian package metadata.
+Fedora CI and local builds share [`linux/rpm/build-rpm.sh`](linux/rpm/build-rpm.sh)
+and [`linux/rpm/hermes.spec`](linux/rpm/hermes.spec). The script consumes the staged
+install tree and writes the finished artifact to `target/dist/rpm/<arch>/`.
+See [Stage a Fedora package payload](../docs/modularization/mcpp-migration.md#stage-a-fedora-package-payload)
+for the local commands.

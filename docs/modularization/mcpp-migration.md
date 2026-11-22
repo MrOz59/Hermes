@@ -71,13 +71,20 @@ GCC 14 host compiler. An extracted Fedora GCC
 main host uses its C++26 toolchain. The pinned upstream PyroWave and Granite
 build actions retain their original C++14 and C99 modes.
 
-Use `pyrowave` with the matching upstream shared SDK at `.toolchain/pyrowave`
-or set `HERMES_MCPP_PYROWAVE_PREFIX` to its install prefix. The SDK needs
-`include/pyrowave/pyrowave.h` and `lib/libpyrowave-shared.so`, and the Fedora
-prefix provides the Vulkan loader and headers. Local builds use the SDK's
-`lib` directory at runtime. For packages, configure
+With the same `MCPP_HOME` and `MCPP_TOOLCHAIN` as the host build, run
+`scripts/build-pyrowave-sdk.sh` to prepare the pinned upstream SDK. The script
+builds its standalone mcpp project under `target/pyrowave-sdk` and writes the
+SDK to `target/pyrowave-sdk/install`, the default `pyrowave` feature input.
+To reuse an existing SDK, set `HERMES_MCPP_PYROWAVE_PREFIX` when building the
+host, for example `export HERMES_MCPP_PYROWAVE_PREFIX="$PWD/.toolchain/pyrowave"`.
+The SDK needs `include/pyrowave/pyrowave.h` and `lib/libpyrowave-shared.so`.
+The Fedora toolchain prefix provides the Vulkan loader and headers.
+
+Local builds use the SDK's `lib` directory at runtime. For packages, configure
 `HERMES_MCPP_PYROWAVE_RUNPATH` to the absolute installed library directory if
-it differs from Fedora's `/usr/lib64/hermes`.
+it differs from Fedora's `/usr/lib64/hermes`. The stager uses the SDK prefix and
+library checksum from the host's build metadata. For older mcpp results that
+lack both values, pass `--pyrowave-prefix` if you built with an alternate SDK.
 
 `web-assets` builds Vite and stages Linux runtime assets, including a default
 `apps.json`, in the mcpp output tree. A package build can use
@@ -129,13 +136,26 @@ MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
 
 packaging/linux/stage-install.sh --mcpp "$PWD/target/hermes-payload" \
   --result "$host_result" --result target/.last-result.json \
-  --pyrowave-prefix .toolchain/pyrowave --libdir lib64 --tray
+  --libdir "$(rpm --eval '%{_lib}')" --tray
+
+packaging/linux/rpm/build-rpm.sh
 ```
 
-The stager creates a new payload directory. It validates the installed
-PyroWave library path and converts the mcpp binary's legacy RPATH to RUNPATH
-on the staged copy. An installed package must still pass the file-capability
-loader test.
+The stager creates a new payload directory. Use a fresh staging directory
+when repeating this step. It verifies the linked PyroWave library and converts
+the mcpp binary's legacy RPATH to RUNPATH on the staged copy. An installed
+package must still pass the file-capability loader test.
+
+The RPM command prints the finished package path in `target/dist/rpm/<arch>/`.
+Fedora CI uses the same command. Its temporary rpmbuild tree lives under
+`target/` and is removed when the command exits. `mcpp clean` removes everything
+under `target/`, including the SDK, staged files and finished packages. For a
+repack of the same source version with both copies retained, pass a new RPM
+release number, for example `packaging/linux/rpm/build-rpm.sh target/hermes-payload 2`.
+
+The [mcpp packaging guide](https://github.com/mcpp-community/mcpp/blob/main/docs/10-pack-and-release.md)
+documents its portable bundle formats and `target/dist` outputs. Hermes's
+native RPM uses rpmbuild for Fedora dependencies, scriptlets and file ownership.
 
 ## Parity status
 

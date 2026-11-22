@@ -18,7 +18,7 @@ import mcpp;
 namespace {
   namespace fs = std::filesystem;
 
-  void add_version_action(const fs::path &manifest, const fs::path &root, const fs::path &out) {
+  void add_version_action(const fs::path &manifest, const fs::path &root, const fs::path &out, const fs::path &pyrowave_library) {
     const auto generator = (manifest / "generate-version.py").string();
     const auto version = (root / "VERSION").string();
     const auto header = (out / "hermes-build-version.h").string();
@@ -35,6 +35,9 @@ namespace {
     action.arg("python3").arg(generator.c_str()).arg(repo.c_str())
       .arg(header.c_str()).arg(depfile.c_str())
       .input(generator.c_str()).input(version.c_str()).output(header.c_str());
+    if (!pyrowave_library.empty()) {
+      action.arg(pyrowave_library.c_str()).input(pyrowave_library.c_str());
+    }
 
     for (const char *key : {"BRANCH", "BUILD_VERSION", "COMMIT"}) {
       mcpp::rerun_if_env_changed(key);
@@ -180,7 +183,6 @@ int main() {
   const auto manifest = fs::path(mcpp::manifest_dir());
   const auto root = manifest.parent_path().parent_path();
   const auto out = fs::path(mcpp::out_dir());
-  add_version_action(manifest, root, out);
   link_codec_and_boost_archives(root);
   const bool package_assets = mcpp::has_feature("package-assets");
   if (package_assets) {
@@ -222,9 +224,8 @@ int main() {
   } else {
     mcpp::define("HERMES_TRAY=0");
   }
-  if (mcpp::has_feature("pyrowave")) {
-    hermes::build::add_pyrowave(root, package_assets);
-  }
+  const auto pyrowave_library = mcpp::has_feature("pyrowave") ? hermes::build::add_pyrowave(root, package_assets) : fs::path {};
+  add_version_action(manifest, root, out, pyrowave_library);
   if (mcpp::has_feature("cuda")) {
     add_cuda_kernel(root, out);
   }

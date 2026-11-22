@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-sdk="$(realpath -m -- "${1:-${repo_root}/build/pyrowave-sdk}")"
+sdk="$(realpath -m -- "${1:-${repo_root}/target/pyrowave-sdk}")"
 revision=d2997ac172bdc00e29c58e3f2938acb7e94580bf
 
 fetch_commit() {

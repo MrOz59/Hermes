@@ -1,197 +1,46 @@
 # Building
-Hermes binaries are built using [CMake](https://cmake.org) and requires `cmake` > 3.25.
 
-## Building Locally
+Hermes builds for Linux. The native mcpp build uses C++26 for the host and
+was verified on Linux x86-64 with GCC 16.2.1.
 
-### Compiler
-It is recommended to use one of the following compilers:
+## Build locally
 
-| Compiler    | Version |
-|:------------|:--------|
-| GCC         | 13+     |
-| Clang       | 17+     |
-| Apple Clang | 15+     |
-
-### Dependencies
-
-#### Linux
-Dependencies vary depending on the distribution. The lists CI actually installs are the most reliable reference:
-the `Install Dependencies` steps of the `build-deb` (Ubuntu) and `build-rpm` (Fedora) jobs in
-[.github/workflows/build.yml](https://github.com/MrOz59/Hermes/blob/main/.github/workflows/build.yml), and the
-`depends`/`makedepends` arrays in the [PKGBUILD](https://github.com/MrOz59/Hermes/blob/main/PKGBUILD) for Arch.
-[scripts/linux_build.sh](https://github.com/MrOz59/Hermes/blob/main/scripts/linux_build.sh) is the inherited upstream
-helper for Debian- and Fedora-based distributions. Please submit a PR if you would like to extend it to other
-distributions.
-
-`libsystemd` is an optional dependency: with it a GNOME session notices the desktop layout changing mid-stream, and
-without it everything else still builds and works.
-
-##### CUDA Toolkit
-Hermes requires CUDA Toolkit for NVFBC capture. There are two caveats to CUDA:
-
-1. The version installed depends on the version of GCC.
-2. The version of CUDA you use will determine compatibility with various GPU generations.
-   At the time of writing, the recommended version to use is CUDA ~12.9.
-   See [CUDA compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/index.html) for more info.
-
-> [!NOTE]
-> To install older versions, select the appropriate run file based on your desired CUDA version and architecture
-> according to [CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive)
-
-The build looks for `nvcc` on `PATH` and then in the usual install locations
-(`/opt/cuda`, `/usr/local/cuda` and their versioned siblings, plus `CUDA_PATH`,
-`CUDA_HOME` and `CUDAToolkit_ROOT`), so a distro that keeps the toolkit outside
-`/usr` and only exports it from a login shell — Arch does — configures without
-extra flags. For a toolkit installed anywhere else, pass
-`-DCMAKE_CUDA_COMPILER=/path/to/nvcc`, adding
-`-DCMAKE_CUDA_HOST_COMPILER=/path/to/g++-<version>` if your GCC is newer than
-that toolkit supports.
-
-#### macOS
-You can either use [Homebrew](https://brew.sh) or [MacPorts](https://www.macports.org) to install dependencies.
-
-##### Homebrew
-```bash
-dependencies=(
-  "boost"  # Optional
-  "cmake"
-  "doxygen"  # Optional, for docs
-  "graphviz"  # Optional, for docs
-  "icu4c"  # Optional, if boost is not installed
-  "miniupnpc"
-  "ninja"
-  "node"
-  "openssl@3"
-  "opus"
-  "pkg-config"
-)
-brew install "${dependencies[@]}"
-```
-
-If there are issues with an SSL header that is not found:
-
-@tabs{
-  @tab{ Intel | ```bash
-    ln -s /usr/local/opt/openssl/include/openssl /usr/local/include/openssl
-    ```}
-  @tab{ Apple Silicon | ```bash
-    ln -s /opt/homebrew/opt/openssl/include/openssl /opt/homebrew/include/openssl
-    ```
-  }
-}
-
-##### MacPorts
-```bash
-dependencies=(
-  "cmake"
-  "curl"
-  "doxygen"  # Optional, for docs
-  "graphviz"  # Optional, for docs
-  "libopus"
-  "miniupnpc"
-  "ninja"
-  "npm9"
-  "pkgconfig"
-)
-sudo port install "${dependencies[@]}"
-```
-
-#### Windows
-First you need to install [MSYS2](https://www.msys2.org), then startup "MSYS2 UCRT64" and execute the following
-commands.
-
-##### Update all packages
-```bash
-pacman -Syu
-```
-
-##### Install dependencies
-```bash
-dependencies=(
-  "git"
-  "mingw-w64-ucrt-x86_64-boost"  # Optional
-  "mingw-w64-ucrt-x86_64-cmake"
-  "mingw-w64-ucrt-x86_64-cppwinrt"
-  "mingw-w64-ucrt-x86_64-curl-winssl"
-  "mingw-w64-ucrt-x86_64-doxygen"  # Optional, for docs... better to install official Doxygen
-  "mingw-w64-ucrt-x86_64-graphviz"  # Optional, for docs
-  "mingw-w64-ucrt-x86_64-MinHook"
-  "mingw-w64-ucrt-x86_64-miniupnpc"
-  "mingw-w64-ucrt-x86_64-nsis"
-  "mingw-w64-ucrt-x86_64-onevpl"
-  "mingw-w64-ucrt-x86_64-openssl"
-  "mingw-w64-ucrt-x86_64-opus"
-  "mingw-w64-ucrt-x86_64-toolchain"
-  "mingw-w64-ucrt-x86_64-nlohmann_json"
-)
-pacman -S "${dependencies[@]}"
-```
-
-##### Install Node.js
-Install Node.js separately from [nodejs.org](https://nodejs.org/) (LTS or current) or via
-[nvm-windows](https://github.com/coreybutler/nvm-windows). Don't install MSYS2's
-`mingw-w64-ucrt-x86_64-nodejs` — it's compiled with the MSYS2 gcc-16 libstdc++ which has
-a `std::bad_weak_ptr` regression that crashes Node during process init (see
-[apache/arrow#49958](https://github.com/apache/arrow/issues/49958) for the upstream
-toolchain trail). The official MSVC-built Node.js isn't affected.
-
-Make sure `node.exe` is on `PATH` before running `cmake` — the `web-ui` CMake target
-invokes `npm install` via `find_program(NPM npm)`, so the official Node's `npm` must be
-visible to CMake.
-
-### Clone
-Ensure [git](https://git-scm.com) is installed on your system, then clone the repository using the following command:
+Clone the repository and its submodules. The submodules provide pinned codec
+archives, protocol definitions, and GoogleTest.
 
 ```bash
-git clone https://github.com/MrOz59/Hermes.git --recurse-submodules
+git clone --recurse-submodules https://github.com/MrOz59/Hermes.git
 cd Hermes
-mkdir build
 ```
 
-### Build
+Prepare the [local toolchain and development inputs](modularization/mcpp-migration.md)
+for your distribution. For the Web UI, install the project's locked dependencies with the Bun version in `src_assets/common/assets/web/package.json`
+in the checkout before building.
 
 ```bash
-cmake -B build -G Ninja -S .
-ninja -C build
+bun install --cwd src_assets/common/assets/web --frozen-lockfile
+bun run --cwd src_assets/common/assets/web typecheck
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  mcpp build --offline --release -p hermes-host --features web-assets
 ```
 
-> [!TIP]
-> Available build options can be found in
-> [options.cmake](https://github.com/MrOz59/Hermes/blob/main/cmake/prep/options.cmake).
+Wayland, X11, DRM, and VA-API are part of the default Linux host build. The
+migration guide lists the optional KWin, Qt tray, XTest, PyroWave, and CUDA
+features and shows how to build the session and card brokers separately.
 
-### Package
+### CUDA
 
-@tabs{
-  @tab{Linux | @tabs{
-    @tab{deb | ```bash
-      cpack -G DEB --config ./build/CPackConfig.cmake
-      ```}
-    @tab{rpm | ```bash
-      cpack -G RPM --config ./build/CPackConfig.cmake
-      ```}
-  }}
-  @tab{macOS | @tabs{
-    @tab{DragNDrop | ```bash
-      cpack -G DragNDrop --config ./build/CPackConfig.cmake
-      ```}
-  }}
-  @tab{Windows | @tabs{
-    @tab{Installer | ```bash
-      cpack -G NSIS --config ./build/CPackConfig.cmake
-      ```}
-    @tab{Portable | ```bash
-      cpack -G ZIP --config ./build/CPackConfig.cmake
-      ```}
-  }}
-}
+Enable `cuda` for NVFBC capture. The release build uses CUDA 12.9.1 with
+GCC 14 for the CUDA translation unit in C++20, the newest dialect supported
+by the pinned nvcc. A separate host compiler builds the rest of Hermes. See the [local CUDA setup](modularization/mcpp-migration.md#build-and-check)
+for the project-local toolkit and compiler paths.
 
-### Remote Build
-It may be beneficial to build remotely in some cases. This will enable easier building on different operating systems.
+## Packages
 
-1. Fork the project
-2. Activate workflows
-3. Trigger the *CI* workflow manually
-4. Download the artifacts/binaries from the workflow run summary
+The [Linux package staging instructions](modularization/mcpp-migration.md#stage-a-fedora-package-payload)
+show how to build the host, brokers, and companion tools with their installed
+asset and library paths. Package CI jobs specify distribution-specific
+dependencies and artifact assembly. See the [build workflow](../.github/workflows/build.yml).
 
 <div class="section_buttons">
 

@@ -1,0 +1,269 @@
+<script lang="ts">
+import { defineComponent } from 'vue'
+import Navbar from './Navbar.vue'
+import ClientCard from './ClientCard.vue'
+import ResourceCard from './ResourceCard.vue'
+import AnnouncementFeed from './AnnouncementFeed.vue'
+import HermesVersion, { type GithubRelease } from './hermes_version'
+import type { ConfigurationResponse } from './config-types'
+import { hostWarnings as computeHostWarnings } from './hostWarnings'
+
+console.log("Hello, Hermes!")
+const hermesApi = "https://api.github.com/repos/MrOz59/Hermes";
+async function fetchJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, {
+    headers: {
+      "Accept": "application/vnd.github+json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub API request failed (${response.status})`);
+  }
+  return response.json();
+}
+
+export default defineComponent({
+  components: {
+    Navbar,
+    ClientCard,
+    ResourceCard,
+    AnnouncementFeed
+  },
+  data() {
+    return {
+      config: null as ConfigurationResponse | null,
+      version: null as HermesVersion | null,
+      stableVersion: null as HermesVersion | null,
+      nightlyVersion: null as HermesVersion | null,
+      nightlyCommit: null as string | null,
+      loading: true,
+      updateLoading: true,
+      updateError: false,
+      logs: null as string | null,
+    }
+  },
+  async created() {
+    await this.refresh();
+  },
+  methods: {
+    async refresh() {
+      await this.loadStatus();
+      await this.loadUpdates();
+    },
+    async loadStatus() {
+      this.loading = true;
+      try {
+        this.config = await fetch("./api/config").then((r) => r.json());
+      } catch (e) {
+        console.error(e);
+      }
+      try {
+        this.logs = (await fetch("./api/logs").then(r => r.text()))
+      } catch (e) {
+        console.error(e);
+      }
+      this.loading = false;
+    },
+    async loadUpdates() {
+      this.updateLoading = true;
+      this.updateError = false;
+      this.stableVersion = null;
+      this.nightlyVersion = null;
+      this.nightlyCommit = null;
+      this.version = this.config?.version ? new HermesVersion(null, this.config.version) : null;
+
+      if (!this.version) {
+        this.updateError = true;
+        this.updateLoading = false;
+        return;
+      }
+
+      try {
+        const stableRelease = await fetchJson<GithubRelease>(`${hermesApi}/releases/latest`);
+        this.stableVersion = new HermesVersion(stableRelease, null);
+      } catch (e) {
+        console.error("Stable update check failed", e);
+        this.updateError = true;
+      }
+
+      if (this.notifyNightlyUpdates) {
+        try {
+          const [nightlyRelease, nightlyCommit] = await Promise.all([
+            fetchJson<GithubRelease>(`${hermesApi}/releases/tags/nightly`),
+            fetchJson<{ sha: string }>(`${hermesApi}/commits/nightly`),
+          ]);
+          this.nightlyVersion = new HermesVersion(nightlyRelease, null);
+          this.nightlyCommit = nightlyCommit.sha;
+        } catch (e) {
+          console.error("Nightly update check failed", e);
+          this.updateError = true;
+        }
+      }
+
+      this.updateLoading = false;
+    },
+  },
+  computed: {
+    announcementsEnabled() {
+      const value = this.config?.announcements;
+      if (value === undefined || value === null || value === "") {
+        // Absent from the config file: on by default. This is how the
+        // maintainers reach users about a known issue, so it has to be opt
+        // *out*, not opt in.
+        return true;
+      }
+      return !["false", "0", "disabled", "disable", "no", "off"].includes(`${value}`.toLowerCase().trim());
+    },
+    notifyNightlyUpdates() {
+      const value = this.config?.notify_pre_releases;
+      if (value === true || value === 1) {
+        return true;
+      }
+      return ["true", "1", "enabled", "enable", "yes", "on"].includes(`${value ?? ""}`.toLowerCase().trim());
+    },
+    installedVersionNotStable() {
+      return !!this.version && !!this.stableVersion && this.version.isGreater(this.stableVersion);
+    },
+    stableBuildAvailable() {
+      return !!this.version && !!this.stableVersion && this.stableVersion.isGreater(this.version);
+    },
+    nightlyBuildAvailable() {
+      if (!this.notifyNightlyUpdates || !this.version || !this.nightlyVersion || !this.nightlyCommit || this.buildVersionIsDirty) {
+        return false;
+      }
+      if (this.nightlyVersion.isGreater(this.version)) {
+        return true;
+      }
+      if (!this.nightlyVersion.isSame(this.version)) {
+        return false;
+      }
+
+      const installedCommit = this.config?.version_commit ?? "";
+      if (!/^[0-9a-f]{7,40}$/i.test(installedCommit)) {
+        // Older Hermes packages did not expose their build commit. Offer the
+        // current nightly once; builds produced after this change can compare
+        // exact commits and will not repeat the notification.
+        return true;
+      }
+      return !this.nightlyCommit.startsWith(installedCommit) && !installedCommit.startsWith(this.nightlyCommit);
+    },
+    buildVersionIsDirty() {
+      return this.config?.version?.includes("dirty") ?? false;
+    },
+    hostWarnings() {
+      // The body lives in ./hostWarnings so it can be tested without a
+      // browser: it feeds the root render, and a value it could not cope
+      // with used to blank the whole page rather than drop one banner.
+      return computeHostWarnings(this.config);
+    },
+    /** Parse the text errors, calculating the text, the timestamp and the level */
+    fancyLogs() {
+      if (!this.logs) return [];
+      let regex = /(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}]):\s/g;
+      let rawLogLines = (this.logs.split(regex)).splice(1);
+      let logLines = []
+      for (let i = 0; i < rawLogLines.length; i += 2) {
+        logLines.push({ timestamp: rawLogLines[i], level: rawLogLines[i + 1].split(":")[0], value: rawLogLines[i + 1] });
+      }
+      return logLines;
+    }
+  }
+});
+</script>
+
+<template>
+  <Navbar></Navbar>
+  <div id="content" class="container">
+    <h1 class="my-4">{{ $t('index.welcome') }}</h1>
+    <p>{{ $t('index.description') }}</p>
+    <div class="alert alert-danger" v-if="fancyLogs.find(x => x.level === 'Fatal')">
+      <div style="line-height: 32px;">
+        <i class="fas fa-circle-exclamation" style="font-size: 32px;margin-right: 0.25em;"></i>
+        <p v-html="$t('index.startup_errors')"></p>
+        <br>
+      </div>
+      <ul>
+        <li v-for="v in fancyLogs.filter(x => x.level === 'Fatal')">{{v.value}}</li>
+      </ul>
+      <a class="btn btn-danger" href="./troubleshooting#logs">View Logs</a>
+    </div>
+    <!-- Announcements from the Hermes maintainers -->
+    <Announcement-Feed v-if="config && announcementsEnabled" :version="config.version"></Announcement-Feed>
+    <!-- Version -->
+    <div class="card p-2 my-4">
+      <div class="card-body" v-if="config">
+        <h2>Hermes {{ config.version }}</h2>
+        <div v-if="updateLoading" class="text-body-secondary">
+          {{ $t('index.loading_latest') }}
+        </div>
+        <div class="alert alert-success" v-if="buildVersionIsDirty">
+          {{ $t('index.version_dirty') }} 🌇
+        </div>
+        <div class="alert alert-warning" v-if="updateError">
+          {{ $t('index.update_check_failed') }}
+        </div>
+        <div class="alert alert-info" v-if="installedVersionNotStable">
+          {{ $t('index.installed_version_not_stable') }}
+        </div>
+        <div class="alert alert-success"
+             v-if="!updateLoading && !updateError && !stableBuildAvailable && !nightlyBuildAvailable && !buildVersionIsDirty">
+          {{ $t('index.version_latest') }}
+        </div>
+        <div class="alert alert-warning" v-if="nightlyBuildAvailable && nightlyVersion?.release">
+          <div class="d-flex justify-content-between align-items-center gap-3">
+            <div>
+              <p class="mb-1">{{ $t('index.new_nightly') }}</p>
+              <strong>{{ nightlyVersion.release.name }}</strong>
+            </div>
+            <a class="btn btn-success m-1"
+               :href="nightlyVersion.release.html_url"
+               target="_blank"
+               rel="noopener noreferrer">{{ $t('index.download') }}</a>
+          </div>
+          <pre class="text-wrap mt-2 mb-0">{{ nightlyVersion.release.body }}</pre>
+        </div>
+        <div class="alert alert-warning" v-if="stableBuildAvailable && !nightlyBuildAvailable && stableVersion?.release">
+          <div class="d-flex justify-content-between align-items-center gap-3">
+            <div>
+              <p class="mb-1">{{ $t('index.new_stable') }}</p>
+              <strong>{{ stableVersion.release.name }}</strong>
+            </div>
+            <a class="btn btn-success m-1"
+               :href="stableVersion.release.html_url"
+               target="_blank"
+               rel="noopener noreferrer">{{ $t('index.download') }}</a>
+          </div>
+          <pre class="text-wrap mt-2 mb-0">{{ stableVersion.release.body }}</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hermes host readiness -->
+    <div class="card p-2 my-4">
+      <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+          <h2 class="h4 mb-0">Hermes host readiness</h2>
+          <button type="button" class="btn btn-outline-secondary btn-sm" :disabled="loading || updateLoading" @click="refresh">
+            <i class="fa-solid fa-arrows-rotate" :class="{'fa-spin': loading || updateLoading}"></i>
+          </button>
+        </div>
+        <div v-if="loading" class="text-body-secondary">Checking local status…</div>
+        <div v-else-if="hostWarnings.length === 0" class="alert alert-success mb-0">
+          No local Hermes configuration warnings detected.
+        </div>
+        <div v-else class="d-grid gap-2">
+          <div v-for="warning in hostWarnings" :key="warning.id" class="alert mb-0" :class="warning.level === 'danger' ? 'alert-danger' : 'alert-warning'">
+            <div class="fw-semibold">{{ warning.title }}</div>
+            <div>{{ warning.message }}</div>
+            <a v-if="warning.href" class="btn btn-sm btn-outline-dark mt-2" :href="warning.href">{{ warning.action }}</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Resources -->
+    <div class="my-4">
+      <Client-Card></Client-Card>
+      <Resource-Card></Resource-Card>
+    </div>
+  </div>
+</template>

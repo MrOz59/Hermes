@@ -1,0 +1,17 @@
+[package]
+name = "pyrowave-sdk"
+version = "0.5.0"
+license = "MIT"
+standard = "gnu++20"
+
+[build]
+sources = []
+cxx_runtime = "host-coupled"
+ldflags = ["-pthread", "-ldl", "-lrt", "-lstdc++"]
+
+[targets.pyrowave-shared]
+kind = "shared"
+soname = "libpyrowave-shared.so.0"
+
+[target.x86_64-linux-gnu]
+sysroot = "glibc@system"

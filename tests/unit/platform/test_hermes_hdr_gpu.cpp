@@ -99,7 +99,7 @@ TEST(HermesHdrGpu, PaddedTenBitRgbToP010) {
   }
 }
 
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
   #include <src/platform/linux/cuda.h>
 extern "C" {
   #include <libavcodec/avcodec.h>
@@ -220,7 +220,7 @@ TEST(HermesHdrCuda, CpuUploadToCudaAndNvencMain10) {
   ASSERT_GT(packet->size, 0);
   // The pinned FFmpeg build deliberately omits decoders. Keep the sample in
   // the test build directory for independent ffprobe metadata verification.
-  const auto bitstream = std::filesystem::path {SUNSHINE_TEST_BIN_DIR} / "hermes-hdr-nvenc.hevc";
+  const auto bitstream = std::filesystem::path {HERMES_TEST_BIN_DIR} / "hermes-hdr-nvenc.hevc";
   std::ofstream output {bitstream, std::ios::binary | std::ios::trunc};
   ASSERT_TRUE(output);
   output.write(reinterpret_cast<const char *>(packet->data), packet->size);

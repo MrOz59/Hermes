@@ -2,9 +2,10 @@
  * @file tests/unit/test_file_handler.cpp
  * @brief Test src/file_handler.*.
  */
-#include "../tests_common.h"
+#include "../tests_environment.h"
 
 #include <format>
+#include <fstream>
 #include <src/file_handler.h>
 
 struct FileHandlerParentDirectoryTest: testing::TestWithParam<std::tuple<std::string, std::string>> {};
@@ -28,8 +29,8 @@ struct FileHandlerMakeDirectoryTest: testing::TestWithParam<std::tuple<std::stri
 
 TEST_P(FileHandlerMakeDirectoryTest, Run) {
   auto [input, expected, remove] = GetParam();
-  const std::string test_dir = platf::appdata().string() + "/tests/path/";
-  input = test_dir + input;
+  const auto test_dir = SunshineEnvironment::artifact_directory / "tests/path";
+  input = (test_dir / input).string();
 
   EXPECT_EQ(file_handler::make_directory(input), expected);
   EXPECT_TRUE(std::filesystem::exists(input));
@@ -80,17 +81,21 @@ Hey, hey, hey!
 
 TEST_P(FileHandlerTests, WriteFileTest) {
   auto [fileNum, content] = GetParam();
-  const std::string fileName = std::format("write_file_test_{}.txt", fileNum);
-  EXPECT_EQ(file_handler::write_file(fileName.c_str(), content), 0);
+  const auto filename = SunshineEnvironment::artifact_directory / std::format("write_{}.txt", fileNum);
+  EXPECT_EQ(file_handler::write_file(filename.c_str(), content), 0);
 }
 
 TEST_P(FileHandlerTests, ReadFileTest) {
   auto [fileNum, content] = GetParam();
-  const std::string fileName = std::format("write_file_test_{}.txt", fileNum);
-  EXPECT_EQ(file_handler::read_file(fileName.c_str()), content);
+  const auto filename = SunshineEnvironment::artifact_directory / std::format("read_{}.txt", fileNum);
+  std::ofstream file(filename);
+  file << content;
+  file.close();
+  ASSERT_TRUE(file);
+  EXPECT_EQ(file_handler::read_file(filename.c_str()), content);
 }
 
 TEST(FileHandlerTests, ReadMissingFileTest) {
-  // read missing file
-  EXPECT_EQ(file_handler::read_file("non-existing-file.txt"), "");
+  const auto filename = SunshineEnvironment::artifact_directory / "non-existing-file.txt";
+  EXPECT_EQ(file_handler::read_file(filename.c_str()), "");
 }

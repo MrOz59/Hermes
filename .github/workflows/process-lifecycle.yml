@@ -8,7 +8,7 @@ on:
       - 'src/platform/linux/process_group.h'
       - 'src/platform/linux/service_lifecycle.h'
       - 'src/platform/linux/misc.*'
-      - 'packaging/linux/sunshine.service.in'
+      - 'packaging/linux/systemd/hermes.service.in'
       - 'tests/unit/platform/test_process_group.cpp'
       - '.github/workflows/process-lifecycle.yml'
   workflow_dispatch:
@@ -21,12 +21,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
+      - name: Install GCC 14 for C++26
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-14
       - name: Initialize GoogleTest
         run: git submodule update --init --depth 1 third-party/googletest
       - name: Compile real process-group regressions
         run: |
-          g++ -std=c++23 -Wall -Wextra -Werror -pthread -I. \
+          g++-14 -std=c++2c -Wall -Wextra -Werror -pthread -I. \
             -Ithird-party/googletest/googletest/include -Ithird-party/googletest/googletest \
             tests/unit/platform/test_process_group.cpp \
             third-party/googletest/googletest/src/gtest-all.cc \

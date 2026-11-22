@@ -7,7 +7,6 @@
  * validation needs only what is checked here: the requested size, an image
  * buffer, and a synthetic frame to fill it with.
  */
-#ifdef __linux__
   #include "../../tests_common.h"
 
   #include <src/platform/common.h>
@@ -58,4 +57,3 @@ TEST(EncoderProbeDisplay, RefusesASizeOfNothing) {
   video::config_t config {};
   EXPECT_FALSE(platf::encoder_probe_display(platf::mem_type_e::system, config));
 }
-#endif

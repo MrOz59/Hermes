@@ -24,18 +24,11 @@
 #include "uuid.h"
 #include "video.h"
 
-#ifdef _WIN32
-  #include "platform/windows/misc.h"
-  #include "platform/windows/virtual_display.h"
-#else
   #include "platform/linux/virtual_display.h"
-#endif
-#ifdef __linux__
   #include "platform/linux/prelogin.h"
   #include "platform/linux/session_attach.h"
 
   #include <boost/log/core.hpp>
-#endif
 
 #define PROBE_DISPLAY_UUID "38F72B96-B00C-4F21-8B6C-E1BFF1602B0E"
 
@@ -68,44 +61,10 @@ std::map<std::string_view, std::function<int(const char *name, int argc, char **
   {"version"sv, [](const char *name, int argc, char **argv) {
      return args::version();
    }},
-#ifdef _WIN32
-  {"restore-nvprefs-undo"sv, [](const char *name, int argc, char **argv) {
-     return args::restore_nvprefs_undo();
-   }},
-#endif
 };
 
-#ifdef _WIN32
-LRESULT CALLBACK SessionMonitorWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-  switch (uMsg) {
-    case WM_CLOSE:
-      DestroyWindow(hwnd);
-      return 0;
-    case WM_DESTROY:
-      PostQuitMessage(0);
-      return 0;
-    case WM_ENDSESSION:
-      {
-        // Terminate ourselves with a blocking exit call
-        std::cout << "Received WM_ENDSESSION"sv << std::endl;
-        lifetime::exit_sunshine(0, false);
-        return 0;
-      }
-    default:
-      return DefWindowProc(hwnd, uMsg, wParam, lParam);
-  }
-}
 
-WINAPI BOOL ConsoleCtrlHandler(DWORD type) {
-  if (type == CTRL_CLOSE_EVENT) {
-    BOOST_LOG(info) << "Console closed handler called";
-    lifetime::exit_sunshine(0, false);
-  }
-  return FALSE;
-}
-#endif
-
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
 constexpr bool tray_is_enabled = true;
 #else
 constexpr bool tray_is_enabled = false;
@@ -115,9 +74,7 @@ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) 
   bool run_loop = false;
 
   // Conditions that would require the main thread event loop
-#ifndef _WIN32
-  run_loop = tray_is_enabled;  // On Windows, tray runs in separate thread, so no main loop needed for tray
-#endif
+  run_loop = tray_is_enabled;
 
   if (!run_loop) {
     BOOST_LOG(info) << "No main thread features enabled, skipping event loop"sv;
@@ -149,13 +106,6 @@ int main(int argc, char *argv[]) {
 
   task_pool_util::TaskPool::task_id_t force_shutdown = nullptr;
 
-#ifdef _WIN32
-  // Avoid searching the PATH in case a user has configured their system insecurely
-  // by placing a user-writable directory in the system-wide PATH variable.
-  SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-
-  setlocale(LC_ALL, "C");
-#endif
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -167,7 +117,6 @@ int main(int argc, char *argv[]) {
 
   mail::man = std::make_shared<safe::mail_raw_t>();
 
-#ifdef __linux__
   // `--prelogin` answers on the terminal and nowhere else. Reading the
   // configuration logs every setting, and starting the log rotates the log
   // file - of a Hermes that is very likely running while this is asked.
@@ -177,18 +126,15 @@ int main(int argc, char *argv[]) {
   if (prelogin_command) {
     boost::log::core::get()->set_logging_enabled(false);
   }
-#endif
 
   // parse config file
   if (config::parse(argc, argv)) {
     return 0;
   }
 
-#ifdef __linux__
   if (prelogin_command && config::sunshine.cmd.name == "prelogin"sv) {
     return platf::prelogin::command(argv[0], config::sunshine.cmd.argc, config::sunshine.cmd.argv);
   }
-#endif
 
   auto log_deinit_guard = logging::init(config::sunshine.min_log_level, config::sunshine.log_file);
   if (!log_deinit_guard) {
@@ -233,92 +179,6 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(error) << "Display device session failed to initialize"sv;
   }
 
-#ifdef _WIN32
-  // Modify relevant NVIDIA control panel settings if the system has corresponding gpu
-  if (nvprefs_instance.load()) {
-    // Restore global settings to the undo file left by improper termination of sunshine.exe
-    nvprefs_instance.restore_from_and_delete_undo_file_if_exists();
-    // Modify application settings for sunshine.exe
-    nvprefs_instance.modify_application_profile();
-    // Modify global settings, undo file is produced in the process to restore after improper termination
-    nvprefs_instance.modify_global_profile();
-    // Unload dynamic library to survive driver re-installation
-    nvprefs_instance.unload();
-  }
-
-  // Wait as long as possible to terminate Sunshine.exe during logoff/shutdown
-  SetProcessShutdownParameters(0x100, SHUTDOWN_NORETRY);
-
-  // We must create a hidden window to receive shutdown notifications since we load gdi32.dll
-  std::promise<HWND> session_monitor_hwnd_promise;
-  auto session_monitor_hwnd_future = session_monitor_hwnd_promise.get_future();
-  std::promise<void> session_monitor_join_thread_promise;
-  auto session_monitor_join_thread_future = session_monitor_join_thread_promise.get_future();
-
-  std::thread session_monitor_thread([&]() {
-    session_monitor_join_thread_promise.set_value_at_thread_exit();
-
-    WNDCLASSA wnd_class {};
-    wnd_class.lpszClassName = "SunshineSessionMonitorClass";
-    wnd_class.lpfnWndProc = SessionMonitorWindowProc;
-    if (!RegisterClassA(&wnd_class)) {
-      session_monitor_hwnd_promise.set_value(nullptr);
-      BOOST_LOG(error) << "Failed to register session monitor window class"sv << std::endl;
-      return;
-    }
-
-    auto wnd = CreateWindowExA(
-      0,
-      wnd_class.lpszClassName,
-      "Sunshine Session Monitor Window",
-      0,
-      CW_USEDEFAULT,
-      CW_USEDEFAULT,
-      CW_USEDEFAULT,
-      CW_USEDEFAULT,
-      nullptr,
-      nullptr,
-      nullptr,
-      nullptr
-    );
-
-    session_monitor_hwnd_promise.set_value(wnd);
-
-    if (!wnd) {
-      BOOST_LOG(error) << "Failed to create session monitor window"sv << std::endl;
-      return;
-    }
-
-    ShowWindow(wnd, SW_HIDE);
-
-    // Run the message loop for our window
-    MSG msg {};
-    while (GetMessage(&msg, nullptr, 0, 0) > 0) {
-      TranslateMessage(&msg);
-      DispatchMessage(&msg);
-    }
-  });
-
-  auto session_monitor_join_thread_guard = util::fail_guard([&]() {
-    if (session_monitor_hwnd_future.wait_for(1s) == std::future_status::ready) {
-      if (HWND session_monitor_hwnd = session_monitor_hwnd_future.get()) {
-        PostMessage(session_monitor_hwnd, WM_CLOSE, 0, 0);
-      }
-
-      if (session_monitor_join_thread_future.wait_for(1s) == std::future_status::ready) {
-        session_monitor_thread.join();
-        return;
-      } else {
-        BOOST_LOG(warning) << "session_monitor_join_thread_future reached timeout";
-      }
-    } else {
-      BOOST_LOG(warning) << "session_monitor_hwnd_future reached timeout";
-    }
-
-    session_monitor_thread.detach();
-  });
-
-#endif
 
   task_pool.start(1);
 
@@ -355,19 +215,13 @@ int main(int argc, char *argv[]) {
     display_device_deinit_guard = nullptr;
   });
 
-#ifdef _WIN32
-  // Terminate gracefully on Windows when console window is closed
-  SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-#endif
 
   proc::refresh(config::stream.file_apps);
 
   // If any of the following fail, we log an error and continue event though sunshine will not function correctly.
   // This allows access to the UI to fix configuration problems or view the logs.
 
-#ifdef __linux__
   platf::session_attach::drop_stale_display_environment();
-#endif
 
   auto platf_deinit_guard = platf::init();
   if (!platf_deinit_guard) {
@@ -382,14 +236,12 @@ int main(int argc, char *argv[]) {
   // Initialize virtual display driver early so clients know it's supported
   proc::initVDisplayDriver();
 
-#ifdef __linux__
   // Say what this session can and cannot do before anything depends on it. A
   // virtual-display feature that is unavailable here is almost always a
   // configuration a user can fix, and the alternative to saying so at startup
   // is that they find out from a black stream.
   VDISPLAY::logSessionAssessment();
   platf::prelogin::log_report();
-#endif
 
   reed_solomon_init();
   auto input_deinit_guard = input::init();
@@ -403,7 +255,6 @@ int main(int argc, char *argv[]) {
   // display" error - which the Web UI shows as a startup failure - before the
   // fallback below had even run.
   const bool display_present = video::display_present();
-#ifdef __linux__
   // Started before anyone logged in, with no monitor, the only thing on screen
   // is the login greeter. SDDM's greeter quits for good when its last output
   // goes away, so the probe display's removal would leave nothing for the
@@ -414,12 +265,7 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(info) << "No monitor is lit and no graphical session is attached; "
                        "probing encoders when the first session brings up its virtual display."sv;
   }
-#else
-  constexpr bool defer_probe = false;
-#endif
   if (!defer_probe && (!display_present || video::probe_encoders())) {
-    bool allow_probing = video::allow_encoder_probing();
-#ifdef __linux__
     // No screen could be opened - typically because every monitor is asleep.
     // A temporary virtual output would be a monitor plugged in and unplugged,
     // which wakes every display the compositor drives, at every start of
@@ -427,90 +273,13 @@ int main(int argc, char *argv[]) {
     // display with nothing behind it instead.
     BOOST_LOG(info) << "No screen to probe encoders on; probing them without one."sv;
     if (video::probe_encoders_without_display()) {
-      BOOST_LOG(error) << (allow_probing ? "Video failed to find working encoder: allow probing but failed"sv : "Video failed to find working encoder"sv);
+      BOOST_LOG(error) << "Video failed to find working encoder: allow probing but failed"sv;
     }
-#else
-    // Create a temporary virtual display for encoder capability probing
-    if (proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
-      std::string probe_uuid_str = PROBE_DISPLAY_UUID;
-      auto probe_uuid = uuid_util::uuid_t::parse(probe_uuid_str);
-
-      if (display_present) {
-        BOOST_LOG(info) << "Creating a temporary virtual display to probe for encoders..."sv;
-      } else {
-        BOOST_LOG(info) << "No monitor is lit; creating a temporary virtual display to probe for encoders..."sv;
-      }
-
-      if (!config::video.adapter_name.empty()) {
-#ifdef _WIN32
-        VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name));
-#else
-        VDISPLAY::setRenderAdapterByName(config::video.adapter_name);
-#endif
-      }
-
-#ifdef _WIN32
-      auto* probe_guid = (GUID*)(void*)&probe_uuid;
-      VDISPLAY::createVirtualDisplay(
-        probe_uuid_str.c_str(),
-        "Probe",
-        800,
-        600,
-        60,
-        *probe_guid
-      );
-#else
-      const auto probe_display = VDISPLAY::createVirtualDisplay(
-        probe_uuid_str.c_str(),
-        "Probe",
-        800,
-        600,
-        60,
-        probe_uuid
-      );
-#endif
-
-      std::this_thread::sleep_for(500ms);
-
-#ifndef _WIN32
-      // Windows makes the new display the one capture opens by default; Linux
-      // does not. Left unnamed, the probe below would open the default output
-      // again - the one that just failed, or none at all - and never look at
-      // the display made for it. Sessions name theirs the same way.
-      const auto previous_output = config::video.output_name;
-      if (!probe_display.empty()) {
-        config::video.output_name = probe_display;
-      }
-#endif
-
-      // Probe again anyways
-      if (video::probe_encoders()) {
-        if (allow_probing) {
-          BOOST_LOG(error) << "Video failed to find working encoder: allow probing but failed"sv;
-        } else {
-          BOOST_LOG(error) << "Video failed to find working encoder even after attempted with a virtual display"sv;
-        }
-      }
-
-#ifdef _WIN32
-      VDISPLAY::removeVirtualDisplay(*probe_guid);
-#else
-      config::video.output_name = previous_output;
-      VDISPLAY::removeVirtualDisplay(probe_uuid);
-#endif
-    } else if (!allow_probing) {
-      BOOST_LOG(error) << "Video failed to find working encoder: probe failed and virtual display driver isn't initialized"sv;
-    }
-#endif
   }
 
   if (http::init()) {
     BOOST_LOG(fatal) << "HTTP interface failed to initialize"sv;
 
-#ifdef _WIN32
-    BOOST_LOG(fatal) << "To relaunch Hermes successfully, use the shortcut in the Start Menu. Do not run sunshine.exe manually."sv;
-    std::this_thread::sleep_for(10s);
-#endif
 
     return -1;
   }
@@ -536,32 +305,14 @@ int main(int argc, char *argv[]) {
   std::thread configThread {confighttp::start};
   std::thread rtspThread {rtsp_stream::start};
 
-#ifdef __linux__
   // Started at boot, before anyone logged in, Hermes joins the graphical
   // session once there is one and no client is in the way.
   auto session_attach_guard = platf::session_attach::start();
-#endif
 
-#ifdef _WIN32
-  // If we're using the default port and GameStream is enabled, warn the user
-  if (config::sunshine.port == 47989 && is_gamestream_enabled()) {
-    BOOST_LOG(fatal) << "GameStream is still enabled in GeForce Experience! This *will* cause streaming problems with Hermes!"sv;
-    BOOST_LOG(fatal) << "Disable GameStream on the SHIELD tab in GeForce Experience or change the Port setting on the Advanced tab in the Hermes Web UI."sv;
-  }
-#endif
 
   if (tray_is_enabled && config::sunshine.system_tray) {
     BOOST_LOG(info) << "Starting system tray"sv;
-#ifdef _WIN32
-    // TODO: Windows has a weird bug where when running as a service and on the first Windows boot,
-    // he tray icon would not appear even though Sunshine is running correctly otherwise.
-    // Restarting the service would allow the icon to appear normally.
-    // For now we will keep the Windows tray icon on a separate thread.
-    // Ideally, we would run the system tray on the main thread for all platforms.
-    system_tray::init_tray_threaded();
-#else
     system_tray::init_tray();
-#endif
   }
 
   mainThreadLoop(shutdown_event);
@@ -576,18 +327,6 @@ int main(int argc, char *argv[]) {
   task_pool.stop();
   task_pool.join();
 
-#ifdef _WIN32
-  // Restore global NVIDIA control panel settings
-  if (nvprefs_instance.owning_undo_file() && nvprefs_instance.load()) {
-    nvprefs_instance.restore_global_profile();
-    nvprefs_instance.unload();
-  }
-
-  // Stop the threaded tray if it was started
-  if (tray_is_enabled && config::sunshine.system_tray) {
-    system_tray::end_tray_threaded();
-  }
-#endif
 
   return lifetime::desired_exit_code;
 }

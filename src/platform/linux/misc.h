@@ -25,7 +25,7 @@ enum class window_system_e {
 
 extern window_system_e window_system;
 
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
 struct sd_bus;
 #endif
 
@@ -88,7 +88,7 @@ namespace platf {
    */
   std::vector<std::string> render_node_descriptions();
 
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
   /**
    * @brief Open the desktop's D-Bus user bus.
    *

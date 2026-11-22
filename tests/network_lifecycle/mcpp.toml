@@ -1,0 +1,66 @@
+[package]
+name = "hermes-network-lifecycle"
+description = "Hermes standalone Linux network lifecycle tests"
+standard = "c++26"
+
+[build]
+cxx_runtime = "host-coupled"
+include_dirs = [
+    "../..",
+    "../../.toolchain/linux-headers-7.3.5/include",
+    "../../third-party/moonlight-common-c/enet/include",
+    "../../third-party/googletest/googletest/include",
+    "../../third-party/googletest/googletest",
+    "../../.toolchain/boost",
+    "../../.toolchain/json-include",
+]
+sources = [
+    "../unit/test_network.cpp",
+    "../unit/test_thread_safe.cpp",
+    "../unit/test_clipboard_process.cpp",
+    "../../src/network.cpp",
+    "support.cpp",
+    "../../third-party/googletest/googletest/src/gtest-all.cc",
+    "../../third-party/moonlight-common-c/enet/*.c",
+]
+defines = ["BOOST_LOG_DYN_LINK", "HERMES_NETWORK_LIFECYCLE_TESTS"]
+cxxflags = ["-pthread"]
+ldflags = ["-pthread"]
+
+[[build.flags]]
+glob = "../../third-party/moonlight-common-c/enet/*.c"
+cflags = [
+    "-DHAS_FCNTL=1",
+    "-DHAS_IOCTL=1",
+    "-DHAS_POLL=1",
+    "-DHAS_GETADDRINFO=1",
+    "-DHAS_GETNAMEINFO=1",
+    "-DHAS_GETHOSTBYNAME_R=1",
+    "-DHAS_GETHOSTBYADDR_R=1",
+    "-DHAS_INET_PTON=1",
+    "-DHAS_INET_NTOP=1",
+    "-DHAS_MSGHDR_FLAGS=1",
+    "-DHAS_SOCKLEN_T=1",
+    "-Wno-error",
+]
+
+[runtime]
+libraries = ["boost_log"]
+link_library_dirs = ["../../.toolchain/boost/stage/lib"]
+transitive_needed_dirs = ["../../.toolchain/boost/stage/lib"]
+runtime_search_dirs = ["../../.toolchain/boost/stage/lib"]
+
+[test]
+discover = []
+
+[targets.network_lifecycle_tests]
+kind = "bin"
+main = "../../third-party/googletest/googletest/src/gtest_main.cc"
+
+[profile.sanitize]
+opt = 0
+debug = true
+split_debuginfo = "off"
+cflags = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+cxxflags = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+ldflags = ["-fsanitize=address,undefined"]

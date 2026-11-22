@@ -43,8 +43,8 @@ INSTANTIATE_TEST_SUITE_P(
   SetEnvTests,
   SetEnvTest,
   ::testing::Values(
-    std::make_tuple("SUNSHINE_UNIT_TEST_ENV_VAR", "test_value_0", 0),
-    std::make_tuple("SUNSHINE_UNIT_TEST_ENV_VAR", "test_value_1", 0),
+    std::make_tuple("HERMES_UNIT_TEST_ENV_VAR", "test_value_0", 0),
+    std::make_tuple("HERMES_UNIT_TEST_ENV_VAR", "test_value_1", 0),
     std::make_tuple("", "test_value", -1)
   )
 );
@@ -54,7 +54,6 @@ TEST(HostnameTests, TestAsioEquality) {
   ASSERT_EQ(platf::get_host_name(), boost::asio::ip::host_name());
 }
 
-#ifdef __linux__
 // Detection of a standalone Gamescope session (SteamOS Game Mode) is driven by
 // XDG_CURRENT_DESKTOP / GAMESCOPE_WAYLAND_DISPLAY and takes precedence over the
 // desktop window-system, so it is testable without a real compositor.
@@ -94,4 +93,3 @@ TEST_F(SessionEnvironmentTest, NonGamescopeDesktopIsNotGamescopeSession) {
   const auto env = platf::detect_session_environment();
   ASSERT_NE(env.kind, platf::session_environment_e::gamescope_session);
 }
-#endif

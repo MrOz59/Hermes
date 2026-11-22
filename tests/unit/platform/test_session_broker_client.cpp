@@ -2,7 +2,6 @@
 /** @file test_session_broker_client.cpp
  *  @brief Unix transport deadlines and session liveness without a real broker.
  */
-#ifdef __linux__
   #include "src/platform/linux/session_broker.h"
   #include "src/platform/linux/session_broker_transport.h"
 
@@ -231,4 +230,3 @@ namespace {
     EXPECT_FALSE(broker::detail::exchange(std::string(200, 'x'), "STATUS abcd\n", 10ms).reply);
   }
 }  // namespace
-#endif

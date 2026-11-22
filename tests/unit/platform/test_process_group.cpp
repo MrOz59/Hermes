@@ -2,7 +2,6 @@
  * @file tests/unit/platform/test_process_group.cpp
  * @brief Real Linux process trees must be cleaned after their launcher exits.
  */
-#ifdef __linux__
 #include <gtest/gtest.h>
 #include <src/platform/linux/process_group.h>
 #include <src/platform/linux/service_lifecycle.h>
@@ -209,4 +208,3 @@ TEST(ServiceLifecycleTest, RecognizesOnlyInstalledHermesUserService) {
     EXPECT_FALSE(platf::is_hermes_user_service_cgroup(entry)) << entry;
   }
 }
-#endif

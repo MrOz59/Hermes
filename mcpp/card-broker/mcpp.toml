@@ -1,0 +1,13 @@
+[package]
+name = "hermes-kms-card-broker"
+standard = "c++26"
+
+[build]
+sources = []
+cxx_runtime = "host-coupled"
+cxxflags = ["-Wall", "-Wno-sign-compare"]
+include_dirs = ["../../.toolchain/linux-headers-7.3.5/include"]
+
+[targets.hermes-kms-card-broker]
+kind = "bin"
+main = "../../tools/hermes-kms-card-broker.cpp"

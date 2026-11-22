@@ -1,0 +1,37 @@
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <iterator>
+#include <regex>
+#include <string>
+
+import mcpp;
+import hermes.build_support;
+
+int main() {
+  namespace fs = std::filesystem;
+  const auto root = fs::path(mcpp::manifest_dir()).parent_path().parent_path();
+  const auto out = fs::path(mcpp::out_dir());
+  auto directory = fs::path(hermes::build::configured_path("HERMES_MCPP_KWIN_PROTOCOLS"));
+  if (directory.empty()) {
+    const auto local = root / ".toolchain/fedora/usr/share/plasma-wayland-protocols";
+    directory = fs::is_directory(local) ? local : fs::path("/usr/share/plasma-wayland-protocols");
+  }
+
+  const auto screencast = directory / "zkde-screencast-unstable-v1.xml";
+  const auto source = screencast.string();
+  mcpp::rerun_if_changed(source.c_str());
+  std::ifstream file(screencast);
+  const std::string text {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+  const std::regex interface(R"re(name="zkde_screencast_unstable_v1"\s+version="([0-9]+)")re");
+  std::smatch match;
+  if (!std::regex_search(text, match, interface) || std::stoi(match[1].str()) < 6) {
+    std::cerr << "KWin transport requires screencast protocol version 6 at " << source << "\n";
+    return 1;
+  }
+
+  const auto scanner = hermes::build::wayland_scanner(root.c_str());
+  mcpp::include_dir(out.c_str());
+  hermes::build::add_wayland_protocol(scanner.c_str(), (directory / "fake-input.xml").c_str(), out.c_str());
+  hermes::build::add_wayland_protocol(scanner.c_str(), screencast.c_str(), out.c_str());
+}

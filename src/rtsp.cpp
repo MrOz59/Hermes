@@ -42,7 +42,6 @@ using namespace std::literals;
 
 namespace rtsp_stream {
   static void release_pending_virtual_display(launch_session_t &session) {
-#ifdef __linux__
     if (session.isolated_session &&
         session.session_virtual_display_cleanup_pending) {
       proc::proc.terminate_isolated(
@@ -62,9 +61,6 @@ namespace rtsp_stream {
       session.session_scoped_virtual_display = false;
       session.display_name.clear();
     }
-#else
-    (void) session;
-#endif
   }
 
   void free_msg(PRTSP_MESSAGE msg) {

@@ -128,7 +128,6 @@ ldflags = [
     "-lsystemd",
     "-lssl",
     "-lcrypto",
-    "-lnuma",
     "-lquadmath",
     "-lrt",
     "-ldl",

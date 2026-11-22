@@ -111,6 +111,8 @@ namespace {
       mcpp::link_flag((boost / archive).c_str());
     }
     mcpp::link_flag("-Wl,--end-group");
+    // Keep NUMA after the static x265 archive that references it.
+    mcpp::link_flag("-lnuma");
   }
 
   void add_cuda_kernel(const std::filesystem::path &root, const std::filesystem::path &out) {

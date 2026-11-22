@@ -430,13 +430,13 @@ by default. You may replace *localhost* with your internal ip address.
 
 1. Add games and applications.
 2. Adjust any configuration settings as needed.
-3. In Moonlight, you may need to add the PC manually.
-4. When Moonlight requests for you insert the pin:
+3. In [Hestia](https://github.com/MrOz59/Hestia) or another compatible client, you may need to add the PC manually.
+4. When the client displays a PIN:
 
    - Login to the web ui
    - Go to "PIN" in the Navbar
    - Type in your PIN and press Enter, you should get a Success Message
-   - In Moonlight, select one of the Applications listed
+   - In your client, select an application from the list
 
 ### Arguments
 To get a list of available arguments, run the following command.
@@ -487,7 +487,7 @@ in the client; EVDI has no HDR path. See [Hermes-KMS HDR10](hermes_kms_hdr.md).
 
   * HDR must be activated in the host OS, which may require an HDR-capable display or EDID emulator dongle
     connected to your host PC.
-  * You must also enable the HDR option in your Moonlight client settings, otherwise the stream will be SDR
+  * Enable HDR in Hestia or your compatible client, otherwise the stream will be SDR
     (and probably overexposed if your host is HDR).
   * A good HDR experience relies on proper HDR display calibration both in the OS and in game. HDR calibration can
     differ significantly between client and host displays.

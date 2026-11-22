@@ -3,13 +3,13 @@ Actions=RunInTerminal;
 Categories=RemoteAccess;Network;
 Comment=@PROJECT_DESCRIPTION@
 Exec=/usr/bin/env systemctl start --user hermes
-Icon=@SUNSHINE_DESKTOP_ICON@
+Icon=@HERMES_DESKTOP_ICON@
 Keywords=gamestream;stream;moonlight;remote play;
 Name=@PROJECT_NAME@
 Type=Application
 Version=1.0
 
 [Desktop Action RunInTerminal]
-Exec=gio launch @CMAKE_INSTALL_FULL_DATAROOTDIR@/applications/@PROJECT_FQDN@.terminal.desktop
+Exec=gio launch @HERMES_DATAROOTDIR@/applications/@PROJECT_FQDN@.terminal.desktop
 Icon=application-x-executable
 Name=Run in Terminal

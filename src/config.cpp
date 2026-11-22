@@ -854,7 +854,7 @@ namespace config {
   void apply_config(std::unordered_map<std::string, std::string> &&vars) {
     normalize_input_config_alias(vars);
     if (!fs::exists(stream.file_apps.c_str())) {
-      fs::copy_file(SUNSHINE_ASSETS_DIR "/apps.json", stream.file_apps);
+      fs::copy_file(HERMES_ASSETS_DIR "/apps.json", stream.file_apps);
     }
 
     for (auto &[name, val] : vars) {

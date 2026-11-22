@@ -428,7 +428,7 @@ namespace nvhttp {
     client_t &client = client_root;
     client.named_devices.push_back(named_cert_p);
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_paired(named_cert_p->name);
 #endif
 
@@ -882,7 +882,7 @@ namespace nvhttp {
 
           getservercert(new_session, tree, pin);
         } else {
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
           system_tray::update_tray_require_pin();
 #endif
           set_pending_pair(new_session.client.uniqueID, new_session.client.name);
@@ -1914,7 +1914,7 @@ namespace nvhttp {
     );
     tree.put("root.resume", 1);
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_client_connected(named_cert_p->name);
 #endif
   }

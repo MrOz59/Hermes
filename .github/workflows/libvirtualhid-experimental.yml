@@ -242,7 +242,7 @@ jobs:
             --message-format json > "$test_report"
           hermes_tests="$(jq -ser '[.[] | select(.status == "built") | .launch.argv[0]] |
             if length == 1 then .[0] else error("expected one Hermes test executable") end' "$test_report")"
-          install -Dm755 "$hermes_tests" build/tests/test_sunshine
+          install -Dm755 "$hermes_tests" build/tests/test_hermes
 
           build_test_program() {
             local package=$1 profile=$2 name=$3 result binary
@@ -257,14 +257,14 @@ jobs:
       - name: Test Hermes input translation and per-client feedback
         env:
           HERMES_TEST_REQUIRE_UNIX_SOCKETS: "1"
-        run: build/tests/test_sunshine --gtest_color=yes --gtest_filter='ProcessGroupTest.*:ServiceLifecycleTest.*:VirtualHidInputTest.*:SessionBrokerLockTest.*:SessionBrokerWorkersTest.*:SessionBrokerClientTest.*:SessionBrokerPolicyTest.*:SessionInputAccessTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*:GamescopeSession.*:ClientMicRouterTest.*:IsolatedRuntimeConcurrencyTest.*'
+        run: build/tests/test_hermes --gtest_color=yes --gtest_filter='ProcessGroupTest.*:ServiceLifecycleTest.*:VirtualHidInputTest.*:SessionBrokerLockTest.*:SessionBrokerWorkersTest.*:SessionBrokerClientTest.*:SessionBrokerPolicyTest.*:SessionInputAccessTest.*:ConfigConsistencyTest.*:LocaleConsistencyTest.*:DirectDevicePort.*:HestiaCapabilitiesSchema.*:GamescopeSession.*:ClientMicRouterTest.*:IsolatedRuntimeConcurrencyTest.*'
 
       - name: Test concurrent private audio servers and resumed capture
         if: "!cancelled() && steps.compile.outcome == 'success'"
         timeout-minutes: 3
         env:
           HERMES_TEST_REQUIRE_PRIVATE_AUDIO: "1"
-        run: build/tests/test_sunshine --gtest_color=yes --gtest_filter='SessionAudioLiveTest.*'
+        run: build/tests/test_hermes --gtest_color=yes --gtest_filter='SessionAudioLiveTest.*'
 
       - name: Test state adapters and isolated-session identity
         run: |
@@ -279,7 +279,7 @@ jobs:
         with:
           name: libvirtualhid-linux-input-tests
           path: |
-            build/tests/test_sunshine
+            build/tests/test_hermes
             build/tests/hermes-hid-consumer
             build/tests/test_libvirtualhid
           if-no-files-found: error
@@ -361,9 +361,9 @@ jobs:
                 libxcursor libxkbcommon libva libvdpau libcap \
                 curl libevdev libinput sdl2 systemd miniupnpc libpulse qt6-base \
                 qt6-svg icu numactl acl util-linux kmod libpipewire
-              chmod +x build/tests/test_sunshine build/tests/hermes-hid-consumer \
+              chmod +x build/tests/test_hermes build/tests/hermes-hid-consumer \
                 build/tests/test_libvirtualhid
-              for binary in build/tests/test_sunshine build/tests/hermes-hid-consumer \
+              for binary in build/tests/test_hermes build/tests/hermes-hid-consumer \
                 build/tests/test_libvirtualhid; do
                 hermes_dependencies=$(ldd "$binary")
                 if grep -q "not found" <<< "$hermes_dependencies"; then
@@ -374,7 +374,7 @@ jobs:
               done
               /usr/lib/systemd/systemd-udevd --daemon
               export HERMES_TEST_HID_CONSUMER_PATH="$PWD/build/tests/hermes-hid-consumer"
-              scripts/vm-isolated-input-test.sh "$PWD/build/tests/test_sunshine"
+              scripts/vm-isolated-input-test.sh "$PWD/build/tests/test_hermes"
               build/tests/test_libvirtualhid \
                 --gtest_color=yes \
                 --gtest_filter="LinuxRuntimeTest.*:LinuxConsumerTest.InputEventPreference*"

@@ -55,6 +55,9 @@ def compute_metadata(root):
         "PROJECT_VERSION_MINOR": minor,
         "PROJECT_VERSION_PATCH": patch,
         "PROJECT_VERSION_COMMIT": commit or "unknown",
+        "HERMES_PUBLISHER_NAME": "Hermes contributors",
+        "HERMES_PUBLISHER_WEBSITE": "https://github.com/MrOz59/Hermes",
+        "HERMES_PUBLISHER_ISSUE_URL": "https://github.com/MrOz59/Hermes/issues",
     }, {path for path in dependencies if path.is_file()}
 
 

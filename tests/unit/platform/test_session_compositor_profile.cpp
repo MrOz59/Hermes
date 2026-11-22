@@ -33,7 +33,7 @@ namespace proc {
 
 namespace {
   const std::filesystem::path profile_dir {
-    std::filesystem::path {SUNSHINE_SOURCE_DIR} / "src_assets" / "linux" / "misc" / "session-compositors"
+    std::filesystem::path {HERMES_SOURCE_DIR} / "src_assets" / "linux" / "misc" / "session-compositors"
   };
 
   // The values a session actually hands a profile: a Hermes-KMS card on its own

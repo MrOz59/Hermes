@@ -49,7 +49,7 @@ namespace {
 
   void add_wayland_actions(const fs::path &root, const fs::path &out) {
     const auto scanner = hermes::build::wayland_scanner(root);
-    mcpp::define("SUNSHINE_BUILD_WAYLAND");
+    mcpp::define("HERMES_BUILD_WAYLAND");
     for (const char *library : {"-lwayland-client", "-lwayland-server", "-lwayland-egl", "-lwayland-cursor", "-lgbm"}) {
       mcpp::link_flag(library);
     }
@@ -146,7 +146,7 @@ namespace {
     action.role = mcpp::roles::object;
     action.depfile = depfile.c_str();
     action.arg(nvcc.c_str()).arg("-ccbin").arg(host_cxx.c_str())
-      .arg("-std=c++20").arg("-DSUNSHINE_BUILD_CUDA").arg("-Xcompiler=-fPIC")
+      .arg("-std=c++20").arg("-DHERMES_BUILD_CUDA").arg("-Xcompiler=-fPIC")
       .arg("-I").arg(root.c_str()).arg("-I").arg((root / "third-party/nvfbc").c_str())
       .arg("-I").arg((root / "third-party/build-deps/dist/Linux-x86_64/include").c_str())
       .arg("-MD").arg("-MF").arg(depfile.c_str())
@@ -186,7 +186,7 @@ int main() {
   } else if (mcpp::has_feature("web-assets")) {
     hermes::build::add_web_assets(root, out, out / "assets");
   } else {
-    mcpp::define("SUNSHINE_ASSETS_DIR=\"/usr/assets\"");
+    mcpp::define("HERMES_ASSETS_DIR=\"/usr/assets\"");
   }
   if (mcpp::has_feature("xtest")) {
     mcpp::link_lib("Xtst");
@@ -204,9 +204,9 @@ int main() {
       definition << key << '=' << std::quoted(path.string());
       mcpp::define(definition.str().c_str());
     };
-    define_path("SUNSHINE_SOURCE_DIR", root);
-    define_path("SUNSHINE_TEST_BIN_DIR", ".");
-    define_path("SUNSHINE_SHADERS_DIR", root / "src_assets/linux/assets/shaders/opengl");
+    define_path("HERMES_SOURCE_DIR", root);
+    define_path("HERMES_TEST_BIN_DIR", ".");
+    define_path("HERMES_SHADERS_DIR", root / "src_assets/linux/assets/shaders/opengl");
     if (mcpp::has_feature("sdl-hid-tests")) {
       define_path("HERMES_TEST_HID_CONSUMER", mcpp::dep_bin("hermes-hid-consumer", "hermes-hid-consumer"));
     }
@@ -215,10 +215,10 @@ int main() {
     }
   }
   if (mcpp::has_feature("tray")) {
-    mcpp::define("SUNSHINE_TRAY=1");
-    mcpp::define("SUNSHINE_TRAY_PREFIX=\"hermes\"");
+    mcpp::define("HERMES_TRAY=1");
+    mcpp::define("HERMES_TRAY_PREFIX=\"hermes\"");
   } else {
-    mcpp::define("SUNSHINE_TRAY=0");
+    mcpp::define("HERMES_TRAY=0");
   }
   if (mcpp::has_feature("pyrowave")) {
     hermes::build::add_pyrowave(root, package_assets);

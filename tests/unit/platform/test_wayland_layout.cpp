@@ -8,7 +8,7 @@
  */
 #include "../../tests_common.h"
 
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
 
   #include <src/platform/linux/wayland.h>
 
@@ -75,4 +75,4 @@ TEST(WaylandInputGeometry, TakesAnUnknownLogicalSizeAsScaleOne) {
   EXPECT_EQ(geometry.env_height, 1080);
 }
 
-#endif  // SUNSHINE_BUILD_WAYLAND
+#endif  // HERMES_BUILD_WAYLAND

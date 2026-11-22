@@ -64,7 +64,7 @@ std::map<std::string_view, std::function<int(const char *name, int argc, char **
 };
 
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
 constexpr bool tray_is_enabled = true;
 #else
 constexpr bool tray_is_enabled = false;

@@ -103,14 +103,10 @@ defines = [
     "BOOST_THREAD_STATIC_LINK",
     "BOOST_THREAD_USE_LIB",
     "EGL_NO_X11=1",
-    "SUNSHINE_BUILD_DRM",
-    "SUNSHINE_BUILD_VAAPI",
-    "SUNSHINE_BUILD_X11",
-    "SUNSHINE_BUILD_SDBUS",
-    'SUNSHINE_PLATFORM="linux"',
-    'SUNSHINE_PUBLISHER_NAME="SudoMaker"',
-    'SUNSHINE_PUBLISHER_WEBSITE="https://www.sudomaker.com"',
-    'SUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/MrOz59/Apollo-Linux/issues"',
+    "HERMES_BUILD_DRM",
+    "HERMES_BUILD_VAAPI",
+    "HERMES_BUILD_X11",
+    "HERMES_BUILD_SDBUS",
 ]
 cxxflags = ["-Wall", "-Wno-sign-compare", "-Wno-maybe-uninitialized", "-pthread"]
 ldflags = [
@@ -184,7 +180,7 @@ default = ["wayland"]
 sources = ["../../src/platform/linux/wlgrab.cpp", "../../src/platform/linux/wayland.cpp"]
 
 [features.cuda]
-defines = ["SUNSHINE_BUILD_CUDA"]
+defines = ["HERMES_BUILD_CUDA"]
 sources = ["../../src/platform/linux/cuda.cpp"]
 
 [features.pyrowave]
@@ -194,7 +190,7 @@ sources = ["../../src/platform/linux/pyrowave.cpp"]
 [features.tray]
 
 [features.kwin]
-defines = ["SUNSHINE_BUILD_KWIN_TRANSPORT"]
+defines = ["HERMES_BUILD_KWIN_TRANSPORT"]
 sources = ["../../src/platform/linux/kwin_display.cpp", "../../src/platform/linux/input/kwin_input.cpp"]
 
 [feature-deps.tray]
@@ -216,7 +212,7 @@ implies = ["full-tests"]
 hermes-hid-consumer = { path = "../hid-consumer", tools = ["hermes-hid-consumer"] }
 
 [features.full-tests]
-defines = ["SUNSHINE_TESTS", "HERMES_TEST_SESSION_INPUT=1"]
+defines = ["HERMES_TESTS", "HERMES_TEST_SESSION_INPUT=1"]
 sources = [
     "../../third-party/googletest/googletest/src/gtest-all.cc",
     "../../tools/session-broker-input.cpp",

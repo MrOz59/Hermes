@@ -485,55 +485,55 @@
               <td><b></b></td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_APP_ID</td>
+              <td style="font-family: monospace">HERMES_APP_ID</td>
               <td>{{ $t('apps.env_app_id') }}</td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_APP_NAME</td>
+              <td style="font-family: monospace">HERMES_APP_NAME</td>
               <td>{{ $t('apps.env_app_name') }}</td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_APP_UUID</td>
+              <td style="font-family: monospace">HERMES_APP_UUID</td>
               <td>{{ $t('apps.env_app_uuid') }}</td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_APP_STATUS</td>
+              <td style="font-family: monospace">HERMES_APP_STATUS</td>
               <td>{{ $t('apps.env_app_status') }}</td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_CLIENT_UUID</td>
+              <td style="font-family: monospace">HERMES_CLIENT_UUID</td>
               <td>{{ $t('apps.env_client_uuid') }}</td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_CLIENT_NAME</td>
+              <td style="font-family: monospace">HERMES_CLIENT_NAME</td>
               <td>{{ $t('apps.env_client_name') }}</td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_CLIENT_WIDTH</td>
+              <td style="font-family: monospace">HERMES_CLIENT_WIDTH</td>
               <td>{{ $t('apps.env_client_width') }}</td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_CLIENT_HEIGHT</td>
+              <td style="font-family: monospace">HERMES_CLIENT_HEIGHT</td>
               <td>{{ $t('apps.env_client_height') }}</td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_CLIENT_FPS</td>
+              <td style="font-family: monospace">HERMES_CLIENT_FPS</td>
               <td>{{ $t('apps.env_client_fps') }}</td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_CLIENT_HDR</td>
+              <td style="font-family: monospace">HERMES_CLIENT_HDR</td>
               <td>{{ $t('apps.env_client_hdr') }}</td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_CLIENT_GCMAP</td>
+              <td style="font-family: monospace">HERMES_CLIENT_GCMAP</td>
               <td>{{ $t('apps.env_client_gcmap') }}</td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_CLIENT_HOST_AUDIO</td>
+              <td style="font-family: monospace">HERMES_CLIENT_HOST_AUDIO</td>
               <td>{{ $t('apps.env_client_host_audio') }}</td>
             </tr>
             <tr>
-              <td style="font-family: monospace">APOLLO_CLIENT_ENABLE_SOPS</td>
+              <td style="font-family: monospace">HERMES_CLIENT_ENABLE_SOPS</td>
               <td>{{ $t('apps.env_client_enable_sops') }}</td>
             </tr>
             <tr>
@@ -544,7 +544,7 @@
 
           <template v-if="platform === 'linux'">
             <div class="form-text"><b>{{ $t('apps.env_xrandr_example') }}</b>
-              <pre>sh -c "xrandr --output HDMI-1 --mode \"${APOLLO_CLIENT_WIDTH}x${APOLLO_CLIENT_HEIGHT}\" --rate ${APOLLO_CLIENT_FPS}"</pre>
+              <pre>sh -c "xrandr --output HDMI-1 --mode \"${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}\" --rate ${HERMES_CLIENT_FPS}"</pre>
             </div>
           </template>
 

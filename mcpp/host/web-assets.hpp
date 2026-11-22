@@ -7,7 +7,7 @@ namespace hermes::build {
     const auto script = root / "mcpp/host/stage-assets.py";
     const auto assets = out / "assets";
     std::ostringstream define;
-    define << "SUNSHINE_ASSETS_DIR=" << std::quoted(runtime_assets.string());
+    define << "HERMES_ASSETS_DIR=" << std::quoted(runtime_assets.string());
     mcpp::define(define.str().c_str());
 
     mcpp::action action;

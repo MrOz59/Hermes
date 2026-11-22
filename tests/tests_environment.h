@@ -31,7 +31,7 @@ struct SunshineEnvironment: testing::Environment {
   }
 
   static std::string log_path() {
-    return (artifact_directory / "test_sunshine.log").string();
+    return (artifact_directory / "hermes-test.log").string();
   }
 
   inline static std::filesystem::path artifact_directory;

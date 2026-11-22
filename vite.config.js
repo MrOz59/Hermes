@@ -17,27 +17,24 @@ import process from 'process'
 let assetsSrcPath = 'src_assets/common/assets/web';
 let assetsDstPath = 'build/assets/web';
 
-if (process.env.SUNSHINE_BUILD_HOMEBREW) {
-    console.log("Building for homebrew, using default paths")
+// If the paths supplied in the environment variables contain any symbolic links
+// at any point in the series of directories, the entire build will fail with
+// a cryptic error message like this:
+//     RollupError: The "fileName" or "name" properties of emitted chunks and assets
+//     must be strings that are neither absolute nor relative paths.
+// To avoid this, we resolve the potential symlinks using `fs.realpathSync` before
+// doing anything else with the paths.
+const sourceOverride = process.env.HERMES_SOURCE_ASSETS_DIR ?? process.env.SUNSHINE_SOURCE_ASSETS_DIR;
+if (sourceOverride) {
+    let path = resolve(fs.realpathSync(sourceOverride), "common/assets/web");
+    console.log("Web asset source directory: " + path);
+    assetsSrcPath = path;
 }
-else {
-    // If the paths supplied in the environment variables contain any symbolic links
-    // at any point in the series of directories, the entire build will fail with
-    // a cryptic error message like this:
-    //     RollupError: The "fileName" or "name" properties of emitted chunks and assets
-    //     must be strings that are neither absolute nor relative paths.
-    // To avoid this, we resolve the potential symlinks using `fs.realpathSync` before
-    // doing anything else with the paths.
-    if (process.env.SUNSHINE_SOURCE_ASSETS_DIR) {
-        let path = resolve(fs.realpathSync(process.env.SUNSHINE_SOURCE_ASSETS_DIR), "common/assets/web");
-        console.log("Web asset source directory: " + path);
-        assetsSrcPath = path;
-    }
-    if (process.env.SUNSHINE_ASSETS_DIR) {
-        let path = resolve(fs.realpathSync(process.env.SUNSHINE_ASSETS_DIR), "assets/web");
-        console.log("Web asset output directory: " + path);
-        assetsDstPath = path;
-    }
+const outputOverride = process.env.HERMES_ASSETS_DIR ?? process.env.SUNSHINE_ASSETS_DIR;
+if (outputOverride) {
+    let path = resolve(fs.realpathSync(outputOverride), "assets/web");
+    console.log("Web asset output directory: " + path);
+    assetsDstPath = path;
 }
 
 let header = fs.readFileSync(resolve(assetsSrcPath, "template_header.html"))
@@ -56,7 +53,7 @@ export default defineConfig({
         // The Codecov vite plugin should be after all other plugins
         codecovVitePlugin({
             enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
-            bundleName: "sunshine",
+            bundleName: "hermes",
             uploadToken: process.env.CODECOV_TOKEN,
         }),
     ],

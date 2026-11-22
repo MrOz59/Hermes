@@ -838,7 +838,7 @@ namespace confighttp {
    * A missing asset used to be served as an empty 200: read_file() returns an
    * empty string and only says so at debug level, so the browser rendered a
    * blank page and the log held nothing to explain it. That is what a build or
-   * package with the wrong SUNSHINE_ASSETS_DIR looks like from the outside, and
+   * package with the wrong HERMES_ASSETS_DIR looks like from the outside, and
    * it is indistinguishable from the UI itself being broken. Fail loudly with
    * the path we actually looked at instead.
    */
@@ -852,8 +852,8 @@ namespace confighttp {
     const std::string content = file_handler::read_file(path.c_str());
     if (content.empty()) {
       BOOST_LOG(error) << "Web UI asset missing or empty: ["sv << path << ']';
-      BOOST_LOG(error) << "Hermes was built with assets in ["sv << SUNSHINE_ASSETS_DIR
-                       << "]; reinstall the package or rebuild with a matching SUNSHINE_ASSETS_DIR."sv;
+      BOOST_LOG(error) << "Hermes was built with assets in ["sv << HERMES_ASSETS_DIR
+                       << "]; reinstall the package or rebuild with a matching HERMES_ASSETS_DIR."sv;
       response->write(
         SimpleWeb::StatusCode::server_error_internal_server_error,
         "Web UI assets are missing on the server. See the Hermes log for the expected path."
@@ -1548,7 +1548,7 @@ namespace confighttp {
   nlohmann::json computed_config_json() {
     nlohmann::json output_tree;
     output_tree["status"] = true;
-    output_tree["platform"] = SUNSHINE_PLATFORM;
+    output_tree["platform"] = "linux";
     output_tree["version"] = PROJECT_VERSION;
     output_tree["version_commit"] = PROJECT_VERSION_COMMIT;
     output_tree["vdisplayStatus"] = (int)proc::vDisplayDriverStatus;
@@ -4190,7 +4190,7 @@ fi')CLIP";
     if (!fs::exists(WEB_DIR "index.html")) {
       BOOST_LOG(error) << "Web UI assets not found in ["sv << WEB_DIR << ']';
       BOOST_LOG(error) << "The configuration UI will not render. This binary was built with "sv
-                          "SUNSHINE_ASSETS_DIR=["sv << SUNSHINE_ASSETS_DIR << "]."sv;
+                          "HERMES_ASSETS_DIR=["sv << HERMES_ASSETS_DIR << "]."sv;
     }
 
     auto accept_and_run = [&](auto *server) {

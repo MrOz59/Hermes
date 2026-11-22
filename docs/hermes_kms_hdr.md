@@ -49,7 +49,7 @@ HDR for Gamescope inside an isolated session, with an optional Gamescope patch,
 was proposed in [#46](https://github.com/MrOz59/Hermes/pull/46) and is not part
 of `main`.
 
-The initial target is KDE/KWin with AMD VAAPI or NVIDIA NVENC and Moonlight/Hestia.
+The initial target is KDE/KWin with AMD VAAPI or NVIDIA NVENC and Hestia or Moonlight.
 HDR requires the actual GPU/driver encoder to support HEVC Main10 or AV1 ten-bit,
 and an HDR-capable client and display. General NVENC support does not imply HDR:
 Maxwell can remain an SDR target, but does not provide HEVC ten-bit encoding.
@@ -109,7 +109,7 @@ MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
 Before release, validate live KDE HDR toggles, metadata-only updates, reconnects,
 cursor appearance, multi-output isolation and sustained sessions. Inspect the
 encoded profile, primaries, transfer, matrix, range and static metadata. Test HDR
-ramps/reference white/near-black on real Moonlight and Hestia clients with HDR
+ramps/reference white/near-black on real Hestia and Moonlight clients with HDR
 screens. Driver VM and shader tests do not replace those measurements.
 
 ## KDE reconnects and client color mode

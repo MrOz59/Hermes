@@ -157,7 +157,7 @@ namespace {
   }
 
   nlohmann::json load_schema() {
-    const std::string path = std::string {SUNSHINE_SOURCE_DIR} + "/capabilities.schema.json";
+    const std::string path = std::string {HERMES_SOURCE_DIR} + "/capabilities.schema.json";
     std::ifstream file {path};
     if (!file) {
       return {};

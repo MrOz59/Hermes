@@ -1,7 +1,7 @@
-# Allows Sunshine to acces /dev/uinput
+# Allows Hermes to access /dev/uinput
 KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", GROUP="input", MODE="0660", TAG+="uaccess"
 
-# Allows Sunshine to access /dev/uhid
+# Allows Hermes to access /dev/uhid
 KERNEL=="uhid", GROUP="input", MODE="0660", TAG+="uaccess"
 
 # libvirtualhid's UHID controllers are renamed by kernel drivers (for example,

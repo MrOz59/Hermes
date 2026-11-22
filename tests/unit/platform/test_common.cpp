@@ -43,8 +43,8 @@ INSTANTIATE_TEST_SUITE_P(
   SetEnvTests,
   SetEnvTest,
   ::testing::Values(
-    std::make_tuple("SUNSHINE_UNIT_TEST_ENV_VAR", "test_value_0", 0),
-    std::make_tuple("SUNSHINE_UNIT_TEST_ENV_VAR", "test_value_1", 0),
+    std::make_tuple("HERMES_UNIT_TEST_ENV_VAR", "test_value_0", 0),
+    std::make_tuple("HERMES_UNIT_TEST_ENV_VAR", "test_value_1", 0),
     std::make_tuple("", "test_value", -1)
   )
 );

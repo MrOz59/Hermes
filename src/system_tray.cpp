@@ -3,13 +3,13 @@
  * @brief Definitions for the system tray icon and notification system.
  */
 // macros
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
 
     // Use absolute paths for tray icons to ensure they work with all icon themes
-    #define TRAY_ICON "/usr/share/icons/hicolor/scalable/status/" SUNSHINE_TRAY_PREFIX "-tray.svg"
-    #define TRAY_ICON_PLAYING "/usr/share/icons/hicolor/scalable/status/" SUNSHINE_TRAY_PREFIX "-playing.svg"
-    #define TRAY_ICON_PAUSING "/usr/share/icons/hicolor/scalable/status/" SUNSHINE_TRAY_PREFIX "-pausing.svg"
-    #define TRAY_ICON_LOCKED "/usr/share/icons/hicolor/scalable/status/" SUNSHINE_TRAY_PREFIX "-locked.svg"
+    #define TRAY_ICON "/usr/share/icons/hicolor/scalable/status/" HERMES_TRAY_PREFIX "-tray.svg"
+    #define TRAY_ICON_PLAYING "/usr/share/icons/hicolor/scalable/status/" HERMES_TRAY_PREFIX "-playing.svg"
+    #define TRAY_ICON_PAUSING "/usr/share/icons/hicolor/scalable/status/" HERMES_TRAY_PREFIX "-pausing.svg"
+    #define TRAY_ICON_LOCKED "/usr/share/icons/hicolor/scalable/status/" HERMES_TRAY_PREFIX "-locked.svg"
 
   #define TRAY_MSG_NO_APP_RUNNING "Reload Apps"
 

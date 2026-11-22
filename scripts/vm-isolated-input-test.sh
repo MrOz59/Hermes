@@ -3,7 +3,7 @@
 # a disposable virtme-ng guest. No host udev rule is changed.
 # Pass the Hermes test executable as the first argument to also test the full
 # libvirtualhid adapter with Xbox, DualSense and Switch controllers:
-#   scripts/vm-isolated-input-test.sh /absolute/path/to/build/tests/test_sunshine
+#   scripts/vm-isolated-input-test.sh /absolute/path/to/build/tests/test_hermes
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

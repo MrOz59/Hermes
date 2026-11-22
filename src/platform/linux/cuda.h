@@ -4,7 +4,7 @@
  */
 #pragma once
 
-#if defined(SUNSHINE_BUILD_CUDA)
+#if defined(HERMES_BUILD_CUDA)
   // standard includes
   #include <cstddef>
   #include <cstdint>

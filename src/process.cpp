@@ -83,7 +83,7 @@
   #include <sys/stat.h>
   #include <unistd.h>
 
-#define DEFAULT_APP_IMAGE_PATH SUNSHINE_ASSETS_DIR "/box.png"
+#define DEFAULT_APP_IMAGE_PATH HERMES_ASSETS_DIR "/box.png"
 
 namespace proc {
   using namespace std::literals;
@@ -459,7 +459,7 @@ namespace proc {
       const auto file = name + ".conf";
       return {
         std::filesystem::path {platf::appdata()} / "session-compositors" / file,
-        std::filesystem::path {SUNSHINE_ASSETS_DIR} / "session-compositors" / file,
+        std::filesystem::path {HERMES_ASSETS_DIR} / "session-compositors" / file,
       };
     }
 
@@ -535,7 +535,7 @@ namespace proc {
 
       BOOST_LOG(error) << "[IsolatedSession] No session compositor profile named \"" << name
                        << "\" under " << (std::filesystem::path {platf::appdata()} / "session-compositors")
-                       << " or " << (std::filesystem::path {SUNSHINE_ASSETS_DIR} / "session-compositors")
+                       << " or " << (std::filesystem::path {HERMES_ASSETS_DIR} / "session-compositors")
                        << '.';
       return std::nullopt;
     }
@@ -1425,7 +1425,7 @@ namespace proc {
         // The desktop's gamepads, kept between its streams, go with it.
         platf::forget_kept_gamepads(runtime->seat_id);
       }
-#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+#ifdef HERMES_BUILD_KWIN_TRANSPORT
       if (runtime->user_unit && !runtime->kwin_wayland_socket.empty()) {
         // So do its pointer and keyboard.
         platf::forget_private_kwin_input(runtime->kwin_wayland_socket);
@@ -1468,7 +1468,7 @@ namespace proc {
     }
   }  // namespace
 
-  #ifdef SUNSHINE_TESTS
+  #ifdef HERMES_TESTS
   // Exercise the production registry/RPC lock ordering without a compositor,
   // display card or account manager. The test owns this synthetic entry.
   void seed_isolated_runtime_for_test(uint32_t id, const std::string &client_uuid) {
@@ -1638,7 +1638,7 @@ namespace proc {
     allow_client_commands = false;
     placebo = true;
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_playing(_app_name);
 #endif
   }
@@ -2014,7 +2014,7 @@ namespace proc {
         return 503;
       };
 
-  #ifndef SUNSHINE_BUILD_KWIN_TRANSPORT
+  #ifndef HERMES_BUILD_KWIN_TRANSPORT
       return plasma_failed(
         "is not available: Hermes was built without the KWin transport, which needs "
         "plasma-wayland-protocols 1.23 or newer"
@@ -3881,7 +3881,7 @@ namespace proc {
 
     fg.disable();
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_playing(_app.name);
 #endif
 
@@ -3918,7 +3918,7 @@ namespace proc {
       BOOST_LOG(info) << "Adjust this behavior in the Applications tab or apps.json if this is not what you want."sv;
       placebo = true;
 
-    #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+    #if defined HERMES_TRAY && HERMES_TRAY >= 1
       if (_process.native_exit_code() != 0) {
         system_tray::update_tray_launch_error(proc::proc.get_last_run_app_name(), _process.native_exit_code());
       }
@@ -4032,7 +4032,7 @@ namespace proc {
       exec_thread.detach();
     }
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_pausing(proc::proc.get_last_run_app_name());
 #endif
   }
@@ -4158,7 +4158,7 @@ namespace proc {
         display_device::revert_configuration();
       }
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
       system_tray::update_tray_stopped(proc::proc.get_last_run_app_name());
 #endif
     }
@@ -4313,12 +4313,12 @@ namespace proc {
     }
 
     // check if image is in assets directory
-    auto full_image_path = std::filesystem::path(SUNSHINE_ASSETS_DIR) / app_image_path;
+    auto full_image_path = std::filesystem::path(HERMES_ASSETS_DIR) / app_image_path;
     if (std::filesystem::exists(full_image_path)) {
       return full_image_path.string();
     } else if (app_image_path == "./assets/steam.png") {
       // handle old default steam image definition
-      return SUNSHINE_ASSETS_DIR "/steam.png";
+      return HERMES_ASSETS_DIR "/steam.png";
     }
 
     // check if specified image exists
@@ -5153,7 +5153,7 @@ namespace proc {
     }
   }
 
-#ifdef SUNSHINE_TESTS
+#ifdef HERMES_TESTS
   /**
    * @brief Load a session compositor profile from an explicit path and expand it.
    *

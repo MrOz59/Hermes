@@ -305,7 +305,7 @@ namespace display_device {
         case resolution_option_e::automatic:
           {
             if (!session.enable_sops) {
-              BOOST_LOG(warning) << R"(Sunshine is configured to change resolution automatically, but the "Optimize game settings" is not set in the client! Resolution will not be changed.)";
+              BOOST_LOG(warning) << R"(Hermes is configured to change resolution automatically, but the "Optimize game settings" is not set in the client! Resolution will not be changed.)";
             } else if (session.width >= 0 && session.height >= 0) {
               config.m_resolution = Resolution {
                 static_cast<unsigned int>(session.width),
@@ -320,7 +320,7 @@ namespace display_device {
         case resolution_option_e::manual:
           {
             if (!session.enable_sops) {
-              BOOST_LOG(warning) << R"(Sunshine is configured to change resolution manually, but the "Optimize game settings" is not set in the client! Resolution will not be changed.)";
+              BOOST_LOG(warning) << R"(Hermes is configured to change resolution manually, but the "Optimize game settings" is not set in the client! Resolution will not be changed.)";
             } else {
               if (!parse_resolution_string(video_config.dd.manual_resolution, config.m_resolution)) {
                 BOOST_LOG(error) << "Failed to parse manual resolution string!";

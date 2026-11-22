@@ -21,7 +21,7 @@ struct ExternalCommandTestData {
   std::string command;
   bool should_succeed;
   std::string description;
-  std::string working_directory;  // Optional: if empty, uses SUNSHINE_SOURCE_DIR
+  std::string working_directory;  // Optional: if empty, uses HERMES_SOURCE_DIR
 
 };
 
@@ -31,14 +31,14 @@ protected:
   static std::pair<int, std::string> runCommand(const std::string &cmd, const std::string_view &working_dir) {
     const auto env = boost::this_process::environment();
 
-    // Determine the working directory: use the provided working_dir or fall back to SUNSHINE_SOURCE_DIR
+    // Determine the working directory: use the provided working_dir or fall back to HERMES_SOURCE_DIR
     boost::filesystem::path effective_working_dir;
 
     if (!working_dir.empty()) {
       effective_working_dir = working_dir;
     } else {
-      // Use SUNSHINE_SOURCE_DIR build definition as the default working directory
-      effective_working_dir = SUNSHINE_SOURCE_DIR;
+      // Use HERMES_SOURCE_DIR build definition as the default working directory
+      effective_working_dir = HERMES_SOURCE_DIR;
     }
 
     std::error_code ec;
@@ -109,7 +109,7 @@ TEST_P(ExternalCommandTest, RunExternalCommand) {
 #ifdef UDEVADM_EXECUTABLE
   #define UDEV_TESTS \
     ExternalCommandTestData { \
-      std::format("{0} verify {1}/src_assets/linux/misc/60-hermes.rules {1}/src_assets/linux/misc/74-hermes-session-acl.rules", UDEVADM_EXECUTABLE, SUNSHINE_TEST_BIN_DIR), \
+      std::format("{0} verify {1}/src_assets/linux/misc/60-hermes.rules {1}/src_assets/linux/misc/74-hermes-session-acl.rules", UDEVADM_EXECUTABLE, HERMES_TEST_BIN_DIR), \
       true, \
       "Test udev rules file", \
       "" \

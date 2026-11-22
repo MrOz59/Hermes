@@ -23,8 +23,8 @@ Wants=graphical-session.target
 
 # Give the compositor a moment to finish coming up before we launch.
 ExecStartPre=/bin/sleep 5
-@SUNSHINE_SERVICE_START_COMMAND@
-@SUNSHINE_SERVICE_STOP_COMMAND@
+@HERMES_SERVICE_START_COMMAND@
+@HERMES_SERVICE_STOP_COMMAND@
 ExecStopPost=-/usr/bin/hermes-monitor-recovery
 # Fedora defaults to aborting timed-out services, producing misleading
 # Gamescope/Wine coredumps. Escalate directly to the final kill signal instead.

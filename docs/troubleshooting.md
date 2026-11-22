@@ -72,8 +72,8 @@ forward the port 5201 (TCP and UDP) from your host.
 
 ### Packet loss (Buffer overrun)
 If the host PC (running Hermes) has a much faster connection to the network
-than the slowest segment of the network path to the client device (running
-Moonlight), massive packet loss can occur: Hermes emits its stream in bursts
+than the slowest segment of the network path to the client device, packet loss
+can occur. Hermes emits its stream in bursts
 every 16 ms (for 60 fps), but those bursts can't be passed on fast enough to the
 client and must be buffered by one of the network devices inbetween. If the
 bitrate is high enough, these buffers will overflow and data will be discarded.

@@ -257,7 +257,7 @@ TEST(SessionAssessment, CaptureFallsBackToACpuCopyWithoutDmabuf) {
  * exercised, and "what does Hermes think my session can do" is the first
  * question asked when someone reports a black stream.
  *
- *   ./build-test/tests/test_sunshine \
+ *   mcpp test --offline -p hermes-host --profile coverage --features kwin -- \
  *     --gtest_also_run_disabled_tests --gtest_filter='*LiveSession*'
  *
  * Run it from the session under test: unlike the rest of the suite it must NOT

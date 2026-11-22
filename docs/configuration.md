@@ -8,14 +8,14 @@ By providing the host authority (URI + port), you can easily open each configura
 @endhtmlonly
 }
 
-Sunshine will work with the default settings for most users. In some cases you may want to configure Sunshine further.
+Hermes will work with the default settings for most users. In some cases you may want to configure Hermes further.
 
 The default location for the configuration file is listed below. You can use another location if you
-choose, by passing in the full configuration file path as the first argument when you start Sunshine.
+choose, by passing in the full configuration file path as the first argument when you start Hermes.
 
 **Example**
 ```bash
-sunshine ~/sunshine_config.conf
+hermes ~/hermes.conf
 ```
 
 The default location of the `apps.json` is the same as the configuration file. You can use a custom
@@ -28,8 +28,7 @@ location by modifying the configuration file.
 | Docker  | @code{}/config@endcode                          |
 | Linux   | @code{}~/.config/hermes@endcode               |
 
-Although it is recommended to use the configuration UI, it is possible manually configure Sunshine by
-editing the `conf` file in a text editor. Use the examples as reference.
+Use the configuration UI or edit the `conf` file in a text editor. Use the examples as reference.
 
 ## General
 
@@ -39,7 +38,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            The locale used for Sunshine's user interface.
+            The locale used for Hermes's user interface.
         </td>
     </tr>
     <tr>
@@ -143,7 +142,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            The name displayed by Moonlight.
+            The name shown by Hestia and other compatible clients.
         </td>
     </tr>
     <tr>
@@ -153,7 +152,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            sunshine_name = Sunshine
+            sunshine_name = Hermes
             @endcode</td>
     </tr>
 </table>
@@ -815,7 +814,7 @@ alias; new configurations should use the key above.
 <table>
     <tr>
         <td>Description</td>
-        <td colspan="2">It may be possible that you cannot send the Windows Key from Moonlight directly. In those cases it may be useful to
+        <td colspan="2">It may be possible that you cannot send the Windows key from your client directly. In those cases it may be useful to
             map the Right Alt key to the Super key on the host.
             </td>
     </tr>
@@ -862,7 +861,7 @@ alias; new configurations should use the key above.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            When enabled, Sunshine will pass through high resolution scroll events from Moonlight clients.
+            When enabled, Hermes will pass through high-resolution scroll events from clients.
             <br>
             This can be useful to disable for older applications that scroll too fast with high resolution scroll
             events.
@@ -888,7 +887,7 @@ alias; new configurations should use the key above.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            When enabled, Sunshine will pass through native pen/touch events from Moonlight clients.
+            When enabled, Hermes will pass through native pen/touch events from clients.
             <br>
             This can be useful to disable for older applications without native pen/touch support.
         </td>
@@ -1072,7 +1071,7 @@ alias; new configurations should use the key above.
     </tr>
     <tr>
         <td>Default</td>
-        <td colspan="2">Sunshine will select the default audio device.</td>
+        <td colspan="2">Hermes will select the default audio device.</td>
     </tr>
     <tr>
         <td>Example</td>
@@ -1197,14 +1196,14 @@ alias; new configurations should use the key above.
             vainfo --display drm --device /dev/dri/renderD129 | \
               grep -E "((VAProfileH264High|VAProfileHEVCMain|VAProfileHEVCMain10).*VAEntrypointEncSlice)|Driver version"
             @endcode
-            To be supported by Sunshine, it needs to have at the very minimum:
+            To be supported by Hermes, it needs to have at the very minimum:
             `VAProfileH264High   : VAEntrypointEncSlice`
             }
         </td>
     </tr>
     <tr>
         <td>Default</td>
-        <td colspan="2">Sunshine will select the default video card.</td>
+        <td colspan="2">Hermes will select the default video card.</td>
     </tr>
     <tr>
         <td>Example</td>
@@ -1226,7 +1225,7 @@ alias; new configurations should use the key above.
             <br>
             **Linux:**
             <br>
-            During Sunshine startup, you should see the list of detected displays:
+            During Hermes startup, you should see the list of detected displays:
             @code{}
             Info: Detecting displays
             Info: Detected display: DVI-D-0 (id: 0) connected: false
@@ -1241,7 +1240,7 @@ alias; new configurations should use the key above.
     </tr>
     <tr>
         <td>Default</td>
-        <td colspan="2">Sunshine will select the default display.</td>
+        <td colspan="2">Hermes will select the default display.</td>
     </tr>
     <tr>
         <td>Example</td>
@@ -1294,7 +1293,7 @@ alias; new configurations should use the key above.
         <td>Description</td>
         <td colspan="2">
             Enables the experimental shared-desktop multi-output Hermes-KMS
-            path. Each simultaneous Moonlight client receives a separate
+            path. Each simultaneously connected client receives a separate
             virtual output and capture pipeline, but all outputs remain part of
             the host compositor and desktop session. Requires Hermes-KMS UAPI 8
             or newer loaded with more than one output, for example
@@ -1755,7 +1754,7 @@ Legacy resolution and refresh-rate remapping rules.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            The maximum bitrate (in Kbps) that Sunshine will encode the stream at. If set to 0, it will always use the bitrate requested by Moonlight.
+            The maximum bitrate (in Kbps) at which Hermes encodes the stream. Set it to 0 to use the bitrate requested by the client.
         </td>
     </tr>
     <tr>
@@ -1778,7 +1777,7 @@ Legacy resolution and refresh-rate remapping rules.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Sunshine tries to save bandwidth when content on screen is static or a low framerate. Because many clients expect a constant stream of video frames, a certain amount of duplicate frames are sent when this happens. This setting controls the lowest effective framerate a stream can reach.
+            Hermes tries to save bandwidth when content on screen is static or a low framerate. Because many clients expect a constant stream of video frames, a certain amount of duplicate frames are sent when this happens. This setting controls the lowest effective framerate a stream can reach.
         </td>
     </tr>
     <tr>
@@ -1851,7 +1850,7 @@ Legacy resolution and refresh-rate remapping rules.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Sunshine will attempt to open ports for streaming over the internet.
+            Hermes will attempt to open ports for streaming over the internet.
         </td>
     </tr>
     <tr>
@@ -1907,7 +1906,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Set the address family that Sunshine will use.
+            Set the address family that Hermes will use.
         </td>
     </tr>
     <tr>
@@ -1939,7 +1938,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Set the family of ports used by Sunshine.
+            Set the family of ports used by Hermes.
             Changing this value will offset other ports as shown in config UI.
         </td>
     </tr>
@@ -2003,7 +2002,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     <tr>
         <td>Description</td>
         <td colspan="2">
-            If no external IP address is given, Sunshine will attempt to automatically detect external ip-address.
+            If no external IP address is given, Hermes will attempt to automatically detect external ip-address.
         </td>
     </tr>
     <tr>
@@ -2098,7 +2097,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     <tr>
         <td>Description</td>
         <td colspan="2">
-            How long to wait, in milliseconds, for data from Moonlight before shutting down the stream.
+            How long to wait, in milliseconds, for data from the client before shutting down the stream.
         </td>
     </tr>
     <tr>
@@ -2124,7 +2123,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
         <td>Description</td>
         <td colspan="2">
             The application configuration file path. The file contains a JSON formatted list of applications that
-            can be started by Moonlight.
+            can be started by a client.
         </td>
     </tr>
     <tr>
@@ -2170,7 +2169,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     <tr>
         <td>Description</td>
         <td colspan="2">
-            The path where the Sunshine log is stored.
+            The path where the Hermes log is stored.
         </td>
     </tr>
     <tr>
@@ -2193,7 +2192,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     <tr>
         <td>Description</td>
         <td colspan="2">
-            The private key used for the web UI and Moonlight client pairing. For best compatibility,
+            The private key used for the web UI and client pairing. For best compatibility,
             this should be an RSA-2048 private key.
             @warning{Not all Moonlight clients support ECDSA keys or RSA key lengths other than 2048 bits.}
         </td>
@@ -2218,7 +2217,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     <tr>
         <td>Description</td>
         <td colspan="2">
-            The certificate used for the web UI and Moonlight client pairing. For best compatibility,
+            The certificate used for the web UI and client pairing. For best compatibility,
             this should have an RSA-2048 public key.
             @warning{Not all Moonlight clients support ECDSA keys or RSA key lengths other than 2048 bits.}
         </td>
@@ -2243,7 +2242,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     <tr>
         <td>Description</td>
         <td colspan="2">
-            The file where current state of Sunshine is stored.
+            The file where current state of Hermes is stored.
         </td>
     </tr>
     <tr>
@@ -2566,7 +2565,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     <tr>
         <td>Default</td>
         <td colspan="2">Automatic.
-            Sunshine will use the first capture method available in the order of the table above.</td>
+            Hermes will use the first capture method available in the order of the table above.</td>
     </tr>
     <tr>
         <td>Example</td>
@@ -2587,7 +2586,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     </tr>
     <tr>
         <td>kms</td>
-        <td>DRM/KMS screen capture from the kernel. This requires that Sunshine has `cap_sys_admin` capability.</td>
+        <td>DRM/KMS screen capture from the kernel. This requires that Hermes has `cap_sys_admin` capability.</td>
     </tr>
     <tr>
         <td>x11</td>
@@ -2606,7 +2605,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
     </tr>
     <tr>
         <td>Default</td>
-        <td colspan="2">Sunshine will use the first encoder that is available.</td>
+        <td colspan="2">Hermes will use the first encoder that is available.</td>
     </tr>
     <tr>
         <td>Example</td>
@@ -2760,7 +2759,7 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
         <td>Description</td>
         <td colspan="2">
             Single-frame VBV/HRD percentage increase.
-            By default Sunshine uses single-frame VBV/HRD, which means any encoded video frame size is not expected to
+            By default Hermes uses single-frame VBV/HRD, which means any encoded video frame size is not expected to
             exceed requested bitrate divided by requested frame rate. Relaxing this restriction can be beneficial and
             act as low-latency variable bitrate, but may also lead to packet loss if the network doesn't have buffer
             headroom to handle bitrate spikes. Maximum accepted value is 400, which corresponds to 5x increased

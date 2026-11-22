@@ -6,7 +6,7 @@
 Categories=RemoteAccess;Network;
 Comment=Pair a device or restart Hermes from Game Mode, with a controller
 Exec=/usr/bin/hermes-gamemode
-Icon=@SUNSHINE_DESKTOP_ICON@
+Icon=@HERMES_DESKTOP_ICON@
 Keywords=gamestream;stream;moonlight;remote play;gamescope;steam deck;
 Name=@PROJECT_NAME@ (Game Mode)
 Type=Application

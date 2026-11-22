@@ -827,7 +827,7 @@ namespace platf {
    * uinput phys/uniq metadata so a compositor seat can select only its client.
    */
   input_t input(const std::string &session_tag = {});
-#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+#ifdef HERMES_BUILD_KWIN_TRANSPORT
   /**
    * Input for a private KWin desktop. Keyboard, mouse and touch go through
    * KWin; gamepads are virtual devices tagged session_tag, and only exist when
@@ -947,7 +947,6 @@ namespace platf {
    */
   platform_caps::caps_t get_capabilities();
 
-#define SERVICE_NAME "Apollo"
 #define SERVICE_TYPE "_nvstream._tcp"
 
   namespace publish {

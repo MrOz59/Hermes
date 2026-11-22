@@ -54,7 +54,7 @@ body:
       description: Describe the problem in your own words. One clear paragraph is enough.
       placeholder: |
         The stream starts normally, but after about ten seconds the picture freezes while the audio keeps playing.
-        Moonlight still reports a connection and my input still moves the mouse on the host.
+        My client still reports a connection and my input still moves the mouse on the host.
     validations:
       required: true
 
@@ -110,7 +110,7 @@ body:
     attributes:
       label: Client app and version
       description: Which client you stream with, its version, and the device it runs on.
-      placeholder: Artemis 2.5.3 on Android 15 (Xiaomi Pad 6) / Hestia commit abc1234 on Fedora 42 / Moonlight-Qt 6.1.0
+      placeholder: Hestia commit abc1234 on Fedora 42 / Artemis 2.5.3 on Android 15 (Xiaomi Pad 6) / Moonlight-Qt 6.1.0
     validations:
       required: true
 

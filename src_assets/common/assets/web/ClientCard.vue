@@ -21,6 +21,12 @@
 <script setup>
     const clients = [
         {
+            platform: 'Desktop',
+            icon: 'fa-solid fa-desktop',
+            name: 'Hestia',
+            link: 'https://github.com/MrOz59/Hestia'
+        },
+        {
             platform: 'Android',
             icon: 'fa-brands fa-android',
             name: 'Artemis',
@@ -31,12 +37,6 @@
             icon: 'fa-brands fa-apple',
             name: 'Coming soon...',
             link: ''
-        },
-        {
-            platform: 'Desktop',
-            icon: 'fa-solid fa-desktop',
-            name: 'Hestia',
-            link: 'https://github.com/MrOz59/Hestia'
         }
     ]
 

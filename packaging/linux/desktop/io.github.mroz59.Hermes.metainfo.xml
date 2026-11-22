@@ -16,27 +16,18 @@
   </supports>
 
   <url type="homepage">@PROJECT_HOMEPAGE_URL@</url>
-  <url type="bugtracker">https://github.com/LizardByte/Sunshine/issues</url>
-  <url type="faq">https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2troubleshooting.html</url>
-  <url type="help">https://docs.lizardbyte.dev/projects/sunshine</url>
-  <url type="donation">https://app.lizardbyte.dev/#Donate</url>
-  <url type="translate">https://translate.lizardbyte.dev</url>
-  <url type="contact">https://app.lizardbyte.dev/support</url>
+  <url type="bugtracker">https://github.com/MrOz59/Hermes/issues</url>
+  <url type="faq">https://github.com/MrOz59/Hermes/blob/main/docs/troubleshooting.md</url>
+  <url type="help">https://github.com/MrOz59/Hermes/blob/main/docs/getting_started.md</url>
+  <url type="contact">https://github.com/MrOz59/Hermes/discussions</url>
 
   <description>
     <p>
       @PROJECT_LONG_DESCRIPTION@
     </p>
 
-    <p>NOTE: Sunshine requires additional installation steps (Flatpak).</p>
-    <p>
-      <code>flatpak run --command=additional-install.sh @PROJECT_FQDN@</code>
-    </p>
-    <p>NOTE: Sunshine uses a self-signed certificate. The web browser will report it as not secure, but it is safe.</p>
-    <p>NOTE: KMS Grab (Flatpak)</p>
-    <p>
-      <code>sudo -i PULSE_SERVER=unix:/run/user/$(id -u $whoami)/pulse/native flatpak run @PROJECT_FQDN@</code>
-    </p>
+    <p>Hermes serves its web interface over HTTPS with a self-signed certificate.
+      The browser may show a certificate warning on first connection.</p>
   </description>
 
   <releases>
@@ -51,15 +42,9 @@
     </release>
   </releases>
 
-  <developer id="dev.lizardbyte">
-    <name>LizardByte</name>
+  <developer id="io.github.mroz59">
+    <name>Hermes contributors</name>
   </developer>
-  <screenshots>
-    <screenshot type="default">
-      <image>https://app.lizardbyte.dev/Sunshine/assets/img/screenshots/01-sunshine-welcome-page.png</image>
-      <caption>Sunshine welcome page</caption>
-    </screenshot>
-  </screenshots>
   <content_rating type="oars-1.0">
     <content_attribute id="language-profanity">moderate</content_attribute>
     <content_attribute id="language-humor">mild</content_attribute>

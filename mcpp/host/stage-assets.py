@@ -19,8 +19,7 @@ def stage_assets(root: Path, output: Path) -> None:
         shutil.copytree(linux / "misc/session-compositors", assets / "session-compositors")
 
         env = os.environ.copy()
-        env.pop("SUNSHINE_BUILD_HOMEBREW", None)
-        env.update(SUNSHINE_SOURCE_ASSETS_DIR=str(source), SUNSHINE_ASSETS_DIR=tmp)
+        env.update(HERMES_SOURCE_ASSETS_DIR=str(source), HERMES_ASSETS_DIR=tmp)
         subprocess.run(["npm", "run", "build"], cwd=root, env=env, check=True)
 
         if output.exists():

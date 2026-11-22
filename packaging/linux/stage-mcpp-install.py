@@ -41,7 +41,7 @@ def template_values(version_header):
         month, day = month_day[:-2].zfill(2), month_day[-2:]
 
     return {
-        "CMAKE_INSTALL_FULL_DATAROOTDIR": "/usr/share",
+        "HERMES_DATAROOTDIR": "/usr/share",
         "PROJECT_BRIEF_DESCRIPTION": "GameStream host for Hestia",
         "PROJECT_DAY": day,
         "PROJECT_DESCRIPTION": "Self-hosted game stream host for Hestia and Artemis",
@@ -59,9 +59,9 @@ def template_values(version_header):
         "PROJECT_NAME": "Hermes",
         "PROJECT_VERSION": version,
         "PROJECT_YEAR": year,
-        "SUNSHINE_DESKTOP_ICON": "hermes",
-        "SUNSHINE_SERVICE_START_COMMAND": "ExecStart=hermes",
-        "SUNSHINE_SERVICE_STOP_COMMAND": "",
+        "HERMES_DESKTOP_ICON": "hermes",
+        "HERMES_SERVICE_START_COMMAND": "ExecStart=hermes",
+        "HERMES_SERVICE_STOP_COMMAND": "",
     }
 
 

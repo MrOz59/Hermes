@@ -881,8 +881,8 @@ namespace stream {
    */
   int send_feedback_msg(session_t *session, platf::gamepad_feedback_msg_t &msg) {
     if (!session->control.peer) {
-      BOOST_LOG(warning) << "Couldn't send gamepad feedback data, still waiting for PING from Moonlight"sv;
-      // Still waiting for PING from Moonlight
+      BOOST_LOG(warning) << "Couldn't send gamepad feedback data, still waiting for PING from the client"sv;
+      // Still waiting for PING from the client
       return -1;
     }
 
@@ -986,8 +986,8 @@ namespace stream {
 
   int send_hdr_mode(session_t *session, video::hdr_info_t hdr_info) {
     if (!session->control.peer) {
-      BOOST_LOG(warning) << "Couldn't send HDR mode, still waiting for PING from Moonlight"sv;
-      // Still waiting for PING from Moonlight
+      BOOST_LOG(warning) << "Couldn't send HDR mode, still waiting for PING from the client"sv;
+      // Still waiting for PING from the client
       return -1;
     }
 
@@ -1924,7 +1924,7 @@ namespace stream {
    */
   static void report_stream_start_failure(const std::string &reason) {
     BOOST_LOG(error) << reason;
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_session_error(reason);
 #endif
   }

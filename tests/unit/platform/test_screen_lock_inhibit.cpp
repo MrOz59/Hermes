@@ -9,7 +9,7 @@
  */
 #include "../../tests_common.h"
 
-#if defined(SUNSHINE_BUILD_SDBUS)
+#if defined(HERMES_BUILD_SDBUS)
 
   // standard includes
   #include <array>

@@ -1,5 +1,5 @@
 /**
- * @file tests/web/locale.test.ts
+ * @file src_assets/common/assets/web/tests/locale.test.ts
  * @brief Every translation compiles, and one that does not costs only itself.
  *
  * vue-i18n compiles a message the first time it is shown and, in production,
@@ -13,9 +13,9 @@ import { join } from 'node:path'
 import { compile, createMessageContext } from '@intlify/core-base'
 import { describe, expect, it } from 'bun:test'
 
-import { safeMessageCompiler } from '../../src_assets/common/assets/web/locale.ts'
+import { safeMessageCompiler } from '../locale.ts'
 
-const localeDir = join(import.meta.dirname, '../../src_assets/common/assets/web/public/assets/locale')
+const localeDir = join(import.meta.dirname, '../public/assets/locale')
 
 /** [key, message] for every string under a locale's tree. */
 function* messages(tree: object, prefix = ''): Generator<[string, string]> {

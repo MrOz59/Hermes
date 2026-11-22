@@ -25,7 +25,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 VERSION_FILE="VERSION"
-PKG_JSON="package.json"
+PKG_JSON="src_assets/common/assets/web/package.json"
 CHANGELOG="CHANGELOG.md"
 PKGBUILD="PKGBUILD"
 # Workspace members inherit the root version. The other packages below

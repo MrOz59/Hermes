@@ -21,7 +21,12 @@
     "strictTemplates": true
   },
   "include": [
-    "src_assets/common/assets/web/**/*.ts",
-    "src_assets/common/assets/web/**/*.vue"
+    "**/*.ts",
+    "**/*.vue"
+  ],
+  "exclude": [
+    "node_modules",
+    "tests",
+    "vite.config.ts"
   ]
 }

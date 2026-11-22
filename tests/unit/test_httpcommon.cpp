@@ -60,7 +60,7 @@ TEST_P(DownloadFileTest, Run) {
 }
 
 #ifdef HERMES_BUILD_FLATPAK
-// requires running `bun run serve` prior to running the tests
+// requires running `bun run --cwd src_assets/common/assets/web serve` prior to running the tests
 constexpr const char *URL_1 = "http://0.0.0.0:3000/hello.txt";
 constexpr const char *URL_2 = "http://0.0.0.0:3000/hello-redirect.txt";
 #else

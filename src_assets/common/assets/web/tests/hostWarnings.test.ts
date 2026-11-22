@@ -1,5 +1,5 @@
 /**
- * @file tests/web/hostWarnings.test.ts
+ * @file src_assets/common/assets/web/tests/hostWarnings.test.ts
  * @brief The home page's host-readiness banners.
  *
  * The first tests in this repository that run on the Web UI at all. The
@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 
 import { describe, expect, it } from 'bun:test'
 
-import { hostWarnings } from '../../src_assets/common/assets/web/hostWarnings.ts'
+import { hostWarnings } from '../hostWarnings.ts'
 
 /** A host with nothing wrong with it, as /api/config describes one. */
 const healthyHost = {

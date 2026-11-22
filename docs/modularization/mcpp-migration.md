@@ -36,8 +36,9 @@ Put the following development inputs in `.toolchain/`.
 
 Initialize the Git submodules, including `third-party/build-deps` for Hermes'
 pinned FFmpeg and codec archives. For a Web UI build, install the Bun version in
-`package.json` and run `bun install --frozen-lockfile` before the native build.
-The offline asset action invokes `bun run build` with those dependencies.
+`src_assets/common/assets/web/package.json` and run
+`bun install --cwd src_assets/common/assets/web --frozen-lockfile` before
+the native build. The offline asset action runs `bun run build` in that directory.
 
 ## Build and check
 

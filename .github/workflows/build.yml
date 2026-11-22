@@ -142,6 +142,8 @@ jobs:
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version-file: src_assets/common/assets/web/package.json
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -164,6 +166,7 @@ jobs:
         run: bash scripts/build-pyrowave-sdk.sh
 
       - name: Run the Web UI tests
+        working-directory: src_assets/common/assets/web
         run: |
           bun install --frozen-lockfile
           bun run typecheck
@@ -556,6 +559,8 @@ jobs:
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version-file: src_assets/common/assets/web/package.json
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -578,7 +583,7 @@ jobs:
           export MCPP_TOOLCHAIN="path:$PWD/.toolchain"
           bash scripts/prepare-mcpp-ci.sh "${CUDA_HOST_GCC}"
           bash scripts/prepare-mcpp-linux-sdk.sh
-          bun install --frozen-lockfile
+          bun install --cwd src_assets/common/assets/web --frozen-lockfile
           {
             echo "MCPP_HOME=${MCPP_HOME}"
             echo "MCPP_TOOLCHAIN=${MCPP_TOOLCHAIN}"
@@ -833,6 +838,8 @@ jobs:
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version-file: src_assets/common/assets/web/package.json
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -851,7 +858,7 @@ jobs:
           export MCPP_TOOLCHAIN="path:$PWD/.toolchain"
           scripts/prepare-mcpp-ci.sh
           scripts/prepare-mcpp-linux-sdk.sh
-          bun install --frozen-lockfile
+          bun install --cwd src_assets/common/assets/web --frozen-lockfile
           printf 'MCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\n' "$MCPP_HOME" "$MCPP_TOOLCHAIN" >> "$GITHUB_ENV"
 
       - name: Build pinned PyroWave SDK

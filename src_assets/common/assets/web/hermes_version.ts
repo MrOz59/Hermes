@@ -3,6 +3,7 @@ export type VersionParts = [major: number, minor: number, patch: number];
 export interface GithubRelease {
   name?: string | null;
   tag_name?: string;
+  html_url?: string;
   body?: string | null;
 }
 

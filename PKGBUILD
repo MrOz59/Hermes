@@ -118,7 +118,7 @@ prepare() {
     _mcpp_environment
     scripts/prepare-mcpp-ci.sh
     scripts/prepare-mcpp-linux-sdk.sh
-    bun install --frozen-lockfile
+    bun install --cwd src_assets/common/assets/web --frozen-lockfile
 }
 
 build() {

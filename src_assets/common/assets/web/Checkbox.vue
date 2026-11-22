@@ -1,5 +1,5 @@
-<script setup lang="ts">
-const model = defineModel<unknown>({ required: true });
+<script setup lang="ts" generic="T">
+const model = defineModel<T>({ required: true });
 const slots = defineSlots();
 const props = defineProps({
   class: {

@@ -14,17 +14,17 @@ internals — the Web UI, localization and the test suites.
 ## Project Patterns
 
 ### Web UI
-* The Web UI uses [Vite](https://vitejs.dev) as its build system.
+* The Web UI uses [Vite](https://vite.dev) and its Rolldown bundler.
+* [Bun](https://bun.com) runs the build, type checks, and tests.
 * The HTML pages used by the Web UI are found in `./src_assets/common/assets/web`.
-* [EJS](https://www.npmjs.com/package/vite-plugin-ejs) is used as a templating system for the pages
-  (check `template_header.html` and `template_header_main.html`).
 * The Style System is provided by [Bootstrap](https://getbootstrap.com).
-* The JS framework used by the more interactive pages is [Vue.js](https://vuejs.org).
+* [Vue](https://vuejs.org) single-file components hold the page templates and TypeScript.
 
 #### Building
 
-Run `bun install --frozen-lockfile`, then `bun run dev` for front-end development. To build the browser scripts used by the
-Doxygen documentation, run `bun run docs:assets` before invoking Doxygen.
+From `src_assets/common/assets/web`, run `bun install --frozen-lockfile`, then
+`bun run dev` for front-end development. Run `bun run docs:assets` from the same
+directory before invoking Doxygen.
 Read the Docs runs this step automatically. Use the
 [`web-assets` build feature](building.md#build-locally) to build and stage the
 production pages with the Hermes executable.
@@ -172,11 +172,12 @@ LeakSanitizer's process inspection, `ASAN_OPTIONS=detect_leaks=0` allows the oth
 sanitizers to run; leak detection must still run on an unrestricted CI runner.
 
 #### Web UI tests
-The Web UI uses [Vitest](https://vitest.dev) with a separate test configuration.
-The production Vite configuration takes its source and output paths from the
-build and renders the pages through EJS.
+The Web UI tests run with Bun. The production Vite configuration takes asset
+paths from the native build and emits eight HTML pages with precompiled Vue
+templates.
 
 ```bash
+cd src_assets/common/assets/web
 bun install --frozen-lockfile
 bun run typecheck
 bun run test

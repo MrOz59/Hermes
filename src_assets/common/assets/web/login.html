@@ -1,46 +1,13 @@
 <!DOCTYPE html>
 <html lang="en" data-bs-theme="auto">
-
 <head>
-  <%- header %>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hermes</title>
+  <link rel="icon" type="image/x-icon" href="./images/hermes.ico">
+  <link rel="stylesheet" href="/assets/css/hermes.css">
 </head>
-
 <body id="app" v-cloak>
-  <main role="main" style="max-width: 1200px; margin: 1em auto">
-    <div class="d-flex justify-content-center">
-      <div class="card p-2">
-        <header>
-          <h1 class="mb-0">
-            <img src="/images/logo-hermes-45.png" height="45" alt="">
-            {{ $t('welcome.greeting') }}
-          </h1>
-        </header>
-        <form @submit.prevent="login" class="mt-4">
-          <div class="mb-2">
-            <label for="usernameInput" class="form-label">{{ $t('_common.username') }}</label>
-            <input type="text" class="form-control" id="usernameInput" autocomplete="username"
-              v-model="passwordData.username" required autofocus/>
-          </div>
-          <div class="mb-2">
-            <label for="passwordInput" class="form-label">{{ $t('_common.password') }}</label>
-            <input type="password" class="form-control" id="passwordInput" autocomplete="password"
-              v-model="passwordData.password" required />
-          </div>
-          <div class="mb-3 form-check">
-            <label for="savePassword" class="form-check-label">{{ $t('login.save_password') }}</label>
-            <input type="checkbox" class="form-check-input" id="savePassword" v-model="savePassword"/>
-          </div>
-          <button type="submit" class="btn btn-primary w-100 mb-2" v-bind:disabled="loading">
-            {{ $t('welcome.login') }}
-          </button>
-          <div class="alert alert-danger" v-if="error"><b>{{ $t('_common.error') }}</b> {{error}}</div>
-          <div class="alert alert-success" v-if="success">
-            <b>{{ $t('_common.success') }}</b> {{ $t('welcome.login_success') }}
-          </div>
-        </form>
-      </div>
-    </div>
-  </main>
+  <script type="module" src="./login.ts"></script>
 </body>
-
-<script type="module" src="./login.ts"></script>
+</html>

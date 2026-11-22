@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [
+      "bun"
+    ]
+  },
+  "include": [
+    "../../../../docs/api.ts",
+    "../../../../docs/configuration.ts",
+    "../../../../scripts/tests/test_input_artifact_reuse.ts",
+    "tests/**/*.ts",
+    "../../../../tests/fixtures/http/serve.ts",
+    "../../../../tests/window_placement/kwin_script.test.ts",
+    "vite.config.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

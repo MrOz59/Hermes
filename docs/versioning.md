@@ -17,7 +17,7 @@ else (e.g. `0.1.0`). Everything derives from it:
 | Consumer            | How it reads the version                                  |
 |---------------------|-----------------------------------------------------------|
 | mcpp / C++ build    | [The version generator](../mcpp/host/generate-version.py) reads `VERSION` and generates the `PROJECT_VERSION` macro for the boot log and Web UI/API. |
-| WebUI               | `package.json` `version` field (kept in sync by the bump script). |
+| WebUI               | `src_assets/common/assets/web/package.json` `version` field (kept in sync by the bump script). |
 | `.deb` / `.rpm`     | The CI packaging steps use the build version computed by the `version` job. |
 | Arch package        | CI rewrites `pkgver` in the `PKGBUILD` to the build version before `makepkg`. |
 | Nightly release     | The `nightly` job titles the release with the build version. |
@@ -44,7 +44,7 @@ scripts/bump-version.sh 1.4.2    # or set it explicitly
 
 The script:
 
-1. updates `VERSION`, `package.json`, and the Arch `pkgver` in `PKGBUILD`,
+1. updates `VERSION`, `src_assets/common/assets/web/package.json`, and the Arch `pkgver` in `PKGBUILD`,
 2. moves the `[Unreleased]` changelog entries into a new dated
    `## [X.Y.Z] - YYYY-MM-DD` section,
 3. commits as `Release vX.Y.Z`, and

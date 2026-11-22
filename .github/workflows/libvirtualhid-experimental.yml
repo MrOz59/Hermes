@@ -33,9 +33,11 @@ jobs:
           sparse-checkout: |
             .github/workflows/libvirtualhid-experimental.yml
             scripts/tests/test_input_artifact_reuse.ts
-            package.json
+            src_assets/common/assets/web/package.json
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version-file: src_assets/common/assets/web/package.json
 
       - name: Test artifact provenance and compiler recipe invalidation
         run: bun scripts/tests/test_input_artifact_reuse.ts
@@ -212,6 +214,8 @@ jobs:
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version-file: src_assets/common/assets/web/package.json
 
       - name: Allow checkout path
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -229,7 +233,7 @@ jobs:
           pkg-config --atleast-version=3.4.12 sdl3
           git -C .toolchain/libvirtualhid submodule update --init --depth 1 third-party/lizardbyte-common
           git -C .toolchain/libvirtualhid/third-party/lizardbyte-common submodule update --init --depth 1 third-party/googletest
-          bun install --frozen-lockfile
+          bun install --cwd src_assets/common/assets/web --frozen-lockfile
           printf 'MCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\nXDG_RUNTIME_DIR=%s\n' \
             "$MCPP_HOME" "$MCPP_TOOLCHAIN" "$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
           printf '%s\n' "$MCPP_HOME/bin" >> "$GITHUB_PATH"

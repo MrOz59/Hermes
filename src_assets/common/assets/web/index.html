@@ -1,105 +1,13 @@
 <!DOCTYPE html>
 <html lang="en" data-bs-theme="auto">
-
 <head>
-  <%- header %>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hermes</title>
+  <link rel="icon" type="image/x-icon" href="./images/hermes.ico">
+  <link rel="stylesheet" href="/assets/css/hermes.css">
 </head>
-
 <body id="app" v-cloak>
-  <Navbar></Navbar>
-  <div id="content" class="container">
-    <h1 class="my-4">{{ $t('index.welcome') }}</h1>
-    <p>{{ $t('index.description') }}</p>
-    <div class="alert alert-danger" v-if="fancyLogs.find(x => x.level === 'Fatal')">
-      <div style="line-height: 32px;">
-        <i class="fas fa-circle-exclamation" style="font-size: 32px;margin-right: 0.25em;"></i>
-        <p v-html="$t('index.startup_errors')"></p>
-        <br>
-      </div>
-      <ul>
-        <li v-for="v in fancyLogs.filter(x => x.level === 'Fatal')">{{v.value}}</li>
-      </ul>
-      <a class="btn btn-danger" href="./troubleshooting#logs">View Logs</a>
-    </div>
-    <!-- Announcements from the Hermes maintainers -->
-    <Announcement-Feed v-if="config && announcementsEnabled" :version="config.version"></Announcement-Feed>
-    <!-- Version -->
-    <div class="card p-2 my-4">
-      <div class="card-body" v-if="config">
-        <h2>Hermes {{ config.version }}</h2>
-        <div v-if="updateLoading" class="text-body-secondary">
-          {{ $t('index.loading_latest') }}
-        </div>
-        <div class="alert alert-success" v-if="buildVersionIsDirty">
-          {{ $t('index.version_dirty') }} 🌇
-        </div>
-        <div class="alert alert-warning" v-if="updateError">
-          {{ $t('index.update_check_failed') }}
-        </div>
-        <div class="alert alert-info" v-if="installedVersionNotStable">
-          {{ $t('index.installed_version_not_stable') }}
-        </div>
-        <div class="alert alert-success"
-             v-if="!updateLoading && !updateError && !stableBuildAvailable && !nightlyBuildAvailable && !buildVersionIsDirty">
-          {{ $t('index.version_latest') }}
-        </div>
-        <div class="alert alert-warning" v-if="nightlyBuildAvailable">
-          <div class="d-flex justify-content-between align-items-center gap-3">
-            <div>
-              <p class="mb-1">{{ $t('index.new_nightly') }}</p>
-              <strong>{{ nightlyVersion.release.name }}</strong>
-            </div>
-            <a class="btn btn-success m-1"
-               :href="nightlyVersion.release.html_url"
-               target="_blank"
-               rel="noopener noreferrer">{{ $t('index.download') }}</a>
-          </div>
-          <pre class="text-wrap mt-2 mb-0">{{ nightlyVersion.release.body }}</pre>
-        </div>
-        <div class="alert alert-warning" v-if="stableBuildAvailable && !nightlyBuildAvailable">
-          <div class="d-flex justify-content-between align-items-center gap-3">
-            <div>
-              <p class="mb-1">{{ $t('index.new_stable') }}</p>
-              <strong>{{ stableVersion.release.name }}</strong>
-            </div>
-            <a class="btn btn-success m-1"
-               :href="stableVersion.release.html_url"
-               target="_blank"
-               rel="noopener noreferrer">{{ $t('index.download') }}</a>
-          </div>
-          <pre class="text-wrap mt-2 mb-0">{{ stableVersion.release.body }}</pre>
-        </div>
-      </div>
-    </div>
-
-    <!-- Hermes host readiness -->
-    <div class="card p-2 my-4">
-      <div class="card-body">
-        <div class="d-flex align-items-center justify-content-between mb-3">
-          <h2 class="h4 mb-0">Hermes host readiness</h2>
-          <button type="button" class="btn btn-outline-secondary btn-sm" :disabled="loading || updateLoading" @click="refresh">
-            <i class="fa-solid fa-arrows-rotate" :class="{'fa-spin': loading || updateLoading}"></i>
-          </button>
-        </div>
-        <div v-if="loading" class="text-body-secondary">Checking local status…</div>
-        <div v-else-if="hostWarnings.length === 0" class="alert alert-success mb-0">
-          No local Hermes configuration warnings detected.
-        </div>
-        <div v-else class="d-grid gap-2">
-          <div v-for="warning in hostWarnings" :key="warning.id" class="alert mb-0" :class="warning.level === 'danger' ? 'alert-danger' : 'alert-warning'">
-            <div class="fw-semibold">{{ warning.title }}</div>
-            <div>{{ warning.message }}</div>
-            <a v-if="warning.href" class="btn btn-sm btn-outline-dark mt-2" :href="warning.href">{{ warning.action }}</a>
-          </div>
-        </div>
-      </div>
-    </div>
-    <!-- Resources -->
-    <div class="my-4">
-      <Client-Card></Client-Card>
-      <Resource-Card></Resource-Card>
-    </div>
-  </div>
+  <script type="module" src="./index.ts"></script>
 </body>
-
-<script type="module" src="./index.ts"></script>
+</html>

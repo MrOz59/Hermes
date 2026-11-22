@@ -63,10 +63,16 @@ fi
         test -x "$compiler_bin/g++"
         export PATH="$compiler_bin:$PATH"
     fi
-    if [[ ! -x b2 ]]; then
-        ./bootstrap.sh
+    if [[ ! -x b2 || ! -f .hermes-b2-cxx26 ]]; then
+        # Boost's top-level bootstrap clears CXXFLAGS. The engine's generic
+        # toolset accepts our dialect without adding the GCC C++11 default.
+        engine=tools/build/src/engine
+        "$engine/build.sh" --cxx=g++ --cxxflags="-std=c++26 -pthread -O2 -s" cxx
+        ./bootstrap.sh --with-bjam="$PWD/$engine/b2" --with-toolset=gcc
+        install -m 755 "$engine/b2" b2
+        touch .hermes-b2-cxx26
     fi
-    ./b2 -j"$jobs" variant=release link=static runtime-link=shared threading=multi \
+    ./b2 -j"$jobs" cxxstd=26 variant=release link=static runtime-link=shared threading=multi \
         boost.locale.icu=off boost.locale.iconv=on \
         --with-atomic --with-chrono --with-container --with-context --with-date_time \
         --with-filesystem --with-locale --with-log --with-process --with-program_options \

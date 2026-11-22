@@ -118,8 +118,19 @@ case "${ID}" in
         archive="$(mktemp)"
         trap 'rm -f "${archive}"' EXIT
 
-        wget -q --tries=3 --retry-connrefused -O "${archive}" \
-            "https://archive.archlinux.org/packages/g/gcc/${package}"
+        download_options=(--fail --location --silent --show-error
+                          --connect-timeout 10 --max-time 90 --retry 1 --retry-max-time 30)
+        if ! curl "${download_options[@]}" -o "${archive}" \
+                "https://archive.archlinux.org/packages/g/gcc/${package}"; then
+            # The historical archive carries an earlier package revision of
+            # GCC 14.2.1. Its SHA-256 was verified using the Arch package
+            # signature before pinning it here.
+            historical="gcc-14.2.1%2Br134%2Bgab884fffe3fc-1-x86_64.pkg.tar.zst"
+            log "Arch Linux Archive unavailable, fetching ${historical} from the historical archive"
+            curl "${download_options[@]}" -o "${archive}" \
+                "https://archive.org/download/archlinux_pkg_gcc/${historical}"
+            printf '%s  %s\n' efcf9a912bb674205fe8cbc2f205ca3d64ec0e8e48700c74bac8952834dc4415 "${archive}" | sha256sum -c - >&2
+        fi
 
         mkdir -p "${prefix}"
         # The package carries .PKGINFO and friends beside the tree; only /usr

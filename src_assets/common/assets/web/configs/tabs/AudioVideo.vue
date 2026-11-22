@@ -1,42 +1,44 @@
-<script setup>
-import {ref, computed, inject, watch} from 'vue'
-import {$tp} from '../../platform-i18n'
+<script setup lang="ts">
+import type { Configuration, EvdiStatus, HermesKmsStatus, ClipboardStatus } from '../../config-types'
+import {ref, computed, watch} from 'vue'
+import {$tp, useTranslator} from '../../platform-i18n'
 import PlatformLayout from '../../PlatformLayout.vue'
 import AdapterNameSelector from './audiovideo/AdapterNameSelector.vue'
 import DisplayOutputSelector from './audiovideo/DisplayOutputSelector.vue'
 import DisplayModesSettings from "./audiovideo/DisplayModesSettings.vue";
 import Checkbox from "../../Checkbox.vue";
 
-const $t = inject('i18n').t;
+const $t = useTranslator().t;
 
-const props = defineProps([
-  'platform',
-  'config',
-  'evdiSetupRequired',
-  'evdiDiagnostic',
-  'evdiInfo',
-  'hermesKmsDiagnostic',
-  'hermesKmsInfo',
-  'min_fps_factor',
-])
+const props = defineProps<{
+  platform: string;
+  config: Configuration;
+  evdiSetupRequired?: boolean;
+  evdiDiagnostic?: string;
+  evdiInfo?: EvdiStatus | null;
+  hermesKmsDiagnostic?: string;
+  hermesKmsInfo?: HermesKmsStatus | null;
+  min_fps_factor?: number;
+  vdisplay?: number;
+}>()
 
 const evdiMessage = ref('')
 const evdiInstallError = ref(false)
 const evdiInstalling = ref(false)
 const evdiDiagnostic = ref(props.evdiDiagnostic)
-const evdiInfo = ref(props.evdiInfo || {})
+const evdiInfo = ref<EvdiStatus>(props.evdiInfo || {})
 const evdiInfoLoading = ref(false)
-const hermesKmsInfo = ref(props.hermesKmsInfo || {})
+const hermesKmsInfo = ref<HermesKmsStatus>(props.hermesKmsInfo || {})
 const hermesKmsDiagnostic = ref(props.hermesKmsDiagnostic)
 const hermesKmsInfoLoading = ref(false)
-const sessionFeatures = ref([])
-const clipboardInfo = ref({})
+const sessionFeatures = ref<{ feature: string; readiness: string; label: string; detail?: string; remediation?: string }[]>([])
+const clipboardInfo = ref<ClipboardStatus>({})
 const clipboardLoading = ref(false)
 const clipboardInstalling = ref(false)
 const clipboardMessage = ref('')
 const clipboardInstallError = ref(false)
 
-const configFlagEnabled = (value) => {
+const configFlagEnabled = (value: unknown) => {
   if (value === true || value === 1) return true
   return ['true', '1', 'enabled', 'enable', 'yes', 'on'].includes(`${value}`.toLowerCase().trim())
 }
@@ -108,7 +110,7 @@ const hermesKmsGuide = computed(() => {
     : hermesKmsMultiOutputEnabled.value
       ? 'initial_enabled=0 outputs=2'
       : 'initial_enabled=0'
-  const withIsolatedRuntime = (commands) => hermesKmsIsolatedSessionsEnabled.value
+  const withIsolatedRuntime = (commands: string[]) => hermesKmsIsolatedSessionsEnabled.value
     ? [
         ...commands,
         'sudo systemctl enable --now hermes-kms-seatd@1.service hermes-kms-seatd@2.service',
@@ -345,15 +347,17 @@ if (props.platform === 'linux') {
 
 const config = ref(props.config)
 
-const validateFallbackMode = (event) => {
-  const value = event.target.value;
+const validateFallbackMode = (event: Event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  const value = input.value;
   if (!value.match(/^\d+x\d+x\d+(\.\d+)?$/)) {
-    event.target.setCustomValidity($t('config.fallback_mode_error'));
+    input.setCustomValidity($t('config.fallback_mode_error'));
   } else {
-    event.target.setCustomValidity('');
+    input.setCustomValidity('');
   }
 
-  event.target.reportValidity();
+  input.reportValidity();
 }
 </script>
 

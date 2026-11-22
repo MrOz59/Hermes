@@ -44,8 +44,7 @@ makedepends=(
   'jq'
   'ninja'
   'nlohmann-json'
-  'nodejs'
-  'npm'
+  'bun>=1.4.5'
   'patchelf'
   'plasma-wayland-protocols'
   'python'
@@ -119,7 +118,7 @@ prepare() {
     _mcpp_environment
     scripts/prepare-mcpp-ci.sh
     scripts/prepare-mcpp-linux-sdk.sh
-    npm install
+    bun install --frozen-lockfile
 }
 
 build() {

@@ -1,7 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Exercise the exact GitHub-script policy with mocked REST responses.
-import fs from 'node:fs';
-const current=fs.readFileSync(new URL('../../.github/workflows/libvirtualhid-experimental.yml', import.meta.url),'utf8');
+const current = await Bun.file(new URL('../../.github/workflows/libvirtualhid-experimental.yml', import.meta.url)).text();
+
+interface PolicyFixture {
+  name: string
+  old?: string
+  now?: string
+  files?: string[]
+  reuse?: boolean
+  status?: string
+  ancestor?: string
+  comparison?: string
+  expired?: boolean
+  eventName?: string
+  ref?: string
+}
 const lines=current.split('\n');
 const start=lines.indexOf('          script: |');
 if(start<0)throw Error('Cannot locate the artifact policy script');
@@ -15,11 +28,11 @@ const script=new AsyncFunction('core','context','github',body.join('\n'));
 const previous=current.replace(/^  kernel:$/m,'  kernel:\n    # A runtime-only fixture change');
 if(previous===current)throw Error('Cannot locate the runtime job fixture');
 const workflow='.github/workflows/libvirtualhid-experimental.yml';
-const cases=[
+const cases: PolicyFixture[] = [
  {name:'runtime harness',old:previous,reuse:true},
  {name:'shell fixture',files:['scripts/session-broker-test.sh'],reuse:true},
  {name:'Python fixture',files:['scripts/session-broker-concurrency-test.py'],reuse:true},
- {name:'new policy regression script',files:['scripts/tests/test_input_artifact_reuse.mjs'],status:'added',reuse:true},
+ {name:'new policy regression script',files:['scripts/tests/test_input_artifact_reuse.ts'],status:'added',reuse:true},
  {name:'migration note',files:['docs/libvirtualhid-experimental.md'],reuse:true},
  {name:'changed mcpp feature',old:previous.replace('--features tray,web-assets,xtest -j2','--features tray,web-assets -j2')},
  {name:'changed compiler image',old:previous.replace('image: archlinux:latest','image: archlinux:other')},
@@ -40,12 +53,12 @@ const cases=[
  {name:'pull request',ref:'refs/pull/1/merge'}
 ];
 for(const test of cases){
- let output;
- const core={setOutput:(_,v)=>output=v,info:()=>{}};
+ let output: string | undefined;
+ const core={setOutput: (_name: string, value: string) => { output = value; },info:()=>{}};
  const context={repo:{owner:'owner',repo:'repo'},ref:test.ref??'refs/heads/feature',sha:'current',eventName:test.eventName??'push'};
  const github={rest:{actions:{listWorkflowRuns:async()=>({data:{workflow_runs:[{id:123,head_sha:'compiled'}]}}),listWorkflowRunArtifacts:async()=>({data:{artifacts:[{name:'libvirtualhid-linux-input-tests',expired:test.expired??false}]}})},repos:{
  compareCommits:async()=>({data:{status:test.comparison??'ahead',merge_base_commit:{sha:test.ancestor??'compiled'},files:(test.files??[workflow]).map(filename=>({filename,status:test.status??'modified'}))}}),
- getContent:async({ref})=>({data:{type:'file',encoding:'base64',content:Buffer.from(ref==='current'?(test.now??current):(test.old??previous)).toString('base64')}})
+ getContent:async({ref}: {ref: string})=>({data:{type:'file',encoding:'base64',content:Buffer.from(ref==='current'?(test.now??current):(test.old??previous)).toString('base64')}})
  }}};
  await script(core,context,github);
  if(output!==(test.reuse?'123':''))throw Error(test.name+': '+output);

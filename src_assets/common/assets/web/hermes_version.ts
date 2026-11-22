@@ -1,3 +1,15 @@
+export type VersionParts = [major: number, minor: number, patch: number];
+
+export interface GithubRelease {
+  name?: string | null;
+  tag_name?: string;
+  body?: string | null;
+}
+
+export function compareVersionParts(left: VersionParts, right: VersionParts): number {
+  return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+}
+
 /**
  * Parse the leading `MAJOR.MINOR.PATCH` of a version string, or return null.
  *
@@ -5,16 +17,25 @@
  * commit into the version (`0.5.1+abc1234`), and that build is still release
  * 0.5.1 for comparison purposes.
  */
-export function parseVersionParts(version) {
+export function parseVersionParts(version: unknown): VersionParts | null {
   if (!version) {
     return null;
   }
   const match = `${version}`.match(/^v?(\d+)\.(\d+)\.(\d+)/);
-  return match ? match.slice(1, 4).map(value => Number.parseInt(value, 10)) : null;
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
 }
 
 class HermesVersion {
-  constructor(release = null, version = null) {
+  readonly release: GithubRelease | null;
+  readonly version: string | null;
+  readonly versionName: string | null | undefined;
+  readonly versionTag: string | null | undefined;
+  readonly versionParts: VersionParts | null;
+  readonly versionMajor: number | null;
+  readonly versionMinor: number | null;
+  readonly versionPatch: number | null;
+
+  constructor(release: GithubRelease | null = null, version: string | null = null) {
     if (release) {
       this.release = release;
       this.version = HermesVersion.releaseVersion(release);
@@ -34,7 +55,7 @@ class HermesVersion {
     this.versionPatch = this.versionParts ? this.versionParts[2] : null;
   }
 
-  static releaseVersion(release) {
+  static releaseVersion(release: GithubRelease | null) {
     const tag = release?.tag_name ?? "";
     if (/^v?\d+\.\d+\.\d+/.test(tag)) {
       return tag;
@@ -46,11 +67,11 @@ class HermesVersion {
     return description.match(/(?:^|[^\d])v?(\d+\.\d+\.\d+)(?:[^\d]|$)/)?.[1] ?? null;
   }
 
-  parseVersion(version) {
+  parseVersion(version: string | null) {
     return parseVersionParts(version);
   }
 
-  isGreater(otherVersion) {
+  isGreater(otherVersion: HermesVersion | string) {
     let otherVersionParts;
     if (otherVersion instanceof HermesVersion) {
       otherVersionParts = otherVersion.versionParts;
@@ -63,17 +84,10 @@ class HermesVersion {
     if (!this.versionParts || !otherVersionParts) {
       return false;
     }
-    for (let i = 0; i < 3; i++) {
-      if (this.versionParts[i] > otherVersionParts[i]) {
-        return true;
-      } else if (this.versionParts[i] < otherVersionParts[i]) {
-        return false;
-      }
-    }
-    return false;
+    return compareVersionParts(this.versionParts, otherVersionParts) > 0;
   }
 
-  isSame(otherVersion) {
+  isSame(otherVersion: HermesVersion | string) {
     if (this.isGreater(otherVersion)) {
       return false;
     }

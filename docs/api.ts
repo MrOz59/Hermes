@@ -1,4 +1,16 @@
-function generateExamples(endpoint, method, body = null) {
+const exampleLanguages = ['cURL', 'Python', 'JavaScript', 'PowerShell'] as const
+type ExampleLanguage = (typeof exampleLanguages)[number]
+type ApiExamples = Record<ExampleLanguage, string>
+
+declare global {
+  interface Window {
+    generateExamples: typeof generateExamples
+    createTabs: typeof createTabs
+    openTab: typeof openTab
+  }
+}
+
+function generateExamples(endpoint: string, method: string, body: unknown = null): ApiExamples {
   let curlBodyString = '';
   let psBodyString = '';
 
@@ -38,7 +50,7 @@ requests.${method.trim().toLowerCase()}(
   };
 }
 
-function hashString(str) {
+function hashString(str: string): number {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
@@ -48,12 +60,11 @@ function hashString(str) {
   return hash;
 }
 
-function createTabs(examples) {
-  const languages = Object.keys(examples);
+function createTabs(examples: ApiExamples): string {
   let tabs = '<div class="tabs-overview-container"><div class="tabs-overview">';
   let content = '<div class="tab-content">';
 
-  languages.forEach((lang, index) => {
+  exampleLanguages.forEach((lang, index) => {
     const hash = hashString(examples[lang]);
     tabs += `<button class="tab-button ${index === 0 ? 'active' : ''}" onclick="openTab(event, '${lang}')"><b class="tab-title" title=" ${lang} "> ${lang} </b></button>`;
     content += `<div id="${lang}" class="tabcontent" style="display: ${index === 0 ? 'block' : 'none'};">
@@ -75,41 +86,43 @@ function createTabs(examples) {
   content += '</div>';
 
   setTimeout(() => {
-    languages.forEach((lang, index) => {
+    exampleLanguages.forEach(lang => {
       const hash = hashString(examples[lang]);
       const copyButton = document.getElementById(`copy-button-${lang}-${hash}`);
-      copyButton.addEventListener('click', copyContent);
+      copyButton?.addEventListener('click', copyContent);
     });
   }, 0);
 
   return tabs + content;
 }
 
-function copyContent() {
-  const content = this.previousElementSibling.cloneNode(true);
+function copyContent(event: Event) {
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLElement)) return;
+  const content = button.previousElementSibling?.cloneNode(true);
   if (content instanceof Element) {
     // filter out line number from file listings
     content.querySelectorAll(".lineno, .ttc").forEach((node) => {
       node.remove();
     });
-    let textContent = Array.from(content.querySelectorAll('.line'))
+    let textContent = Array.from(content.querySelectorAll<HTMLElement>('.line'))
       .map(line => line.innerText)
       .join('\n')
       .trim(); // Join lines with newline characters and trim leading/trailing whitespace
     navigator.clipboard.writeText(textContent);
-    this.classList.add("success");
-    this.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>`;
+    button.classList.add("success");
+    button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>`;
     window.setTimeout(() => {
-      this.classList.remove("success");
-      this.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>`;
+      button.classList.remove("success");
+      button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>`;
     }, 980);
   } else {
     console.error('Failed to copy: content is not a DOM element');
   }
 }
 
-function openTab(evt, lang) {
-  const tabcontent = document.getElementsByClassName("tabcontent");
+function openTab(_event: Event, lang: ExampleLanguage) {
+  const tabcontent = document.querySelectorAll<HTMLElement>(".tabcontent");
   for (const content of tabcontent) {
     content.style.display = "none";
   }
@@ -119,7 +132,7 @@ function openTab(evt, lang) {
     link.className = link.className.replace(" active", "");
   }
 
-  const selectedTabs = document.querySelectorAll(`#${lang}`);
+  const selectedTabs = document.querySelectorAll<HTMLElement>(`#${lang}`);
   for (const tab of selectedTabs) {
     tab.style.display = "block";
   }
@@ -129,3 +142,11 @@ function openTab(evt, lang) {
     button.className += " active";
   }
 }
+
+
+// Doxygen's generated inline examples invoke these helpers.
+window.generateExamples = generateExamples
+window.createTabs = createTabs
+window.openTab = openTab
+
+export {}

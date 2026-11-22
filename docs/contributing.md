@@ -23,7 +23,9 @@ internals — the Web UI, localization and the test suites.
 
 #### Building
 
-Run `npm run dev` for front-end development. Use the
+Run `bun install --frozen-lockfile`, then `bun run dev` for front-end development. To build the browser scripts used by the
+Doxygen documentation, run `bun run docs:assets` before invoking Doxygen.
+Read the Docs runs this step automatically. Use the
 [`web-assets` build feature](building.md#build-locally) to build and stage the
 production pages with the Hermes executable.
 
@@ -175,8 +177,9 @@ The production Vite configuration takes its source and output paths from the
 build and renders the pages through EJS.
 
 ```bash
-npm install
-npm test
+bun install --frozen-lockfile
+bun run typecheck
+bun run test
 ```
 
 #### Clang Format

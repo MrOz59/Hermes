@@ -14,11 +14,12 @@ cd Hermes
 ```
 
 Prepare the [local toolchain and development inputs](modularization/mcpp-migration.md)
-for your distribution. For the Web UI, install the project's npm dependencies
+for your distribution. For the Web UI, install the project's locked dependencies with the Bun version in `package.json`
 in the checkout before building.
 
 ```bash
-npm install
+bun install --frozen-lockfile
+bun run typecheck
 MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
   mcpp build --offline --release -p hermes-host --features web-assets
 ```

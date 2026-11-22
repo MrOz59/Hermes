@@ -99,6 +99,7 @@ jobs:
             base-devel \
             git \
             git-lfs \
+            unzip \
             ninja \
             python \
             nlohmann-json \
@@ -139,10 +140,8 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Set up the pinned Node.js runtime
-        uses: actions/setup-node@v7.1.0
-        with:
-          node-version-file: .node-version
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -164,12 +163,11 @@ jobs:
       - name: Build pinned PyroWave SDK
         run: bash scripts/build-pyrowave-sdk.sh
 
-      # Vitest exercises the Web UI without running the Vite asset build.
       - name: Run the Web UI tests
-        # The checkout keeps package-lock.json outside version control.
         run: |
-          npm install
-          npm test
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun run test
 
       - name: Compile the full Linux test suite
         shell: bash
@@ -358,8 +356,7 @@ jobs:
             plasma-wayland-protocols \
             qt6-base \
             qt6-svg \
-            npm \
-            nodejs \
+            bun \
             icu \
             numactl
 
@@ -373,11 +370,6 @@ jobs:
           submodules: recursive
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Set up the pinned Node.js runtime
-        uses: actions/setup-node@v7.1.0
-        with:
-          node-version-file: .node-version
 
       # makepkg cannot take pkgver from the environment, so rewrite it in the
       # CI checkout. This keeps the package filename, the pacman version and
@@ -428,8 +420,7 @@ jobs:
           # by the PKGBUILD's native CUDA feature.
           # Pass the package inputs explicitly. The runner's command file
           # is owned by root and is unavailable to makepkg.
-          node_bin="$(dirname "$(command -v node)")"
-          su builder -c "export PATH='/usr/local/cuda/bin:${node_bin}':\$PATH \
+          su builder -c "export PATH='/usr/local/cuda/bin':\$PATH \
             CUDAHOSTCXX='${CUDA_HOST_CXX}' \
             BRANCH='${BRANCH}' \
             BUILD_VERSION='${BUILD_VERSION}' \
@@ -501,6 +492,7 @@ jobs:
             git \
             wget \
             xz-utils \
+            unzip \
             build-essential \
             ninja-build \
             libssl-dev \
@@ -562,10 +554,8 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Set up the pinned Node.js runtime
-        uses: actions/setup-node@v7.1.0
-        with:
-          node-version-file: .node-version
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -588,7 +578,7 @@ jobs:
           export MCPP_TOOLCHAIN="path:$PWD/.toolchain"
           bash scripts/prepare-mcpp-ci.sh "${CUDA_HOST_GCC}"
           bash scripts/prepare-mcpp-linux-sdk.sh
-          npm install --no-audit --no-fund
+          bun install --frozen-lockfile
           {
             echo "MCPP_HOME=${MCPP_HOME}"
             echo "MCPP_TOOLCHAIN=${MCPP_TOOLCHAIN}"
@@ -780,7 +770,7 @@ jobs:
             curl \
             python3 \
             libstdc++-static \
-            libatomic \
+            unzip \
             patchelf \
             pkgconf-pkg-config \
             json-devel \
@@ -841,10 +831,8 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Set up the pinned Node.js runtime
-        uses: actions/setup-node@v7.1.0
-        with:
-          node-version-file: .node-version
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -863,7 +851,7 @@ jobs:
           export MCPP_TOOLCHAIN="path:$PWD/.toolchain"
           scripts/prepare-mcpp-ci.sh
           scripts/prepare-mcpp-linux-sdk.sh
-          npm install --no-audit --no-fund
+          bun install --frozen-lockfile
           printf 'MCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\n' "$MCPP_HOME" "$MCPP_TOOLCHAIN" >> "$GITHUB_ENV"
 
       - name: Build pinned PyroWave SDK

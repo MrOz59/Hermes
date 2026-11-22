@@ -1,34 +1,54 @@
-const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
-const vm = require('node:vm');
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import vm from 'node:vm';
 
-const generator = process.env.HERMES_PLACEMENT_SCRIPT_GENERATOR;
-assert.ok(generator, 'Set HERMES_PLACEMENT_SCRIPT_GENERATOR to the compiled script.cc');
+import { test } from 'bun:test';
+
+interface Screen {
+  name: string
+}
+
+interface DesktopWindow {
+  pid: number
+  resourceClass: string
+  fullScreen: boolean
+  normalWindow: boolean
+  output: Screen
+  fullScreenChanged?: { connect: (handler: () => void) => void }
+}
 
 function script(mode = 'gamescope', output = 'Virtual-1') {
+  const generator = Bun.env.HERMES_PLACEMENT_SCRIPT_GENERATOR;
+  assert.ok(generator, 'Set HERMES_PLACEMENT_SCRIPT_GENERATOR to the compiled script.cc');
   return execFileSync(generator, [mode, output], { encoding: 'utf8' });
 }
 
-function desktop(existing, mode = 'gamescope', outputExists = true) {
+function desktop(existing: DesktopWindow[], mode = 'gamescope', outputExists = true) {
   const physical = { name: 'HDMI-A-1' };
   const target = { name: 'Virtual-1' };
-  const moves = [];
-  let onAdded;
+  const moves: DesktopWindow[] = [];
+  let onAdded: ((window: DesktopWindow) => void) | undefined;
   const workspace = {
     screens: outputExists ? [physical, target] : [physical],
     windowList: () => existing,
-    windowAdded: { connect: fn => { onAdded = fn; } },
-    sendClientToScreen: (window, screen) => {
+    windowAdded: { connect: (handler: (window: DesktopWindow) => void) => { onAdded = handler; } },
+    sendClientToScreen: (window: DesktopWindow, screen: Screen) => {
       moves.push(window);
       window.output = screen;
     },
   };
   vm.runInNewContext(script(mode), { workspace });
-  return { moves, target, add: window => onAdded(window) };
+  return {
+    moves,
+    target,
+    add(window: DesktopWindow) {
+      assert.ok(onAdded);
+      onAdded(window);
+    },
+  };
 }
 
-function window(pid, resourceClass = 'gamescope', fullScreen = true) {
+function window(pid: number, resourceClass = 'gamescope', fullScreen = true): DesktopWindow {
   return { pid, resourceClass, fullScreen, normalWindow: true, output: { name: 'HDMI-A-1' } };
 }
 
@@ -76,9 +96,9 @@ test('Big Picture that moves itself back and goes fullscreen is placed again', (
   // Recorded on KDE Plasma 6.8 with a 2560x1440 primary monitor lit: Steam
   // adds "Steam Big Picture Mode" on the primary monitor, the script moves it
   // to Virtual-1, Steam moves it straight back and makes it fullscreen there.
-  const handlers = [];
+  const handlers: (() => void)[] = [];
   let fullScreen = false;
-  const bigPicture = {
+  const bigPicture: DesktopWindow = {
     pid: 4538,
     resourceClass: 'steam',
     normalWindow: true,

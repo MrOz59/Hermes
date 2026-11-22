@@ -35,12 +35,12 @@ function pageContext() {
  * which of these it was — by design, since distinguishing them leaks
  * cross-origin information — so list them rather than guess.
  */
-function rejectionHints(error) {
-  if (error?.name === 'AbortError') {
+function rejectionHints(error: { name: string }) {
+  if (error.name === 'AbortError') {
     return ['The request was aborted, usually by navigating away or a timeout.'];
   }
-  if (error?.name !== 'TypeError') {
-    return [`Unexpected error type: ${error?.name}.`];
+  if (error.name !== 'TypeError') {
+    return [`Unexpected error type: ${error.name}.`];
   }
   return [
     'The request never got a reply. The browser reports every one of these the same way, so it is one of:',
@@ -56,12 +56,8 @@ function rejectionHints(error) {
  * fetch() with diagnostics. Same signature and return value, so it is a drop-in
  * replacement; it only adds console output.
  *
- * @param {string} url Relative or absolute request URL.
- * @param {object} options Passed through to fetch().
- * @param {string} label Human name for the operation, e.g. "create password".
- * @returns {Promise<Response>} The fetch result, unchanged.
  */
-export async function apiFetch(url, options = {}, label = 'request') {
+export async function apiFetch(url: string, options: RequestInit = {}, label = 'request') {
   // Resolving the URL here is the point: every API call in the UI is written
   // relative, so a page reached at an unexpected path silently changes what
   // gets requested.
@@ -71,7 +67,7 @@ export async function apiFetch(url, options = {}, label = 'request') {
 
   console.info(`${PREFIX} ${label}: ${method} ${resolved}`);
 
-  let response;
+  let response: Response;
   try {
     response = await fetch(url, options);
   } catch (error) {
@@ -79,7 +75,8 @@ export async function apiFetch(url, options = {}, label = 'request') {
     console.error(
       `${PREFIX} ${label} FAILED after ${elapsed}ms — the request never reached Hermes.`
     );
-    console.error(`${PREFIX} ${error.name}: ${error.message}`);
+    const detail = error instanceof Error ? error : new Error(String(error));
+    console.error(`${PREFIX} ${detail.name}: ${detail.message}`);
     // Timing separates the two shapes this takes: an immediate rejection is a
     // refused or reset connection, while seconds of waiting is a stall or a
     // dialog nobody answered.
@@ -91,7 +88,7 @@ export async function apiFetch(url, options = {}, label = 'request') {
       elapsedMs: elapsed,
       ...pageContext(),
     });
-    for (const hint of rejectionHints(error)) {
+    for (const hint of rejectionHints(detail)) {
       console.error(`${PREFIX} ${hint}`);
     }
     throw error;
@@ -125,6 +122,6 @@ export async function apiFetch(url, options = {}, label = 'request') {
  * the console, so a pasted report is self-describing even when the interesting
  * part is a single failure further down.
  */
-export function logPageContext(page) {
+export function logPageContext(page: string) {
   console.info(`${PREFIX} ${page} loaded`, pageContext());
 }

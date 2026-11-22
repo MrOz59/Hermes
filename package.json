@@ -2,25 +2,30 @@
   "name": "hermes",
   "version": "0.7.0",
   "scripts": {
-    "build": "vite build --debug",
-    "build-clean": "vite build --debug --emptyOutDir",
-    "dev": "vite build --watch",
-    "serve": "serve ./tests/fixtures/http --no-port-switching",
-    "test": "vitest run"
+    "build": "bun --bun vite build",
+    "dev": "bun --bun vite build --watch",
+    "serve": "bun tests/fixtures/http/serve.ts",
+    "test": "bun test tests/web",
+    "typecheck": "bun --bun vue-tsc --noEmit && bun --bun tsc --project tsconfig.tools.json",
+    "docs:assets": "bun build --target browser --format iife --outdir target/docs-assets docs/api.ts docs/configuration.ts"
   },
   "type": "module",
   "dependencies": {
     "@intlify/core-base": "11.4.23",
-    "@lizardbyte/shared-web": "2025.922.181114",
+    "bootstrap": "5.3.8",
     "vue": "3.5.46",
     "vue-i18n": "11.4.23"
   },
   "devDependencies": {
-    "@codecov/vite-plugin": "1.9.1",
-    "@vitejs/plugin-vue": "6.0.1",
-    "serve": "14.2.5",
-    "vite": "6.3.6",
-    "vite-plugin-ejs": "1.7.0",
-    "vitest": "^3.2.7"
-  }
+    "@codecov/vite-plugin": "2.0.1",
+    "@types/bootstrap": "5.2.11",
+    "@types/bun": "1.4.5",
+    "@vitejs/plugin-vue": "6.0.11",
+    "ejs": "7.0.2",
+    "typescript": "6.0.3",
+    "vite": "6.4.6",
+    "vite-plugin-ejs": "2.0.0",
+    "vue-tsc": "3.3.14"
+  },
+  "packageManager": "bun@1.4.5"
 }

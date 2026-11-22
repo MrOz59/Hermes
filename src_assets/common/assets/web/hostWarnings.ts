@@ -15,13 +15,23 @@
  * rather than one missing banner.
  */
 
-/** @returns {object} `value` when it is a plain object, an empty one otherwise. */
-function asObject(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+interface HostWarning {
+  id: string;
+  level: 'warning' | 'danger';
+  title: string;
+  message: string;
+  href: string;
+  action: string;
+}
+
+function asObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value))
+    : {};
 }
 
 /** @returns {Array} `value` when it is an array, an empty one otherwise. */
-function asArray(value) {
+function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
@@ -29,9 +39,9 @@ function asArray(value) {
  * @param {object|null} config The `/api/config` response.
  * @returns {Array<{id: string, level: 'warning'|'danger', title: string, message: string, href: string, action: string}>}
  */
-export function hostWarnings(config) {
+export function hostWarnings(config: unknown): HostWarning[] {
   const c = asObject(config);
-  const warnings = [];
+  const warnings: HostWarning[] = [];
   const evdiInfo = asObject(c.evdiInfo);
   const hermesKmsInfo = asObject(c.hermesKmsInfo);
   const clipboardInfo = asObject(c.clipboardInfo);
@@ -97,7 +107,7 @@ export function hostWarnings(config) {
     });
   }
 
-  const busyPorts = asArray(c.streamPorts).filter(port => asObject(port).available === false);
+  const busyPorts = asArray(c.streamPorts).map(asObject).filter(port => port.available === false);
   if (busyPorts.length > 0) {
     warnings.push({
       id: 'stream-port-in-use',

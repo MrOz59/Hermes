@@ -35,9 +35,9 @@ Put the following development inputs in `.toolchain/`.
 | `acl/include` and `acl/lib` | libacl development files for the session broker |
 
 Initialize the Git submodules, including `third-party/build-deps` for Hermes'
-pinned FFmpeg and codec archives. For a Web UI build, provision Node.js, npm,
-and this project's dependencies under `node_modules` ahead of the build. The
-asset action invokes `npm run build` with the installed dependencies.
+pinned FFmpeg and codec archives. For a Web UI build, install the Bun version in
+`package.json` and run `bun install --frozen-lockfile` before the native build.
+The offline asset action invokes `bun run build` with those dependencies.
 
 ## Build and check
 

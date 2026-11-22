@@ -1,16 +1,17 @@
-<script setup>
+<script setup lang="ts">
+import type { Configuration } from '../../config-types'
 import { computed, ref } from 'vue'
 import Checkbox from "../../Checkbox.vue";
 
-const props = defineProps([
-  'platform',
-  'config'
-])
+const props = defineProps<{
+  platform: string;
+  config: Configuration;
+}>()
 
 const defaultPort = 47989
 
 const config = ref(props.config)
-const effectivePort = computed(() => +config.value?.port ?? defaultPort)
+const effectivePort = computed(() => Number(config.value.port ?? defaultPort))
 </script>
 
 <template>
@@ -36,7 +37,7 @@ const effectivePort = computed(() => +config.value?.port ?? defaultPort)
     <!-- Port family -->
     <div class="mb-3">
       <label for="port" class="form-label">{{ $t('config.port') }}</label>
-      <input type="number" min="1029" max="65514" class="form-control" id="port" :placeholder="defaultPort"
+      <input type="number" min="1029" max="65514" class="form-control" id="port" :placeholder="String(defaultPort)"
              v-model="config.port" />
       <div class="form-text">{{ $t('config.port_desc') }}</div>
       <!-- Add warning if any port is less than 1024 -->

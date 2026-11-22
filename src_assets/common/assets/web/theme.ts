@@ -1,7 +1,16 @@
-const getStoredTheme = () => localStorage.getItem('theme')
-const setStoredTheme = theme => localStorage.setItem('theme', theme)
+type Theme = 'auto' | 'dark' | 'light';
 
-export const getPreferredTheme = () => {
+function isTheme(value: string | null): value is Theme {
+    return value === 'auto' || value === 'dark' || value === 'light';
+}
+
+const getStoredTheme = (): Theme | null => {
+    const theme = localStorage.getItem('theme');
+    return isTheme(theme) ? theme : null;
+}
+const setStoredTheme = (theme: Theme) => localStorage.setItem('theme', theme)
+
+export const getPreferredTheme = (): Theme => {
     const storedTheme = getStoredTheme()
     if (storedTheme) {
         return storedTheme
@@ -10,7 +19,7 @@ export const getPreferredTheme = () => {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
-const setTheme = theme => {
+const setTheme = (theme: Theme) => {
     if (theme === 'auto') {
         document.documentElement.setAttribute(
             'data-bs-theme',
@@ -21,8 +30,8 @@ const setTheme = theme => {
     }
 }
 
-export const showActiveTheme = (theme, focus = false) => {
-    const themeSwitcher = document.querySelector('#bd-theme')
+export const showActiveTheme = (theme: Theme, focus = false) => {
+    const themeSwitcher = document.querySelector<HTMLElement>('#bd-theme')
 
     if (!themeSwitcher) {
         return
@@ -31,7 +40,8 @@ export const showActiveTheme = (theme, focus = false) => {
     const themeSwitcherText = document.querySelector('#bd-theme-text')
     const activeThemeIcon = document.querySelector('.theme-icon-active i')
     const btnToActive = document.querySelector(`[data-bs-theme-value="${theme}"]`)
-    const classListOfActiveBtn = btnToActive.querySelector('i').classList
+    const classListOfActiveBtn = btnToActive?.querySelector('i')?.classList
+    if (!themeSwitcherText || !activeThemeIcon || !btnToActive || !classListOfActiveBtn) return
 
     document.querySelectorAll('[data-bs-theme-value]').forEach(element => {
         element.classList.remove('active')
@@ -42,7 +52,7 @@ export const showActiveTheme = (theme, focus = false) => {
     btnToActive.setAttribute('aria-pressed', 'true')
     activeThemeIcon.classList.remove(...activeThemeIcon.classList.values())
     activeThemeIcon.classList.add(...classListOfActiveBtn)
-    const themeSwitcherLabel = `${themeSwitcherText.textContent} (${btnToActive.textContent.trim()})`
+    const themeSwitcherLabel = `${themeSwitcherText.textContent} (${(btnToActive.textContent ?? '').trim()})`
     themeSwitcher.setAttribute('aria-label', themeSwitcherLabel)
 
     if (focus) {
@@ -55,6 +65,7 @@ export function setupThemeToggleListener() {
         .forEach(toggle => {
             toggle.addEventListener('click', () => {
                 const theme = toggle.getAttribute('data-bs-theme-value')
+                if (!isTheme(theme)) return
                 setStoredTheme(theme)
                 setTheme(theme)
                 showActiveTheme(theme, true)

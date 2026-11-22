@@ -7,7 +7,7 @@ on:
       - 'src/platform/linux/window_placement.h'
       - 'src/platform/linux/virtual_display.*'
       - 'tests/window_placement/**'
-      - '.node-version'
+      - 'package.json'
       - '.github/workflows/window-placement.yml'
   workflow_dispatch:
 
@@ -20,10 +20,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7.0.1
-      - name: Set up the pinned Node.js runtime
-        uses: actions/setup-node@v7.1.0
-        with:
-          node-version-file: .node-version
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
 
       - name: Install GCC 14 for C++26
         run: |
@@ -34,4 +32,4 @@ jobs:
       - name: Preserve unrelated local windows and fullscreen state
         env:
           HERMES_PLACEMENT_SCRIPT_GENERATOR: /tmp/hermes-placement-script
-        run: node --test tests/window_placement/kwin_script.cjs
+        run: bun test tests/window_placement/kwin_script.test.ts

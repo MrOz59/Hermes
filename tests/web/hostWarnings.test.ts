@@ -1,5 +1,5 @@
 /**
- * @file tests/web/hostWarnings.test.js
+ * @file tests/web/hostWarnings.test.ts
  * @brief The home page's host-readiness banners.
  *
  * The first tests in this repository that run on the Web UI at all. The
@@ -9,9 +9,11 @@
  * the render dereferenced `.length`, Vue tore the tree down, and `v-cloak`
  * hid what was left. A bad field must cost one banner, never the page.
  */
-import { describe, expect, it } from 'vitest'
+import assert from 'node:assert/strict'
 
-import { hostWarnings } from '../../src_assets/common/assets/web/hostWarnings.js'
+import { describe, expect, it } from 'bun:test'
+
+import { hostWarnings } from '../../src_assets/common/assets/web/hostWarnings.ts'
 
 /** A host with nothing wrong with it, as /api/config describes one. */
 const healthyHost = {
@@ -78,7 +80,7 @@ describe('hostWarnings', () => {
       ],
     })
     const busy = warnings.find(w => w.id === 'stream-port-in-use')
-    expect(busy).toBeDefined()
+    assert.ok(busy)
     expect(busy.level).toBe('danger')
     expect(busy.message).toContain('Video (47998)')
     expect(busy.message).not.toContain('Control')
@@ -90,7 +92,7 @@ describe('hostWarnings', () => {
       streamPorts: [null, 'Video', { name: 'Audio', port: 48000, available: false }],
     })
     const busy = warnings.find(w => w.id === 'stream-port-in-use')
-    expect(busy).toBeDefined()
+    assert.ok(busy)
     expect(busy.message).toContain('Audio (48000)')
   })
 
@@ -164,7 +166,7 @@ describe('hostWarnings', () => {
 
     it('is told what stands in the way, and only that', () => {
       const warning = hostWarnings({ ...healthyHost, preloginInfo: blocked }).find(w => w.id === 'prelogin-not-ready')
-      expect(warning).toBeDefined()
+      assert.ok(warning)
       expect(warning.message).toContain('Login screen: SDDM uses its X11 greeter. Set DisplayServer=wayland.')
       expect(warning.message).not.toContain('Start at boot')
       expect(warning.message).not.toContain('Autologin')

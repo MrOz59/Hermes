@@ -5,7 +5,7 @@
             <br>
             <p>{{ $t('client_card.clients_desc') }}</p>
             <div class="card-group p-4 align-items-center">
-                <a v-for="{ platform, icon, name, link } of clients" class="btn m-1" :class="[link && 'btn-success' || 'btn-secondary']" :href="link" target="_blank" @click="shouldOpen($event, link)"><i v-if="icon" :class="icon"></i> <span class="platform-text">{{ platform }}</span> [ {{ name }} ] </a>
+                <a v-for="{ platform, icon, name, link } of clients" class="btn m-1" :class="[link && 'btn-success' || 'btn-secondary']" :href="link || undefined" target="_blank" @click="shouldOpen($event, link ?? undefined)"><i v-if="icon" :class="icon"></i> <span class="platform-text">{{ platform }}</span> [ {{ name }} ] </a>
             </div>
             <i>* {{ $t('client_card.generic_moonlight_clients_desc') }}</i>
         </div>
@@ -18,7 +18,7 @@
     }
 </style>
 
-<script setup>
+<script setup lang="ts">
     const clients = [
         {
             platform: 'Desktop',
@@ -40,7 +40,7 @@
         }
     ]
 
-    const shouldOpen = (e, link) => {
+    const shouldOpen = (e: MouseEvent, link?: string) => {
         if (!link) {
             e.preventDefault();
         }

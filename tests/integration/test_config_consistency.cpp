@@ -93,7 +93,7 @@ protected:
     return "";
   }
 
-  // Helper function to find and extract tabs content from HTML
+  // Helper function to find and extract tabs content from the typed page module
   static std::string extractTabsContent(const std::string &content) {
     const size_t tabsStart = content.find("tabs: [");
     if (tabsStart == std::string::npos) {
@@ -190,10 +190,10 @@ protected:
     return "";
   }
 
-  // Extract config options from config.html
-  static std::map<std::string, std::string, std::less<>> extractConfigHtmlOptions() {
+  // Extract config options from config.ts
+  static std::map<std::string, std::string, std::less<>> extractWebConfigOptions() {
     std::map<std::string, std::string, std::less<>> options;
-    const std::string content = file_handler::read_file("src_assets/common/assets/web/config.html");
+    const std::string content = file_handler::read_file("src_assets/common/assets/web/config.ts");
 
     const std::string tabsContent = extractTabsContent(content);
     if (tabsContent.empty()) {
@@ -209,10 +209,10 @@ protected:
     extractOptionsFromTabGeneric(tabObject, optionsByTab);
   }
 
-  // Extract config options from config.html with order preserved
-  static std::map<std::string, std::vector<std::string>, std::less<>> extractConfigHtmlOptionsWithOrder() {
+  // Extract config options from config.ts with order preserved
+  static std::map<std::string, std::vector<std::string>, std::less<>> extractWebConfigOptionsWithOrder() {
     std::map<std::string, std::vector<std::string>, std::less<>> optionsByTab;
-    const std::string content = file_handler::read_file("src_assets/common/assets/web/config.html");
+    const std::string content = file_handler::read_file("src_assets/common/assets/web/config.ts");
 
     const std::string tabsContent = extractTabsContent(content);
     if (tabsContent.empty()) {
@@ -368,7 +368,7 @@ protected:
   // Helper function to validate option existence across files
   static void validateOptionExistence(const std::string &option, const std::map<std::string, std::string, std::less<>> &htmlOptions, const std::map<std::string, std::string, std::less<>> &mdOptions, const std::set<std::string, std::less<>> &jsonOptions, std::vector<std::string> &missingFromFiles) {
     if (!isOptionInHtml(option, htmlOptions)) {
-      missingFromFiles.push_back(std::format("config.html missing: {}", option));
+      missingFromFiles.push_back(std::format("config.ts missing: {}", option));
     }
 
     if (!isOptionInMd(option, mdOptions)) {
@@ -408,7 +408,7 @@ protected:
         continue;
       }
 
-      if (missing.contains("config.html")) {
+      if (missing.contains("config.ts")) {
         foundMissingDummyInHtml = true;
       }
       if (missing.contains("configuration.md")) {
@@ -435,7 +435,7 @@ protected:
 
 TEST_F(ConfigConsistencyTest, AllConfigOptionsExistInAllFiles) {
   const auto cppOptions = extractConfigCppOptions();
-  const auto htmlOptions = extractConfigHtmlOptions();
+  const auto htmlOptions = extractWebConfigOptions();
   const auto mdOptions = extractConfigMdOptions();
   const auto jsonOptions = extractEnJsonConfigOptions();
 
@@ -469,7 +469,7 @@ TEST_F(ConfigConsistencyTest, AllConfigOptionsExistInAllFiles) {
 }
 
 TEST_F(ConfigConsistencyTest, ConfigTabsMatchDocumentationSections) {
-  auto htmlOptions = extractConfigHtmlOptions();
+  auto htmlOptions = extractWebConfigOptions();
   auto mdOptions = extractConfigMdOptions();
 
   // Get unique tabs and sections
@@ -509,7 +509,7 @@ TEST_F(ConfigConsistencyTest, ConfigTabsMatchDocumentationSections) {
 
 TEST_F(ConfigConsistencyTest, ConfigOptionsInSameOrderWithinSections) {
   // Extract options with order preserved
-  auto htmlOptionsByTab = extractConfigHtmlOptionsWithOrder();
+  auto htmlOptionsByTab = extractWebConfigOptionsWithOrder();
   auto mdOptionsBySection = extractConfigMdOptionsWithOrder();
 
   std::vector<std::string> orderInconsistencies;
@@ -569,7 +569,7 @@ TEST_F(ConfigConsistencyTest, ConfigOptionsInSameOrderWithinSections) {
 
 TEST_F(ConfigConsistencyTest, DummyConfigOptionsDoNotExist) {
   const auto cppOptions = extractConfigCppOptions();
-  const auto htmlOptions = extractConfigHtmlOptions();
+  const auto htmlOptions = extractWebConfigOptions();
   const auto mdOptions = extractConfigMdOptions();
   const auto jsonOptions = extractEnJsonConfigOptions();
 
@@ -591,7 +591,7 @@ TEST_F(ConfigConsistencyTest, DummyConfigOptionsDoNotExist) {
     }
 
     if (htmlOptions.contains(dummyOption)) {
-      unexpectedlyFound.push_back(std::format("config.html contains dummy option: {}", dummyOption));
+      unexpectedlyFound.push_back(std::format("config.ts contains dummy option: {}", dummyOption));
     }
 
     if (mdOptions.contains(dummyOption)) {
@@ -616,7 +616,7 @@ TEST_F(ConfigConsistencyTest, DummyConfigOptionsDoNotExist) {
 
 TEST_F(ConfigConsistencyTest, TestFrameworkDetectsMissingOptions) {
   const auto cppOptions = extractConfigCppOptions();
-  const auto htmlOptions = extractConfigHtmlOptions();
+  const auto htmlOptions = extractWebConfigOptions();
   const auto mdOptions = extractConfigMdOptions();
   const auto jsonOptions = extractEnJsonConfigOptions();
 
@@ -639,7 +639,7 @@ TEST_F(ConfigConsistencyTest, TestFrameworkDetectsMissingOptions) {
     }
 
     if (!htmlOptions.contains(option)) {
-      missingFromFiles.push_back(std::format("config.html missing: {}", option));
+      missingFromFiles.push_back(std::format("config.ts missing: {}", option));
     }
 
     if (!mdOptions.contains(option)) {
@@ -659,7 +659,7 @@ TEST_F(ConfigConsistencyTest, TestFrameworkDetectsMissingOptions) {
   checkTestDummyDetection(missingFromFiles, testDummyOption, foundMissingDummyInHtml, foundMissingDummyInMd, foundMissingDummyInJson);
 
   // The test framework should have detected the fake option as missing from all files
-  EXPECT_TRUE(foundMissingDummyInHtml) << "Test framework failed to detect missing option in config.html";
+  EXPECT_TRUE(foundMissingDummyInHtml) << "Test framework failed to detect missing option in config.ts";
   EXPECT_TRUE(foundMissingDummyInMd) << "Test framework failed to detect missing option in configuration.md";
   EXPECT_TRUE(foundMissingDummyInJson) << "Test framework failed to detect missing option in en.json";
 

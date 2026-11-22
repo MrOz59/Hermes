@@ -1,14 +1,15 @@
-<script setup>
+<script setup lang="ts">
+import type { Configuration } from '../../config-types'
 import { ref } from 'vue'
 import NvidiaNvencEncoder from './encoders/NvidiaNvencEncoder.vue'
 import SoftwareEncoder from './encoders/SoftwareEncoder.vue'
 import VAAPIEncoder from './encoders/VAAPIEncoder.vue'
 
-const props = defineProps([
-  'platform',
-  'config',
-  'currentTab'
-])
+const props = defineProps<{
+  platform: string;
+  config: Configuration;
+  currentTab: string;
+}>()
 
 const config = ref(props.config)
 </script>

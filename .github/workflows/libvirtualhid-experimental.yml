@@ -32,15 +32,13 @@ jobs:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             .github/workflows/libvirtualhid-experimental.yml
-            scripts/tests/test_input_artifact_reuse.mjs
-            .node-version
-      - name: Set up the pinned Node.js runtime
-        uses: actions/setup-node@v7.1.0
-        with:
-          node-version-file: .node-version
+            scripts/tests/test_input_artifact_reuse.ts
+            package.json
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
 
       - name: Test artifact provenance and compiler recipe invalidation
-        run: node scripts/tests/test_input_artifact_reuse.mjs
+        run: bun scripts/tests/test_input_artifact_reuse.ts
       - uses: actions/github-script@v9.0.0
         id: reuse
         with:
@@ -109,7 +107,7 @@ jobs:
                 '.github/workflows/libvirtualhid-experimental.yml',
                 'scripts/session-broker-test.sh',
                 'scripts/session-broker-concurrency-test.py',
-                'scripts/tests/test_input_artifact_reuse.mjs',
+                'scripts/tests/test_input_artifact_reuse.ts',
                 'docs/libvirtualhid-experimental.md',
                 'docs/libvirtualhid-merge-handoff.md'
               ]);
@@ -192,7 +190,7 @@ jobs:
           # Refresh/upgrade and install in one transaction, with a bounded retry.
           for attempt in 1 2 3; do
             if pacman -Syu --noconfirm --needed \
-              base-devel git ninja python jq nlohmann-json openssl opus ffmpeg \
+              base-devel git ninja python jq nlohmann-json unzip openssl opus ffmpeg \
               libdrm wayland libx11 libxrandr libxfixes libxcb \
               libxi libxtst libxss libxcursor libxkbcommon wayland-protocols \
               libva libvdpau libcap curl libevdev libinput sdl2 sdl3 systemd \
@@ -212,10 +210,8 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up the pinned Node.js runtime
-        uses: actions/setup-node@v7.1.0
-        with:
-          node-version-file: .node-version
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
 
       - name: Allow checkout path
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -233,7 +229,7 @@ jobs:
           pkg-config --atleast-version=3.4.12 sdl3
           git -C .toolchain/libvirtualhid submodule update --init --depth 1 third-party/lizardbyte-common
           git -C .toolchain/libvirtualhid/third-party/lizardbyte-common submodule update --init --depth 1 third-party/googletest
-          npm install
+          bun install --frozen-lockfile
           printf 'MCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\nXDG_RUNTIME_DIR=%s\n' \
             "$MCPP_HOME" "$MCPP_TOOLCHAIN" "$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
           printf '%s\n' "$MCPP_HOME/bin" >> "$GITHUB_PATH"

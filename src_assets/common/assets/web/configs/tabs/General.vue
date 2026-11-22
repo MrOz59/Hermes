@@ -1,14 +1,15 @@
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import type { Configuration, PreparationCommand, ServerCommand } from '../../config-types'
 import Checkbox from '../../Checkbox.vue'
 
-const props = defineProps({
-  platform: String,
-  config: Object,
-  globalPrepCmd: Array,
-  globalStateCmd: Array,
-  serverCmd: Array
-})
+const props = defineProps<{
+  platform: string;
+  config: Configuration;
+  globalPrepCmd: PreparationCommand[];
+  globalStateCmd: PreparationCommand[];
+  serverCmd: ServerCommand[];
+}>()
 
 const config = ref(props.config)
 const globalPrepCmd = ref(props.globalPrepCmd)
@@ -30,7 +31,7 @@ const serverCmdTemplate = {
   cmd: ""
 }
 
-function addCmd(cmdArr, template, idx) {
+function addCmd<T extends PreparationCommand | ServerCommand>(cmdArr: T[], template: T, idx: number) {
   const _tpl = Object.assign({}, template);
 
   if (idx < 0) {
@@ -40,7 +41,7 @@ function addCmd(cmdArr, template, idx) {
   }
 }
 
-function removeCmd(cmdArr, index) {
+function removeCmd(cmdArr: unknown[], index: number) {
   cmdArr.splice(index,1)
 }
 

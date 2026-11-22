@@ -1,4 +1,35 @@
-import { parseVersionParts } from './hermes_version'
+import { compareVersionParts, parseVersionParts, type VersionParts } from './hermes_version'
+
+export type DismissedMessages = Record<string, number>;
+
+interface FeedLink {
+  url: string;
+  label: string | null;
+}
+
+export interface FeedMessage {
+  id: string;
+  title: string;
+  body: string | null;
+  level: typeof LEVEL_ORDER[number];
+  channel: typeof CHANNELS[number];
+  link: FeedLink | null;
+  affects: unknown;
+  starts: number | null;
+  expires: number | null;
+  dismissible: boolean;
+  revision: number;
+}
+
+interface MessageSelection {
+  version?: string | null;
+  now?: number;
+  dismissed?: DismissedMessages;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 /**
  * Hermes announcement feed.
@@ -18,11 +49,11 @@ export const DEFAULT_FEED_URL = "https://raw.githubusercontent.com/MrOz59/Hermes
 export const DISMISSED_STORAGE_KEY = "hermes.feed.dismissed";
 
 /** Alert levels, in the order they are shown. Doubles as the allow-list. */
-const LEVEL_ORDER = ["danger", "warning", "info", "success"];
+const LEVEL_ORDER = ["danger", "warning", "info", "success"] as const;
 const DEFAULT_LEVEL = "info";
 
 /** Release channels a message may target. */
-const CHANNELS = ["all", "stable", "nightly"];
+const CHANNELS = ["all", "stable", "nightly"] as const;
 
 /** Upper bound on rendered messages, so a bad feed cannot bury the home page. */
 const MAX_MESSAGES = 10;
@@ -32,29 +63,20 @@ const MAX_MESSAGES = 10;
  * suffix: `0.5.1+abc1234` from CI, `0.5.1.abc1234` or `0.5.1.dirty` from a
  * local branch build).
  */
-export function releaseChannel(version) {
+export function releaseChannel(version: unknown) {
   return /^v?\d+\.\d+\.\d+$/.test(`${version ?? ""}`.trim()) ? "stable" : "nightly";
-}
-
-function compareParts(a, b) {
-  for (let i = 0; i < 3; i++) {
-    if (a[i] !== b[i]) {
-      return a[i] < b[i] ? -1 : 1;
-    }
-  }
-  return 0;
 }
 
 /**
  * Evaluate one comparison clause (`>=0.5.0`, `<0.5.2`, `0.5.1`) against a
  * parsed version.
  */
-function satisfiesClause(parts, clause) {
+function satisfiesClause(parts: VersionParts, clause: string) {
   const match = `${clause}`.match(/^(>=|<=|>|<|=)?v?(\d+)\.(\d+)\.(\d+)$/);
   if (!match) {
     return false;
   }
-  const result = compareParts(parts, match.slice(2, 5).map(value => Number.parseInt(value, 10)));
+  const result = compareVersionParts(parts, [Number(match[2]), Number(match[3]), Number(match[4])]);
   switch (match[1] ?? "=") {
     case ">=":
       return result >= 0;
@@ -77,7 +99,7 @@ function satisfiesClause(parts, clause) {
  * `"*"`, matches everything. Build metadata is ignored, so a known issue in
  * 0.5.1 also covers every 0.5.1 nightly.
  */
-export function affectsVersion(affects, version) {
+export function affectsVersion(affects: unknown, version: unknown) {
   if (affects === null || affects === undefined || affects === "*") {
     return true;
   }
@@ -97,7 +119,7 @@ export function affectsVersion(affects, version) {
   });
 }
 
-function parseTimestamp(value) {
+function parseTimestamp(value: unknown) {
   if (typeof value !== "string" || !value.trim()) {
     return null;
   }
@@ -109,8 +131,9 @@ function parseTimestamp(value) {
  * Accept a link only if it is an absolute http(s) URL, so a `javascript:` or
  * `data:` href in the feed can never reach an anchor.
  */
-function parseLink(raw) {
-  const url = typeof raw === "string" ? raw : raw?.url;
+function parseLink(raw: unknown): FeedLink | null {
+  const entry = isRecord(raw) ? raw : {};
+  const url = typeof raw === "string" ? raw : entry.url;
   if (typeof url !== "string") {
     return null;
   }
@@ -123,7 +146,7 @@ function parseLink(raw) {
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     return null;
   }
-  const label = typeof raw?.label === "string" ? raw.label.trim() : "";
+  const label = typeof entry.label === "string" ? entry.label.trim() : "";
   return { url: parsed.href, label: label || null };
 }
 
@@ -131,8 +154,8 @@ function parseLink(raw) {
  * Validate one raw entry into the shape the component renders, or return null
  * if it is unusable. An entry needs at least an `id` and a `title`.
  */
-export function normalizeMessage(raw) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+export function normalizeMessage(raw: unknown): FeedMessage | null {
+  if (!isRecord(raw)) {
     return null;
   }
   const id = typeof raw.id === "string" ? raw.id.trim() : "";
@@ -140,10 +163,10 @@ export function normalizeMessage(raw) {
   if (!id || !title) {
     return null;
   }
-  const level = LEVEL_ORDER.includes(raw.level) ? raw.level : DEFAULT_LEVEL;
-  const channel = CHANNELS.includes(raw.channel) ? raw.channel : "all";
+  const level = LEVEL_ORDER.find(level => level === raw.level) ?? DEFAULT_LEVEL;
+  const channel = CHANNELS.find(channel => channel === raw.channel) ?? "all";
   const body = typeof raw.body === "string" ? raw.body.trim() : "";
-  const revision = Number.isFinite(raw.revision) ? Math.trunc(raw.revision) : 1;
+  const revision = typeof raw.revision === "number" && Number.isFinite(raw.revision) ? Math.trunc(raw.revision) : 1;
   return {
     id,
     title,
@@ -162,11 +185,11 @@ export function normalizeMessage(raw) {
 }
 
 /** Turn a fetched feed document into validated messages, dropping bad entries. */
-export function parseFeed(document) {
-  const entries = Array.isArray(document) ? document :
-    Array.isArray(document?.messages) ? document.messages : [];
-  const seen = new Set();
-  const messages = [];
+export function parseFeed(document: unknown): FeedMessage[] {
+  const source = isRecord(document) ? document.messages : document;
+  const entries: unknown[] = Array.isArray(source) ? source : [];
+  const seen = new Set<string>();
+  const messages: FeedMessage[] = [];
   for (const entry of entries) {
     const message = normalizeMessage(entry);
     if (!message || seen.has(message.id)) {
@@ -182,7 +205,7 @@ export function parseFeed(document) {
  * A message stays dismissed until its `revision` is bumped, which is how an
  * edited announcement comes back for people who already cleared it.
  */
-export function isDismissed(message, dismissed) {
+export function isDismissed(message: FeedMessage, dismissed: DismissedMessages) {
   if (!message.dismissible) {
     return false;
   }
@@ -191,7 +214,7 @@ export function isDismissed(message, dismissed) {
 }
 
 /** Filter to the messages this build should show, most severe first. */
-export function selectMessages(messages, { version = null, now = Date.now(), dismissed = {} } = {}) {
+export function selectMessages(messages: FeedMessage[], { version = null, now = Date.now(), dismissed = {} }: MessageSelection = {}) {
   const channel = releaseChannel(version);
   return messages
     .filter(message => message.channel === "all" || message.channel === channel)
@@ -215,16 +238,22 @@ function storage() {
 }
 
 /** Read the `{ id: revision }` map of messages this browser has cleared. */
-export function loadDismissed() {
+export function loadDismissed(): DismissedMessages {
   try {
-    const stored = JSON.parse(storage()?.getItem(DISMISSED_STORAGE_KEY) ?? "null");
-    return stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+    const stored: unknown = JSON.parse(storage()?.getItem(DISMISSED_STORAGE_KEY) ?? "null");
+    const dismissed: DismissedMessages = Object.create(null);
+    if (isRecord(stored)) {
+      for (const [id, revision] of Object.entries(stored)) {
+        if (typeof revision === "number" && Number.isFinite(revision)) dismissed[id] = revision;
+      }
+    }
+    return dismissed;
   } catch {
     return {};
   }
 }
 
-export function saveDismissed(dismissed) {
+export function saveDismissed(dismissed: DismissedMessages) {
   try {
     storage()?.setItem(DISMISSED_STORAGE_KEY, JSON.stringify(dismissed));
   } catch {
@@ -232,7 +261,7 @@ export function saveDismissed(dismissed) {
   }
 }
 
-export async function fetchFeed(url = DEFAULT_FEED_URL, { signal } = {}) {
+export async function fetchFeed(url = DEFAULT_FEED_URL, { signal }: Pick<RequestInit, "signal"> = {}) {
   const response = await fetch(url, { cache: "no-cache", credentials: "omit", signal });
   if (!response.ok) {
     throw new Error(`Announcement feed request failed (${response.status})`);

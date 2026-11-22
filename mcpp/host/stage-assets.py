@@ -20,7 +20,7 @@ def stage_assets(root: Path, output: Path) -> None:
 
         env = os.environ.copy()
         env.update(HERMES_SOURCE_ASSETS_DIR=str(source), HERMES_ASSETS_DIR=tmp)
-        subprocess.run(["npm", "run", "build"], cwd=root, env=env, check=True)
+        subprocess.run(["bun", "run", "build"], cwd=root, env=env, check=True)
 
         if output.exists():
             shutil.rmtree(output)

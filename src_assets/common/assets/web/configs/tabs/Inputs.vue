@@ -1,12 +1,13 @@
-<script setup>
+<script setup lang="ts">
+import type { Configuration } from '../../config-types'
 import { ref } from 'vue'
 import PlatformLayout from '../../PlatformLayout.vue'
 import Checkbox from "../../Checkbox.vue";
 
-const props = defineProps([
-  'platform',
-  'config'
-])
+const props = defineProps<{
+  platform: string;
+  config: Configuration;
+}>()
 
 const config = ref(props.config)
 </script>
@@ -51,7 +52,7 @@ const config = ref(props.config)
         <option value="uinput">{{ $t('config.linux_gamepad_backend_uinput') }}</option>
       </select>
       <div class="form-text">{{ $t('config.linux_gamepad_backend_desc') }}</div>
-      <div class="form-text text-warning" v-if="config.linux_gamepad_backend === 'uinput' && ['ds4', 'ds5', 'switch'].includes(config.gamepad)">
+      <div class="form-text text-warning" v-if="config.linux_gamepad_backend === 'uinput' && ['ds4', 'ds5', 'switch'].includes(config.gamepad ?? '')">
         {{ $t('config.linux_gamepad_backend_conflict') }}
       </div>
     </div>
@@ -106,7 +107,7 @@ const config = ref(props.config)
                   ></Checkbox>
                 </template>
                 <!-- Switch Pro and PlayStation pads keep one MAC per client controller. -->
-                <template v-if="platform === 'linux' && ['ds4', 'ds5', 'switch', 'auto'].includes(config.gamepad)">
+                <template v-if="platform === 'linux' && ['ds4', 'ds5', 'switch', 'auto'].includes(config.gamepad ?? '')">
                   <Checkbox class="mb-3"
                             id="virtualhid_stable_mac"
                             locale-prefix="config"

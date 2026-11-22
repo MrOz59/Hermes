@@ -1,12 +1,13 @@
-<script setup>
+<script setup lang="ts">
+import type { Configuration } from '../../../config-types'
 import { ref } from 'vue'
 import { $tp } from '../../../platform-i18n'
 import PlatformLayout from '../../../PlatformLayout.vue'
 
-const props = defineProps([
-  'platform',
-  'config'
-])
+const props = defineProps<{
+  platform: string;
+  config: Configuration;
+}>()
 
 const config = ref(props.config)
 const outputNamePlaceholder = '0'

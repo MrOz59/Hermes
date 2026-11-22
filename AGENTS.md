@@ -159,7 +159,7 @@ the existing CI workflow and test suites. See
 [`docs/modularization/mcpp-migration.md`](docs/modularization/mcpp-migration.md)
 for building and testing with the local toolchain and SDK. Run the native
 GoogleTest suite from the repository root with its required build features and
-a virtual display where appropriate. Use `npm test` for Web UI tests.
+a virtual display where appropriate. Use `bun run test` for Web UI tests.
 
 - Add characterization tests before changing behavior that is difficult
   to reason about.

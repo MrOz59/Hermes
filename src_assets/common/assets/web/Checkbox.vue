@@ -1,5 +1,5 @@
-<script setup>
-const model = defineModel({ required: true });
+<script setup lang="ts">
+const model = defineModel<unknown>({ required: true });
 const slots = defineSlots();
 const props = defineProps({
   class: {
@@ -27,7 +27,7 @@ const props = defineProps({
     default: false,
   },
   default: {
-    type: undefined,
+    type: [String, Number, Boolean],
     default: null,
   }
 });
@@ -42,7 +42,7 @@ const extendedClassStr = (() => {
 })();
 
 // Map the value to boolean representation if possible, otherwise return null.
-const mapToBoolRepresentation = (value) => {
+const mapToBoolRepresentation = (value: unknown) => {
   // Try literal values first
   if (value === true || value === false) {
     return { possibleValues: [true, false], value: value };

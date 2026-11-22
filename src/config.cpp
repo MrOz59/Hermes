@@ -185,6 +185,7 @@ namespace config {
     {
       false,  // strict_rc_buffer
       -1,  // quality
+      true,  // intra_refresh
     },  // vaapi
 
     {},  // capture
@@ -312,6 +313,7 @@ namespace config {
     {},  // prep commands
     {},  // state commands
     {},  // server commands
+    false,  // inhibit screen locking while a client is connected
   };
 
   bool endline(char ch) {
@@ -892,6 +894,7 @@ namespace config {
 
     bool_f(vars, "vaapi_strict_rc_buffer", video.vaapi.strict_rc_buffer);
     int_between_f(vars, "vaapi_quality", video.vaapi.quality, {-1, 8});
+    bool_f(vars, "vaapi_intra_refresh", video.vaapi.intra_refresh);
 
     string_f(vars, "capture", video.capture);
     string_f(vars, "encoder", video.encoder);
@@ -1031,6 +1034,7 @@ namespace config {
 
     bool_f(vars, "system_tray", sunshine.system_tray);
     bool_f(vars, "hide_tray_controls", sunshine.hide_tray_controls);
+    bool_f(vars, "inhibit_screen_lock", sunshine.inhibit_screen_lock);
     bool_f(vars, "enable_pairing", sunshine.enable_pairing);
     bool_f(vars, "enable_discovery", sunshine.enable_discovery);
     bool_f(vars, "envvar_compatibility_mode", sunshine.envvar_compatibility_mode);

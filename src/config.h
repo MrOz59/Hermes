@@ -52,6 +52,7 @@ namespace config {
     struct {
       bool strict_rc_buffer;
       int quality;  // ffmpeg VAAPI quality option, -1 = leave codec default.
+      bool intra_refresh;  // rolling intra refresh, so a lost frame heals without a key frame
     } vaapi;
 
     std::string capture;
@@ -278,6 +279,11 @@ namespace config {
     std::vector<prep_cmd_t> prep_cmds;
     std::vector<prep_cmd_t> state_cmds;
     std::vector<server_cmd_t> server_cmds;
+
+    /// Inhibit screen locking while a client is connected. Linux only: the
+    /// inhibition is held through org.freedesktop.ScreenSaver on the D-Bus
+    /// session bus.
+    bool inhibit_screen_lock;
   };
 
   extern video_t video;

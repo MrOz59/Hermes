@@ -117,6 +117,7 @@
     "virtual_display_layout_desc": "Onde o monitor virtual da sessão fica no desktop do host. \"auto\" segue a opção global \"Usar o Monitor Virtual exclusivamente\"; \"extend\" coloca ao lado dos monitores físicos; \"mirror\" sobrepõe o monitor primário, então o desktop — incluindo janelas que o compositor coloca lá, como um Gamescope aninhado — é clonado no stream; \"exclusive\" desliga os monitores físicos durante a sessão e entrega o desktop ao monitor virtual.",
     "virtual_display_layout_auto": "Automático",
     "virtual_display_layout_extend": "Estender (ao lado dos monitores físicos)",
+    "virtual_display_layout_primary": "Principal (ao lado dos monitores físicos, como monitor principal)",
     "virtual_display_layout_mirror": "Espelhar (clonar o monitor primário)",
     "virtual_display_layout_exclusive": "Exclusivo (monitores físicos desligados)",
     "virtual_display_primary": "Forçar Monitor Virtual como primário",

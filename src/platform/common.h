@@ -592,6 +592,20 @@ namespace platf {
      */
     virtual bool is_sink_available(const std::string &sink) = 0;
 
+    /**
+     * @brief Applications playing to a sink other than @p sink.
+     *
+     * A stream follows the default sink unless something chose an output for
+     * it: the user in the desktop's sound settings, or the sound server
+     * restoring that choice the next time the application plays. Such a
+     * stream does not move when Hermes makes its sink the default, so the
+     * client never hears it.
+     * @return One "application -> sink" entry per stream that is playing.
+     */
+    virtual std::vector<std::string> streams_playing_elsewhere([[maybe_unused]] const std::string &sink) {
+      return {};
+    }
+
     virtual std::optional<sink_t> sink_info() = 0;
 
     /**

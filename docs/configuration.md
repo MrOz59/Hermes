@@ -440,6 +440,40 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### inhibit_screen_lock
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Keep the host's screensaver and screen lock from engaging while a
+            client is connected, by holding an inhibition through
+            <code>org.freedesktop.ScreenSaver</code> on the D-Bus session bus.
+            The inhibition is released when the last client disconnects.
+            @note{This option applies to Linux only. It needs a desktop
+            screensaver service implementing <code>org.freedesktop.ScreenSaver</code>
+            on the same D-Bus user bus as Hermes. The desktop must honor the
+            request; a manual lock or administrator-enforced lock is not
+            overridden. If the service restarts, Hermes attempts to restore
+            the inhibition. Use Save and Apply in the web UI (which restarts
+            Hermes) after changing this setting; saving alone does not change
+            an already-running stream.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            inhibit_screen_lock = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ## Input
 
 ### controller
@@ -1775,8 +1809,12 @@ Legacy resolution and refresh-rate remapping rules.
             @note{Individual apps can override this through their
             <code>virtual-display-layout</code> field in apps.json:
             <code>exclusive</code> forces this behaviour for that app, while
-            <code>extend</code> or <code>mirror</code> keep the physical
-            outputs on even when this option is enabled.}
+            <code>extend</code>, <code>primary</code> or <code>mirror</code> keep the physical
+            outputs on even when this option is enabled. <code>primary</code>
+            is <code>extend</code> with the virtual display as the primary
+            output for the session, so applications and games open in the
+            stream; on KDE/KWin only, elsewhere it behaves like
+            <code>extend</code>.}
             @note{On Linux, this requires a compositor Hermes can drive:
             KDE/KWin through KScreen, a Wayland compositor implementing the
             wlr-output-management protocol, or GNOME through Mutter's own
@@ -2847,6 +2885,34 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
         <td>Example</td>
         <td colspan="2">@code{}
             vaapi_quality = 4
+            @endcode</td>
+    </tr>
+</table>
+
+### vaapi_intra_refresh
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Rolling intra refresh: the encoder refreshes a band of rows in every frame, the whole picture every half
+            second. A frame lost on the network then heals on its own, so Hermes offers reference frame invalidation
+            and a client that lost frames keeps decoding instead of waiting for a key frame.
+            @note{Only applies when using the VA-API [encoder](#encoder), with an FFmpeg build whose VA-API encoders
+            have the <code>intra_refresh</code> option and a driver that refreshes rows (Mesa radeonsi). Otherwise
+            nothing changes.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vaapi_intra_refresh = disabled
             @endcode</td>
     </tr>
 </table>

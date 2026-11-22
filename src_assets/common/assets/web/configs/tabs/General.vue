@@ -229,6 +229,15 @@ onMounted(() => {
               v-model="config.hide_tray_controls"
               default="false"
     ></Checkbox>
+
+    <!-- Inhibit screen locking while a client is connected -->
+    <Checkbox v-if="platform === 'linux'"
+              class="mb-3"
+              id="inhibit_screen_lock"
+              locale-prefix="config"
+              v-model="config.inhibit_screen_lock"
+              default="false"
+    ></Checkbox>
   </div>
 </template>
 

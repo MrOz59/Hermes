@@ -194,6 +194,12 @@ ok 'the session unit is active'
 	|| fail 'the unit does not run as the session account'
 ok 'the unit runs as the session account'
 
+# A simple service is active once systemd has forked it, before the child has
+# exec'd the command, so the name can lag behind ActiveState for a moment.
+for _ in $(seq 50); do
+	pgrep -u hermes-s01 -x sleep >/dev/null && break
+	sleep 0.1
+done
 pgrep -u hermes-s01 -x sleep >/dev/null || fail 'no process is running as the session account'
 ok 'the command really runs under the session uid'
 

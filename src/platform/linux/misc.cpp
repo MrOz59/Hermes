@@ -14,6 +14,15 @@
 #include <cstdio>
 #include <cerrno>
 #include <csignal>
+#include <cstring>
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <climits>
+#include <cstdint>
+#include <ctime>
+#include <mutex>
+#include <thread>
 #include <string_view>
 #include <utility>
 
@@ -40,6 +49,7 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <xf86drm.h>
 
 // local includes
 #include "clipboard_process.h"
@@ -61,6 +71,12 @@
 #endif
 
 #include <linux/rtnetlink.h>
+
+#ifdef SUNSHINE_BUILD_SDBUS
+  #include <poll.h>
+  #include <sys/eventfd.h>
+  #include <systemd/sd-bus.h>
+#endif
 
 #ifdef __GNUC__
   #define SUNSHINE_GNUC_EXTENSION __extension__
@@ -117,6 +133,66 @@ namespace dyn {
 }  // namespace dyn
 
 namespace platf {
+
+  int open_drm_node(const char *path, int flags) {
+    const int fd = ::open(path, flags | O_CLOEXEC);
+    if (fd >= 0) {
+      // EINVAL when this fd is not master, and render nodes refuse the
+      // ioctl: either way there is nothing to give back.
+      const int saved_errno = errno;
+      (void) drmDropMaster(fd);
+      errno = saved_errno;
+    }
+    return fd;
+  }
+
+#ifdef SUNSHINE_BUILD_SDBUS
+  int open_user_bus(sd_bus **result) {
+    if (!result) {
+      return -EINVAL;
+    }
+    *result = nullptr;
+
+    const int discovered = sd_bus_open_user(result);
+    if (discovered >= 0) {
+      return discovered;
+    }
+    if (*result) {
+      sd_bus_unref(*result);
+      *result = nullptr;
+    }
+    if (discovered != -ENOMEDIUM) {
+      return discovered;
+    }
+
+    sd_bus *bus = nullptr;
+    int status = sd_bus_new(&bus);
+    if (status < 0) {
+      return status;
+    }
+    const auto fail = [&bus](int error) {
+      sd_bus_unref(bus);
+      return error;
+    };
+
+    const auto address = VDISPLAY::systemdUserBusAddress(static_cast<uint32_t>(::getuid()));
+    status = sd_bus_set_address(bus, address.c_str());
+    if (status < 0) {
+      return fail(status);
+    }
+    status = sd_bus_set_bus_client(bus, 1);
+    if (status < 0) {
+      return fail(status);
+    }
+    status = sd_bus_start(bus);
+    if (status < 0) {
+      return fail(status);
+    }
+
+    *result = bus;
+    return 0;
+  }
+#endif
 
   bool touch_binds_to_output() {
     // KWin picks an output for every touchscreen and tablet (its own guess
@@ -474,12 +550,444 @@ std::string get_local_ip_for_gateway() {
     // Unimplemented
   }
 
+  namespace {
+#ifdef SUNSHINE_BUILD_SDBUS
+    constexpr auto screen_saver_service = "org.freedesktop.ScreenSaver"sv;
+    constexpr auto screen_saver_path = "/org/freedesktop/ScreenSaver"sv;
+    constexpr auto screen_saver_interface = "org.freedesktop.ScreenSaver"sv;
+
+    // All sd-bus operations belong to a worker thread. The stream hooks only
+    // publish the desired state and wake the worker, so a slow or wedged
+    // screensaver cannot block session transitions, which are serialized by
+    // stream::session_activity_counter_t while these hooks run.
+    struct screen_lock_bus_t {
+      using clock = std::chrono::steady_clock;
+
+      sd_bus *bus {nullptr};
+      sd_bus_slot *owner_watch {nullptr};
+      std::uint32_t cookie {0};
+      // Unique bus name of the service instance which issued the cookie.
+      // NameOwnerChanged signals from *older* instances must not invalidate
+      // an inhibition already re-established on a replacement instance.
+      std::string cookie_owner;
+      bool inhibited {false};
+      bool failure_logged {false};
+      // Earliest time to connect or call Inhibit again. clock::time_point::max()
+      // means "wait until org.freedesktop.ScreenSaver gets an owner".
+      clock::time_point retry_at {};
+      // Next back-off step; zero restarts the back-off.
+      clock::duration retry_delay {};
+    };
+
+    std::string bus_error_message(const sd_bus_error &error, int status) {
+      if (error.message) {
+        return error.message;
+      }
+      return std::strerror(-status);
+    }
+
+    bool screen_saver_has_no_owner(const sd_bus_error &error) {
+      return sd_bus_error_has_name(&error, SD_BUS_ERROR_SERVICE_UNKNOWN) ||
+             sd_bus_error_has_name(&error, SD_BUS_ERROR_NAME_HAS_NO_OWNER);
+    }
+
+    class screen_lock_inhibitor_t {
+    public:
+      screen_lock_inhibitor_t():
+          wake_fd_ {::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)},
+          wake_errno_ {wake_fd_ < 0 ? errno : 0} {
+      }
+
+      screen_lock_inhibitor_t(const screen_lock_inhibitor_t &) = delete;
+      screen_lock_inhibitor_t &operator=(const screen_lock_inhibitor_t &) = delete;
+
+      ~screen_lock_inhibitor_t() {
+        // The eventfd is level-triggered, so this wakeup cannot be lost even if
+        // the worker is between checking the stop token and blocking in poll().
+        // Join explicitly so wake_fd_ outlives the worker.
+        worker_.request_stop();
+        wake();
+        if (worker_.joinable()) {
+          worker_.join();
+        }
+        if (wake_fd_ >= 0) {
+          ::close(wake_fd_);
+        }
+      }
+
+      void set_streaming(bool streaming) {
+        {
+          std::lock_guard lock {mutex_};
+          streaming_ = streaming;
+          if (streaming && !worker_.joinable()) {
+            if (wake_fd_ < 0) {
+              if (!wake_failure_logged_) {
+                BOOST_LOG(warning) << "Could not inhibit screen locking: eventfd() failed: "sv
+                                   << std::strerror(wake_errno_);
+                wake_failure_logged_ = true;
+              }
+              return;
+            }
+            worker_ = std::jthread {[this](std::stop_token stop) {
+              run(stop);
+            }};
+          }
+        }
+        wake();
+      }
+
+    private:
+      using clock = screen_lock_bus_t::clock;
+
+      static constexpr auto initial_retry_delay = std::chrono::seconds {2};
+      static constexpr auto max_retry_delay = std::chrono::seconds {30};
+      static constexpr auto never = clock::time_point::max();
+
+      std::mutex mutex_;
+      bool streaming_ {false};
+      bool wake_failure_logged_ {false};
+      const int wake_fd_;
+      const int wake_errno_;
+      std::jthread worker_;
+
+      void wake() {
+        if (wake_fd_ < 0) {
+          return;
+        }
+        const std::uint64_t one = 1;
+        while (::write(wake_fd_, &one, sizeof(one)) < 0 && errno == EINTR) {
+        }
+      }
+
+      void consume_wakeups() {
+        std::uint64_t count = 0;
+        while (::read(wake_fd_, &count, sizeof(count)) < 0 && errno == EINTR) {
+        }
+      }
+
+      bool wants_inhibition() {
+        std::lock_guard lock {mutex_};
+        return streaming_;
+      }
+
+      /**
+       * @brief Sleep until set_streaming()/shutdown, D-Bus traffic or @p deadline.
+       * @return false if the bus connection can no longer be polled.
+       */
+      bool wait_for_event(const screen_lock_bus_t &state, clock::time_point deadline) {
+        std::array<pollfd, 2> fds {};
+        nfds_t count = 0;
+        fds[count++] = pollfd {wake_fd_, POLLIN, 0};
+
+        if (state.bus) {
+          const int fd = sd_bus_get_fd(state.bus);
+          const int events = sd_bus_get_events(state.bus);
+          std::uint64_t bus_deadline_usec = UINT64_MAX;
+          const int has_bus_deadline = sd_bus_get_timeout(state.bus, &bus_deadline_usec);
+          if (fd < 0 || events < 0 || has_bus_deadline < 0) {
+            return false;
+          }
+          fds[count++] = pollfd {fd, static_cast<short>(events), 0};
+
+          // sd-bus reports an absolute CLOCK_MONOTONIC deadline. It is zero
+          // when messages are already queued, so poll() returns immediately.
+          if (has_bus_deadline > 0 && bus_deadline_usec != UINT64_MAX) {
+            timespec now {};
+            ::clock_gettime(CLOCK_MONOTONIC, &now);
+            const auto now_usec = static_cast<std::uint64_t>(now.tv_sec) * 1'000'000u +
+                                  static_cast<std::uint64_t>(now.tv_nsec) / 1'000u;
+            const auto remaining = std::chrono::microseconds {
+              bus_deadline_usec > now_usec ? bus_deadline_usec - now_usec : 0
+            };
+            deadline = std::min(deadline, clock::now() + remaining);
+          }
+        }
+
+        int timeout_ms = -1;
+        if (deadline != never) {
+          const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - clock::now());
+          timeout_ms = static_cast<int>(std::clamp<std::chrono::milliseconds::rep>(remaining.count(), 0, INT_MAX));
+        }
+
+        if (::poll(fds.data(), count, timeout_ms) < 0 && errno != EINTR) {
+          // Not expected for valid descriptors; avoid spinning if it happens.
+          std::this_thread::sleep_for(std::chrono::milliseconds {100});
+          return !state.bus;
+        }
+        return true;
+      }
+
+      static void warn_once(screen_lock_bus_t &state, const std::string &message) {
+        if (!state.failure_logged) {
+          BOOST_LOG(warning) << message;
+          state.failure_logged = true;
+        }
+      }
+
+      static void retry_now(screen_lock_bus_t &state) {
+        state.retry_at = clock::now();
+        state.retry_delay = {};
+      }
+
+      static void schedule_retry(screen_lock_bus_t &state) {
+        const clock::duration delay = state.retry_delay > clock::duration::zero() ? state.retry_delay : clock::duration {initial_retry_delay};
+        state.retry_at = clock::now() + delay;
+        state.retry_delay = std::min<clock::duration>(delay * 2, max_retry_delay);
+      }
+
+      static int on_owner_changed(sd_bus_message *message, void *userdata, sd_bus_error *) {
+        auto *state = static_cast<screen_lock_bus_t *>(userdata);
+        const char *name = nullptr;
+        const char *old_owner = nullptr;
+        const char *new_owner = nullptr;
+        if (sd_bus_message_read(message, "sss", &name, &old_owner, &new_owner) < 0) {
+          return 0;
+        }
+        if (std::strcmp(name, screen_saver_service.data()) != 0 ||
+            std::strcmp(old_owner, new_owner) == 0) {
+          return 0;
+        }
+
+        // A late NameOwnerChanged for the PREVIOUS screensaver may be queued
+        // after an Inhibit reply from the NEW screensaver. Only invalidate
+        // cookies issued by the owner which actually disappeared.
+        if (state->inhibited && state->cookie_owner == old_owner) {
+          state->inhibited = false;
+          state->cookie = 0;
+          state->cookie_owner.clear();
+          if (new_owner[0] != '\0') {
+            retry_now(*state);
+          } else {
+            // Give a restarting screensaver a moment; its NameOwnerChanged
+            // brings the retry forward as soon as it is back.
+            state->retry_delay = {};
+            schedule_retry(*state);
+          }
+        } else if (!state->inhibited && new_owner[0] != '\0') {
+          // A service just appeared after a failed attempt: retry promptly.
+          retry_now(*state);
+        }
+        return 0;
+      }
+
+      static bool dispatch(screen_lock_bus_t &state) {
+        int processed = 0;
+        while ((processed = sd_bus_process(state.bus, nullptr)) > 0) {
+        }
+        return processed >= 0;
+      }
+
+      static void close_bus(screen_lock_bus_t &state, bool release_inhibition) {
+        if (!state.bus) {
+          return;
+        }
+        if (release_inhibition && state.inhibited) {
+          // If the issuing screensaver is already gone, its queued
+          // NameOwnerChanged clears the cookie and there is nothing to release.
+          dispatch(state);
+        }
+        if (release_inhibition && state.inhibited) {
+          sd_bus_error error = SD_BUS_ERROR_NULL;
+          // Target the instance which issued this cookie, not the well-known
+          // name that may now belong to a different screensaver process.
+          const int status = sd_bus_call_method(
+            state.bus,
+            state.cookie_owner.c_str(),
+            screen_saver_path.data(),
+            screen_saver_interface.data(),
+            "UnInhibit",
+            &error,
+            nullptr,
+            "u",
+            state.cookie
+          );
+          if (status >= 0) {
+            BOOST_LOG(info) << "Released screen-lock inhibition."sv;
+          } else if (screen_saver_has_no_owner(error)) {
+            BOOST_LOG(debug) << "The screensaver holding our inhibition is gone; nothing to release."sv;
+          } else {
+            BOOST_LOG(warning) << "Could not release screen-lock inhibition: "sv
+                               << bus_error_message(error, status);
+          }
+          sd_bus_error_free(&error);
+        }
+        // Closing the caller's bus connection also releases the inhibition
+        // if UnInhibit failed.
+        sd_bus_slot_unref(state.owner_watch);
+        state.owner_watch = nullptr;
+        sd_bus_unref(state.bus);
+        state.bus = nullptr;
+        state.inhibited = false;
+        state.cookie = 0;
+        state.cookie_owner.clear();
+        state.retry_at = {};
+      }
+
+      static bool connect_bus(screen_lock_bus_t &state) {
+        sd_bus *bus = nullptr;
+        const int opened = open_user_bus(&bus);
+        if (opened < 0 || !bus) {
+          warn_once(state, "Could not connect to the D-Bus session bus to inhibit screen locking.");
+          return false;
+        }
+
+        state.bus = bus;
+        sd_bus_set_method_call_timeout(bus, 2'000'000);
+
+        // Watch the owner, not merely the connection. Desktop components can
+        // restart without disconnecting Hermes from the user bus.
+        constexpr auto match =
+          "type='signal',sender='org.freedesktop.DBus',"
+          "interface='org.freedesktop.DBus',member='NameOwnerChanged',"
+          "arg0='org.freedesktop.ScreenSaver'";
+        const int matched = sd_bus_add_match(bus, &state.owner_watch, match, on_owner_changed, &state);
+        if (matched < 0) {
+          warn_once(state, "Could not watch org.freedesktop.ScreenSaver ownership changes.");
+          close_bus(state, false);
+          return false;
+        }
+
+        state.retry_at = clock::now();
+        return true;
+      }
+
+      static void acquire_inhibition(screen_lock_bus_t &state) {
+        sd_bus_error error = SD_BUS_ERROR_NULL;
+        sd_bus_message *reply = nullptr;
+        const int status = sd_bus_call_method(
+          state.bus,
+          screen_saver_service.data(),
+          screen_saver_path.data(),
+          screen_saver_interface.data(),
+          "Inhibit",
+          &error,
+          &reply,
+          "ss",
+          "Hermes",
+          "Streaming a client"
+        );
+
+        std::uint32_t cookie = 0;
+        const int read_status = status < 0 ? status : (reply ? sd_bus_message_read(reply, "u", &cookie) : -EIO);
+        const char *reply_owner = read_status >= 0 ? sd_bus_message_get_sender(reply) : nullptr;
+        if (read_status < 0) {
+          if (status < 0) {
+            warn_once(state, "Could not inhibit screen locking through org.freedesktop.ScreenSaver: " + bus_error_message(error, status));
+          } else {
+            warn_once(state, "The screensaver returned an unexpected Inhibit reply.");
+          }
+          if (status < 0 && screen_saver_has_no_owner(error)) {
+            // Nothing to retry until a screensaver appears; NameOwnerChanged
+            // reports that without polling the bus for the whole stream.
+            state.retry_at = never;
+          } else {
+            schedule_retry(state);
+          }
+        } else if (!reply_owner || !*reply_owner) {
+          warn_once(state, "The screensaver did not identify the owner of its inhibition cookie.");
+          schedule_retry(state);
+        } else {
+          state.cookie = cookie;
+          state.cookie_owner = reply_owner;
+          state.inhibited = true;
+          state.failure_logged = false;
+          state.retry_delay = {};
+          BOOST_LOG(info) << "Inhibited screen locking while a client is connected."sv;
+        }
+
+        sd_bus_error_free(&error);
+        sd_bus_message_unref(reply);
+      }
+
+      void run(std::stop_token stop) {
+        screen_lock_bus_t state;
+        for (;;) {
+          // Consume wakeups BEFORE reading the state they announce: a stop or
+          // set_streaming() racing with this iteration leaves the eventfd
+          // readable, so the next poll() returns instead of sleeping on it.
+          consume_wakeups();
+          if (stop.stop_requested()) {
+            break;
+          }
+
+          if (!wants_inhibition()) {
+            close_bus(state, true);
+            state.retry_delay = {};
+            wait_for_event(state, never);
+            continue;
+          }
+
+          if (!state.bus) {
+            if (clock::now() < state.retry_at) {
+              wait_for_event(state, state.retry_at);
+              continue;
+            }
+            if (!connect_bus(state)) {
+              schedule_retry(state);
+              continue;
+            }
+          }
+
+          // Dispatch owner changes queued on the socket or by an earlier
+          // synchronous call before deciding whether to (re)acquire.
+          if (!dispatch(state)) {
+            warn_once(state, "Lost the D-Bus session bus while inhibiting screen locking.");
+            close_bus(state, false);
+            schedule_retry(state);
+            continue;
+          }
+
+          if (!state.inhibited && clock::now() >= state.retry_at) {
+            acquire_inhibition(state);
+            // Dispatch whatever arrived during the call before sleeping.
+            continue;
+          }
+
+          if (!wait_for_event(state, state.inhibited ? never : state.retry_at)) {
+            warn_once(state, "Lost the D-Bus session bus while inhibiting screen locking.");
+            close_bus(state, false);
+            schedule_retry(state);
+          }
+        }
+        close_bus(state, true);
+      }
+    };
+
+    screen_lock_inhibitor_t &screen_lock() {
+      static screen_lock_inhibitor_t inhibitor;
+      return inhibitor;
+    }
+
+    void inhibit_screen_lock() {
+      screen_lock().set_streaming(true);
+    }
+
+    void uninhibit_screen_lock() {
+      screen_lock().set_streaming(false);
+    }
+#else
+    void inhibit_screen_lock() {
+      static std::once_flag warned;
+      std::call_once(warned, [] {
+        BOOST_LOG(warning) << "inhibit_screen_lock is enabled, but this build has no libsystemd "
+                              "support for org.freedesktop.ScreenSaver."sv;
+      });
+    }
+
+    void uninhibit_screen_lock() {}
+#endif
+  }  // namespace
+
   void streaming_will_start() {
-    // Nothing to do
+    if (config::sunshine.inhibit_screen_lock) {
+      inhibit_screen_lock();
+    }
   }
 
   void streaming_will_stop() {
-    // Nothing to do
+    // Uninhibit even when the setting was just turned off, so the bus
+    // connection cannot outlive the configuration that opened it.
+    uninhibit_screen_lock();
   }
 
   void restart_on_exit() {

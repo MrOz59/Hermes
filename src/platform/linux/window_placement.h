@@ -37,6 +37,24 @@ namespace platf::window_placement {
     return names_program(arguments, "gamescope") || names_program(arguments, "hermes-gamescope-launch");
   }
 
+  /**
+   * Whether the command starts a Gamescope whose own client is Steam: the
+   * shipped launcher, which always runs `steam -bigpicture`, or a gamescope
+   * command that names steam.
+   *
+   * Steam runs once per user. A Steam started inside a new Gamescope while
+   * another one is running hands its request to that one and exits, and
+   * Gamescope exits with it.
+   */
+  inline bool gamescope_runs_steam(const std::vector<std::string> &arguments) {
+    if (names_program(arguments, "hermes-gamescope-launch")) {
+      return true;
+    }
+    return names_program(arguments, "gamescope") &&
+           (names_program(arguments, "steam") ||
+            std::find(arguments.begin(), arguments.end(), "com.valvesoftware.Steam") != arguments.end());
+  }
+
   inline std::string kwin_script(const std::string &output, const std::vector<std::string> &classes, const std::vector<std::uint32_t> &gamescope_pids) {
     // Both names become JavaScript string literals. Restrict them before
     // interpolation, including when this helper is called outside VDISPLAY.

@@ -25,7 +25,27 @@ enum class window_system_e {
 
 extern window_system_e window_system;
 
+#ifdef SUNSHINE_BUILD_SDBUS
+struct sd_bus;
+#endif
+
 namespace platf {
+  /**
+   * @brief Open a DRM device node without becoming its DRM master.
+   * @details The kernel makes whoever opens a primary node (`/dev/dri/cardN`)
+   * while no one holds master that device's master. Hermes never sets modes,
+   * but a master it holds keeps logind from handing the device back to the
+   * compositor when its session becomes active again: switch to a text console
+   * during a stream and back, and the compositor is locked out of that GPU
+   * until the stream ends. So drop master straight away, as logind and KWin do
+   * for the fds they open. The fd is close-on-exec, so launched apps cannot
+   * inherit it.
+   * @param path The device node.
+   * @param flags open(2) flags; O_CLOEXEC is added.
+   * @return An owned file descriptor, or -1 with errno set.
+   */
+  int open_drm_node(const char *path, int flags);
+
   /**
    * @brief Open the render node of the best GPU to encode a stream on.
    * @details adapter_name when it is set. Otherwise every real GPU is ranked
@@ -67,6 +87,22 @@ namespace platf {
    * the capture-only Hermes-KMS node included and marked as such.
    */
   std::vector<std::string> render_node_descriptions();
+
+#ifdef SUNSHINE_BUILD_SDBUS
+  /**
+   * @brief Open the desktop's D-Bus user bus.
+   *
+   * Tries libsystemd's normal discovery first, then the standard systemd user
+   * bus socket. The fallback matters because Hermes may carry file
+   * capabilities, which make libsystemd hide DBUS_SESSION_BUS_ADDRESS and
+   * XDG_RUNTIME_DIR and leave discovery unable to find the bus.
+   *
+   * @param result Receives the connection; unref it with sd_bus_unref().
+   * @return 0 on success, or a negative errno.
+   */
+  int open_user_bus(sd_bus **result);
+#endif
+
 }  // namespace platf
 
 namespace dyn {

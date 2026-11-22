@@ -66,6 +66,7 @@
 #include "logging.h"
 #include "platform/common.h"
 #include "process.h"
+#include "frame_limit_env.h"
 #include "httpcommon.h"
 #include "system_tray.h"
 #include "utility.h"
@@ -76,6 +77,7 @@
   #include "platform/linux/session_audio.h"
   #include "platform/linux/session_broker.h"
   #include "platform/linux/process_group.h"
+  #include "platform/linux/detached_scope.h"
   #include "platform/linux/session_devices.h"
   #include "platform/linux/virtual_display.h"
   #include <sys/stat.h>
@@ -135,7 +137,7 @@ namespace proc {
     }
 
     const auto &layout = app.virtual_display_layout;
-    if (layout == "extend" || layout == "mirror" || layout == "exclusive") {
+    if (layout == "extend" || layout == "primary" || layout == "mirror" || layout == "exclusive") {
       return session_route_e::shared;
     }
 
@@ -152,6 +154,9 @@ namespace proc {
       }
       if (layout == "detached") {
         return VDISPLAY::virtual_display_layout_e::detached;
+      }
+      if (layout == "primary") {
+        return VDISPLAY::virtual_display_layout_e::primary;
       }
       return VDISPLAY::virtual_display_layout_e::extend;
     }
@@ -326,33 +331,35 @@ namespace proc {
      * one. SIGTERM shuts it down cleanly (logs off, saves its config) in a few
      * seconds even when its window is unmapped; `steam -shutdown` would start
      * Steam's updater if no client were left by then.
+     *
+     * @return Whether a Steam was running and has been stopped.
      */
-    void stop_desktop_steam() {
+    bool stop_desktop_steam(std::string_view tag = "[IsolatedSession]") {
       const char *home = std::getenv("HOME");
       pid_t pid = 0;
       std::ifstream {std::string {home ? home : ""} + "/.steam/steam.pid"} >> pid;
       // The pid file outlives the client.
       if (pid <= 0 || read_proc_line(pid, "comm") != "steam") {
-        return;
+        return false;
       }
       const auto own = read_proc_line(getpid(), "cgroup");
       if (own.ends_with(".service") && read_proc_line(pid, "cgroup").starts_with(own)) {
-        return;
+        return false;
       }
 
-      BOOST_LOG(info) << "[IsolatedSession] Shutting down the desktop's Steam (pid " << pid << ") first.";
+      BOOST_LOG(info) << tag << " Shutting down the desktop's Steam (pid " << pid << ") first.";
       ::kill(pid, SIGTERM);
       const auto deadline = std::chrono::steady_clock::now() + 30s;
       while (std::filesystem::exists("/proc/" + std::to_string(pid)) && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(100ms);
       }
       if (!std::filesystem::exists("/proc/" + std::to_string(pid))) {
-        BOOST_LOG(info) << "[IsolatedSession] The desktop's Steam has exited.";
-        return;
+        BOOST_LOG(info) << tag << " The desktop's Steam has exited.";
+        return true;
       }
 
       // Not graceful: no log-off, unsaved config and cloud sync are lost.
-      BOOST_LOG(warning) << "[IsolatedSession] The desktop's Steam ignored SIGTERM for 30 s; killing it.";
+      BOOST_LOG(warning) << tag << " The desktop's Steam ignored SIGTERM for 30 s; killing it.";
       std::vector<pid_t> tree {pid};
       std::error_code ec;
       for (bool grew = true; grew;) {
@@ -376,6 +383,7 @@ namespace proc {
       for (const auto member : tree) {
         ::kill(member, SIGKILL);
       }
+      return true;
     }
 
     std::string isolated_runtime_root() {
@@ -1021,6 +1029,14 @@ namespace proc {
       env["HERMES_CLIENT_RENDER_WIDTH"] = std::to_string(render_width);
       env["HERMES_CLIENT_RENDER_HEIGHT"] = std::to_string(render_height);
       env["HERMES_CLIENT_FPS"] = fps_buffer;
+      if (app.limit_fps) {
+        const auto existing = env.find("MANGOHUD_CONFIG");
+        for (const auto &[name, value] : frame_limit::environment(
+               static_cast<int>(std::lround(static_cast<double>(fps_millihz) / 1000.0)),
+               existing != env.end() ? existing->to_string() : std::string {})) {
+          env[name] = value;
+        }
+      }
       env["HERMES_SESSION_ID"] = runtime.runtime_id;
       env["HERMES_SESSION_SEAT"] = runtime.seat_id;
       env["HERMES_SEATD_SOCKET"] = runtime.seatd_socket;
@@ -1078,6 +1094,60 @@ namespace proc {
     std::string find_program(const std::string &name) {
       const auto path = boost::process::v1::search_path(name);
       return path.empty() ? std::string {} : boost::filesystem::absolute(path).string();
+    }
+
+    /**
+     * @brief Start the desktop's Steam again, after an app that had to shut it down.
+     *
+     * Runs in the background: it first waits for the app's own Steam to exit,
+     * because a Steam started while another is running hands itself to that
+     * one. The new Steam is a unit of the user's service manager, not a child
+     * of Hermes, so ending a later app leaves it alone. `-silent` brings it
+     * back to the tray, as a Steam started at login runs.
+     *
+     * @param environment `NAME=value` pairs it needs to reach the desktop.
+     */
+    void reopen_desktop_steam(std::vector<std::string> environment) {
+      const auto systemd_run = find_program("systemd-run");
+      const auto steam = find_program("steam");
+      if (systemd_run.empty() || steam.empty()) {
+        BOOST_LOG(warning) << "[Gamescope] Cannot start the desktop's Steam again: "
+                           << (systemd_run.empty() ? "systemd-run" : "steam") << " is not in PATH.";
+        return;
+      }
+      std::thread {[systemd_run, steam, environment = std::move(environment)]() {
+        const char *home = std::getenv("HOME");
+        const auto pid_file = std::string {home ? home : ""} + "/.steam/steam.pid";
+        const auto steam_running = [&pid_file]() {
+          pid_t pid = 0;
+          std::ifstream {pid_file} >> pid;
+          return pid > 0 && read_proc_line(pid, "comm") == "steam";
+        };
+        const auto deadline = std::chrono::steady_clock::now() + 30s;
+        while (steam_running() && std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(250ms);
+        }
+        if (steam_running()) {
+          BOOST_LOG(warning) << "[Gamescope] The app's Steam is still running after 30 s; "
+                                "not starting the desktop's Steam again.";
+          return;
+        }
+
+        const auto unit = "hermes-desktop-steam-" +
+                          std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+                                           std::chrono::system_clock::now().time_since_epoch())
+                                           .count());
+        std::vector<std::string> arguments {systemd_run, "--user", "--quiet", "--collect", "--unit=" + unit};
+        for (const auto &variable : environment) {
+          arguments.push_back("--setenv=" + variable);
+        }
+        arguments.insert(arguments.end(), {"--", steam, "-silent"});
+        if (run_program(arguments, 30s) == 0) {
+          BOOST_LOG(info) << "[Gamescope] Started the desktop's Steam again (" << unit << ").";
+        } else {
+          BOOST_LOG(warning) << "[Gamescope] Could not start the desktop's Steam again.";
+        }
+      }}.detach();
     }
 
     /**
@@ -3288,6 +3358,10 @@ namespace proc {
       config::video.headless_mode         // Headless mode
       || launch_session->virtual_display  // User requested virtual display
       || _app.virtual_display;            // App is configured to use virtual display
+    // Screens put to sleep read as unlit, the same as no monitor at all.
+    if (!virtual_display_requested && !gamescope_session && !video::display_present()) {
+      VDISPLAY::wakeSleepingMonitor();
+    }
     const bool needs_virtual_display =
       !gamescope_session &&                 // Not in a standalone Gamescope session
       (virtual_display_requested ||
@@ -3400,13 +3474,14 @@ namespace proc {
         // Per-app virtual display layout: "mirror" overlaps the primary
         // output so the desktop is cloned, "exclusive" hands the desktop to
         // the virtual display for the session, "extend" forces the default
-        // side-by-side placement, "detached" places it beside the physical
+        // side-by-side placement, "primary" does the same with the virtual
+        // display as the primary output, "detached" places it beside the physical
         // desktop without intentionally rewriting physical-output state, and
         // "auto" follows the global exclusive option. Any explicit non-exclusive
         // placement also disables the global exclusive option for this session.
         const std::string &vd_layout = _app.virtual_display_layout;
         const bool vd_layout_explicit =
-          vd_layout == "extend" || vd_layout == "detached" || vd_layout == "mirror";
+          vd_layout == "extend" || vd_layout == "primary" || vd_layout == "detached" || vd_layout == "mirror";
         const bool want_exclusive = vd_layout == "exclusive" ||
                                     (config::video.isolated_virtual_display_option && !vd_layout_explicit);
         if (config::video.isolated_virtual_display_option && vd_layout_explicit) {
@@ -3584,6 +3659,25 @@ namespace proc {
       _env["PROTON_ENABLE_HDR"] = "0";
     }
 
+    if (_app.limit_fps) {
+      const auto existing = _env.find("MANGOHUD_CONFIG");
+      const auto limits = frame_limit::environment(
+        static_cast<int>(std::lround(static_cast<double>(launch_session->fps) / 1000.0)),
+        existing != _env.end() ? existing->to_string() : std::string {}
+      );
+      // _env outlives the app: remember what was there, so terminate() can
+      // give the next app the environment without this app's limit.
+      for (const auto &[name, value] : limits) {
+        const auto previous = _env.find(name);
+        _frame_limit_restore.emplace_back(name, previous != _env.end() ? std::optional<std::string> {previous->to_string()} : std::nullopt);
+        _env[name] = value;
+      }
+      if (!limits.empty()) {
+        BOOST_LOG(info) << "Capping " << _app.name << " at the stream's " << limits.front().second
+                        << " FPS (DXVK, VKD3D-Proton, and MangoHud where it is enabled)";
+      }
+    }
+
     int channelCount = launch_session->surround_info & 65535;
     switch (channelCount) {
       case 2:
@@ -3661,12 +3755,46 @@ namespace proc {
                                launch_session->launch_mode == "gamescope");
     std::vector<std::uint32_t> gamescope_pids;
 
+    // A Gamescope nested in the desktop starts a Steam of its own. Steam runs
+    // once per user: with another Steam running, that one takes the request,
+    // the new one exits, and Gamescope and the app end within a second. Shut
+    // the other Steam down first, as independent sessions do. Inside a
+    // standalone Gamescope session the running Steam is the session's own and
+    // is meant to take the request.
+    if (!gamescope_session && _app.stop_desktop_steam != "off") {
+      bool nested_steam = platf::window_placement::gamescope_runs_steam(app_arguments) ||
+                          (launch_session->launch_mode == "gamescope" && runs_steam(_app));
+      for (const auto &cmd : _app.detached) {
+        nested_steam = nested_steam || platf::window_placement::gamescope_runs_steam(placement_arguments(cmd));
+      }
+      // It was the user's, so it comes back when the app ends.
+      if (nested_steam && stop_desktop_steam("[Gamescope]")) {
+        _reopen_desktop_steam = true;
+      }
+    }
+
+    // Detached commands outlive the process Hermes starts (Steam's first
+    // process updates itself and exits), so a process group cannot hold them.
+    // A scope of the user's systemd manager does, however they fork, setsid or
+    // enter containers, and ending the app stops it (terminate()).
+    _detached_units.clear();
+    const auto systemd_run = find_program("systemd-run");
+    const bool scoped = _app.stop_detached && !_app.elevated && !systemd_run.empty() &&
+                        std::filesystem::exists("/run/user/" + std::to_string(::getuid()) + "/bus");
+    static std::atomic<unsigned> detached_launches {0};
+    const unsigned launch = ++detached_launches;
     for (auto &cmd : _app.detached) {
       boost::filesystem::path working_dir = _app.working_dir.empty() ?
                                               find_working_directory(cmd, _env) :
                                               boost::filesystem::path(_app.working_dir);
       BOOST_LOG(info) << "Spawning ["sv << cmd << "] in ["sv << working_dir << ']';
-      auto child = platf::run_command(_app.elevated, true, cmd, working_dir, _env, _pipe.get(), ec, nullptr);
+      std::string spawn = cmd;
+      std::string unit;
+      if (scoped) {
+        unit = platf::detached_scope::unit_name(::getpid(), launch, _detached_units.size());
+        spawn = platf::detached_scope::wrap(systemd_run, unit, std::max(_app.exit_timeout, std::chrono::seconds {15}), cmd);
+      }
+      auto child = platf::run_command(_app.elevated, true, spawn, working_dir, _env, _pipe.get(), ec, nullptr);
       if (ec) {
         BOOST_LOG(warning) << "Couldn't spawn ["sv << cmd << "]: System: "sv << ec.message();
       } else {
@@ -3674,6 +3802,9 @@ namespace proc {
         place_steam = place_steam || platf::window_placement::opens_big_picture(arguments);
         if (!gamescope_session && platf::window_placement::launches_gamescope(arguments)) {
           gamescope_pids.push_back(static_cast<std::uint32_t>(child.id()));
+        }
+        if (!unit.empty()) {
+          _detached_units.push_back(unit);
         }
         child.detach();
       }
@@ -3944,7 +4075,43 @@ namespace proc {
       finish_undo_command(child, undo_group, _app.exit_timeout);
     }
 
+    // After the undo commands, which may still talk to them (Steam's
+    // steam://close/bigpicture). A command that handed its work to a program
+    // already running, such as a Steam the user opened, has left its scope
+    // empty and gone; only what Hermes started is stopped.
+    if (!_detached_units.empty()) {
+      if (const auto systemctl = find_program("systemctl"); !systemctl.empty()) {
+        const auto timeout = std::max(_app.exit_timeout, std::chrono::seconds {15});
+        for (const auto &unit : _detached_units) {
+          BOOST_LOG(info) << "Stopping "sv << unit << ", what this app's detached commands started"sv;
+          run_program({systemctl, "--user", "--quiet", "stop", unit}, timeout + 10s);
+        }
+      }
+      _detached_units.clear();
+    }
+
     _pipe.reset();
+
+    // Undo this app's frame limit, newest first, so a variable set twice ends
+    // with the value it had before either.
+    for (auto it = _frame_limit_restore.rbegin(); it != _frame_limit_restore.rend(); ++it) {
+      if (it->second) {
+        _env[it->first] = *it->second;
+      } else {
+        _env.erase(it->first);
+      }
+    }
+    _frame_limit_restore.clear();
+
+    if (std::exchange(_reopen_desktop_steam, false)) {
+      std::vector<std::string> environment;
+      for (const char *name : {"DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"}) {
+        if (const auto variable = _env.find(name); variable != _env.end()) {
+          environment.push_back(std::string {name} + '=' + variable->to_string());
+        }
+      }
+      reopen_desktop_steam(std::move(environment));
+    }
 
     bool has_run = _app_id > 0;
 
@@ -4735,6 +4902,8 @@ namespace proc {
           ctx.allow_client_commands = app_node.value("allow-client-commands", true);
           ctx.terminate_on_pause = app_node.value("terminate-on-pause", false);
           ctx.unlock_host_session = app_node.value("unlock-host-session", false);
+          ctx.stop_detached = app_node.value("stop-detached", true);
+          ctx.limit_fps = app_node.value("limit-fps", false);
           ctx.isolation_method = app_node.value("isolation-method", "default");
           if (ctx.isolation_method != "default" &&
               ctx.isolation_method != "gamescope" &&
@@ -4767,6 +4936,7 @@ namespace proc {
           ctx.virtual_display_layout = app_node.value("virtual-display-layout", "auto");
           if (ctx.virtual_display_layout != "auto" &&
               ctx.virtual_display_layout != "extend" &&
+              ctx.virtual_display_layout != "primary" &&
               ctx.virtual_display_layout != "detached" &&
               ctx.virtual_display_layout != "mirror" &&
               ctx.virtual_display_layout != "exclusive") {

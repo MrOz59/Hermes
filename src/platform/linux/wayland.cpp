@@ -33,6 +33,7 @@
 
 // local includes
 #include "graphics.h"
+#include "misc.h"
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
@@ -720,7 +721,7 @@ namespace wl {
    * Asking for a throwaway buffer is what separates the two cases.
    */
   static gbm_device *open_usable_gbm_device(const char *node, int &out_fd) {
-    const int fd = open(node, O_RDWR | O_CLOEXEC);
+    const int fd = platf::open_drm_node(node, O_RDWR);
     if (fd < 0) {
       BOOST_LOG(debug) << "GBM: cannot open "sv << node << ": "sv << std::strerror(errno);
       return nullptr;

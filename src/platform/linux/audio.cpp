@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <bitset>
+#include <map>
 #include <sstream>
 #include <thread>
 
@@ -585,6 +586,50 @@ namespace platf {
         // gap, so answering "yes" unconditionally is the one answer that makes
         // the wait pointless.
         return !sink.empty() && sink_exists(sink);
+      }
+
+      std::vector<std::string> streams_playing_elsewhere(const std::string &sink) override {
+        std::vector<std::string> elsewhere;
+        if (sink.empty()) {
+          return elsewhere;
+        }
+
+        std::map<std::uint32_t, std::string> sink_names;
+        {
+          auto alarm = safe::make_alarm<int>();
+          cb_t<pa_sink_info *> f = [&](ctx_t::pointer, const pa_sink_info *info, int) {
+            if (!info) {
+              alarm->ring(0);
+              return;
+            }
+            sink_names.emplace(info->index, info->name ? info->name : "");
+          };
+          op_t op {pa_context_get_sink_info_list(ctx.get(), cb<pa_sink_info *>, &f)};
+          if (!op) {
+            return elsewhere;
+          }
+          alarm->wait();
+        }
+
+        auto alarm = safe::make_alarm<int>();
+        cb_t<pa_sink_input_info *> f = [&](ctx_t::pointer, const pa_sink_input_info *info, int) {
+          if (!info) {
+            alarm->ring(0);
+            return;
+          }
+          const auto target = sink_names.find(info->sink);
+          if (info->corked || target == sink_names.end() || target->second == sink) {
+            return;
+          }
+          const char *application = pa_proplist_gets(info->proplist, PA_PROP_APPLICATION_NAME);
+          elsewhere.push_back(std::string {application ? application : (info->name ? info->name : "?")} + " -> " + target->second);
+        };
+        op_t op {pa_context_get_sink_input_info_list(ctx.get(), cb<pa_sink_input_info *>, &f)};
+        if (!op) {
+          return elsewhere;
+        }
+        alarm->wait();
+        return elsewhere;
       }
 
       int set_sink(const std::string &sink) override {

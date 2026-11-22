@@ -413,14 +413,14 @@ jobs:
         run: |
           # The pinned nvcc and compatible host compiler are both needed
           # by the PKGBUILD's native CUDA feature.
-          # `su` does not carry the job environment across, so the build vars
-          # are passed explicitly rather than inherited.
+          # Pass the package inputs explicitly. The runner's command file
+          # is owned by root and is unavailable to makepkg.
           su builder -c "export PATH=/usr/local/cuda/bin:\$PATH \
             CUDAHOSTCXX='${CUDA_HOST_CXX}' \
             BRANCH='${BRANCH}' \
             BUILD_VERSION='${BUILD_VERSION}' \
             COMMIT='${COMMIT}'; \
-            makepkg -sf --noconfirm"
+            env -u GITHUB_ENV makepkg -sf --noconfirm"
 
       # The Arch package must include the private KWin transport.
       - name: Check the detached desktop transport

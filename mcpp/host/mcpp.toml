@@ -165,6 +165,9 @@ main = "../../src/main.cpp"
 hermes-libdisplaydevice = { path = "../libdisplaydevice" }
 hermes-libvirtualhid = { path = "../libvirtualhid" }
 
+[build-dependencies]
+hermes-build-support = { path = "../build-support" }
+
 [features]
 default = ["wayland"]
 

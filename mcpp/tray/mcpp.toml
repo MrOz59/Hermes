@@ -29,6 +29,9 @@ private_include_dirs = [
 [targets.hermes-qt-tray]
 kind = "lib"
 
+[build-dependencies]
+hermes-build-support = { path = "../build-support" }
+
 [runtime]
 libraries = ["Qt6Svg", "Qt6Widgets", "Qt6Gui", "Qt6Core"]
 link_library_dirs = ["../../.toolchain/fedora/usr/lib64"]

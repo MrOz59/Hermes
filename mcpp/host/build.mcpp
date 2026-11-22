@@ -10,8 +10,7 @@
 #include <utility>
 
 import mcpp;
-
-#include "../wayland-actions.hpp"
+import hermes.build_support;
 #include "web-assets.hpp"
 #include "pyrowave-build.hpp"
 
@@ -51,13 +50,13 @@ namespace {
   }
 
   void add_wayland_actions(const fs::path &root, const fs::path &out) {
-    const auto scanner = hermes::build::wayland_scanner(root);
+    const auto scanner = hermes::build::wayland_scanner(root.c_str());
     mcpp::define("HERMES_BUILD_WAYLAND");
     for (const char *library : {"-lwayland-client", "-lwayland-server", "-lwayland-egl", "-lwayland-cursor", "-lgbm"}) {
       mcpp::link_flag(library);
     }
     mcpp::include_dir(out.c_str());
-    auto protocols = hermes::build::configured_path("HERMES_MCPP_WAYLAND_PROTOCOLS");
+    auto protocols = fs::path(hermes::build::configured_path("HERMES_MCPP_WAYLAND_PROTOCOLS"));
     if (protocols.empty()) {
       protocols = root / "third-party/wayland-protocols";
     }
@@ -72,7 +71,7 @@ namespace {
       wlr / "wlr-output-management-unstable-v1.xml",
     };
     for (const auto &input : inputs) {
-      hermes::build::add_wayland_protocol(scanner, input, out);
+      hermes::build::add_wayland_protocol(scanner.c_str(), input.c_str(), out.c_str());
     }
   }
   void link_codec_and_boost_archives(const fs::path &root) {
@@ -121,11 +120,11 @@ namespace {
   void add_cuda_kernel(const std::filesystem::path &root, const std::filesystem::path &out) {
     namespace fs = std::filesystem;
 
-    auto prefix = hermes::build::configured_path("HERMES_MCPP_CUDA_PREFIX");
+    auto prefix = fs::path(hermes::build::configured_path("HERMES_MCPP_CUDA_PREFIX"));
     if (prefix.empty()) {
       prefix = root / ".toolchain/cuda-12.9";
     }
-    auto host_cxx = hermes::build::configured_path("CUDAHOSTCXX");
+    auto host_cxx = fs::path(hermes::build::configured_path("CUDAHOSTCXX"));
     if (host_cxx.empty()) {
       host_cxx = root / ".toolchain/cuda-gcc14/usr/bin/g++-14";
     }

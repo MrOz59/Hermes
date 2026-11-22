@@ -1,13 +1,9 @@
-#include <array>
-#include <cstdlib>
 #include <filesystem>
+#include <initializer_list>
 #include <stdexcept>
-#include <string>
-#include <utility>
 
 import mcpp;
-
-#include "../wayland-actions.hpp"
+import hermes.build_support;
 
 int main() {
   namespace fs = std::filesystem;
@@ -15,7 +11,7 @@ int main() {
   const auto source = root / "third-party/tray/src/QtTrayMenu.h";
   const auto output = fs::path(mcpp::out_dir()) / "moc_QtTrayMenu.cpp";
 
-  auto moc = hermes::build::configured_path("HERMES_MCPP_QT_MOC");
+  auto moc = fs::path(hermes::build::configured_path("HERMES_MCPP_QT_MOC"));
   if (moc.empty()) {
     moc = root / ".toolchain/fedora/usr/lib64/qt6/libexec/moc";
   }

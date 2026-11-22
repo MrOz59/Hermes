@@ -20,6 +20,9 @@ ldflags = ["-pthread"]
 [targets.hermes-kwin-transport]
 kind = "lib"
 
+[build-dependencies]
+hermes-build-support = { path = "../build-support" }
+
 [runtime]
 libraries = ["wayland-client", "../../.toolchain/fedora/usr/lib64/libpipewire-0.3.so"]
 link_library_dirs = ["../../.toolchain/fedora/usr/lib64"]

@@ -780,6 +780,7 @@ jobs:
             curl \
             python3 \
             libstdc++-static \
+            libatomic \
             patchelf \
             pkgconf-pkg-config \
             json-devel \

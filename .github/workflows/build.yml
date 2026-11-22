@@ -318,7 +318,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           # The PKGBUILD requires the pinned CUDA toolkit for releases.
-          # wget and zstd are what the two CUDA scripts need to fetch and unpack.
+          # wget and zstd fetch and unpack the pinned build inputs.
           pacman -S --noconfirm --needed \
             base-devel \
             wget \
@@ -368,6 +368,7 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+          persist-credentials: false
           
       # makepkg cannot take pkgver from the environment, so rewrite it in the
       # CI checkout. This keeps the package filename, the pacman version and
@@ -394,16 +395,51 @@ jobs:
           chown -R builder:builder .
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
-      # Arch's own `cuda` package is 13.x, which would leave this package
-      # unable to encode on anything older than Turing; see the CUDA_VERSION
-      # comment at the top of the workflow. Both halves are installed system
-      # wide as root, world-readable, so the unprivileged makepkg build below
-      # can use them.
-      - name: Install CUDA toolkit
+      - name: Identify the GCC 14 cache
+        id: gcc14-abi
+        shell: bash
         run: |
-          host_cxx="$(scripts/install_cuda_host_gcc.sh "${CUDA_HOST_GCC}")"
-          scripts/install_cuda_redist.sh "${CUDA_VERSION}"
-          echo "CUDA_HOST_CXX=${host_cxx}" >> "${GITHUB_ENV}"
+          runtime="$(pacman -Q gcc glibc binutils libisl libmpc libstdc++ libgcc)"
+          abi="$({
+            printf '%s\n' "$runtime"
+            sha256sum /etc/makepkg.conf
+          } | sha256sum | cut -d ' ' -f 1)"
+          printf 'key=arch-cuda-gcc14-%s-%s\n' "$abi" "${{ hashFiles('scripts/install_cuda_host_gcc.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached AUR GCC 14 packages
+        id: gcc14-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: target/arch-cuda-host-gcc/packages
+          key: ${{ steps.gcc14-abi.outputs.key }}
+
+      - name: Install official Arch dependencies for the AUR build
+        if: steps.gcc14-cache.outputs.cache-hit != 'true'
+        run: pacman -S --noconfirm --needed doxygen gcc-ada gcc-d libisl libmpc
+
+      - name: Prepare the CUDA-only GCC 14 compiler
+        shell: bash
+        run: |
+          compiler_root="$PWD/target/arch-cuda-host-gcc"
+          useradd --create-home --user-group cuda-gcc-builder
+          install -d -m 0755 "$compiler_root"
+          chown -R cuda-gcc-builder:cuda-gcc-builder "$compiler_root"
+          host_cxx="$(runuser -u cuda-gcc-builder -- env -i \
+            HOME=/home/cuda-gcc-builder PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            bash scripts/install_cuda_host_gcc.sh "$CUDA_HOST_GCC" "$compiler_root")"
+          echo "CUDA_HOST_CXX=${host_cxx}" >> "$GITHUB_ENV"
+
+      - name: Save verified AUR GCC 14 packages
+        if: steps.gcc14-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: target/arch-cuda-host-gcc/packages
+          key: ${{ steps.gcc14-abi.outputs.key }}
+
+      # Keep CUDA 12.9's older GPU coverage. The unprivileged package build
+      # uses the toolkit from /usr/local and the CUDA-only compiler under target.
+      - name: Install CUDA toolkit
+        run: scripts/install_cuda_redist.sh "${CUDA_VERSION}"
 
       # Build the real Arch package straight from the PKGBUILD, so CI and a
       # local `makepkg -si` produce the exact same

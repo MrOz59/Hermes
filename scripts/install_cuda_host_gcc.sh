@@ -14,7 +14,7 @@
 # of standard headers, so pointing CUDAHOSTCXX here leaves every other
 # translation unit on the compiler the release ships.
 #
-# Usage: install_cuda_host_gcc.sh <gcc-major-version>
+# Usage: install_cuda_host_gcc.sh <gcc-major-version> [arch-ci-work-dir]
 #   Progress is written to stderr; the path to g++ is printed on stdout.
 
 set -euo pipefail
@@ -95,55 +95,56 @@ case "${ID}" in
         ;;
 
     arch)
-        # Arch keeps no compat compilers, but every package it has ever shipped
-        # stays in the archive. GCC locates its own headers and libraries
-        # relative to the driver binary, so the package works unpacked under a
-        # prefix without being installed - which is what is wanted here, since
-        # installing it would displace the compiler the rest of the build uses.
-        #
-        # Refresh from https://archive.archlinux.org/packages/g/gcc/ if a newer
-        # point release of the same major is ever needed; the archive is
-        # permanent, so a pinned URL keeps working.
-        case "${gcc_major}" in
-            14) package="gcc-14.2.1%2Br753%2Bg1cd744a6828f-1-x86_64.pkg.tar.zst" ;;
-            *)
-                log "No pinned Arch archive package for GCC ${gcc_major}."
-                exit 1
-                ;;
-        esac
+        if [[ ${gcc_major} != 14 || $(uname -m) != x86_64 ]]; then
+            log "The pinned AUR CUDA host compiler is GCC 14 for x86_64."
+            exit 1
+        fi
+        if (( EUID == 0 )); then
+            log "Build and unpack the AUR CUDA host compiler as an unprivileged user."
+            exit 1
+        fi
+        work_dir="$(realpath -m -- "${2:?pass the Arch CI workspace directory}")"
+        revision=87e62884e433543b59aaa2a28dcceb2e6f314054
+        version=14.4.1+r175+gafa9b4ecc082-1
+        packages="${work_dir}/packages"
+        gcc_archive="${packages}/gcc14-${version}-x86_64.pkg.tar.zst"
+        runtime_archive="${packages}/gcc14-libs-${version}-x86_64.pkg.tar.zst"
+        prefix="${work_dir}/prefix"
+        mkdir -p "${packages}" "${prefix}"
 
-        prefix="/opt/gcc${gcc_major}"
-        log "Unpacking ${package} under ${prefix}"
-
-        archive="$(mktemp)"
-        trap 'rm -f "${archive}"' EXIT
-
-        download_options=(--fail --location --silent --show-error
-                          --connect-timeout 10 --max-time 90 --retry 1 --retry-max-time 30)
-        if ! curl "${download_options[@]}" -o "${archive}" \
-                "https://archive.archlinux.org/packages/g/gcc/${package}"; then
-            # The historical archive carries an earlier package revision of
-            # GCC 14.2.1. Its SHA-256 was verified using the Arch package
-            # signature before pinning it here.
-            historical="gcc-14.2.1%2Br134%2Bgab884fffe3fc-1-x86_64.pkg.tar.zst"
-            log "Arch Linux Archive unavailable, fetching ${historical} from the historical archive"
-            curl "${download_options[@]}" -o "${archive}" \
-                "https://archive.org/download/archlinux_pkg_gcc/${historical}"
-            printf '%s  %s\n' efcf9a912bb674205fe8cbc2f205ca3d64ec0e8e48700c74bac8952834dc4415 "${archive}" | sha256sum -c - >&2
+        if [[ ! -f ${gcc_archive} || ! -f ${runtime_archive} ]]; then
+            recipe="$(mktemp -d "${work_dir}/aur-recipe.XXXXXX")"
+            trap 'rm -rf -- "${recipe}"' EXIT
+            git -C "${recipe}" init -q
+            git -C "${recipe}" fetch --depth 1 https://aur.archlinux.org/gcc14.git "${revision}" >&2
+            git -C "${recipe}" checkout -q --detach "${revision}"
+            log "Building AUR gcc14 ${version} at ${revision}"
+            # makepkg verifies the pinned GCC source and launcher checksums.
+            # The runner provisions official dependencies before entering this step.
+            (
+                cd "${recipe}"
+                # The compiler only drives nvcc. Skip split debug output to
+                # keep the bootstrap within the hosted runner disk budget.
+                printf 'source /etc/makepkg.conf\nOPTIONS+=(!debug)\n' > ci-makepkg.conf
+                PKGDEST="${recipe}" makepkg --config ci-makepkg.conf --nocheck --noconfirm
+            ) >&2
+            install -m 0644 "${recipe}/${gcc_archive##*/}" "${gcc_archive}"
+            install -m 0644 "${recipe}/${runtime_archive##*/}" "${runtime_archive}"
+        else
+            log "Using cached Arch gcc14 ${version} packages"
         fi
 
-        mkdir -p "${prefix}"
-        # The package carries .PKGINFO and friends beside the tree; only /usr
-        # is wanted.
-        tar --use-compress-program=unzstd -xf "${archive}" -C "${prefix}" usr
-
-        # libgcc_s lives in gcc-libs, which is deliberately not unpacked: the
-        # host compiler must not bring a second runtime alongside the one the
-        # rest of the build links against. The installed libgcc_s is newer and
-        # a strict superset, so the link name is pointed at it.
-        ln -sfn /usr/lib/libgcc_s.so.1 "${prefix}/usr/lib/libgcc_s.so"
-
-        host_cxx="${prefix}/usr/bin/g++"
+        # Use only the versioned compiler and runtime files. Keeping these
+        # out of /usr leaves the runner's normal gcc and g++ available to mcpp.
+        for archive in "${gcc_archive}" "${runtime_archive}"; do
+            tar --zstd -xf "${archive}" -C "${prefix}" usr
+        done
+        host_cxx="${prefix}/usr/bin/g++-14"
+        actual_version="$("${host_cxx}" -dumpfullversion)"
+        if [[ ${actual_version} != "${version%%+*}" ]]; then
+            log "Expected GCC ${version%%+*}, got ${actual_version} from ${host_cxx}."
+            exit 1
+        fi
         ;;
 
     *)

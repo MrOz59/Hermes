@@ -483,6 +483,7 @@ jobs:
           apt-get update
           apt-get install -y \
             ca-certificates \
+            curl \
             git \
             wget \
             xz-utils \

@@ -35,6 +35,13 @@ GCC 14 for the CUDA translation unit in C++20, the newest dialect supported
 by the pinned nvcc. A separate host compiler builds the rest of Hermes. See the [local CUDA setup](modularization/mcpp-migration.md#build-and-check)
 for the project-local toolkit and compiler paths.
 
+## Rust interop
+
+To develop or test a Rust component alongside Hermes's C++26 modules,
+follow the [mcpp interop instructions](modularization/mcpp-migration.md#build-and-test-rust-components).
+The [Rust workspace guide](../rust/README.md) covers Cargo, code checks, and
+browser-targeted WebAssembly.
+
 ## Packages
 
 The [Linux package staging instructions](modularization/mcpp-migration.md#stage-a-fedora-package-payload)

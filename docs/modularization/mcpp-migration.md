@@ -128,6 +128,88 @@ MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
   --profile coverage -- --gtest_color=yes
 ```
 
+## Build and test Rust components
+
+Rust components live in the [Cargo workspace](../../rust/README.md). The
+optional mcpp smoke package exercises the same dependency path a production
+component would use. It needs only the pinned mcpp and local C++ toolchain
+above, plus Cargo and the native Rust toolchain selected by
+`rust/rust-toolchain.toml`.
+
+From the repository root, with the pinned Rust toolchain already available:
+
+```sh
+(
+  export MCPP_HOME="$PWD/.mcpp/local-home"
+  export MCPP_TOOLCHAIN="path:$PWD/.toolchain"
+  cd mcpp/rust-interop-smoke
+  mcpp test --offline
+)
+```
+
+The smoke test imports `hermes.rust_interop` as a C++26 named module. It checks
+the ABI revision, ordinary and wrapping RTP timestamp distances, and a batch
+that writes directly into a caller-owned `std::span<uint32_t>`. The caller
+owns both buffers and keeps them alive for the call. Equal-length disjoint
+views succeed, including two empty views. Mismatched or overlapping views
+return a typed error and leave the output untouched. The smoke test exercises
+partial views with guard values, so it checks both the results and adjacent
+caller storage. This path currently targets Linux x86-64 with glibc.
+
+The [Rust package's build program](../../rust/build.mcpp) runs Cargo directly
+with `--offline --locked` and a configuration-specific target directory under
+mcpp's output directory. The plan names the archive, workspace
+configuration, lockfile, toolchain files, and each crate's manifest and
+default `build.rs` under `rust/crates/<crate>/`. The plan refreshes as those
+files are added or removed. Cargo's depfile reports the Rust sources read
+by the archive build, including those of local dependencies.
+The package passes the archive and its system link libraries to mcpp consumers.
+The Rust archive uses Cargo's release profile. Standard Hermes build and
+packaging commands do not require Cargo. Ninja and Cargo use file timestamps
+for incremental builds. If a restore tool preserves old timestamps on files
+whose contents changed, refresh their timestamps before rebuilding. To isolate
+a clean repro, use a fresh checkout or scratch copy with a fresh local
+`MCPP_HOME` configured for the same toolchain.
+
+When introducing a Rust component, add its crate to `rust/Cargo.toml` and consume
+it from the crate that owns the C ABI. This lets Cargo link one Rust static
+archive per C++ link image, even when the implementation uses several Rust
+crates. Place local crates under `rust/crates/<crate>/`. For a Cargo build
+script, also declare custom script paths, extra files and environment variables
+it reads as mcpp action inputs. Keep the ABI narrow with fixed-width values
+or explicit buffer lengths. Keep Rust panics and C++ exceptions on their own
+side of the boundary and use status values for expected failures.
+
+Use a named C++ module as the typed facade. A borrowed view is a pointer and
+count at the C boundary. The Rust entry point validates the contract it can
+check without dereferencing and keeps unsafe pointer handling private. The
+caller still guarantees readable input, writable output, and buffer lifetimes.
+For a growing Rust-owned C API, `cbindgen` can generate its headers. Consider
+`CXX` if recurring two-way calls need typed ownership and C++ data structures.
+The current bridge uses the hand-written C ABI.
+
+The smoke test enables a feature that adds the Rust mcpp package as a path
+dependency. For a component gated in the host, add the equivalent dependency to
+`mcpp/host/mcpp.toml`, then import its module from a source enabled by the same
+feature:
+
+```toml
+[features.rust-interop]
+
+[feature-deps.rust-interop]
+hermes-rust-interop = { path = "../../rust" }
+```
+
+The host can then select the component with `--features rust-interop`. Before
+switching a production caller, compare its C++ and Rust behavior with the same
+inputs and test any resource ownership, failure, and performance requirements.
+
+The same crate compiles as a WebAssembly module for `wasm32-unknown-unknown`.
+The [Rust guide](../../rust/README.md) covers building and exercising the wasm
+exports with Bun. A future Hestia-rs browser experiment can reuse portable
+logic here. A client still needs browser-specific transport, decoding, input,
+and UI work.
+
 ## Stage a Fedora package payload
 
 Build the host with its installed asset path and save its result manifest.

@@ -106,6 +106,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 
 ### Fixed
+- Ending a stream from the host no longer crashes Hermes (from PunkUnity).
+  Hestia's stop-session request, the web UI's End session button and
+  unpairing a streaming device stop the session gracefully, and that path
+  sent the termination message from the web server's thread, racing the
+  control thread for the session's cipher, then let the session be freed
+  while the control server still listed it. The control thread then encrypted
+  a message for the freed session and Hermes died with SIGSEGV. The control
+  thread now sends the message itself and releases the session afterwards.
 - Stopping the desktop's Steam before a session, and starting it again after a
   nested Gamescope app, works with Flatpak Steam too (from PunkUnity). Its pid
   file is in the Flatpak's home and holds a pid from inside the sandbox, so

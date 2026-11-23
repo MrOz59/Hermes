@@ -39,6 +39,7 @@
   #include <xf86drm.h>
 
     #include "platform/linux/bounded_command.h"
+  #include "platform/linux/desktop_steam.h"
   #include "platform/linux/gamescope_session.h"
   #include "platform/linux/window_placement.h"
   // For the GBM allocation probe: picking the render node an isolated session
@@ -324,6 +325,11 @@ namespace proc {
       return line;
     }
 
+    std::optional<platf::desktop_steam::client_t> find_desktop_steam() {
+      const char *home = std::getenv("HOME");
+      return platf::desktop_steam::find("/proc", ::getuid(), std::string {home ? home : ""} + "/.steam/steam.pid", read_proc_line(getpid(), "cgroup"));
+    }
+
     /**
      * @brief Shut down a Steam client running outside Hermes' sessions.
      *
@@ -332,22 +338,16 @@ namespace proc {
      * seconds even when its window is unmapped; `steam -shutdown` would start
      * Steam's updater if no client were left by then.
      *
-     * @return Whether a Steam was running and has been stopped.
+     * @return The Steam that was running and has been stopped, if any.
      */
-    bool stop_desktop_steam(std::string_view tag = "[IsolatedSession]") {
-      const char *home = std::getenv("HOME");
-      pid_t pid = 0;
-      std::ifstream {std::string {home ? home : ""} + "/.steam/steam.pid"} >> pid;
-      // The pid file outlives the client.
-      if (pid <= 0 || read_proc_line(pid, "comm") != "steam") {
-        return false;
+    std::optional<platf::desktop_steam::client_t> stop_desktop_steam(std::string_view tag = "[IsolatedSession]") {
+      const auto client = find_desktop_steam();
+      if (!client) {
+        return std::nullopt;
       }
-      const auto own = read_proc_line(getpid(), "cgroup");
-      if (own.ends_with(".service") && read_proc_line(pid, "cgroup").starts_with(own)) {
-        return false;
-      }
+      const pid_t pid = client->pid;
 
-      BOOST_LOG(info) << tag << " Shutting down the desktop's Steam (pid " << pid << ") first.";
+      BOOST_LOG(info) << tag << " Shutting down the desktop's " << (client->flatpak ? "Flatpak " : "") << "Steam (pid " << pid << ") first.";
       ::kill(pid, SIGTERM);
       const auto deadline = std::chrono::steady_clock::now() + 30s;
       while (std::filesystem::exists("/proc/" + std::to_string(pid)) && std::chrono::steady_clock::now() < deadline) {
@@ -355,7 +355,7 @@ namespace proc {
       }
       if (!std::filesystem::exists("/proc/" + std::to_string(pid))) {
         BOOST_LOG(info) << tag << " The desktop's Steam has exited.";
-        return true;
+        return client;
       }
 
       // Not graceful: no log-off, unsaved config and cloud sync are lost.
@@ -383,7 +383,7 @@ namespace proc {
       for (const auto member : tree) {
         ::kill(member, SIGKILL);
       }
-      return true;
+      return client;
     }
 
     std::string isolated_runtime_root() {
@@ -1106,22 +1106,20 @@ namespace proc {
      * back to the tray, as a Steam started at login runs.
      *
      * @param environment `NAME=value` pairs it needs to reach the desktop.
+     * @param flatpak The desktop's Steam was the Flatpak.
      */
-    void reopen_desktop_steam(std::vector<std::string> environment) {
+    void reopen_desktop_steam(std::vector<std::string> environment, bool flatpak) {
       const auto systemd_run = find_program("systemd-run");
-      const auto steam = find_program("steam");
+      const char *launcher = flatpak ? "flatpak" : "steam";
+      const auto steam = find_program(launcher);
       if (systemd_run.empty() || steam.empty()) {
         BOOST_LOG(warning) << "[Gamescope] Cannot start the desktop's Steam again: "
-                           << (systemd_run.empty() ? "systemd-run" : "steam") << " is not in PATH.";
+                           << (systemd_run.empty() ? "systemd-run" : launcher) << " is not in PATH.";
         return;
       }
-      std::thread {[systemd_run, steam, environment = std::move(environment)]() {
-        const char *home = std::getenv("HOME");
-        const auto pid_file = std::string {home ? home : ""} + "/.steam/steam.pid";
-        const auto steam_running = [&pid_file]() {
-          pid_t pid = 0;
-          std::ifstream {pid_file} >> pid;
-          return pid > 0 && read_proc_line(pid, "comm") == "steam";
+      std::thread {[systemd_run, steam, flatpak, environment = std::move(environment)]() {
+        const auto steam_running = []() {
+          return find_desktop_steam().has_value();
         };
         const auto deadline = std::chrono::steady_clock::now() + 30s;
         while (steam_running() && std::chrono::steady_clock::now() < deadline) {
@@ -1141,7 +1139,12 @@ namespace proc {
         for (const auto &variable : environment) {
           arguments.push_back("--setenv=" + variable);
         }
-        arguments.insert(arguments.end(), {"--", steam, "-silent"});
+        arguments.push_back("--");
+        arguments.push_back(steam);
+        if (flatpak) {
+          arguments.insert(arguments.end(), {"run", std::string {platf::desktop_steam::flatpak_id}});
+        }
+        arguments.push_back("-silent");
         if (run_program(arguments, 30s) == 0) {
           BOOST_LOG(info) << "[Gamescope] Started the desktop's Steam again (" << unit << ").";
         } else {
@@ -3768,8 +3771,11 @@ namespace proc {
         nested_steam = nested_steam || platf::window_placement::gamescope_runs_steam(placement_arguments(cmd));
       }
       // It was the user's, so it comes back when the app ends.
-      if (nested_steam && stop_desktop_steam("[Gamescope]")) {
-        _reopen_desktop_steam = true;
+      if (nested_steam) {
+        if (const auto stopped = stop_desktop_steam("[Gamescope]")) {
+          _reopen_desktop_steam = true;
+          _desktop_steam_flatpak = stopped->flatpak;
+        }
       }
     }
 
@@ -4110,7 +4116,7 @@ namespace proc {
           environment.push_back(std::string {name} + '=' + variable->to_string());
         }
       }
-      reopen_desktop_steam(std::move(environment));
+      reopen_desktop_steam(std::move(environment), _desktop_steam_flatpak);
     }
 
     bool has_run = _app_id > 0;

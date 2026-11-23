@@ -59,6 +59,7 @@ jobs:
       - name: Verify reference and search artifacts
         run: |
           test -s build/reference/cpp/http_api.htm
+          test -s build/reference/cpp/modules.htm
           test -s build/reference/cpp/confighttp_8cpp__incl.svg
           node -e 'if (!require("./build/search-index.json").some(({documents}) => documents.length)) process.exit(1)'
       - uses: actions/upload-artifact@v7.0.2

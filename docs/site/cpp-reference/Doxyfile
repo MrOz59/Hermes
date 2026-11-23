@@ -6,7 +6,6 @@ OUTPUT_DIRECTORY       = .generated
 INPUT                  = ../../src cpp-reference/main.dox cpp-reference/http-api.dox
 RECURSIVE              = YES
 FILE_PATTERNS          = *.h *.hpp *.c *.cc *.cpp *.cppm *.cu *.dox
-EXTENSION_MAPPING      = cppm=C++
 STRIP_FROM_PATH        = ../..
 STRIP_FROM_INC_PATH    = ../..
 PREDEFINED             = DOXYGEN __linux__ HERMES_BUILD_WAYLAND HERMES_TRAY=1

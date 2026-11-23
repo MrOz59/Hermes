@@ -47,7 +47,10 @@ For a hosted build, set `HERMES_DOCS_URL` to the site's origin and
 the build and preview. CI uploads the built site as an artifact.
 
 Edit guides in `docs/` and navigation in `docs/site/sidebars.ts`. Edit the
-C++ source comments to update the generated API reference.
+C++ source comments to update the generated API reference. Use `.cppm` for
+named module interfaces and place a brief Doxygen comment before the
+`export module` declaration. Doxygen reads these declarations directly and
+lists them in the [C++ module index](pathname:///reference/cpp/modules.htm).
 
 ### Localization
 The strings Hermes ships are inherited from Sunshine's localization, and the default language is `en` (English).

@@ -2,7 +2,7 @@
 /** @file test_session_input_access.cpp
  *  @brief Input lease, sysfs identity and ACL tests without touching host devices.
  */
-#if defined(__linux__) && defined(HERMES_TEST_SESSION_INPUT)
+#if defined(HERMES_TEST_SESSION_INPUT)
   #include "tools/session-broker-input.h"
 
   #include <acl/libacl.h>

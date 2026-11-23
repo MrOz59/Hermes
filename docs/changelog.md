@@ -18,7 +18,7 @@ Unreleased work is collected under **[Unreleased]** until a version is cut.
 
 | Previous                            |                          Next |
 |:------------------------------------|------------------------------:|
-| [Compatibility](compatibility.md)   | [Docker](../DOCKER_README.md) |
+| [Compatibility](compatibility.md)   | [Docker](container.md) |
 
 </div>
 

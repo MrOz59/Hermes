@@ -9,8 +9,8 @@ Two different callers are authenticated in two different ways:
   account. Authenticate with basic authentication using the admin username and
   password, or with the session cookie `/api/login` returns.
 - **Hestia endpoints** (`/api/hestia/v1/*`) use the *paired client certificate*
-  presented during the TLS handshake — the same pairing a Moonlight, Artemis or
-  Hestia client completes — and each one additionally requires the matching
+  presented during the TLS handshake. This uses the pairing completed by Hestia,
+  Artemis, and Moonlight clients. Each endpoint also requires the matching
   per-client permission. An unpaired certificate is rejected with
   `401 unauthorized`; a paired client without the permission gets
   `403 permission_denied`. These endpoints never accept the admin password. The

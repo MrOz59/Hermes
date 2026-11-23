@@ -37,7 +37,7 @@ namespace input {
     const std::string &client_id = {}
   );
 
-#ifdef SUNSHINE_TESTS
+#ifdef HERMES_TESTS
   /**
    * @brief Construct a stream with injected devices and no delayed mouse movement.
    * @param mail Stream mailbox.

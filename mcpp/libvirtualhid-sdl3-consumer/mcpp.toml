@@ -1,0 +1,22 @@
+[package]
+name = "hermes-libvirtualhid-sdl3-consumer"
+version = "0.7.0"
+description = "SDL3 gamepad consumer for the pinned libvirtualhid tests"
+standard = "c++26"
+
+[build]
+cxx_runtime = "host-coupled"
+sources = []
+include_dirs = ["../../.toolchain/fedora/usr/include"]
+ldflags = ["-pthread"]
+
+[dependencies]
+hermes-libvirtualhid = { path = "../libvirtualhid", features = ["xtest"] }
+
+[runtime]
+libraries = ["SDL3", "X11", "Xtst"]
+link_library_dirs = ["../../.toolchain/fedora/usr/lib64"]
+
+[targets.test_linux_sdl3_xbox_consumer]
+kind = "bin"
+main = "../../.toolchain/libvirtualhid/tests/consumers/linux_sdl3_xbox_consumer.cpp"

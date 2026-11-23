@@ -165,7 +165,7 @@ namespace input {
     std::shared_ptr<platf::input_t> platform_input;
 
     // When emulating the HOME button, we may need to artificially release the back button.
-    // Afterwards, the gamepad state on sunshine won't match the state on Moonlight.
+    // Afterwards, the gamepad state on Hermes won't match the client state.
     // To prevent Sunshine from sending erroneous input data to the active application,
     // Sunshine forces the button to be in a specific state until the gamepad state matches that of
     // Moonlight once more.
@@ -174,7 +174,7 @@ namespace input {
 
   static std::shared_ptr<platf::input_t> platform_input_for(const std::string &tag, const std::string &socket) {
     if (!socket.empty()) {
-#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+#ifdef HERMES_BUILD_KWIN_TRANSPORT
       return std::make_shared<platf::input_t>(platf::input_private_kwin(socket, tag));
 #else
       throw std::runtime_error("Private KWin input support was not built");
@@ -596,7 +596,7 @@ namespace input {
     // Prevent divide by zero
     // Don't expect it to happen, but just in case
     if (!packet->width || !packet->height) {
-      BOOST_LOG(warning) << "Moonlight passed invalid dimensions"sv;
+      BOOST_LOG(warning) << "Client sent invalid touch dimensions"sv;
 
       return;
     }
@@ -1893,7 +1893,7 @@ namespace input {
     return input;
   }
 
-#ifdef SUNSHINE_TESTS
+#ifdef HERMES_TESTS
   std::shared_ptr<input_t> alloc_for_testing(
     safe::mail_t mail,
     std::shared_ptr<platf::input_t> platform,

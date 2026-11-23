@@ -1,0 +1,18 @@
+[package]
+name = "hermes-hid-consumer"
+version = "0.7.0"
+description = "Unprivileged SDL2 consumer for the isolated-input VM tests"
+standard = "gnu++26"
+
+[build]
+sources = []
+include_dirs = ["../../.toolchain/fedora/usr/include/SDL2", "/usr/include/SDL2"]
+cxx_runtime = "host-coupled"
+
+[targets.hermes-hid-consumer]
+kind = "bin"
+main = "../../tests/consumers/linux_hid_rumble.cpp"
+
+[runtime]
+libraries = ["SDL2"]
+link_library_dirs = ["../../.toolchain/fedora/usr/lib64"]

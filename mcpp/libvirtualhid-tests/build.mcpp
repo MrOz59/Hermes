@@ -1,0 +1,11 @@
+#include <iomanip>
+#include <sstream>
+
+import mcpp;
+
+int main() {
+  const auto consumer = mcpp::dep_bin("hermes-libvirtualhid-sdl3-consumer", "test_linux_sdl3_xbox_consumer");
+  std::ostringstream definition;
+  definition << "LIBVIRTUALHID_TEST_SDL3_XBOX_CONSUMER_PATH=" << std::quoted(consumer);
+  mcpp::define(definition.str().c_str());
+}

@@ -37,19 +37,16 @@
   </nav>
 </template>
 
-<script>
+<script setup lang="ts">
+import { onMounted } from 'vue'
 import ThemeToggle from './ThemeToggle.vue'
 
-export default {
-  components: { ThemeToggle },
-  created() {
-    console.log("Header mounted!")
-  },
-  mounted() {
-    let el = document.querySelector("a[href='" + document.location.pathname + "']");
-    if (el) el.classList.add("active")
-  }
-}
+onMounted(() => {
+  const activeLink = [...document.querySelectorAll<HTMLAnchorElement>('.header .nav-link[href]')]
+    .find(link => link.pathname === document.location.pathname)
+  activeLink?.classList.add('active')
+  activeLink?.setAttribute('aria-current', 'page')
+})
 </script>
 
 <style>

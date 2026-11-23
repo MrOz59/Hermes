@@ -1,11 +1,6 @@
-On Windows we use msys2 and ucrt64 to compile.
-You need to prefix commands with `C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c`.
+Hermes builds for Linux with mcpp. Follow
+[the local toolchain and build guide](../docs/modularization/mcpp-migration.md)
+and the package manifests when changing build logic.
 
-Prefix build directories with `cmake-build-`.
-
-The test executable is named `test_sunshine` and will be located inside the `tests` directory within
-the build directory.
-
-The project uses gtest as a test framework.
-
-Always follow the style guidelines defined in .clang-format for c/c++ code.
+Use GoogleTest for the C++ test suite and follow `.clang-format` for C and
+C++ changes.

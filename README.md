@@ -531,6 +531,9 @@ method.
 
 ## CachyOS/Arch package build
 
+For the mcpp toolchain, build commands and optional features, see the
+[Linux build guide](docs/building.md).
+
 From the repository root:
 
 ```bash
@@ -599,9 +602,6 @@ means one container each. See `packaging/container/README.md`.
 
 Adapted from [SOVLOOKUP/hermes-sunshine](https://github.com/SOVLOOKUP/hermes-sunshine),
 contributed upstream by its author.
-
-Note that `docker/` at the repository root is unrelated: those are Sunshine's
-*build* images and produce no runnable host.
 
 ## Notes
 

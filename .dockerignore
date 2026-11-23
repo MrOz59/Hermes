@@ -14,9 +14,6 @@ scripts/
 tools/
 crowdin.yml
 
-# don't ignore linux build script
-!scripts/linux_build.sh
-
 # ignore dev directories
 build/
 cmake-*/

@@ -1,4 +1,3 @@
-#ifdef __linux__
 #include "src/platform/linux/pyrowave_fence.h"
 #include <gtest/gtest.h>
 #include <unistd.h>
@@ -21,4 +20,3 @@ TEST(PyroWaveFence, BrokenOrClosedFenceCannotAuthorizeAnEncode) {
   close(fds[0]);
   EXPECT_FALSE(pyrowave::wait_for_conversion_fence(fds[0], std::chrono::milliseconds(50)));
 }
-#endif

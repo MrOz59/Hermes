@@ -1,0 +1,192 @@
+#include <filesystem>
+#include <initializer_list>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import mcpp;
+
+namespace {
+  namespace fs = std::filesystem;
+
+  void build_part(
+    const fs::path &source_root,
+    const fs::path &output,
+    const fs::path &toolchain,
+    const char *name,
+    std::initializer_list<const char *> sources,
+    std::initializer_list<const char *> includes,
+    std::initializer_list<const char *> defines,
+    bool shared_entry = false
+  ) {
+    std::vector<fs::path> objects;
+    for (const auto *source_name : sources) {
+      const auto source = source_root / source_name;
+      const auto object = output / (std::string(name) + "-" + source.stem().string() + ".o");
+      const auto dependencies = object.string() + ".d";
+      const bool c_source = source.extension() == ".c";
+      const auto compiler = toolchain / "bin" / (c_source ? "gcc" : "g++");
+
+      // Preserve the pinned upstream language dialects.
+      mcpp::action compile;
+      const auto action_id = object.filename().string();
+      compile.id = action_id.c_str();
+      compile.role = shared_entry ? mcpp::roles::object : mcpp::roles::source;
+      compile.depfile = dependencies.c_str();
+      compile.arg(compiler.c_str()).arg(c_source ? "-std=gnu99" : "-std=gnu++14")
+        .arg("-O3").arg("-DNDEBUG").arg("-fPIC");
+      if (!c_source) {
+        for (const auto *option : {"-Wshadow", "-Wall", "-Wextra", "-Wno-comment",
+                                   "-Wno-missing-field-initializers", "-Wno-empty-body", "-msse3"}) {
+          compile.arg(option);
+        }
+      }
+      if (std::string_view(name).starts_with("pyrowave")) {
+        compile.arg("-fvisibility=hidden");
+      }
+      for (const auto *directory : includes) {
+        compile.arg(("-I" + (source_root / directory).string()).c_str());
+      }
+      for (const auto *definition : defines) {
+        compile.arg((std::string("-D") + definition).c_str());
+      }
+      compile.arg("-MMD").arg("-MF").arg(dependencies.c_str())
+        .arg("-c").arg(source.c_str()).arg("-o").arg(object.c_str())
+        .input(source.c_str()).output(object.c_str()).submit();
+      objects.push_back(object);
+    }
+
+    if (!shared_entry) {
+      const auto archive = output / (std::string("lib") + name + ".a");
+      const auto ar = toolchain / "bin/ar";
+      mcpp::action pack;
+      const auto action_id = archive.filename().string();
+      pack.id = action_id.c_str();
+      pack.role = mcpp::roles::object;
+      pack.arg("sh").arg("-c").arg(R"(archive=$1; archiver=$2; shift 2; rm -f -- "$archive" && exec "$archiver" rcs "$archive" "$@")")
+        .arg("archive").arg(archive.c_str()).arg(ar.c_str());
+      for (const auto &object : objects) {
+        pack.arg(object.c_str()).input(object.c_str());
+      }
+      pack.output(archive.c_str()).submit();
+    }
+  }
+}
+
+int main() {
+  const auto source = fs::path(mcpp::manifest_dir()) / "src";
+  const auto out = fs::path(mcpp::out_dir());
+  const auto toolchain = fs::path(mcpp::toolchain_dir());
+  const auto version_script = source / "link.T";
+  mcpp::rerun_if_changed(version_script.c_str());
+  mcpp::link_flag(("-Wl,--version-script=" + version_script.string()).c_str());
+
+  build_part(source, out, toolchain, "pyrowave-shared",
+    {
+      "pyrowave_c.cpp",
+    },
+    {".", "Granite/vulkan", "Granite/util", "Granite/application/global", "Granite/third_party/volk", "Granite/third_party/khronos/vulkan-headers/include"},
+    {"GRANITE_SHIPPING", "PYROWAVE_EXPORT_SYMBOLS", "pyrowave_shared_EXPORTS"}, true);
+  build_part(source, out, toolchain, "pyrowave",
+    {
+      "pyrowave_encoder.cpp",
+      "pyrowave_decoder.cpp",
+      "pyrowave_common.cpp",
+    },
+    {".", "Granite/vulkan", "Granite/util", "Granite/application/global", "Granite/third_party/volk", "Granite/third_party/khronos/vulkan-headers/include", "Granite/math"},
+    {"GRANITE_SHIPPING", "PYROWAVE_PRECISION=1"});
+  build_part(source, out, toolchain, "granite-vulkan",
+    {
+      "Granite/vulkan/context.cpp",
+      "Granite/vulkan/device.cpp",
+      "Granite/vulkan/wsi.cpp",
+      "Granite/vulkan/wsi_pacer.cpp",
+      "Granite/vulkan/buffer_pool.cpp",
+      "Granite/vulkan/image.cpp",
+      "Granite/vulkan/cookie.cpp",
+      "Granite/vulkan/sampler.cpp",
+      "Granite/vulkan/command_pool.cpp",
+      "Granite/vulkan/fence_manager.cpp",
+      "Granite/vulkan/descriptor_set.cpp",
+      "Granite/vulkan/semaphore_manager.cpp",
+      "Granite/vulkan/command_buffer.cpp",
+      "Granite/vulkan/shader.cpp",
+      "Granite/vulkan/render_pass.cpp",
+      "Granite/vulkan/buffer.cpp",
+      "Granite/vulkan/rtas.cpp",
+      "Granite/vulkan/indirect_layout.cpp",
+      "Granite/vulkan/pipeline_cache.cpp",
+      "Granite/vulkan/semaphore.cpp",
+      "Granite/vulkan/memory_allocator.cpp",
+      "Granite/vulkan/fence.cpp",
+      "Granite/vulkan/event_manager.cpp",
+      "Granite/vulkan/breadcrumbs.cpp",
+      "Granite/vulkan/pipeline_event.cpp",
+      "Granite/vulkan/query_pool.cpp",
+      "Granite/vulkan/texture/texture_format.cpp",
+      "Granite/vulkan/renderdoc_capture.cpp",
+    },
+    {"Granite/vulkan", "Granite/third_party/renderdoc", "Granite/util", "Granite/application/global", "Granite/third_party/volk", "Granite/third_party/khronos/vulkan-headers/include"},
+    {"GRANITE_RENDERDOC_CAPTURE", "GRANITE_SHIPPING"});
+  build_part(source, out, toolchain, "granite-volk",
+    {
+      "Granite/third_party/volk/volk.c",
+    },
+    {"Granite/third_party/volk", "Granite/third_party/khronos/vulkan-headers/include"},
+    {});
+  build_part(source, out, toolchain, "granite-util",
+    {
+      "Granite/util/logging.cpp",
+      "Granite/util/aligned_alloc.cpp",
+      "Granite/util/timer.cpp",
+      "Granite/util/thread_id.cpp",
+      "Granite/util/string_helpers.cpp",
+      "Granite/util/timeline_trace_file.cpp",
+      "Granite/util/thread_name.cpp",
+      "Granite/util/thread_priority.cpp",
+      "Granite/util/cli_parser.cpp",
+      "Granite/util/dynamic_library.cpp",
+      "Granite/util/message_queue.cpp",
+      "Granite/util/arena_allocator.cpp",
+      "Granite/util/environment.cpp",
+      "Granite/util/slab_allocator.cpp",
+    },
+    {"Granite/util", "Granite/application/global"},
+    {"GRANITE_SHIPPING"});
+  build_part(source, out, toolchain, "granite-math",
+    {
+      "Granite/math/math.cpp",
+      "Granite/math/frustum.cpp",
+      "Granite/math/aabb.cpp",
+      "Granite/math/interpolation.cpp",
+      "Granite/math/muglm/muglm.cpp",
+      "Granite/math/transforms.cpp",
+    },
+    {"Granite/math"},
+    {});
+
+  // Preserve the upstream standalone validator alongside the shared SDK.
+  const auto validator = out / "pyrowave-device-validation";
+  const auto validator_source = source / "pyrowave_device_validation.cpp";
+  const auto granite_util = out / "libgranite-util.a";
+  const auto cxx = toolchain / "bin/g++";
+  const auto depfile = validator.string() + ".d";
+  constexpr auto codec = "${mcpp.target_file:pyrowave-shared}";
+  mcpp::action validate;
+  validate.id = "build-device-validator";
+  validate.role = mcpp::roles::artifact;
+  validate.depfile = depfile.c_str();
+  validate.arg(cxx.c_str()).arg("-std=gnu++14").arg("-O3").arg("-DNDEBUG")
+    .arg("-DGRANITE_SHIPPING").arg("-msse3").arg("-pthread");
+  for (const auto *directory : {
+      "Granite/util", "Granite/application/global", "Granite/third_party/volk",
+      "Granite/third_party/khronos/vulkan-headers/include",
+    }) {
+    validate.arg(("-I" + (source / directory).string()).c_str());
+  }
+  validate.arg("-MMD").arg("-MF").arg(depfile.c_str())
+    .arg(validator_source.c_str()).arg(codec).arg(granite_util.c_str())
+    .arg("-ldl").arg("-lrt").arg("-o").arg(validator.c_str())
+    .input(validator_source.c_str()).input(codec).input(granite_util.c_str())
+    .output(validator.c_str()).submit();
+}

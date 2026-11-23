@@ -13,11 +13,7 @@
 
 // Synchronize the recovery journal before installing permanent router rules.
 #include <fcntl.h>
-#ifdef _WIN32
-  #include <io.h>
-#else
   #include <unistd.h>
-#endif
 #include <stddef.h>  // workaround for type_t error in miniupnpc 2.3.3, see https://github.com/miniupnp/miniupnp/commit/e263ab6f56c382e10fed31347ec68095d691a0e8
 
 // lib includes
@@ -358,15 +354,6 @@ namespace upnp {
 
       // Closing an ofstream does not promise that the record survives a power failure.
       // Flush file contents to stable storage before asking the router for a permanent lease.
-#ifdef _WIN32
-      const int fd = ::_wopen(path.c_str(), _O_RDONLY | _O_BINARY);
-      if (fd < 0) {
-        BOOST_LOG(warning) << "Could not reopen UPnP recovery journal for syncing"sv;
-        return false;
-      }
-      const bool durable = ::_commit(fd) == 0;
-      ::_close(fd);
-#else
       const int fd = ::open(path.c_str(), O_RDONLY);
       if (fd < 0) {
         BOOST_LOG(warning) << "Could not reopen UPnP recovery journal for syncing"sv;
@@ -374,7 +361,6 @@ namespace upnp {
       }
       const bool durable = ::fsync(fd) == 0;
       ::close(fd);
-#endif
       if (!durable) {
         BOOST_LOG(warning) << "Could not sync UPnP recovery journal; refusing an unrecorded permanent mapping"sv;
         return false;

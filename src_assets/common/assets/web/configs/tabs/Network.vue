@@ -1,16 +1,17 @@
-<script setup>
+<script setup lang="ts">
+import type { Configuration } from '../../config-types'
 import { computed, ref } from 'vue'
 import Checkbox from "../../Checkbox.vue";
 
-const props = defineProps([
-  'platform',
-  'config'
-])
+const props = defineProps<{
+  platform: string;
+  config: Configuration;
+}>()
 
-const defaultMoonlightPort = 47989
+const defaultPort = 47989
 
 const config = ref(props.config)
-const effectivePort = computed(() => +config.value?.port ?? defaultMoonlightPort)
+const effectivePort = computed(() => Number(config.value.port ?? defaultPort))
 </script>
 
 <template>
@@ -36,7 +37,7 @@ const effectivePort = computed(() => +config.value?.port ?? defaultMoonlightPort
     <!-- Port family -->
     <div class="mb-3">
       <label for="port" class="form-label">{{ $t('config.port') }}</label>
-      <input type="number" min="1029" max="65514" class="form-control" id="port" :placeholder="defaultMoonlightPort"
+      <input type="number" min="1029" max="65514" class="form-control" id="port" :placeholder="String(defaultPort)"
              v-model="config.port" />
       <div class="form-text">{{ $t('config.port_desc') }}</div>
       <!-- Add warning if any port is less than 1024 -->
@@ -68,7 +69,7 @@ const effectivePort = computed(() => +config.value?.port ?? defaultMoonlightPort
           <td>{{ $t('config.port_tcp') }}</td>
           <td>{{+effectivePort}}</td>
           <td>
-            <div class="alert alert-primary" role="alert" v-if="+effectivePort !== defaultMoonlightPort">
+            <div class="alert alert-primary" role="alert" v-if="+effectivePort !== defaultPort">
               <i class="fa-solid fa-xl fa-circle-info"></i> {{ $t('config.port_http_port_note') }}
             </div>
           </td>

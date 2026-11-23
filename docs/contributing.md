@@ -46,8 +46,9 @@ For a hosted build, set `HERMES_DOCS_URL` to the site's origin and
 `HERMES_DOCS_BASE_URL` to its path, such as `/Hermes/`. Use the same values for
 the build and preview. CI uploads the built site as an artifact.
 
-Edit guides in `docs/` and navigation in `docs/site/sidebars.ts`. Edit the
-C++ source comments to update the generated API reference. Use `.cppm` for
+Edit guides in `docs/`, group them in `docs/site/sidebars.ts`, and edit the
+homepage in `docs/site/src/pages/index.tsx`. Edit the C++ source comments to
+update the generated API reference. Use `.cppm` for
 named module interfaces and place a brief Doxygen comment before the
 `export module` declaration. Doxygen reads these declarations directly and
 lists them in the [C++ module index](pathname:///reference/cpp/modules.htm).

@@ -12,7 +12,8 @@ export default {
   baseUrl: process.env.HERMES_DOCS_BASE_URL ?? '/',
   noIndex: !publishedUrl,
 
-  staticDirectories: ['.generated'],
+  favicon: 'hermes.ico',
+  staticDirectories: ['.generated', '../../src_assets/common/branding'],
   onBrokenLinks: 'throw',
   onBrokenAnchors: 'throw',
   onDuplicateRoutes: 'throw',
@@ -31,6 +32,7 @@ export default {
         editUrl: repository + '/edit/main/docs/',
       },
       blog: false,
+      theme: {customCss: './src/css/custom.css'},
       sitemap: publishedUrl ? {} : false,
     } satisfies Options],
   ],
@@ -45,13 +47,46 @@ export default {
 
   themeConfig: {
     colorMode: {respectPrefersColorScheme: true},
+    docs: {
+      sidebar: {autoCollapseCategories: true},
+    },
     navbar: {
       title: 'Hermes',
+      logo: {alt: '', src: 'hermes.svg', width: 28, height: 28},
       items: [
-        {type: 'docSidebar', sidebarId: 'hermes', label: 'Docs', position: 'left'},
-        {href: 'pathname:///reference/cpp/index.htm', label: 'C++ reference', position: 'left'},
+        {type: 'docSidebar', sidebarId: 'guides', label: 'Guides', position: 'left'},
+        {type: 'docSidebar', sidebarId: 'developers', label: 'Developers', position: 'left'},
+        {type: 'docSidebar', sidebarId: 'project', label: 'Project', position: 'left'},
         {href: repository + '/releases', label: 'Releases', position: 'right'},
         {href: repository, label: 'GitHub', position: 'right'},
+      ],
+    },
+    footer: {
+      links: [
+        {
+          title: 'Guides',
+          items: [
+            {label: 'Getting started', to: '/getting_started'},
+            {label: 'Configuration', to: '/configuration'},
+            {label: 'Troubleshooting', to: '/troubleshooting'},
+          ],
+        },
+        {
+          title: 'Developers',
+          items: [
+            {label: 'Build from source', to: '/building'},
+            {label: 'HTTP API', to: '/api'},
+            {label: 'C++ reference', href: 'pathname:///reference/cpp/index.htm'},
+          ],
+        },
+        {
+          title: 'Project',
+          items: [
+            {label: 'Roadmap', to: '/product-roadmap'},
+            {label: 'Releases', href: repository + '/releases'},
+            {label: 'GitHub', href: repository},
+          ],
+        },
       ],
     },
     prism: {

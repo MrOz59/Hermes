@@ -1,7 +1,3 @@
----
-slug: /
----
-
 # Getting Started
 
 Hermes is a Linux game-streaming host. The recommended way to run it is one of

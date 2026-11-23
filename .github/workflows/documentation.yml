@@ -6,12 +6,14 @@ on:
       - '.github/workflows/documentation.yml'
       - 'docs/**'
       - 'src/**'
+      - 'src_assets/common/branding/**'
       - 'VERSION'
   pull_request:
     paths:
       - '.github/workflows/documentation.yml'
       - 'docs/**'
       - 'src/**'
+      - 'src_assets/common/branding/**'
       - 'VERSION'
   workflow_dispatch:
 

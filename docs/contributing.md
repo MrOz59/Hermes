@@ -7,9 +7,9 @@ internals — the Web UI, localization and the test suites.
 
 ## Recommended Tools
 
-| Tool                                                                                                                                                                           | Description                                                                                                                                                                           |
-|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
-| <a href="https://www.jetbrains.com/clion/"><img src="https://resources.jetbrains.com/storage/products/company/brand/logos/CLion_icon.svg" width="30" height="30"></a><br>CLion | Recommended IDE for C and C++ development. Free for non-commercial use. |
+| Tool | Description |
+|---|---|
+| [CLion](https://www.jetbrains.com/clion/) | Recommended IDE for C and C++ development. Free for non-commercial use. |
 
 ## Project Patterns
 
@@ -23,13 +23,31 @@ internals — the Web UI, localization and the test suites.
 #### Building
 
 From `src_assets/common/assets/web`, run `bun install --frozen-lockfile`, then
-`bun run dev` for front-end development. Run `bun run docs:assets` from the same
-directory before invoking Doxygen.
-Read the Docs runs this step automatically with Doxygen and Graphviz. To render the same site locally,
-put Bun, Doxygen, Graphviz, jq, and unzip on PATH and run `scripts/build-readthedocs.sh`.
-The HTML is written to `target/docs/html` by default. Use the
+`bun run dev` for front-end development. Use the
 [`web-assets` build feature](building.md#build-locally) to build and stage the
 production pages with the Hermes executable.
+
+### Documentation
+
+The documentation site uses [Docusaurus](https://docusaurus.io/). Use the Node.js
+version pinned in `docs/site/.node-version` with Doxygen and Graphviz on PATH.
+Start a local preview from the repository root.
+
+```bash
+npm --prefix docs/site ci
+npm --prefix docs/site run start
+```
+
+Run `npm --prefix docs/site run build` to check links and generate the
+production site in `docs/site/build/`. Preview that build with
+`npm --prefix docs/site run serve`.
+
+For a hosted build, set `HERMES_DOCS_URL` to the site's origin and
+`HERMES_DOCS_BASE_URL` to its path, such as `/Hermes/`. Use the same values for
+the build and preview. CI uploads the built site as an artifact.
+
+Edit guides in `docs/` and navigation in `docs/site/sidebars.ts`. Edit the
+C++ source comments to update the generated API reference.
 
 ### Localization
 The strings Hermes ships are inherited from Sunshine's localization, and the default language is `en` (English).
@@ -196,16 +214,3 @@ Option 2 (will modify files):
 ```bash
 ./scripts/update_clang_format.sh
 ```
-
-<div class="section_buttons">
-
-| Previous                |                                                         Next |
-|:------------------------|-------------------------------------------------------------:|
-| [Building](building.md) | [Source Code](../third-party/doxyconfig/docs/source_code.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>

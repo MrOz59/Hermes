@@ -1,0 +1,105 @@
+/**
+ * @page http_api HTTP endpoint implementation reference
+ *
+ * These endpoints are documented alongside their handlers in the Hermes host.
+ * See the [HTTP API guide](../../api/) for authentication and client requirements.
+ *
+ * @section post-api-login POST /api/login
+ * @copydoc confighttp::login()
+ *
+ * @section post-api-otp POST /api/otp
+ * @copydoc confighttp::getOTP()
+ *
+ * @section post-api-pin POST /api/pin
+ * @copydoc confighttp::savePin()
+ *
+ * @section get-api-apps GET /api/apps
+ * @copydoc confighttp::getApps()
+ *
+ * @section post-api-apps POST /api/apps
+ * @copydoc confighttp::saveApp()
+ *
+ * @section post-api-apps-delete POST /api/apps/delete
+ * @copydoc confighttp::deleteApp()
+ *
+ * @section post-api-apps-reorder POST /api/apps/reorder
+ * @copydoc confighttp::reorderApps()
+ *
+ * @section post-api-apps-launch POST /api/apps/launch
+ * @copydoc confighttp::launchApp()
+ *
+ * @section post-api-apps-close POST /api/apps/close
+ * @copydoc confighttp::closeApp()
+ *
+ * @section post-api-covers-upload POST /api/covers/upload
+ * @copydoc confighttp::uploadCover()
+ *
+ * @section get-api-clients-list GET /api/clients/list
+ * @copydoc confighttp::getClients()
+ *
+ * @section post-api-clients-update POST /api/clients/update
+ * @copydoc confighttp::updateClient()
+ *
+ * @section post-api-clients-disconnect POST /api/clients/disconnect
+ * @copydoc confighttp::disconnect()
+ *
+ * @section post-api-clients-unpair POST /api/clients/unpair
+ * @copydoc confighttp::unpair()
+ *
+ * @section post-api-clients-unpair-all POST /api/clients/unpair-all
+ * @copydoc confighttp::unpairAll()
+ *
+ * @section get-api-config GET /api/config
+ * @copydoc confighttp::getConfig()
+ *
+ * @section get-api-configlocale GET /api/configLocale
+ * @copydoc confighttp::getLocale()
+ *
+ * @section post-api-config POST /api/config
+ * @copydoc confighttp::saveConfig()
+ *
+ * @section post-api-password POST /api/password
+ * @copydoc confighttp::savePassword()
+ *
+ * @section get-api-logs GET /api/logs
+ * @copydoc confighttp::getLogs()
+ *
+ * @section get-api-metrics GET /api/metrics
+ * @copydoc confighttp::getMetrics()
+ *
+ * @section get-api-gamemode-status GET /api/gamemode/status
+ * @copydoc confighttp::getGameModeStatus()
+ *
+ * @section get-api-sessions-list GET /api/sessions/list
+ * @copydoc confighttp::getSessions()
+ *
+ * @section post-api-sessions-terminate POST /api/sessions/terminate
+ * @copydoc confighttp::terminateSession()
+ *
+ * @section post-api-reset-display-device-persistence POST /api/reset-display-device-persistence
+ * @copydoc confighttp::resetDisplayDevicePersistence()
+ *
+ * @section post-api-restart POST /api/restart
+ * @copydoc confighttp::restart()
+ *
+ * @section post-api-quit POST /api/quit
+ * @copydoc confighttp::quit()
+ *
+ * @section get-api-evdi-status GET /api/evdi/status
+ * @copydoc confighttp::getEvdiStatus()
+ *
+ * @section post-api-evdi-install POST /api/evdi/install
+ * @copydoc confighttp::installEvdi()
+ *
+ * @section get-api-evdi-install-status GET /api/evdi/install/status
+ * @copydoc confighttp::getEvdiInstallStatus()
+ *
+ * @section get-api-hermes-kms-status GET /api/hermes-kms/status
+ * @copydoc confighttp::getHermesKmsStatus()
+ *
+ * @section get-api-hestia-v1-capabilities GET /api/hestia/v1/capabilities
+ * @copydoc confighttp::getHestiaCapabilities()
+ *
+ * @section post-api-hestia-v1-session-prepare POST /api/hestia/v1/session/prepare
+ * @copydoc confighttp::prepare_hestia_session()
+ */

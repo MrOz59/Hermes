@@ -1,0 +1,38 @@
+{
+  "name": "hermes-docs",
+  "private": true,
+  "scripts": {
+    "build:reference": "rm -rf .generated/reference/cpp && mkdir -p .generated/reference/cpp && HERMES_VERSION=\"$(cat ../../VERSION)\" doxygen cpp-reference/Doxyfile && test -s .generated/reference/cpp/index.htm && test -s .generated/reference/cpp/http_api.htm",
+    "prebuild": "npm run build:reference",
+    "build": "docusaurus build",
+    "prestart": "npm run build:reference",
+    "start": "docusaurus start",
+    "serve": "docusaurus serve"
+  },
+  "dependencies": {
+    "@docusaurus/core": "3.10.2",
+    "@docusaurus/preset-classic": "3.10.2",
+    "@easyops-cn/docusaurus-search-local": "0.55.3",
+    "prism-react-renderer": "2.4.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "engines": {
+    "node": ">=26.13.1 <27"
+  },
+  "packageManager": "npm@11.20.0",
+  "overrides": {
+    "@docusaurus/core": {
+      "tinypool": "2.2.0"
+    },
+    "copy-webpack-plugin": {
+      "serialize-javascript": "7.1.4"
+    },
+    "css-minimizer-webpack-plugin": {
+      "serialize-javascript": "7.1.4"
+    },
+    "sockjs": {
+      "uuid": "11.1.1"
+    }
+  }
+}

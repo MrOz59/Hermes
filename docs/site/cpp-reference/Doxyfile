@@ -1,0 +1,40 @@
+PROJECT_NAME           = Hermes
+PROJECT_NUMBER         = $(HERMES_VERSION)
+PROJECT_BRIEF          = "Linux game streaming host"
+OUTPUT_DIRECTORY       = .generated
+
+INPUT                  = ../../src cpp-reference/main.dox cpp-reference/http-api.dox
+RECURSIVE              = YES
+FILE_PATTERNS          = *.h *.hpp *.c *.cc *.cpp *.cppm *.cu *.dox
+EXTENSION_MAPPING      = cppm=C++
+STRIP_FROM_PATH        = ../..
+STRIP_FROM_INC_PATH    = ../..
+PREDEFINED             = DOXYGEN __linux__ HERMES_BUILD_WAYLAND HERMES_TRAY=1
+MACRO_EXPANSION        = YES
+
+GENERATE_HTML          = YES
+HTML_OUTPUT            = reference/cpp
+HTML_FILE_EXTENSION    = .htm
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+SOURCE_BROWSER         = YES
+SEARCHENGINE           = YES
+
+HAVE_DOT               = YES
+DOT_IMAGE_FORMAT       = svg
+DOT_GRAPH_MAX_NODES    = 60
+INTERACTIVE_SVG        = YES
+
+# Keep source documentation diagnostics visible while existing warnings are addressed.
+QUIET                  = YES
+WARN_AS_ERROR          = NO
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_INCOMPLETE_DOC = YES
+WARN_IF_UNDOC_ENUM_VAL = YES
+WARN_NO_PARAMDOC       = YES
+
+ALIASES               += "examples=^^**Examples**^^@code{.cpp}"
+ALIASES               += "examples_end=@endcode^^"
+ALIASES               += "attention{1}=\attention \1"
+ALIASES               += "seealso{1}=\see \1"
+ALIASES               += "api_examples{3|}=\par HTTP request^^\code{.text}^^\2 \1^^Request body: \3^^\endcode"

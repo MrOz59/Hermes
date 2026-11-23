@@ -105,16 +105,3 @@ problem is also reporting the exact commit they are on.
 Set `expires` to a date, or delete the entry. Deleting is fine — nothing else
 references it — but an `expires` written when the message is published means one
 less thing to remember.
-
-<div class="section_buttons">
-
-| Previous                          |                            Next |
-|:----------------------------------|--------------------------------:|
-| [Configuration](configuration.md) | [App Examples](app_examples.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>

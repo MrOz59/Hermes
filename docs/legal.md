@@ -8,7 +8,7 @@ Hermes is licensed under the GPL-3.0 license, which allows for free use and modi
 The full text of the license can be reviewed [here](https://github.com/MrOz59/Hermes/blob/main/LICENSE).
 Hermes derives from [Apollo](https://github.com/ClassicOldSong/Apollo), which derives from
 [Sunshine](https://github.com/LizardByte/Sunshine); both are under the same license. The Credits section of the
-[overview](../README.md) records what came from where.
+[overview](https://github.com/MrOz59/Hermes/blob/e1cbddf53a55578d5d750541219782fa0b29838f/README.md#credits) records what came from where.
 
 ## Commercial Use
 Hermes can be used in commercial applications without any limitations. This means that businesses and organizations
@@ -22,16 +22,3 @@ Motion Picture Experts Group (MPEG-LA) and/or any other necessary licensing requ
 In summary, while Hermes is free to use, it is the user's responsibility to ensure compliance with all applicable
 licensing requirements when redistributing the software as part of a commercial offering. If you have any questions or
 concerns about using Hermes in a commercial setting, we recommend consulting with a lawyer.
-
-<div class="section_buttons">
-
-| Previous                                        |                              Next |
-|:------------------------------------------------|----------------------------------:|
-| [Gamestream Migration](gamestream_migration.md) | [Configuration](configuration.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>

@@ -40,17 +40,4 @@ for the project-local toolkit and compiler paths.
 The [Linux package staging instructions](modularization/mcpp-migration.md#stage-a-fedora-package-payload)
 show how to build the host, brokers, and companion tools with their installed
 asset and library paths. Package CI jobs specify distribution-specific
-dependencies and artifact assembly. See the [build workflow](../.github/workflows/build.yml).
-
-<div class="section_buttons">
-
-| Previous                              |                            Next |
-|:--------------------------------------|--------------------------------:|
-| [Troubleshooting](troubleshooting.md) | [Contributing](contributing.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>
+dependencies and artifact assembly. See the [build workflow](https://github.com/MrOz59/Hermes/blob/main/.github/workflows/build.yml).

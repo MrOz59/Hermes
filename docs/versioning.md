@@ -11,12 +11,12 @@ changes; treat `0.x` as "fast-moving".
 
 ## Single source of truth
 
-The top-level [`VERSION`](../VERSION) file holds the current version and nothing
+The top-level [`VERSION`](https://github.com/MrOz59/Hermes/blob/main/VERSION) file holds the current version and nothing
 else (e.g. `0.1.0`). Everything derives from it:
 
 | Consumer            | How it reads the version                                  |
 |---------------------|-----------------------------------------------------------|
-| mcpp / C++ build    | [The version generator](../mcpp/host/generate-version.sh) reads `VERSION` and generates the `PROJECT_VERSION` macro for the boot log and Web UI/API. |
+| mcpp / C++ build    | [The version generator](https://github.com/UsmanTariq2/Hermes/blob/502916388cd7329e86acd256baf96cb930d19ca9/mcpp/host/generate-version.sh) reads `VERSION` and generates the `PROJECT_VERSION` macro for the boot log and Web UI/API. |
 | WebUI               | `src_assets/common/assets/web/package.json` `version` field (kept in sync by the bump script). |
 | `.deb` / `.rpm`     | The CI packaging steps use the build version computed by the `version` job. |
 | Arch package        | CI rewrites `pkgver` in the `PKGBUILD` to the build version before `makepkg`. |
@@ -27,7 +27,7 @@ Because of this, you never edit the version in more than one place.
 ## Day-to-day: the changelog
 
 As you make changes, add a bullet under **[Unreleased]** in
-[`CHANGELOG.md`](../CHANGELOG.md) (under `Added` / `Changed` / `Fixed` /
+[`CHANGELOG.md`](https://github.com/MrOz59/Hermes/blob/main/CHANGELOG.md) (under `Added` / `Changed` / `Fixed` /
 `Removed`). This is the only per-commit habit needed — it keeps the release
 notes ready at all times.
 
@@ -58,7 +58,7 @@ git push origin vX.Y.Z
 ```
 
 Pushing the `vX.Y.Z` tag triggers the **release** job in
-[`.github/workflows/build.yml`](../.github/workflows/build.yml), which builds the
+[`.github/workflows/build.yml`](https://github.com/MrOz59/Hermes/blob/main/.github/workflows/build.yml), which builds the
 Linux artifacts and publishes a normal (non-prerelease) GitHub Release.
 
 Flags: `--no-tag` (commit but don't tag), `--no-commit` (edit files only).
@@ -88,7 +88,7 @@ plain version rather than below it, which is correct — a nightly is 0.5.1 plus
 commits, not a 0.5.1 pre-release. It is also the one separator that Arch
 `pkgver`, `dpkg` and `rpm` all accept.
 
-The `version` job in [`build.yml`](../.github/workflows/build.yml) computes it once
+The `version` job in [`build.yml`](https://github.com/MrOz59/Hermes/blob/main/.github/workflows/build.yml) computes it once
 and every package job passes it to mcpp as `BUILD_VERSION` along with
 `BRANCH`. The version generator uses that supplied value. A local `makepkg`
 defaults to `BRANCH=local` and uses `pkgver` as `BUILD_VERSION`. An mcpp build

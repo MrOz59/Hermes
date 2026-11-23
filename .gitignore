@@ -44,11 +44,11 @@
 build/
 build-test/
 cmake-*/
-docs/doxyconfig*
 
 # Frontend dependencies
 node_modules/
 package-lock.json
+!/docs/site/package-lock.json
 
 # Translations
 *.mo
@@ -78,3 +78,7 @@ write_file_test_*.txt
 /tests/display_restore/target/
 /.mcpp/
 /.toolchain/
+
+# Docusaurus and generated C++ reference
+/docs/site/.docusaurus/
+/docs/site/.generated/

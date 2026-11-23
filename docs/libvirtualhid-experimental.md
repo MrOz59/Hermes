@@ -167,7 +167,7 @@ MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
 ```
 
 Linux builds use libvirtualhid for input. The focused dependency suite and its
-SDL3 probe are built by the [Linux input CI workflow](../.github/workflows/libvirtualhid-experimental.yml).
+SDL3 probe are built by the [Linux input CI workflow](https://github.com/MrOz59/Hermes/blob/main/.github/workflows/libvirtualhid-experimental.yml).
 
 ## Manual validation with a DS4 and DualSense
 

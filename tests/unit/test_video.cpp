@@ -25,19 +25,8 @@ INSTANTIATE_TEST_SUITE_P(
   EncoderVariants,
   EncoderTest,
   testing::Values(
-#if !defined(__APPLE__)
     &video::nvenc,
-#endif
-#ifdef _WIN32
-    &video::amdvce,
-    &video::quicksync,
-#endif
-#ifdef __linux__
     &video::vaapi,
-#endif
-#ifdef __APPLE__
-    &video::videotoolbox,
-#endif
     &video::software
   ),
   [](const auto &info) {

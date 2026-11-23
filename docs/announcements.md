@@ -97,7 +97,7 @@ want: a bug in 0.5.1 is a bug in the nightlies built on top of it. Use
 builds.
 
 Because every nightly stamps its own commit into the version
-(`0.5.1+abc1234`, see [Versioning](../VERSIONING.md)), a user reporting a
+(`0.5.1+abc1234`, see [Versioning](versioning.md)), a user reporting a
 problem is also reporting the exact commit they are on.
 
 ## Retiring a message

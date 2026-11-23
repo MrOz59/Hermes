@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { loadAutoTheme, setupThemeToggleListener } from './theme'
 import { onMounted } from 'vue'
 

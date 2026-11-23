@@ -2,7 +2,6 @@
 /** @file test_session_broker_lock.cpp
  *  @brief Exercise broker mutation locking without changing accounts or devices.
  */
-#ifdef __linux__
   #include "tools/session-broker-lock.h"
 
   #include <filesystem>
@@ -91,4 +90,3 @@ namespace {
     EXPECT_FALSE(fifo);
   }
 }  // namespace
-#endif

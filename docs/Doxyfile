@@ -25,15 +25,15 @@
 DOCSET_BUNDLE_ID = io.github.mroz59.Hermes
 DOCSET_PUBLISHER_ID = io.github.mroz59.Hermes.documentation
 PROJECT_BRIEF = "Self-hosted game stream host for Hestia and Artemis."
-PROJECT_ICON = ../hermes.ico
-PROJECT_LOGO = ../hermes.png
+PROJECT_ICON = ../src_assets/common/branding/hermes.ico
+PROJECT_LOGO = ../src_assets/common/branding/hermes.png
 PROJECT_NAME = Hermes
 
 # project specific settings
 DOT_GRAPH_MAX_NODES = 60
 # IMAGE_PATH = ../docs/images
-PREDEFINED += SUNSHINE_BUILD_WAYLAND
-PREDEFINED += SUNSHINE_TRAY=1
+PREDEFINED += HERMES_BUILD_WAYLAND
+PREDEFINED += HERMES_TRAY=1
 
 # TODO: Enable this when we have complete documentation
 WARN_IF_UNDOCUMENTED = NO
@@ -44,7 +44,7 @@ INPUT = ../README.md \
         getting_started.md \
         compatibility.md \
         changelog.md \
-        ../DOCKER_README.md \
+        container.md \
         third_party_packages.md \
         gamestream_migration.md \
         legal.md \
@@ -65,8 +65,8 @@ INPUT = ../README.md \
 HTML_EXTRA_STYLESHEET += doc-styles.css
 
 # extra js
-HTML_EXTRA_FILES += api.js
-HTML_EXTRA_FILES += configuration.js
+HTML_EXTRA_FILES += ../target/docs-assets/api.js
+HTML_EXTRA_FILES += ../target/docs-assets/configuration.js
 
 # custom aliases
 ALIASES += api_examples{3|}="@htmlonly<script>(function() { let examples = generateExamples('\1', '\2', \3); document.write(createTabs(examples)); })();</script>@endhtmlonly"

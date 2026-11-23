@@ -4,7 +4,7 @@
  */
 #include "../tests_common.h"
 
-#include <src/client_link_monitor.h>
+import hermes.client_link_monitor;
 
 namespace {
   using namespace std::chrono_literals;
@@ -84,6 +84,23 @@ TEST(ClientLinkMonitor, KeyFrameRequestRightAfterASilenceIsAttributedToIt) {
 
   // Long after, a request has some other cause.
   EXPECT_FALSE(link.silence_before(t0 + 600ms + client_link_monitor_t::attribution_window + 1ms));
+}
+
+TEST(ClientLinkMonitor, ShorterLatestSilenceControlsAttributionWhileLongestIsRetained) {
+  client_link_monitor_t link;
+  const auto t0 = clock_t_::time_point {};
+  link.on_periodic_ping();
+  link.on_message(t0);
+  ASSERT_EQ(link.on_message(t0 + 625ms), 625ms);
+  ASSERT_FALSE(link.on_message(t0 + 725ms));
+
+  const auto recent_end = t0 + 925ms;
+  ASSERT_EQ(link.on_message(recent_end), 200ms);
+  const auto cutoff = recent_end + client_link_monitor_t::attribution_window;
+  EXPECT_EQ(link.silence_before(cutoff), 200ms);
+  EXPECT_FALSE(link.silence_before(cutoff + clock_t_::duration {1}));
+  EXPECT_EQ(link.since_last_silence(cutoff), client_link_monitor_t::attribution_window);
+  EXPECT_EQ(link.longest_silence(), 625ms);
 }
 
 TEST(ClientLinkMonitor, NoSilenceMeansNoAttribution) {

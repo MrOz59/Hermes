@@ -141,7 +141,7 @@ namespace platf {
         continue;
       }
       candidate.nvidia = candidate.driver == "nvidia-drm"sv;
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
       candidate.capability = va::encode_capability(candidate.fd);
 #endif
       candidate.memory = video_memory(candidate.fd);

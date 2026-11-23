@@ -1,6 +1,6 @@
 /**
  * @file tests/integration/test_external_commands.cpp
- * @brief Integration tests for running external commands with platform-specific validation
+ * @brief Integration tests for running external commands with Linux
  */
 #include "../tests_common.h"
 
@@ -19,52 +19,26 @@
 // Test data structure for parameterized testing
 struct ExternalCommandTestData {
   std::string command;
-  std::string platform;  // "windows", "linux", "macos", or "all"
   bool should_succeed;
   std::string description;
-  std::string working_directory;  // Optional: if empty, uses SUNSHINE_SOURCE_DIR
-  bool xfail_condition = false;  // Optional: condition for expected failure
-  std::string xfail_reason = "";  // Optional: reason for expected failure
+  std::string working_directory;  // Optional: if empty, uses HERMES_SOURCE_DIR
 
-  // Constructor with xfail parameters
-  ExternalCommandTestData(std::string cmd, std::string plat, const bool succeed, std::string desc, std::string work_dir = "", const bool xfail_cond = false, std::string xfail_rsn = ""):
-      command(std::move(cmd)),
-      platform(std::move(plat)),
-      should_succeed(succeed),
-      description(std::move(desc)),
-      working_directory(std::move(work_dir)),
-      xfail_condition(xfail_cond),
-      xfail_reason(std::move(xfail_rsn)) {}
 };
 
 class ExternalCommandTest: public ::testing::TestWithParam<ExternalCommandTestData> {
 protected:
-  void SetUp() override {
-    if constexpr (IS_WINDOWS) {
-      current_platform = "windows";
-    } else if constexpr (IS_MACOS) {
-      current_platform = "macos";
-    } else if constexpr (IS_LINUX) {
-      current_platform = "linux";
-    }
-  }
-
-  [[nodiscard]] bool shouldRunOnCurrentPlatform(const std::string_view &test_platform) const {
-    return test_platform == "all" || test_platform == current_platform;
-  }
-
   // Helper function to run a command using the existing process infrastructure
   static std::pair<int, std::string> runCommand(const std::string &cmd, const std::string_view &working_dir) {
     const auto env = boost::this_process::environment();
 
-    // Determine the working directory: use the provided working_dir or fall back to SUNSHINE_SOURCE_DIR
+    // Determine the working directory: use the provided working_dir or fall back to HERMES_SOURCE_DIR
     boost::filesystem::path effective_working_dir;
 
     if (!working_dir.empty()) {
       effective_working_dir = working_dir;
     } else {
-      // Use SUNSHINE_SOURCE_DIR CMake definition as the default working directory
-      effective_working_dir = SUNSHINE_SOURCE_DIR;
+      // Use HERMES_SOURCE_DIR build definition as the default working directory
+      effective_working_dir = HERMES_SOURCE_DIR;
     }
 
     std::error_code ec;
@@ -109,21 +83,11 @@ protected:
     return {exit_code, output};
   }
 
-public:
-  std::string current_platform;
 };
 
 // Test case implementation
 TEST_P(ExternalCommandTest, RunExternalCommand) {
-  const auto &[command, platform, should_succeed, description, working_directory, xfail_condition, xfail_reason] = GetParam();
-
-  // Skip test if not for the current platform
-  if (!shouldRunOnCurrentPlatform(platform)) {
-    GTEST_SKIP() << "Test not applicable for platform: " << current_platform;
-  }
-
-  // Use the xfail condition and reason from test data
-  XFAIL_IF(xfail_condition, xfail_reason);
+  const auto &[command, should_succeed, description, working_directory] = GetParam();
 
   BOOST_LOG(info) << "Running external command test: " << description;
   BOOST_LOG(debug) << "Command: " << command;
@@ -136,22 +100,19 @@ TEST_P(ExternalCommandTest, RunExternalCommand) {
   }
 
   if (should_succeed) {
-    HANDLE_XFAIL_ASSERT_EQ(exit_code, 0, std::format("Command should have succeeded but failed with exit code {}\nOutput: {}", std::to_string(exit_code), output));
+    EXPECT_EQ(exit_code, 0) << "Command should have succeeded\nOutput: " << output;
   } else {
-    HANDLE_XFAIL_ASSERT_NE(exit_code, 0, std::format("Command should have failed but succeeded\nOutput: {}", output));
+    EXPECT_NE(exit_code, 0) << "Command should have failed\nOutput: " << output;
   }
 }
-
-// Platform-specific command strings
-constexpr auto SIMPLE_COMMAND = IS_WINDOWS ? "where cmd" : "which sh";
 
 #ifdef UDEVADM_EXECUTABLE
   #define UDEV_TESTS \
     ExternalCommandTestData { \
-      std::format("{0} verify {1}/src_assets/linux/misc/60-hermes.rules {1}/src_assets/linux/misc/74-hermes-session-acl.rules", UDEVADM_EXECUTABLE, SUNSHINE_TEST_BIN_DIR), \
-      "linux", \
+      std::format("{0} verify {1}/src_assets/linux/misc/60-hermes.rules {1}/src_assets/linux/misc/74-hermes-session-acl.rules", UDEVADM_EXECUTABLE, HERMES_TEST_BIN_DIR), \
       true, \
-      "Test udev rules file" \
+      "Test udev rules file", \
+      "" \
     },
 #else
   #define UDEV_TESTS
@@ -163,22 +124,12 @@ INSTANTIATE_TEST_SUITE_P(
   ExternalCommandTest,
   ::testing::Values(
     UDEV_TESTS
-      // Cross-platform tests with xfail on Windows CI
-      ExternalCommandTestData {
-        SIMPLE_COMMAND,
-        "all",
-        true,
-        "Simple command test",
-        "",  // working_directory
-        IS_WINDOWS,  // xfail_condition
-        "Simple command test fails on Windows CI environment"  // xfail_reason
-      },
-    // Cross-platform failing test
+    ExternalCommandTestData {"which sh", true, "Simple command test", ""},
     ExternalCommandTestData {
       "non_existent_command_12345",
-      "all",
       false,
-      "Test command that should fail"
+      "Test command that should fail",
+      ""
     }
   ),
   [](const ::testing::TestParamInfo<ExternalCommandTestData> &info) {

@@ -2,7 +2,6 @@
  * @file tests/unit/platform/test_window_placement.cpp
  * @brief Placement must recognize supported command quoting and Steam entry types.
  */
-#ifdef __linux__
 #include <gtest/gtest.h>
 #include <boost/program_options/parsers.hpp>
 #include <src/platform/linux/window_placement.h>
@@ -91,5 +90,3 @@ TEST(WindowPlacement, RecognizesEveryWayAnAppStartsSteam) {
     EXPECT_FALSE(launches_steam(split_unix(command))) << command;
   }
 }
-
-#endif

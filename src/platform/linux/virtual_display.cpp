@@ -51,7 +51,7 @@
 #include <sys/un.h>
 #include <sys/utsname.h>
 #include <unistd.h>
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
   #include <systemd/sd-bus.h>
   #include <systemd/sd-login.h>
 #endif
@@ -68,7 +68,7 @@
 #include "src/utility.h"
 #include "virtual_display.h"
 #include "window_placement.h"
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
   #include "wayland.h"
 #endif
 
@@ -133,7 +133,7 @@ namespace VDISPLAY {
   }
 
   std::optional<bool> graphicalSessionPresent() {
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     char *session_raw = nullptr;
     const int status = sd_uid_get_display(::getuid(), &session_raw);
     const std::unique_ptr<char, decltype(&std::free)> session {session_raw, &std::free};
@@ -161,7 +161,7 @@ namespace VDISPLAY {
   }
 
   bool inLoginSession() {
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     char *session_raw = nullptr;
     const int status = sd_pid_get_session(0, &session_raw);
     std::free(session_raw);
@@ -172,7 +172,7 @@ namespace VDISPLAY {
   }
 
   std::optional<std::vector<std::string>> userManagerEnvironment() {
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     sd_bus *bus = nullptr;
     if (platf::open_user_bus(&bus) < 0 || !bus) {
       return std::nullopt;
@@ -209,7 +209,7 @@ namespace VDISPLAY {
   }
 
   bool unlockHostSessionIfLocked() {
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     // Hermes normally runs as a systemd user service, so its own PID is not a
     // reliable way to identify the graphical login session. Ask sd-login for
     // this uid's display session instead; this is the same session loginctl
@@ -2375,7 +2375,7 @@ namespace VDISPLAY {
    * for a greeter nobody saw, and one already kept is not released on a guess.
    */
   static std::optional<bool> greeter_holds_seat() {
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     char *session_raw = nullptr;
     const int status = sd_seat_get_active("seat0", &session_raw, nullptr);
     const std::unique_ptr<char, decltype(&std::free)> session {session_raw, &std::free};
@@ -3490,7 +3490,7 @@ namespace VDISPLAY {
       return have("kreadconfig6") && have("kwriteconfig6");
     }
 
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     static constexpr const char *kwin_service = "org.kde.KWin";
     static constexpr const char *input_device_manager_path = "/org/kde/KWin/InputDevice";
     static constexpr const char *input_device_interface = "org.kde.KWin.InputDevice";
@@ -3820,7 +3820,7 @@ namespace VDISPLAY {
     }
 #endif
 
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     /**
      * Windows of these classes, put on a session's virtual output by a KWin
      * script, keyed by the display the session made.
@@ -5500,7 +5500,7 @@ namespace VDISPLAY {
     /// stale geometry and reinitialises.
     static std::atomic<uint64_t> layout_generation {1};
 
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     struct watcher_t {
       sd_bus *bus {nullptr};
       sd_bus_slot *slot {nullptr};
@@ -6076,7 +6076,7 @@ namespace VDISPLAY {
     facts.wayland = window_system == window_system_e::WAYLAND;
     facts.x11 = window_system == window_system_e::X11;
 
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     if (facts.wayland) {
       const auto protocols = wl::probe_protocols();
       facts.output_management = protocols.output_management;
@@ -6124,13 +6124,13 @@ namespace VDISPLAY {
                                      window_system == window_system_e::WAYLAND ? "wayland" : "unknown";
     bool exclusive_layout_supported = window_system == window_system_e::X11;
     std::string output_layout_backend = exclusive_layout_supported ? "xrandr" : "unavailable";
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND && kscreen::available()) {
       exclusive_layout_supported = true;
       output_layout_backend = "kscreen-doctor";
     }
 #endif
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND) {
       if (!exclusive_layout_supported && wl::output_management_supported()) {
         exclusive_layout_supported = true;
@@ -6854,7 +6854,7 @@ namespace VDISPLAY {
       BOOST_LOG(info) << "[VDISPLAY] EVDI available - real virtual displays supported!";
     } else {
       BOOST_LOG(warning) << "[VDISPLAY] EVDI is unavailable; virtual-display sessions are disabled.";
-      BOOST_LOG(warning) << "[VDISPLAY] Install libevdi and load the evdi kernel module, then restart Apollo.";
+      BOOST_LOG(warning) << "[VDISPLAY] Install libevdi and load the evdi kernel module, then restart Hermes.";
       driver_status = DRIVER_STATUS::NOT_SUPPORTED;
       return driver_status;
     }
@@ -7857,7 +7857,7 @@ namespace VDISPLAY {
     if (mutter::available()) {
       return mutter::apply_output_mode(connector, width, height, refresh_mhz, deadline_ms);
     }
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     const bool applied = wl::configure_virtual_output(connector, width, height, refresh_mhz, false);
     if (applied && !getHyprlandOutputName(displayName).empty()) {
       if (virtual_display_layout(displayName) == virtual_display_layout_e::mirror) {
@@ -7980,7 +7980,7 @@ namespace VDISPLAY {
 
     /** Tell the desktop's screen saver that the user is active. */
     void simulate_user_activity() {
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
       sd_bus *bus = nullptr;
       if (platf::open_user_bus(&bus) < 0 || !bus) {
         return;
@@ -8198,7 +8198,7 @@ namespace VDISPLAY {
       return false;
     }
 
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND) {
       int width = 0;
       int height = 0;
@@ -8424,7 +8424,7 @@ namespace VDISPLAY {
       return enabled;
     }
 
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND) {
       int width = 0;
       int height = 0;
@@ -8488,7 +8488,7 @@ namespace VDISPLAY {
       return;
     }
 
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND) {
       if (!wl::restore_virtual_output_layout()) {
         BOOST_LOG(warning) << "[VDISPLAY] Failed to restore the Wayland display layout.";

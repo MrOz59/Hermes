@@ -1,10 +1,11 @@
-<script setup>
+<script setup lang="ts">
+import type { Configuration } from '../../config-types'
 import { ref } from 'vue'
 
-const props = defineProps([
-  'platform',
-  'config'
-])
+const props = defineProps<{
+  platform: string;
+  config: Configuration;
+}>()
 
 const config = ref(props.config)
 </script>

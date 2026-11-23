@@ -11,11 +11,12 @@
  * To run them against a compositor other than the desktop's:
  *
  *     WLR_BACKENDS=headless WLR_RENDER_DRM_DEVICE=/dev/dri/renderD128 labwc &
- *     WAYLAND_DISPLAY=wayland-1 ./tests/test_sunshine --gtest_filter='WaylandCapture*'
+ *     WAYLAND_DISPLAY=wayland-1 mcpp test --offline -p hermes-host --profile coverage \
+ *       -- --gtest_filter='WaylandCapture*'
  */
 #include "../../tests_common.h"
 
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
 
   #include <algorithm>
   #include <chrono>
@@ -312,4 +313,4 @@ TEST_F(WaylandCaptureTest, ProbeAgreesWithWhatWasBound) {
   EXPECT_EQ(probed.xdg_output, session->interface[wl::interface_t::XDG_OUTPUT]);
 }
 
-#endif  // SUNSHINE_BUILD_WAYLAND
+#endif  // HERMES_BUILD_WAYLAND

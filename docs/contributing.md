@@ -14,24 +14,20 @@ internals — the Web UI, localization and the test suites.
 ## Project Patterns
 
 ### Web UI
-* The Web UI uses [Vite](https://vitejs.dev) as its build system.
+* The Web UI uses [Vite](https://vite.dev) and its Rolldown bundler.
+* [Bun](https://bun.com) runs the build, type checks, and tests.
 * The HTML pages used by the Web UI are found in `./src_assets/common/assets/web`.
-* [EJS](https://www.npmjs.com/package/vite-plugin-ejs) is used as a templating system for the pages
-  (check `template_header.html` and `template_header_main.html`).
 * The Style System is provided by [Bootstrap](https://getbootstrap.com).
-* The JS framework used by the more interactive pages is [Vue.js](https://vuejs.org).
+* [Vue](https://vuejs.org) single-file components hold the page templates and TypeScript.
 
 #### Building
 
-@tabs{
-  @tab{CMake | ```bash
-    cmake -B build -G Ninja -S . --target web-ui
-    ninja -C build web-ui
-    ```}
-  @tab{Manual | ```bash
-    npm run dev
-    ```}
-}
+From `src_assets/common/assets/web`, run `bun install --frozen-lockfile`, then
+`bun run dev` for front-end development. Run `bun run docs:assets` from the same
+directory before invoking Doxygen.
+Read the Docs runs this step automatically. Use the
+[`web-assets` build feature](building.md#build-locally) to build and stage the
+production pages with the Hermes executable.
 
 ### Localization
 The strings Hermes ships are inherited from Sunshine's localization, and the default language is `en` (English).
@@ -131,41 +127,23 @@ runs both on every push and pull request. Nothing else is gated: this fork has n
 clang-format lint job and no coverage upload, so run these locally before opening a PR.
 
 #### C++ unit tests
-Hermes uses [Google Test](https://github.com/google/googletest), included as a submodule. The test sources are in
-`./tests`. They are built by the normal build process when `BUILD_TESTS` is `ON`, and can be turned off with `OFF`.
 
-Configure and build the same way CI does:
-
-```bash
-cmake -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DSUNSHINE_ENABLE_WAYLAND=ON \
-  -DSUNSHINE_ENABLE_X11=ON \
-  -DSUNSHINE_ENABLE_DRM=ON \
-  -DSUNSHINE_ENABLE_CUDA=OFF \
-  -DBUILD_TESTS=ON
-cmake --build build --target test_sunshine -j$(nproc)
-```
-
-The suite is a single GoogleTest binary with no ctest registration, so run it directly. On a headless machine run it
-under `xvfb`, so `platf::init()` finds an X11 capture source — without one the platform-dependent suites fail their
-setup rather than skipping:
+Hermes uses [GoogleTest](https://github.com/google/googletest), included as a
+submodule. The suite compiles the host sources with test hooks and coverage
+instrumentation. Prepare the [local mcpp toolchain](modularization/mcpp-migration.md)
+and run from the repository root.
 
 ```bash
-xvfb-run -a ./build/tests/test_sunshine --gtest_color=yes
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  xvfb-run -a mcpp test --offline -p hermes-host --features kwin,web-assets \
+  --profile coverage -- --gtest_color=yes
 ```
 
-To see all available options, run the tests with the `--help` flag.
-
-```bash
-./build/tests/test_sunshine --help
-```
-
-Cases that need hardware the machine does not have skip themselves. The Wayland suites need a compositor on
-`WAYLAND_DISPLAY`; CI starts a headless wlroots compositor for them, and without one they skip.
-
-> [!TIP]
-> See the googletest [FAQ](https://google.github.io/googletest/faq.html) for more information on how to use Google Test.
+Xvfb supplies an X11 capture source on a headless machine. Pass GoogleTest
+options after `--`, such as `--gtest_filter='SessionBroker*'`. Wayland cases
+use the compositor identified by `WAYLAND_DISPLAY`. CI runs a second pass
+against a headless compositor to exercise output layout and scaling.
+Cases that need unavailable hardware report a skip.
 
 #### Network lifecycle tests without a GPU
 
@@ -177,16 +155,15 @@ tests also exercise the actual helper pipe code with deliberately inheritable
 sockets, full-size/empty content, failed commands, and broken pipes. The target supplements the full suite;
 it does not exercise RTSP negotiation, capture, or actual client sessions.
 
-On Ubuntu, install `cmake`, `ninja-build`, `libboost-log-dev`,
-`libboost-system-dev`, and `nlohmann-json3-dev`, then run:
+Use the project-local [mcpp toolchain setup](modularization/mcpp-migration.md).
+Run from the repository root.
 
 ```bash
 git submodule update --init third-party/googletest third-party/moonlight-common-c
 git -C third-party/moonlight-common-c submodule update --init enet
-cmake -S tests/network_lifecycle -B build-network -G Ninja \
-  -DCMAKE_BUILD_TYPE=Debug -DHERMES_TEST_SANITIZERS=ON
-cmake --build build-network --parallel 2
-ctest --test-dir build-network --output-on-failure
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  mcpp run --offline --profile sanitize -p hermes-network-lifecycle \
+  network_lifecycle_tests -- --gtest_color=yes
 ```
 
 The `Network lifecycle regressions` workflow runs this target with AddressSanitizer,
@@ -195,12 +172,15 @@ LeakSanitizer's process inspection, `ASAN_OPTIONS=detect_leaks=0` allows the oth
 sanitizers to run; leak detection must still run on an unrestricted CI runner.
 
 #### Web UI tests
-The Web UI is tested with [Vitest](https://vitest.dev), on its own config: `vite.config.js` is driven by the CMake
-environment and builds the pages through ejs, neither of which a unit test needs.
+The Web UI tests run with Bun. The production Vite configuration takes asset
+paths from the native build and emits eight HTML pages with precompiled Vue
+templates.
 
 ```bash
-npm install
-npm test
+cd src_assets/common/assets/web
+bun install --frozen-lockfile
+bun run typecheck
+bun run test
 ```
 
 #### Clang Format

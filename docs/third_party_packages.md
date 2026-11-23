@@ -6,10 +6,9 @@ built by CI and published at
 [Getting Started](getting_started.md) for the list.
 
 > [!WARNING]
-> Packages named *sunshine* or *apollo* in distribution repositories, the AUR,
-> Chocolatey, Scoop, nixpkgs, Solus or Homebrew are **different programs**, not
-> repackaged Hermes. They can be installed alongside Hermes, but only one of
-> them can run at a time: all three bind ports 47984, 47989 and 47990.
+> Packages named *sunshine* or *apollo* provide their own streaming hosts.
+> They can be installed alongside Hermes. Run one host at a time because all
+> three bind ports 47984, 47989 and 47990.
 >
 > In the AUR specifically, the package named `hermes` is an unrelated PAM
 > authentication project. The Hermes package built from this repository is named
@@ -22,7 +21,7 @@ is maintained by someone who runs that distribution is worth linking here.
 
 | Previous                      |                                            Next |
 |:------------------------------|------------------------------------------------:|
-| [Docker](../DOCKER_README.md) | [Gamestream Migration](gamestream_migration.md) |
+| [Docker](container.md) | [Gamestream Migration](gamestream_migration.md) |
 
 </div>
 

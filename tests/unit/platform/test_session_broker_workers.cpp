@@ -2,7 +2,6 @@
 /** @file test_session_broker_workers.cpp
  *  @brief Real-process concurrency, limits and ownership for broker workers.
  */
-#if defined(__linux__)
   #include "tools/session-broker-workers.h"
 
   #include <chrono>
@@ -121,4 +120,3 @@ namespace {
     EXPECT_EQ(errno, ECHILD);
   }
 }  // namespace
-#endif

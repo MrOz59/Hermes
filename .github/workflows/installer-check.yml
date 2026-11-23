@@ -22,7 +22,7 @@ jobs:
   installer:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Check bash syntax and CLI entrypoint
         shell: bash
         run: |
@@ -55,7 +55,7 @@ jobs:
   dry-run:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Dry runs against the published releases
         shell: bash
         env:

@@ -23,8 +23,8 @@ ARG BASE_IMAGE=docker.io/cachyos/cachyos:latest
 
 FROM ${BASE_IMAGE} AS runtime
 
-LABEL org.opencontainers.image.title="hermes-sunshine" \
-    org.opencontainers.image.description="Dockerized Sunshine/Hermes game streaming host on CachyOS" \
+LABEL org.opencontainers.image.title="Hermes" \
+    org.opencontainers.image.description="Hermes game streaming host on CachyOS" \
     org.opencontainers.image.source="https://github.com/MrOz59/Hermes"
 
 ARG HERMES_REPO=MrOz59/Hermes

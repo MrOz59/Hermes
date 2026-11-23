@@ -14,7 +14,7 @@ cd Hermes
 ```
 
 Prepare the [local toolchain and development inputs](modularization/mcpp-migration.md)
-for your distribution. For the Web UI, install the project's locked dependencies with the Bun version in `src_assets/common/assets/web/package.json`
+for your distribution. For the Web UI, use the Bun version in `src_assets/common/assets/web/package.json` and install the locked frontend dependencies
 in the checkout before building.
 
 ```bash

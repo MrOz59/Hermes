@@ -25,7 +25,9 @@ internals — the Web UI, localization and the test suites.
 From `src_assets/common/assets/web`, run `bun install --frozen-lockfile`, then
 `bun run dev` for front-end development. Run `bun run docs:assets` from the same
 directory before invoking Doxygen.
-Read the Docs runs this step automatically. Use the
+Read the Docs runs this step automatically with Doxygen and Graphviz. To render the same site locally,
+put Bun, Doxygen, Graphviz, jq, and unzip on PATH and run `scripts/build-readthedocs.sh`.
+The HTML is written to `target/docs/html` by default. Use the
 [`web-assets` build feature](building.md#build-locally) to build and stage the
 production pages with the Hermes executable.
 
@@ -99,21 +101,20 @@ some situations. For example the system tray icon could be localized as it is us
 > The below is for information only. Contributors should never include manually updated template files, or
 > manually compiled language files in Pull Requests.
 
-Strings are extracted from the code to the `locale/sunshine.po` template file. Upstream generates it from a
+Strings are extracted from the code to the `locale/hermes.po` template file. Upstream generates it from a
 `localize.yml` workflow; this fork has no such workflow, so extract locally when you add a translatable C++ string.
 
-When testing locally it may be desirable to manually extract, initialize, update, and compile strings. Python is
-required for this, along with the python dependencies in the `./scripts/requirements.txt` file. Additionally,
-[xgettext](https://www.gnu.org/software/gettext) must be installed.
+To maintain native translations locally, install [GNU gettext](https://www.gnu.org/software/gettext), which
+supplies `xgettext`, `msginit`, `msgmerge`, and `msgfmt`. This is separate from the Web UI's JSON translations.
 
 * Extract, initialize, and update
   ```bash
-  python ./scripts/_locale.py --extract --init --update
+  ./scripts/_locale.sh --extract --init --update
   ```
 
 * Compile
   ```bash
-  python ./scripts/_locale.py --compile
+  ./scripts/_locale.sh --compile
   ```
 
 > [!IMPORTANT]
@@ -193,7 +194,7 @@ find ./ -iname *.cpp -o -iname *.h -iname *.m -iname *.mm | xargs clang-format -
 
 Option 2 (will modify files):
 ```bash
-python ./scripts/update_clang_format.py
+./scripts/update_clang_format.sh
 ```
 
 <div class="section_buttons">

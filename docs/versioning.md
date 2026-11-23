@@ -16,7 +16,7 @@ else (e.g. `0.1.0`). Everything derives from it:
 
 | Consumer            | How it reads the version                                  |
 |---------------------|-----------------------------------------------------------|
-| mcpp / C++ build    | [The version generator](../mcpp/host/generate-version.py) reads `VERSION` and generates the `PROJECT_VERSION` macro for the boot log and Web UI/API. |
+| mcpp / C++ build    | [The version generator](../mcpp/host/generate-version.sh) reads `VERSION` and generates the `PROJECT_VERSION` macro for the boot log and Web UI/API. |
 | WebUI               | `src_assets/common/assets/web/package.json` `version` field (kept in sync by the bump script). |
 | `.deb` / `.rpm`     | The CI packaging steps use the build version computed by the `version` job. |
 | Arch package        | CI rewrites `pkgver` in the `PKGBUILD` to the build version before `makepkg`. |

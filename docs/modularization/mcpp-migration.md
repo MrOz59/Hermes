@@ -35,7 +35,8 @@ Put the following development inputs in `.toolchain/`.
 | `acl/include` and `acl/lib` | libacl development files for the session broker |
 
 Initialize the Git submodules, including `third-party/build-deps` for Hermes'
-pinned FFmpeg and codec archives. For a Web UI build, install the Bun version in
+pinned FFmpeg and codec archives. The native version action and PyroWave SDK installer use Bash and jq.
+For a Web UI build, install the Bun version in
 `src_assets/common/assets/web/package.json` and run
 `bun install --cwd src_assets/common/assets/web --frozen-lockfile` before
 the native build. The offline asset action runs `bun run build` in that directory.
@@ -102,12 +103,20 @@ access to the session runtime directory.
 
 ```sh
 MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
-  mcpp build --offline --release -p hermes-kms-card-broker -p hermes-session-broker
+  mcpp build --offline --release -p hermes-kms-card-broker -p hermes-session-broker \
+    -p hermes-detached-session -p hermes-posix-fixtures
 ```
 
-Pass the resulting executables to `scripts/card-broker-test.sh` and
-`scripts/session-broker-concurrency-test.py`. Both use temporary fixtures. The
-session broker's end-to-end test requires a disposable Linux VM.
+Pass the resulting broker and fixture executable paths to the corresponding checks.
+
+- `scripts/card-broker-test.sh <card-broker> <hermes-broker-socket-test>`
+- `<hermes-broker-socket-test> session-concurrency <session-broker>`
+- `<hermes-wayland-peer-test> <hermes-detached-session> <hermes-wayland-peer-check>`
+
+These checks use temporary fixtures. The Wayland check accepts
+`--no-listener` before its executable arguments for a restricted sandbox.
+The [session broker's end-to-end test](../libvirtualhid-experimental.md)
+requires a disposable Linux VM.
 
 Run the full Linux GoogleTest suite from the repository root so it can read
 the source fixtures. Use a short temporary directory for Unix socket tests
@@ -129,7 +138,7 @@ features.
 MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
   mcpp build --offline --release -p hermes-host \
   --features cuda,kwin,package-assets,xtest,pyrowave,tray
-host_result=$(python3 -c 'import json, pathlib; print(json.loads(pathlib.Path("target/.last-result.json").read_text())["data"]["result"])')
+host_result=$(jq -er '.data.result | strings | select(length > 0)' target/.last-result.json)
 
 MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
   mcpp build --offline --release -p hermes-kms-card-broker \

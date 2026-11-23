@@ -18,7 +18,7 @@ namespace {
   namespace fs = std::filesystem;
 
   void add_version_action(const fs::path &manifest, const fs::path &root, const fs::path &out, const fs::path &pyrowave_library) {
-    const auto generator = (manifest / "generate-version.py").string();
+    const auto generator = (manifest / "generate-version.sh").string();
     const auto version = (root / "VERSION").string();
     const auto header = (out / "hermes-build-version.h").string();
     const auto depfile = (out / "hermes-build-version.d").string();
@@ -31,9 +31,9 @@ namespace {
     action.id = "hermes-version";
     action.role = mcpp::roles::source;
     action.depfile = depfile.c_str();
-    action.arg("python3").arg(generator.c_str()).arg(repo.c_str())
+    action.arg("bash").arg(generator.c_str()).arg(repo.c_str())
       .arg(header.c_str()).arg(depfile.c_str())
-      .input(generator.c_str()).input(version.c_str()).output(header.c_str());
+      .input(generator.c_str()).input((manifest / "depfile.sh").c_str()).input(version.c_str()).output(header.c_str());
     if (!pyrowave_library.empty()) {
       action.arg(pyrowave_library.c_str()).input(pyrowave_library.c_str());
     }

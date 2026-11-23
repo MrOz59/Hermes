@@ -58,7 +58,6 @@ package-lock.json
 .DS_Store
 
 # Python
-*.pyc
 venv/
 
 # Build directories

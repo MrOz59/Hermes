@@ -1,9 +1,12 @@
 import type {Config} from '@docusaurus/types';
 import type {Options, ThemeConfig} from '@docusaurus/preset-classic';
 import {themes as prismThemes} from 'prism-react-renderer';
+import {parseFrontMatter, resolveDocSourceLink} from './content-routing';
+import {companionPath, localDocs, remoteSources} from './content-sources.mjs';
 
 const repository = 'https://github.com/MrOz59/Hermes';
 const publishedUrl = process.env.HERMES_DOCS_URL;
+const companionDocs = remoteSources.flatMap(source => source.paths.map(path => companionPath(source, path)));
 
 export default {
   title: 'Hermes documentation',
@@ -19,17 +22,20 @@ export default {
   onDuplicateRoutes: 'throw',
   markdown: {
     format: 'detect',
+    parseFrontMatter,
     hooks: {onBrokenMarkdownLinks: 'throw'},
   },
 
   presets: [
     ['classic', {
       docs: {
-        path: '..',
+        path: '../..',
         routeBasePath: '/',
         sidebarPath: './sidebars.ts',
-        exclude: ['**/_*.{md,mdx}', '**/_*/**', '**/*.test.{md,mdx}', '**/__tests__/**', 'codex/**', 'feed/**', 'site/**'],
-        editUrl: repository + '/edit/main/docs/',
+        include: [...localDocs, ...companionDocs],
+        exclude: ['**/_*.{md,mdx}', '**/_*/**', '**/*.test.{md,mdx}', '**/__tests__/**', 'docs/codex/**', 'docs/feed/**', 'docs/site/**'],
+        beforeDefaultRemarkPlugins: [resolveDocSourceLink],
+        editUrl: ({docPath}) => docPath.startsWith('docs/') ? repository + '/edit/main/' + docPath : undefined,
       },
       blog: false,
       theme: {customCss: './src/css/custom.css'},

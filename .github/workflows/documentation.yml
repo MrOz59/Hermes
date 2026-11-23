@@ -5,6 +5,10 @@ on:
     paths:
       - '.github/workflows/documentation.yml'
       - 'docs/**'
+      - 'rust/**/README.md'
+      - 'rust/**/docs/**'
+      - 'mcpp/**/README.md'
+      - 'mcpp/**/docs/**'
       - 'src/**'
       - 'src_assets/common/branding/**'
       - 'VERSION'
@@ -12,6 +16,10 @@ on:
     paths:
       - '.github/workflows/documentation.yml'
       - 'docs/**'
+      - 'rust/**/README.md'
+      - 'rust/**/docs/**'
+      - 'mcpp/**/README.md'
+      - 'mcpp/**/docs/**'
       - 'src/**'
       - 'src_assets/common/branding/**'
       - 'VERSION'
@@ -22,11 +30,13 @@ permissions:
 
 concurrency:
   group: documentation-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.repository != 'MrOz59/Hermes' || github.ref != 'refs/heads/main' }}
 
 jobs:
   build:
     runs-on: ubuntu-26.04
+    env:
+      PUBLISH_PAGES: ${{ github.repository == 'MrOz59/Hermes' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     defaults:
       run:
         working-directory: docs/site
@@ -57,9 +67,16 @@ jobs:
           "$bin/doxygen" --version
           echo "$bin" >> "$GITHUB_PATH"
       - run: npm ci
-      - run: npm run build
+      - name: Build documentation
+        run: |
+          if [[ "$PUBLISH_PAGES" == true ]]; then
+            export HERMES_DOCS_URL=https://mroz59.github.io
+            export HERMES_DOCS_BASE_URL=/Hermes/
+          fi
+          npm run build
       - name: Verify reference and search artifacts
         run: |
+          test -s build/developers/rust/index.html
           test -s build/reference/cpp/http_api.htm
           test -s build/reference/cpp/modules.htm
           test -s build/reference/cpp/confighttp_8cpp__incl.svg
@@ -70,3 +87,36 @@ jobs:
           path: docs/site/build
           if-no-files-found: error
           retention-days: 7
+
+      - name: Upload GitHub Pages artifact
+        if: env.PUBLISH_PAGES == 'true'
+        uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: docs/site/build
+
+  deploy:
+    if: github.repository == 'MrOz59/Hermes' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: build
+    runs-on: ubuntu-26.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@v6.0.0
+      - name: Verify the Pages address
+        env:
+          PAGES_ORIGIN: ${{ steps.pages.outputs.origin }}
+          PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: |
+          if [[ "$PAGES_ORIGIN" != https://mroz59.github.io || "${PAGES_BASE_PATH%/}" != /Hermes ]]; then
+            echo "::error::Hermes docs expect GitHub Pages at https://mroz59.github.io/Hermes/."
+            exit 1
+          fi
+      - name: Deploy GitHub Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v5.0.1

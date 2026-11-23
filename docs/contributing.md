@@ -44,7 +44,8 @@ production site in `docs/site/build/`. Preview that build with
 
 For a hosted build, set `HERMES_DOCS_URL` to the site's origin and
 `HERMES_DOCS_BASE_URL` to its path, such as `/Hermes/`. Use the same values for
-the build and preview. CI uploads the built site as an artifact.
+the build and preview. CI uploads the built site as an artifact. GitHub Pages
+setup is documented in `docs/site/README.md`.
 
 Edit guides in `docs/`, group them in `docs/site/sidebars.ts`, and edit the
 homepage in `docs/site/src/pages/index.tsx`. Edit the C++ source comments to
@@ -52,6 +53,36 @@ update the generated API reference. Use `.cppm` for
 named module interfaces and place a brief Doxygen comment before the
 `export module` declaration. Doxygen reads these declarations directly and
 lists them in the [C++ module index](pathname:///reference/cpp/modules.htm).
+
+#### Documentation sources
+
+The site uses one Docusaurus collection so the guides, package docs, and
+companion docs share link checking and search. Routes are relative to the
+site's base path.
+
+| Source | Where it appears |
+| --- | --- |
+| Hermes guides in `docs/` | Existing routes such as `/building` and `/configuration` |
+| Package READMEs and `docs/` under `rust/` or `mcpp/` | Developers → Package docs, at `/developers/rust` or under `/developers/mcpp/` |
+| Selected Hestia-rs and Hermes-KMS Markdown | Project → Companion projects, under `/companions/<project>/` |
+
+Edit local docs in place. Use relative Markdown links, such as a link from
+`docs/building.md` to `../rust/README.md`, so they work in GitHub and Docusaurus.
+For a new source directory, add its Markdown pattern to `localDocs` in
+`docs/site/content-sources.mjs` and wire its route and sidebar. New READMEs and
+Markdown in package `docs/` directories already match the allowlist.
+
+Add or update a companion in `remoteSources` in the same registry. Set the
+repository, full commit SHA, license, and selected Markdown paths, including
+its root README. Imported pages retain a link to the pinned original and the
+upstream license. Builds and previews fetch the selected files into
+`target/docs-content/`, with the download cache under `cache/`.
+
+After the first build has warmed the cache, use it for an offline build.
+
+```bash
+HERMES_DOCS_OFFLINE=1 npm --prefix docs/site run build
+```
 
 ### Localization
 The strings Hermes ships are inherited from Sunshine's localization, and the default language is `en` (English).

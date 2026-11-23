@@ -2,10 +2,11 @@
   "name": "hermes-docs",
   "private": true,
   "scripts": {
+    "prepare:content": "node prepare-content.mjs",
     "build:reference": "rm -rf .generated/reference/cpp && mkdir -p .generated/reference/cpp && HERMES_VERSION=\"$(cat ../../VERSION)\" doxygen cpp-reference/Doxyfile && test -s .generated/reference/cpp/index.htm && test -s .generated/reference/cpp/http_api.htm",
-    "prebuild": "npm run build:reference",
+    "prebuild": "npm run prepare:content && npm run build:reference",
     "build": "docusaurus build",
-    "prestart": "npm run build:reference",
+    "prestart": "npm run prepare:content && npm run build:reference",
     "start": "docusaurus start",
     "serve": "docusaurus serve"
   },

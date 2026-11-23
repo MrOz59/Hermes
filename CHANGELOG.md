@@ -106,6 +106,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 
 ### Fixed
+- The video and audio sockets no longer share one sender address while both
+  wait for a packet (from PunkUnity). A client's video and audio pings arriving
+  together could overwrite each other's address, so Hermes could send a stream
+  to the wrong port and the stream started without picture or sound. Each
+  socket now has its own (as Sunshine fixed in #6021).
 - Stopping the desktop's Steam before a session, and starting it again after a
   nested Gamescope app, works with Flatpak Steam too (from PunkUnity). Its pid
   file is in the Flatpak's home and holds a pid from inside the sandbox, so

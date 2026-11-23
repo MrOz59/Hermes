@@ -9,6 +9,8 @@ on:
       - 'src/platform/linux/process_group.h'
       - 'src/process.cpp'
       - 'tests/display_restore/**'
+      - 'mcpp.toml'
+      - 'scripts/prepare-mcpp-ci.sh'
       - '.github/workflows/monitor-restore.yml'
   workflow_dispatch:
 
@@ -18,16 +20,21 @@ permissions:
 jobs:
   restore:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    strategy:
-      matrix:
-        standard: [c++17, c++23]
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - name: Compile production restoration and subprocess helpers with sanitizers
+      - uses: actions/checkout@v7.0.1
+      - name: Install GCC 14 and Ninja
         run: |
-          g++ -std=${{ matrix.standard }} -Wall -Wextra -Werror -pedantic -pthread \
-            -fsanitize=address,undefined -fno-omit-frame-pointer -g -I. \
-            tests/display_restore/monitor_restore.cc -o /tmp/hermes-monitor-restore
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl g++-14 ninja-build
+      - name: Prepare mcpp with the runner toolchain
+        run: |
+          export MCPP_HOME="$RUNNER_TEMP/hermes-monitor-mcpp"
+          export MCPP_TOOLCHAIN="path:$RUNNER_TEMP/hermes-monitor-gcc"
+          scripts/prepare-mcpp-ci.sh 14
+          printf 'MCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\n' "$MCPP_HOME" "$MCPP_TOOLCHAIN" >> "$GITHUB_ENV"
+          printf '%s\n' "$MCPP_HOME/bin" >> "$GITHUB_PATH"
+      - name: Compile production restoration and subprocess helpers with sanitizers
+        run: mcpp build --offline --profile sanitize -p hermes-monitor-restore
       - name: Verify partial recovery, retries, headless layouts and real helper timeouts
-        run: /tmp/hermes-monitor-restore
+        run: mcpp run --offline --profile sanitize -p hermes-monitor-restore hermes-monitor-restore

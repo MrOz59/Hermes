@@ -1,9 +1,7 @@
 # Hermes in a container
 
 A runtime image that runs Hermes on a headless Wayland session (sway), with
-audio, XWayland and an optional Steam Big Picture session. This is distinct from
-`docker/` at the repository root, which holds *build* images inherited from
-Sunshine and produces no runnable host.
+audio, XWayland and an optional Steam Big Picture session.
 
 It is the practical way to run Hermes on a distribution that cannot install it
 normally — Bazzite, Silverblue, SteamOS and other image-based systems — because

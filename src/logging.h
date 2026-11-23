@@ -16,7 +16,7 @@ extern boost::log::sources::severity_logger<int> info;
 extern boost::log::sources::severity_logger<int> warning;
 extern boost::log::sources::severity_logger<int> error;
 extern boost::log::sources::severity_logger<int> fatal;
-#ifdef SUNSHINE_TESTS
+#ifdef HERMES_TESTS
 extern boost::log::sources::severity_logger<int> tests;
 #endif
 

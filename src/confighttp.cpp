@@ -25,17 +25,13 @@
 #include <iterator>
 #include <cctype>
 #include <mutex>
-#ifndef _WIN32
   #include <sys/utsname.h>
   #include <unistd.h>
-#endif
-#ifdef __linux__
   #include <cerrno>
   #include <cstring>
   #include <fcntl.h>
   #include <sys/stat.h>
   #include <unistd.h>
-#endif
 
 // lib includes
 #include <boost/algorithm/string.hpp>
@@ -65,16 +61,9 @@
 #include "utility.h"
 #include "uuid.h"
 #include "video.h"
-#ifdef __linux__
   #include "platform/linux/misc.h"
-#endif
 
-#ifdef _WIN32
-  #include "platform/windows/utils.h"
-#endif
-#ifdef __linux__
   #include "platform/linux/prelogin.h"
-#endif
 
 using namespace std::literals;
 
@@ -206,7 +195,6 @@ namespace confighttp {
   std::string sessionCookie;
   static std::chrono::time_point<std::chrono::steady_clock> cookie_creation_time;
 
-#ifdef __linux__
   /**
    * @brief A bearer token any local process of this user may present.
    *
@@ -326,14 +314,12 @@ namespace confighttp {
     }
     return true;
   }
-#endif
 
   // 0 = idle, 1 = running, 2 = succeeded, 3 = failed/cancelled.
   static std::atomic<int> evdi_install_status {0};
   // 0 = idle, 1 = running, 2 = succeeded, 3 = failed/cancelled.
   static std::atomic<int> clipboard_install_status {0};
 
-#ifdef __linux__
   static const char *evdi_diagnostic_name(VDISPLAY::EVDI_DIAGNOSTIC diagnostic) {
     switch (diagnostic) {
       case VDISPLAY::EVDI_DIAGNOSTIC::READY:
@@ -613,7 +599,6 @@ namespace confighttp {
       {"manualInstall", "Arch/CachyOS: sudo pacman -S --needed wl-clipboard xclip\nDebian/Ubuntu: sudo apt install wl-clipboard xclip\nFedora: sudo dnf install wl-clipboard xclip"},
     };
   }
-#endif
 
   /**
    * @brief Log the request details.
@@ -745,7 +730,6 @@ namespace confighttp {
         send_unauthorized(response, request);
       }
     });
-#ifdef __linux__
     // Checked after the origin and the first-run redirect, never before: the
     // token is a way for a local process to skip typing a password it already
     // effectively holds, not a way around either of those.
@@ -753,7 +737,6 @@ namespace confighttp {
       fg.disable();
       return true;
     }
-#endif
     if (sessionCookie.empty())
       return false;
     // Check for expiry
@@ -855,7 +838,7 @@ namespace confighttp {
    * A missing asset used to be served as an empty 200: read_file() returns an
    * empty string and only says so at debug level, so the browser rendered a
    * blank page and the log held nothing to explain it. That is what a build or
-   * package with the wrong SUNSHINE_ASSETS_DIR looks like from the outside, and
+   * package with the wrong HERMES_ASSETS_DIR looks like from the outside, and
    * it is indistinguishable from the UI itself being broken. Fail loudly with
    * the path we actually looked at instead.
    */
@@ -869,8 +852,8 @@ namespace confighttp {
     const std::string content = file_handler::read_file(path.c_str());
     if (content.empty()) {
       BOOST_LOG(error) << "Web UI asset missing or empty: ["sv << path << ']';
-      BOOST_LOG(error) << "Hermes was built with assets in ["sv << SUNSHINE_ASSETS_DIR
-                       << "]; reinstall the package or rebuild with a matching SUNSHINE_ASSETS_DIR."sv;
+      BOOST_LOG(error) << "Hermes was built with assets in ["sv << HERMES_ASSETS_DIR
+                       << "]; reinstall the package or rebuild with a matching HERMES_ASSETS_DIR."sv;
       response->write(
         SimpleWeb::StatusCode::server_error_internal_server_error,
         "Web UI assets are missing on the server. See the Hermes log for the expected path."
@@ -1441,9 +1424,6 @@ namespace confighttp {
     nlohmann::json named_certs = nvhttp::get_all_clients();
     nlohmann::json output_tree;
     output_tree["named_certs"] = named_certs;
-#ifdef _WIN32
-    output_tree["platform"] = "windows";
-#endif
     output_tree["status"] = true;
     send_response(response, output_tree);
   }
@@ -1568,12 +1548,11 @@ namespace confighttp {
   nlohmann::json computed_config_json() {
     nlohmann::json output_tree;
     output_tree["status"] = true;
-    output_tree["platform"] = SUNSHINE_PLATFORM;
+    output_tree["platform"] = "linux";
     output_tree["version"] = PROJECT_VERSION;
     output_tree["version_commit"] = PROJECT_VERSION_COMMIT;
     output_tree["vdisplayStatus"] = (int)proc::vDisplayDriverStatus;
     output_tree["streamPorts"] = stream_ports_json();
-#ifdef __linux__
     output_tree["evdiSetupRequired"] = VDISPLAY::needsInitialDeviceConfiguration();
     output_tree["evdiInfo"] = evdi_status_json();
     output_tree["evdiDiagnostic"] = output_tree["evdiInfo"]["diagnostic"];
@@ -1581,7 +1560,6 @@ namespace confighttp {
     output_tree["hermesKmsDiagnostic"] = output_tree["hermesKmsInfo"]["diagnostic"];
     output_tree["clipboardInfo"] = clipboard_status_json();
     output_tree["preloginInfo"] = prelogin_status_json();
-#endif
     return output_tree;
   }
 
@@ -1862,17 +1840,10 @@ namespace confighttp {
         send_hestia_error(response, SimpleWeb::StatusCode::client_error_bad_request, "unsupported_codec_mode", "PyroWave currently supports SDR streams only");
         return;
       }
-#ifdef _WIN32
-      if (app["launch_mode"] == "gamescope") {
-        send_hestia_error(response, SimpleWeb::StatusCode::client_error_bad_request, "unsupported_feature", "Gamescope is only available on Linux hosts");
-        return;
-      }
-#else
       if (app["launch_mode"] == "gamescope" && boost::process::v1::search_path("gamescope").empty()) {
         send_hestia_error(response, SimpleWeb::StatusCode::client_error_bad_request, "unsupported_feature", "Gamescope is not available on this host");
         return;
       }
-#endif
       const auto client = std::static_pointer_cast<crypto::named_cert_t>(request->userp);
       nvhttp::store_hestia_session_prepare(client->uuid, {
         .virtual_display = virtual_display["enabled"].get<bool>(),
@@ -1929,7 +1900,6 @@ namespace confighttp {
   }
 
   nlohmann::json hestia_display_status_json() {
-#ifdef __linux__
     const auto evdi_status = VDISPLAY::getEvdiStatus();
     const bool virtual_display_active = !evdi_status.active_displays.empty();
     const auto *display = virtual_display_active ? &evdi_status.active_displays.front() : nullptr;
@@ -1958,15 +1928,6 @@ namespace confighttp {
         {"kscreen_output", display ? display->name : ""},
       }},
     };
-#else
-    return {
-      {"ok", true},
-      {"active", false},
-      {"virtual_display", {{"enabled", false}, {"name", ""}, {"backend", "none"}, {"width", 0}, {"height", 0}, {"fps", 0}, {"hdr", false}}},
-      {"physical_display", {{"disabled_during_stream", false}, {"saved_primary", ""}, {"recovery_state_exists", false}}},
-      {"desktop", {{"environment", "unknown"}, {"kscreen_available", false}, {"kscreen_output", ""}}},
-    };
-#endif
   }
 
   void get_hestia_display_status(resp_https_t response, req_https_t request) {
@@ -1999,9 +1960,7 @@ namespace confighttp {
       if (proc::proc.running() > 0) {
         proc::proc.terminate();
       } else {
-#ifdef __linux__
         VDISPLAY::restoreExclusiveVirtualDisplay();
-#endif
         // The monitors are coming back, so whatever sink left with them can be
         // waited for and put back as the default. terminate() does this for the
         // branch above.
@@ -2184,7 +2143,6 @@ namespace confighttp {
       {"session_environment", appliance.session_environment},
     };
 
-#ifdef __linux__
     // Hermes-KMS device counters: the zero-copy capture path's own view of how
     // many frames were updated, acquired, exported, and waited on. Only present
     // when the hermes_kms backend is selected and a metrics-capable device is
@@ -2227,7 +2185,6 @@ namespace confighttp {
         runtime["hermes_kms"] = nullptr;
       }
     }
-#endif
 
     return runtime;
   }
@@ -2273,7 +2230,6 @@ namespace confighttp {
           "No active display detected; a virtual display will be created for the session if configured.");
     }
 
-#ifdef __linux__
     // Virtual-display backend readiness (Linux only).
     const auto evdi = VDISPLAY::getEvdiStatus();
     const auto env = [](const char *name) {
@@ -2344,7 +2300,6 @@ namespace confighttp {
                " Hermes-KMS " + kms.driver_version + " is installed and ready if you switch." :
                std::string {}));
     }
-#endif
 
     // Session/compositor environment (informational).
     const auto session_env = platf::detect_session_environment();
@@ -2358,11 +2313,7 @@ namespace confighttp {
       return;
     }
 
-#ifdef __linux__
     send_response(response, {{"ok", true}, {"runtime", hestia_runtime_status_json()}, {"preflight", hestia_preflight_json()}, {"dependencies", {{"clipboard", clipboard_status_json()}}}});
-#else
-    send_response(response, {{"ok", true}, {"runtime", hestia_runtime_status_json()}, {"preflight", hestia_preflight_json()}, {"dependencies", {{"clipboard", {{"available", platf::clipboard_available()}, {"diagnostic", platf::clipboard_available() ? "ready" : "clipboard_unavailable"}, {"manualInstall", "Use the native clipboard service for this platform."}}}}}});
-#endif
   }
 
   /**
@@ -2427,7 +2378,6 @@ namespace confighttp {
       system_t system;
     };
 
-#ifdef __linux__
     namespace fs = std::filesystem;
 
     std::optional<long long> read_number(const fs::path &path) {
@@ -2688,11 +2638,6 @@ namespace confighttp {
       }
       return s;
     }
-#else
-    system_t read_system(bool) {
-      return {};
-    }
-#endif
 
     std::mutex mutex;
     std::deque<sample_t> samples;
@@ -2731,11 +2676,7 @@ namespace confighttp {
     std::string local_time(std::chrono::system_clock::time_point at, const char *format) {
       const auto t = std::chrono::system_clock::to_time_t(at);
       std::tm tm {};
-#ifdef _WIN32
-      localtime_s(&tm, &t);
-#else
       localtime_r(&t, &tm);
-#endif
       char text[64];
       std::strftime(text, sizeof(text), format, &tm);
       return text;
@@ -2772,7 +2713,6 @@ namespace confighttp {
     }
   }  // namespace
 
-#ifdef __linux__
     /**
      * What is attached to and running on the machine, as an unprivileged
      * user can read it: USB devices, input devices, display outputs with
@@ -2941,7 +2881,6 @@ namespace confighttp {
         return std::format("{:>10.0f} s", p.cpu_seconds);
       });
     }
-#endif
 
   /**
    * One plain-text file that explains a host to someone who cannot see it:
@@ -2965,14 +2904,11 @@ namespace confighttp {
       }
     }
     out << "OS: " << os << '\n';
-#ifndef _WIN32
     utsname system {};
     ::uname(&system);
     out << "Kernel: " << system.release << ' ' << system.machine << '\n';
-#endif
     const auto session_env = platf::detect_session_environment();
     out << "Session: " << session_env.describe() << '\n';
-#ifdef __linux__
     const auto gpus = platf::render_node_descriptions();
     std::string kms = std::filesystem::exists("/sys/module/hermes_kms") ? "loaded" : "not loaded";
     for (const auto &gpu : gpus) {
@@ -2989,11 +2925,8 @@ namespace confighttp {
     }
     const auto encoding = platf::encode_gpu_description();
     out << "Encodes on: " << (encoding.empty() ? "no GPU qualifies"s : encoding) << '\n';
-#endif
 
-#ifdef __linux__
     machine_snapshot(out);
-#endif
 
     out << "\n== Last capture-path check ==\n";
     const auto readiness = video::last_capture_readiness();
@@ -3054,7 +2987,6 @@ namespace confighttp {
              "GPU figures are for the encoding GPU: amdgpu and Intel from sysfs, NVIDIA from nvidia-smi.\n";
     }
 
-#ifdef __linux__
     // Drivers and hardware: what the kernel warned about lately, where the
     // user may read it (journal access).
     out << "\n== Kernel warnings and errors (last 2 hours) ==\n";
@@ -3111,8 +3043,6 @@ namespace confighttp {
         out << "None.\n";
       }
     }
-#endif
-#ifdef __linux__
     out << "\n== What this session can do ==\n";
     for (const auto &feature : session_features_json()) {
       out << feature["feature"].get<std::string>() << ": " << feature["readiness"].get<std::string>() << " - "
@@ -3130,7 +3060,6 @@ namespace confighttp {
         }
       }
     }
-#endif
     out << "\n== Runtime state ==\n" << hestia_runtime_status_json().dump(2) << '\n';
     out << "\n== Streaming preflight ==\n" << hestia_preflight_json().dump(2) << '\n';
     out << "\n== Settings (secrets removed) ==\n" << redacted_settings();
@@ -3310,7 +3239,6 @@ namespace confighttp {
     }
   }
 
-#ifdef __linux__
   /**
    * @brief Whether Hermes is running inside a container.
    *
@@ -3325,7 +3253,6 @@ namespace confighttp {
     std::error_code ec;
     return std::filesystem::exists("/run/.containerenv", ec) || std::filesystem::exists("/.dockerenv", ec);
   }
-#endif
 
   /**
    * Start EVDI installation only after the user explicitly confirms it in the UI.
@@ -3339,7 +3266,6 @@ namespace confighttp {
     print_req(request);
     nlohmann::json output_tree;
 
-#ifdef __linux__
     try {
       std::stringstream ss;
       ss << request->content.rdbuf();
@@ -3424,10 +3350,6 @@ printf "evdi\\n" > /etc/modules-load.d/evdi.conf')EVDI";
       bad_request(response, request, e.what());
       return;
     }
-#else
-    output_tree["status"] = false;
-    output_tree["error"] = "EVDI is only available on Linux.";
-#endif
 
     send_response(response, output_tree);
   }
@@ -3442,12 +3364,10 @@ printf "evdi\\n" > /etc/modules-load.d/evdi.conf')EVDI";
     output_tree["status"] = true;
     output_tree["installStatus"] = evdi_install_status.load();
     output_tree["vdisplayStatus"] = (int)proc::vDisplayDriverStatus;
-#ifdef __linux__
     output_tree["evdiInfo"] = evdi_status_json();
     output_tree["evdiDiagnostic"] = output_tree["evdiInfo"]["diagnostic"];
     output_tree["hermesKmsInfo"] = hermes_kms_status_json();
     output_tree["hermesKmsDiagnostic"] = output_tree["hermesKmsInfo"]["diagnostic"];
-#endif
     send_response(response, output_tree);
   }
 
@@ -3458,13 +3378,8 @@ printf "evdi\\n" > /etc/modules-load.d/evdi.conf')EVDI";
     }
 
     nlohmann::json output_tree;
-#ifdef __linux__
     output_tree["status"] = true;
     output_tree["evdiInfo"] = evdi_status_json();
-#else
-    output_tree["status"] = false;
-    output_tree["error"] = "EVDI is only available on Linux.";
-#endif
     send_response(response, output_tree);
   }
 
@@ -3475,16 +3390,11 @@ printf "evdi\\n" > /etc/modules-load.d/evdi.conf')EVDI";
     }
 
     nlohmann::json output_tree;
-#ifdef __linux__
     output_tree["status"] = true;
     output_tree["hermesKmsInfo"] = hermes_kms_status_json();
     // Only here, not in every config response: it asks the compositor and
     // kscreen-doctor, which is worth it when the user opens this panel.
     output_tree["sessionFeatures"] = session_features_json();
-#else
-    output_tree["status"] = false;
-    output_tree["error"] = "Hermes-KMS is only available on Linux.";
-#endif
     send_response(response, output_tree);
   }
 
@@ -3544,11 +3454,7 @@ printf "evdi\\n" > /etc/modules-load.d/evdi.conf')EVDI";
     // So the UI can tell "nothing is running" from "this platform never runs
     // one", and hide the panel entirely in the second case rather than showing
     // an empty list forever.
-#ifdef __linux__
     output_tree["supported"] = true;
-#else
-    output_tree["supported"] = false;
-#endif
     output_tree["status"] = true;
     send_response(response, output_tree);
   }
@@ -3664,15 +3570,9 @@ printf "evdi\\n" > /etc/modules-load.d/evdi.conf')EVDI";
     }
 
     nlohmann::json output_tree;
-#ifdef __linux__
     output_tree["status"] = true;
     output_tree["clipboardInfo"] = clipboard_status_json();
     output_tree["installStatus"] = clipboard_install_status.load();
-#else
-    output_tree["status"] = true;
-    output_tree["clipboardInfo"] = {{"available", platf::clipboard_available()}, {"diagnostic", platf::clipboard_available() ? "ready" : "clipboard_unavailable"}, {"manualInstall", "Use the native clipboard service for this platform."}};
-    output_tree["installStatus"] = 0;
-#endif
     send_response(response, output_tree);
   }
 
@@ -3682,7 +3582,6 @@ printf "evdi\\n" > /etc/modules-load.d/evdi.conf')EVDI";
     }
 
     nlohmann::json output_tree;
-#ifdef __linux__
     try {
       std::stringstream ss;
       ss << request->content.rdbuf();
@@ -3731,10 +3630,6 @@ fi')CLIP";
       bad_request(response, request, e.what());
       return;
     }
-#else
-    output_tree["status"] = false;
-    output_tree["error"] = "Automatic clipboard dependency installation is only available on Linux.";
-#endif
     send_response(response, output_tree);
   }
 
@@ -3804,10 +3699,6 @@ fi')CLIP";
     std::string content = file_handler::read_file(config::sunshine.log_file.c_str());
     SimpleWeb::CaseInsensitiveMultimap headers;
     std::string contentType = "text/plain";
-  #ifdef _WIN32
-    contentType += "; charset=";
-    contentType += currentCodePageToCharset();
-  #endif
     headers.emplace("Content-Type", contentType);
     headers.emplace("X-Frame-Options", "DENY");
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
@@ -4013,8 +3904,6 @@ fi')CLIP";
    * @brief Quit Hermes.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
-   *
-   * On Windows, if running in a service, a special shutdown code is returned.
    */
   void quit(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
@@ -4027,11 +3916,6 @@ fi')CLIP";
 
     proc::proc.terminate();
 
-#ifdef _WIN32
-    if (GetConsoleWindow() == NULL) {
-      lifetime::exit_sunshine(ERROR_SHUTDOWN_IN_PROGRESS, true);
-    } else
-#endif
     {
       lifetime::exit_sunshine(0, true);
     }
@@ -4196,10 +4080,8 @@ fi')CLIP";
    */
   void start() {
     auto shutdown_event = mail::man->event<bool>(mail::shutdown);
-#ifdef __linux__
     write_local_api_token();
     auto token_guard = util::fail_guard(remove_local_api_token);
-#endif
     auto port_https = net::map_port(PORT_HTTPS);
     auto address_family = net::af_from_enum_string(config::sunshine.address_family);
     https_server_t server { config::nvhttp.cert, config::nvhttp.pkey };
@@ -4308,7 +4190,7 @@ fi')CLIP";
     if (!fs::exists(WEB_DIR "index.html")) {
       BOOST_LOG(error) << "Web UI assets not found in ["sv << WEB_DIR << ']';
       BOOST_LOG(error) << "The configuration UI will not render. This binary was built with "sv
-                          "SUNSHINE_ASSETS_DIR=["sv << SUNSHINE_ASSETS_DIR << "]."sv;
+                          "HERMES_ASSETS_DIR=["sv << HERMES_ASSETS_DIR << "]."sv;
     }
 
     auto accept_and_run = [&](auto *server) {

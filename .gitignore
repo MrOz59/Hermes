@@ -46,7 +46,7 @@ build-test/
 cmake-*/
 docs/doxyconfig*
 
-# npm
+# Frontend dependencies
 node_modules/
 package-lock.json
 
@@ -72,3 +72,10 @@ docs/codex/*
 jsson-lsp.log
 test_sunshine.log*
 write_file_test_*.txt
+
+# mcpp build output and local toolchain
+/target/
+/mcpp/*/target/
+/tests/display_restore/target/
+/.mcpp/
+/.toolchain/

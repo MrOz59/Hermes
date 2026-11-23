@@ -5,14 +5,12 @@
             <br>
             <p>{{ $t('resource_card.resources_desc') }}</p>
             <div class="card-group p-4 align-items-center">
-                <!-- <a class="btn btn-success m-1" href="https://app.lizardbyte.dev" target="_blank">
-                    {{ $t('resource_card.lizardbyte_website') }}</a> -->
                 <a class="btn btn-secondary m-1" href="https://github.com/MrOz59/Hermes/discussions" target="_blank">
                     <i class="fab fa-fw fa-github"></i> {{ $t('resource_card.github_discussions') }}</a>
-                <a class="btn btn-secondary m-1" href="https://github.com/ClassicOldSong/Apollo/wiki" target="_blank">
-                    <i class="fab fa-fw fa-github"></i> {{ $t('resource_card.github_wiki') }}</a>
-                <a class="btn btn-secondary m-1" href="https://github.com/ClassicOldSong/Apollo/wiki/Stuttering-Clinic" target="_blank">
-                    <i class="fab fa-fw fa-github"></i> {{ $t('resource_card.github_stuttering_clinic') }}</a>
+                <a class="btn btn-secondary m-1" href="https://github.com/MrOz59/Hermes/tree/main/docs" target="_blank">
+                    <i class="fab fa-fw fa-github"></i> {{ $t('resource_card.github_docs') }}</a>
+                <a class="btn btn-secondary m-1" href="https://github.com/MrOz59/Hermes/blob/main/docs/troubleshooting.md" target="_blank">
+                    <i class="fab fa-fw fa-github"></i> {{ $t('navbar.troubleshoot') }}</a>
             </div>
         </div>
     </div>

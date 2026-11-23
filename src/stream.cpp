@@ -23,7 +23,6 @@ extern "C" {
 }
 
 // local includes
-#include "client_link_monitor.h"
 #include "client_mic_router.h"
 #include "config.h"
 #include "crypto.h"
@@ -42,6 +41,8 @@ extern "C" {
 #include "utility.h"
 #include "video_fec_budget.h"
 #include "video_loss_monitor.h"
+
+import hermes.client_link_monitor;
 
 #define IDX_START_A 0
 #define IDX_START_B 1
@@ -371,7 +372,6 @@ namespace stream {
 
   struct session_t {
     ~session_t() {
-#ifdef __linux__
       if (isolated_session) {
         proc::proc.disconnect_isolated(isolated_runtime_owner_id);
       } else if (session_scoped_virtual_display) {
@@ -379,7 +379,6 @@ namespace stream {
           BOOST_LOG(warning) << "Failed to release session-scoped virtual display " << display_name;
         }
       }
-#endif
     }
 
     config_t config;
@@ -459,11 +458,7 @@ namespace stream {
     std::string isolated_seat_id;
     bool session_scoped_virtual_display {false};
     std::string display_name;
-#ifndef _WIN32
     uuid_util::uuid_t display_guid {};
-#else
-    GUID display_guid {};
-#endif
     crypto::PERM permission;
 
     std::list<crypto::command_entry_t> do_cmds;
@@ -886,8 +881,8 @@ namespace stream {
    */
   int send_feedback_msg(session_t *session, platf::gamepad_feedback_msg_t &msg) {
     if (!session->control.peer) {
-      BOOST_LOG(warning) << "Couldn't send gamepad feedback data, still waiting for PING from Moonlight"sv;
-      // Still waiting for PING from Moonlight
+      BOOST_LOG(warning) << "Couldn't send gamepad feedback data, still waiting for PING from the client"sv;
+      // Still waiting for PING from the client
       return -1;
     }
 
@@ -991,8 +986,8 @@ namespace stream {
 
   int send_hdr_mode(session_t *session, video::hdr_info_t hdr_info) {
     if (!session->control.peer) {
-      BOOST_LOG(warning) << "Couldn't send HDR mode, still waiting for PING from Moonlight"sv;
-      // Still waiting for PING from Moonlight
+      BOOST_LOG(warning) << "Couldn't send HDR mode, still waiting for PING from the client"sv;
+      // Still waiting for PING from the client
       return -1;
     }
 
@@ -1929,7 +1924,7 @@ namespace stream {
    */
   static void report_stream_start_failure(const std::string &reason) {
     BOOST_LOG(error) << reason;
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_session_error(reason);
 #endif
   }

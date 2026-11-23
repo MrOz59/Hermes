@@ -33,11 +33,7 @@
 #include "rtsp.h"
 #include "utility.h"
 
-#ifdef _WIN32
-  #include "platform/windows/virtual_display.h"
-#else
   #include "platform/linux/virtual_display.h"
-#endif
 
 #define VIRTUAL_DISPLAY_UUID "8902CB19-674A-403D-A587-41B092E900BA"
 #define FALLBACK_DESKTOP_UUID "EAAC6159-089A-46A9-9E24-6436885F6610"

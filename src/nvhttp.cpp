@@ -41,9 +41,6 @@
 #include "video.h"
 #include "zwpad.h"
 
-#ifdef _WIN32
-  #include "platform/windows/virtual_display.h"
-#endif
 
 using namespace std::literals;
 
@@ -56,12 +53,8 @@ namespace nvhttp {
   using PERM = crypto::PERM;
 
   bool experimental_isolated_sessions_enabled() {
-#ifdef __linux__
     return config::video.virtual_display_backend == "hermes_kms" &&
            config::video.hermes_kms_isolated_sessions;
-#else
-    return false;
-#endif
   }
 
   struct client_t {
@@ -435,7 +428,7 @@ namespace nvhttp {
     client_t &client = client_root;
     client.named_devices.push_back(named_cert_p);
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_paired(named_cert_p->name);
 #endif
 
@@ -889,7 +882,7 @@ namespace nvhttp {
 
           getservercert(new_session, tree, pin);
         } else {
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
           system_tray::update_tray_require_pin();
 #endif
           set_pending_pair(new_session.client.uniqueID, new_session.client.name);
@@ -1072,14 +1065,12 @@ namespace nvhttp {
 
       tree.put("root.Permission", std::to_string((uint32_t)named_cert_p->perm));
 
-    #if defined(_WIN32) || defined(__linux__)
       tree.put("root.VirtualDisplayCapable", true);
       if (!!(named_cert_p->perm & PERM::_all_actions)) {
         tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK);
       } else {
         tree.put("root.VirtualDisplayDriverReady", true);
       }
-    #endif
     } else {
       tree.put("root.mac", "00:00:00:00:00:00");
       tree.put("root.Permission", "0");
@@ -1646,7 +1637,6 @@ namespace nvhttp {
       tree.put("root.gamesession", 0);
     }
 
-#ifdef __linux__
     if (!is_input_only &&
         !isolated_launch &&
         config::video.virtual_display_backend == "hermes_kms" &&
@@ -1660,7 +1650,6 @@ namespace nvhttp {
         return;
       }
     }
-#endif
 
     // One real frame through capture, conversion and encoding, before the
     // client is told the stream is ready, while no stream holds the encoder.
@@ -1692,7 +1681,6 @@ namespace nvhttp {
               display_device::revert_configuration();
             }
           }
-#ifdef __linux__
           // An output prepared above for this launch alone has no stream to release it.
           if (!isolated_launch && launch_session->session_virtual_display_cleanup_pending) {
             VDISPLAY::removeVirtualDisplay(launch_session->display_guid);
@@ -1700,7 +1688,6 @@ namespace nvhttp {
             launch_session->session_scoped_virtual_display = false;
             launch_session->display_name.clear();
           }
-#endif
           tree.put("root.<xmlattr>.status_code", 503);
           tree.put("root.<xmlattr>.status_message", failure + ".");
           tree.put("root.gamesession", 0);
@@ -1836,7 +1823,6 @@ namespace nvhttp {
         return;
       }
     }
-#ifndef _WIN32
     else if (!isolated_resume && no_active_shared_sessions && proc::proc.virtual_display && !proc::proc.display_name.empty()) {
       // A resumed app keeps its virtual display, but every client brings its
       // own mode. Without this, the first client's geometry outlives it: A
@@ -1885,7 +1871,6 @@ namespace nvhttp {
         return;
       }
     }
-#endif
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
     if (!launch_session->rtsp_cipher && encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {
@@ -1898,7 +1883,6 @@ namespace nvhttp {
       return;
     }
 
-#ifdef __linux__
     if (config::video.virtual_display_backend == "hermes_kms" &&
         !isolated_resume &&
         config::video.hermes_kms_multi_output &&
@@ -1910,7 +1894,6 @@ namespace nvhttp {
         return;
       }
     }
-#endif
 
     if (!rtsp_stream::launch_session_raise(launch_session)) {
       tree.put("root.resume", 0);
@@ -1931,7 +1914,7 @@ namespace nvhttp {
     );
     tree.put("root.resume", 1);
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_client_connected(named_cert_p->name);
 #endif
   }

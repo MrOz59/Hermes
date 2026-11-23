@@ -724,7 +724,7 @@ namespace platf {
       }
     }
 
-#ifdef SUNSHINE_TESTS
+#ifdef HERMES_TESTS
     void blend_hermes_cursor_for_test(
       img_t &img,
       bool visible,
@@ -789,7 +789,7 @@ namespace platf {
 
         if (drmSetClientCap(fd.el, DRM_CLIENT_CAP_ATOMIC, 1)) {
           BOOST_LOG(warning) << "GPU driver doesn't support atomic mode-setting: "sv << path;
-#if defined(SUNSHINE_BUILD_X11)
+#if defined(HERMES_BUILD_X11)
           // We won't be able to capture the mouse cursor with KMS on non-atomic drivers,
           // so fall back to X11 if it's available and the user didn't explicitly force KMS.
           if (window_system == window_system_e::X11 && config::video.capture != "kms") {
@@ -1005,7 +1005,7 @@ namespace platf {
       }
     };
 
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
     /// A CPU-copied frame in page-locked memory, which the CUDA upload reads by DMA.
     struct cuda_host_img_t: public img_t {
       ~cuda_host_img_t() override {
@@ -1775,13 +1775,13 @@ namespace platf {
 #endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
           return va::make_avcodec_encode_device(width, height, false);
         }
 #endif
 
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           return cuda::make_avcodec_encode_device(width, height, false);
         }
@@ -1976,12 +1976,12 @@ namespace platf {
 #endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e) override {
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
           return va::make_avcodec_encode_device(width, height, false);
         }
 #endif
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           return cuda::make_avcodec_encode_device(width, height, false);
         }
@@ -2020,13 +2020,13 @@ namespace platf {
 #endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
           return va::make_avcodec_encode_device(width, height, dup(card.render_fd.el), img_offset_x, img_offset_y, true);
         }
 #endif
 
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           return cuda::make_avcodec_gl_encode_device(width, height, img_offset_x, img_offset_y);
         }
@@ -2148,14 +2148,14 @@ namespace platf {
           return -1;
         }
 
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi && !va::validate(card.render_fd.el)) {
           BOOST_LOG(warning) << "Monitor "sv << display_name << " doesn't support hardware encoding. Reverting back to GPU -> RAM -> GPU"sv;
           return -1;
         }
 #endif
 
-#ifndef SUNSHINE_BUILD_CUDA
+#ifndef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           BOOST_LOG(warning) << "Attempting to use NVENC without CUDA support. Reverting back to GPU -> RAM -> GPU"sv;
           return -1;
@@ -2357,14 +2357,14 @@ namespace platf {
           return -1;
         }
 
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi && !va::validate(encode_render_fd.el)) {
           BOOST_LOG(warning) << "Encoding GPU doesn't support VAAPI."sv;
           return -1;
         }
 #endif
 
-#ifndef SUNSHINE_BUILD_CUDA
+#ifndef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           BOOST_LOG(warning) << "Hermes-KMS NVENC path requested but Hermes was built without CUDA support."sv;
           return -1;
@@ -2384,13 +2384,13 @@ namespace platf {
 #endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
           // Encode on the real GPU, importing the Hermes DMA-BUFs (vram=true).
           return va::make_avcodec_encode_device(width, height, dup(encode_render_fd.el), img_offset_x, img_offset_y, true);
         }
 #endif
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           // Same descriptor flow as display_vram_t: the GL/CUDA device imports
           // the Hermes DMA-BUFs through EGL on the NVIDIA GPU and encodes with
@@ -2693,7 +2693,7 @@ namespace platf {
           img.row_pitch = static_cast<std::int32_t>(row_pitch);
         };
 
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           if (auto *pinned = static_cast<std::uint8_t *>(cuda::alloc_host(size))) {
             std::memset(pinned, 0, size);
@@ -2730,7 +2730,7 @@ namespace platf {
 #endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           // One CUDA kernel decodes the frame's layout and writes NV12 or
           // P010 from pinned memory; no OpenGL context, and no GL-CUDA
@@ -2738,7 +2738,7 @@ namespace platf {
           return cuda::make_avcodec_encode_device(width, height, false, hermes_cuda_layout(source_fourcc));
         }
 #endif
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
           // Only reachable through HERMES_KMS_FORCE_CPU_COPY; the VAAPI upload
           // reads 8-bit BGRA.

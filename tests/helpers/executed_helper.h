@@ -1,6 +1,5 @@
 #pragma once
 
-#ifdef __linux__
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -87,4 +86,3 @@ namespace test {
     pid_t child_ {-1};
   };
 }
-#endif

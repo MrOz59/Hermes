@@ -12,8 +12,8 @@ import datetime
 import os
 import subprocess
 
-project_name = 'Sunshine'
-project_owner = 'LizardByte'
+project_name = 'Hermes'
+project_owner = 'MrOz59'
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(script_dir)
@@ -68,7 +68,7 @@ def x_extract():
         '--boost',
         '--from-code=utf-8',
         '-F',
-        f'--msgid-bugs-address=github.com/{project_owner.lower()}/{project_name.lower()}',
+        f'--msgid-bugs-address=https://github.com/{project_owner}/{project_name}/issues',
         f'--copyright-holder={project_owner}',
         f'--package-name={project_name}',
         '--package-version=v0'

@@ -2,7 +2,6 @@
  * @file test_isolated_runtime.cpp
  * @brief A slow account broker must not lock every other session's registry.
  */
-#ifdef __linux__
   #include <chrono>
   #include <cstring>
   #include <filesystem>
@@ -154,4 +153,3 @@ namespace {
   }
 
 }  // namespace
-#endif

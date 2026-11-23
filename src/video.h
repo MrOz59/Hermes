@@ -258,22 +258,11 @@ namespace video {
    */
   std::size_t pyrowave_frame_budget(const config_t &config);
 
-#if !defined(__APPLE__)
-  extern encoder_t nvenc;  // available for windows and linux
-#endif
+  extern encoder_t nvenc;
 
-#ifdef _WIN32
-  extern encoder_t amdvce;
-  extern encoder_t quicksync;
-#endif
 
-#ifdef __linux__
   extern encoder_t vaapi;
-#endif
 
-#ifdef __APPLE__
-  extern encoder_t videotoolbox;
-#endif
 
   struct packet_raw_t {
     virtual ~packet_raw_t() = default;
@@ -390,17 +379,11 @@ namespace video {
   bool validate_encoder(encoder_t &encoder, bool expect_failure);
 
   /**
-   * @brief Check if we can allow probing for the encoders.
-   * @return True if there should be no issues with the probing, false if we should prevent it.
-   */
-  bool allow_encoder_probing();
-
-  /**
    * @brief Whether the host has a display to capture without creating one.
    *
    * False means a virtual display has to stand in, both to probe the encoders
-   * and to stream. On Windows this is allow_encoder_probing(). On Linux it asks
-   * the kernel whether any connector lights a monitor, and answers yes whenever
+   * and to stream. The kernel reports whether any connector lights a monitor.
+   * This answers yes whenever
    * no virtual display could stand in or one already does.
    */
   bool display_present();
@@ -481,7 +464,6 @@ namespace video {
    */
   void forget_capture_readiness(const std::string &client);
 
-#ifdef __linux__
   /**
    * @brief Probe encoders without opening any screen.
    * @details For when no screen can be captured - every monitor asleep, say.
@@ -490,7 +472,6 @@ namespace video {
    * @return 0 on success, -1 if no encoder works.
    */
   int probe_encoders_without_display();
-#endif
 
   /**
    * @brief Result of the last encoder probe, for diagnostics/metrics.

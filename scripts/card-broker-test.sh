@@ -9,12 +9,11 @@
 # path to a machine with the module loaded.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BROKER="${1:-$REPO/build/hermes-kms-card-broker}"
+BROKER="${1:?pass the path to the hermes-kms-card-broker binary}"
 
 if [ ! -x "$BROKER" ]; then
 	printf 'broker binary not found: %s\n' "$BROKER" >&2
-	printf 'build it with: cmake --build build --target hermes-kms-card-broker\n' >&2
+	printf 'build it with: mcpp build --offline -p hermes-kms-card-broker\n' >&2
 	exit 2
 fi
 

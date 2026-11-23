@@ -2,7 +2,7 @@
  * @file tests/unit/test_logging.cpp
  * @brief Test src/logging.*.
  */
-#include "../tests_common.h"
+#include "../tests_environment.h"
 #include "../tests_log_checker.h"
 
 #include <format>
@@ -18,8 +18,6 @@ namespace {
     std::tuple("error", &error),
     std::tuple("fatal", &fatal),
   };
-
-  constexpr auto log_file = "test_sunshine.log";
 }  // namespace
 
 struct LogLevelsTest: testing::TestWithParam<decltype(log_levels)::value_type> {};
@@ -43,5 +41,5 @@ TEST_P(LogLevelsTest, PutMessage) {
   auto test_message = std::format("{}{}", rand_gen(), rand_gen());
   BOOST_LOG(logger) << test_message;
 
-  ASSERT_TRUE(log_checker::line_contains(log_file, test_message));
+  ASSERT_TRUE(log_checker::line_contains(SunshineEnvironment::log_path(), test_message));
 }

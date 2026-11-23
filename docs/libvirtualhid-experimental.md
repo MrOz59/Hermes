@@ -7,7 +7,7 @@ compiled or linked.
 ## Dependency provenance
 
 The dependency is our fork,
-[MrOz59/libvirtualhid](https://github.com/MrOz59/libvirtualhid), pinned by CMake
+[MrOz59/libvirtualhid](https://github.com/MrOz59/libvirtualhid), pinned by the Linux SDK setup
 to commit `14ee6c4717d32b678c2983bfa6c54019b944d421`. Updating the dependency
 requires reviewing and intentionally changing that SHA.
 
@@ -155,16 +155,17 @@ queued mutations and immediate refusal of unsafe locks.
 
 ## Building
 
+Follow the [Linux build instructions](building.md) and provision the pinned
+libvirtualhid sources in the local SDK. From the checkout root, build the
+host with its XTest fallback enabled.
+
 ```bash
-git clone --recursive https://github.com/MrOz59/Hermes.git
-cd Hermes
-git switch experimental/libvirtualhid-input
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target sunshine -j2
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  mcpp build --offline --release -p hermes-host --features web-assets,xtest
 ```
 
-The first configure fetches the pinned fork revision. There is no backend
-selection option: Linux builds use libvirtualhid exclusively.
+Linux builds use libvirtualhid for input. The focused dependency suite and its
+SDL3 probe are built by the [Linux input CI workflow](../.github/workflows/libvirtualhid-experimental.yml).
 
 ## Manual validation with a DS4 and DualSense
 
@@ -241,9 +242,9 @@ For each result, record the Hermes commit/package, Hestia version and client
 OS, host kernel/compositor, physical controller and USB/Bluetooth connection,
 the two settings above, game and Steam Input setting, expected/observed behavior
 and time of failure. Keep the Hermes log from the same attempt; for an
-isolated-session failure also keep the session-broker journal. CMake configure
-output must identify `Hermes Linux input backend: MrOz59/libvirtualhid`;
-controller-selection messages show the profile chosen by `auto`. If more
+isolated-session failure also keep the session-broker journal. Record the
+libvirtualhid source revision from the build's local SDK. Controller-selection
+messages show the profile chosen by `auto`. If more
 detail is needed, repeat the failure with `min_log_level = debug`, then
 restore the previous log level. Review logs before sharing them.
 
@@ -289,7 +290,7 @@ guest's device nodes. Native Switch evdev validation requires hid_nintendo;
 when Azure omits it, CI builds that driver from the matching upstream Linux
 series against the running kernel's headers. A runtime-harness or migration-note
 change may reuse binaries from a passing compiler job after checking that all
-compiled inputs remain identical. Source, dependency, CMake and compiled-test
+compiled inputs remain identical. Source, dependency, build and compiled-test
 changes always trigger a new complete build.
 
 The branch workflow compiles Hermes and runs the library's identity/discovery,
@@ -313,16 +314,22 @@ driver instead; that skip does not validate motion/touchpad child discovery.
 The local VM validation below used `hid-playstation` and ran that test.
 
 The repository's `scripts/vm-isolated-input-test.sh` validates the packaged
-udev rules inside a disposable VM. Pass `build/tests/test_sunshine` to also
-exercise the actual Hermes adapter with two concurrent private seats, including
-seat 12 to cover dynamically allocated indices beyond the old eight-seat pool:
+udev rules inside a disposable VM. Pass the mcpp-built Hermes test executable
+to exercise two concurrent private seats, including seat 12. Supply SDL2
+development files for the unprivileged helper.
 
 ```bash
-cmake -B build -G Ninja -DBUILD_TESTS=ON
-cmake --build build --target sunshine test_sunshine -j2
+MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
+  mcpp test --offline --no-run --no-programs -p hermes-host --profile coverage \
+  --features web-assets,sdl-hid-tests --message-format json > input-tests.jsonl
+test_binary="$(jq -er 'select(.status == "built") | .launch.argv[0]' input-tests.jsonl)"
 # Inside a disposable guest, as root with udev running:
-scripts/vm-isolated-input-test.sh /absolute/path/to/build/tests/test_sunshine
+scripts/vm-isolated-input-test.sh "$test_binary"
 ```
+
+The test binary uses the helper cached by mcpp. When transferring the test
+binary to another path or VM, set `HERMES_TEST_HID_CONSUMER_PATH` to the
+transferred helper so the kernel test can execute it as UID 65534.
 
 Library baseline validation on 2026-10-24 passed 193 tests (one xpadneo-specific
 test skipped). The expanded adapter validation passed 37 local tests covering

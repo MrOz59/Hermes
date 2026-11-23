@@ -1,0 +1,47 @@
+[package]
+name = "hermes-libvirtualhid"
+version = "0.0.0"
+description = "Hermes' pinned libvirtualhid fork, Linux uhid backend"
+standard = "c++26"
+
+[build]
+sources = [
+    "../../.toolchain/libvirtualhid/src/core/backend.cpp",
+    "../../.toolchain/libvirtualhid/src/core/gamepad_adapter.cpp",
+    "../../.toolchain/libvirtualhid/src/core/profiles.cpp",
+    "../../.toolchain/libvirtualhid/src/core/report.cpp",
+    "../../.toolchain/libvirtualhid/src/core/runtime.cpp",
+    "../../.toolchain/libvirtualhid/src/core/types.cpp",
+    "../../.toolchain/libvirtualhid/src/platform/linux/uhid_backend.cpp",
+    "../../.toolchain/libvirtualhid/src/platform/license_unavailable.cpp",
+]
+include_dirs = [
+    "../../.toolchain/libvirtualhid/src/include",
+    "../../.toolchain/libvirtualhid/src",
+    "../../.toolchain/linux-headers-7.3.5/include",
+    "../../.toolchain/fedora/usr/include",
+    "../../.toolchain/fedora/usr/include/libevdev-1.0",
+]
+private_include_dirs = [
+    "../../.toolchain/libvirtualhid/src",
+    "../../.toolchain/linux-headers-7.3.5/include",
+    "../../.toolchain/fedora/usr/include",
+    "../../.toolchain/fedora/usr/include/libevdev-1.0",
+]
+cxxflags = ["-Wall", "-Wextra", "-Wpedantic", "-pthread"]
+ldflags = ["-pthread"]
+
+# Upstream disables GNU language extensions for its compiled library units.
+[[build.flags]]
+glob = "../../.toolchain/libvirtualhid/src/**/*.cpp"
+cxxflags = ["-std=c++26"]
+
+[runtime]
+libraries = ["evdev"]
+link_library_dirs = ["../../.toolchain/fedora/usr/lib64"]
+
+[targets.hermes-libvirtualhid]
+kind = "lib"
+
+[features.xtest]
+defines = ["LIBVIRTUALHID_HAVE_XTEST=1"]

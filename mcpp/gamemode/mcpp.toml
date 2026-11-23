@@ -1,0 +1,32 @@
+[package]
+name = "hermes-gamemode"
+standard = "c++26"
+
+[build]
+sources = []
+cxx_runtime = "host-coupled"
+include_dirs = [
+    "../../.toolchain/json-include",
+]
+include_dirs_after = [
+    "../../.toolchain/fedora/usr/include",
+    "../../.toolchain/qt6/include/qt6",
+    "../../.toolchain/qt6/include/qt6/QtCore",
+    "../../.toolchain/qt6/include/qt6/QtGui",
+    "../../.toolchain/qt6/include/qt6/QtWidgets",
+    "../../.toolchain/qt6/include/qt6/QtConcurrent",
+]
+cxxflags = ["-fPIC", "-Wall", "-Wno-sign-compare"]
+ldflags = [
+    "-L../../.toolchain/fedora/usr/lib64",
+    "-L../../.toolchain/qt6/lib64",
+    "-lcurl",
+    "-lQt6Widgets",
+    "-lQt6Gui",
+    "-lQt6Concurrent",
+    "-lQt6Core",
+]
+
+[targets.hermes-gamemode]
+kind = "bin"
+main = "../../tools/hermes-gamemode.cpp"

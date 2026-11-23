@@ -1,14 +1,15 @@
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import type { Configuration, PreparationCommand, ServerCommand } from '../../config-types'
 import Checkbox from '../../Checkbox.vue'
 
-const props = defineProps({
-  platform: String,
-  config: Object,
-  globalPrepCmd: Array,
-  globalStateCmd: Array,
-  serverCmd: Array
-})
+const props = defineProps<{
+  platform: string;
+  config: Configuration;
+  globalPrepCmd: PreparationCommand[];
+  globalStateCmd: PreparationCommand[];
+  serverCmd: ServerCommand[];
+}>()
 
 const config = ref(props.config)
 const globalPrepCmd = ref(props.globalPrepCmd)
@@ -30,12 +31,9 @@ const serverCmdTemplate = {
   cmd: ""
 }
 
-function addCmd(cmdArr, template, idx) {
+function addCmd<T extends PreparationCommand | ServerCommand>(cmdArr: T[], template: T, idx: number) {
   const _tpl = Object.assign({}, template);
 
-  if (props.platform === 'windows') {
-    _tpl.elevated = false;
-  }
   if (idx < 0) {
     cmdArr.push(_tpl);
   } else {
@@ -43,7 +41,7 @@ function addCmd(cmdArr, template, idx) {
   }
 }
 
-function removeCmd(cmdArr, index) {
+function removeCmd(cmdArr: unknown[], index: number) {
   cmdArr.splice(index,1)
 }
 
@@ -119,9 +117,6 @@ onMounted(() => {
         <tr>
           <th scope="col"><i class="fas fa-play"></i> {{ $t('_common.do_cmd') }}</th>
           <th scope="col"><i class="fas fa-undo"></i> {{ $t('_common.undo_cmd') }}</th>
-          <th scope="col" v-if="platform === 'windows'">
-            <i class="fas fa-shield-alt"></i> {{ $t('_common.run_as') }}
-          </th>
           <th scope="col"></th>
         </tr>
         </thead>
@@ -132,14 +127,6 @@ onMounted(() => {
           </td>
           <td>
             <input type="text" class="form-control monospace" v-model="c.undo" />
-          </td>
-          <td v-if="platform === 'windows'" class="align-middle">
-            <Checkbox :id="type + '-cmd-admin-' + i"
-                      label="_common.elevated"
-                      desc=""
-                      default="false"
-                      v-model="c.elevated"
-            ></Checkbox>
           </td>
           <td class="text-end">
             <button class="btn btn-danger me-2" @click="removeCmd(cmds[type], i)">
@@ -162,16 +149,13 @@ onMounted(() => {
       <label class="form-label">{{ $t('config.server_cmd') }}</label>
       <div class="form-text">{{ $t('config.server_cmd_desc') }}</div>
       <div class="form-text">
-        <a href="https://github.com/ClassicOldSong/Apollo/wiki/Server-Commands" target="_blank">{{ $t('_common.learn_more') }}</a>
+        <a href="https://github.com/MrOz59/Hermes/blob/main/docs/configuration.md#server_cmd" target="_blank">{{ $t('_common.learn_more') }}</a>
       </div>
       <table class="table" v-if="serverCmd.length > 0">
         <thead>
         <tr>
           <th scope="col"><i class="fas fa-tag"></i> {{ $t('_common.cmd_name') }}</th>
           <th scope="col"><i class="fas fa-terminal"></i> {{ $t('_common.cmd_val') }}</th>
-          <th scope="col" v-if="platform === 'windows'">
-            <i class="fas fa-shield-alt"></i> {{ $t('_common.run_as') }}
-          </th>
           <th scope="col"></th>
         </tr>
         </thead>
@@ -182,12 +166,6 @@ onMounted(() => {
           </td>
           <td>
             <input type="text" class="form-control monospace" v-model="c.cmd" />
-          </td>
-          <td v-if="platform === 'windows'">
-            <div class="form-check">
-              <input type="checkbox" class="form-check-input" :id="'server-cmd-admin-' + i" v-model="c.elevated"/>
-              <label :for="'server-cmd-admin-' + i" class="form-check-label">{{ $t('_common.elevated') }}</label>
-            </div>
           </td>
           <td class="text-end">
             <button class="btn btn-danger me-2" @click="removeCmd(serverCmd, i)">

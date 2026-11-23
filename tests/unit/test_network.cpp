@@ -6,13 +6,9 @@
 #include <src/network.h>
 #include <src/thread_safe.h>
 
-#ifndef _WIN32
   #include <fcntl.h>
-#endif
 
-#ifdef __linux__
   #include "../helpers/executed_helper.h"
-#endif
 
 namespace {
   std::uint16_t bound_port(ENetHost &host) {
@@ -191,7 +187,6 @@ TEST_P(HostCreateTest, RepeatedlyReleasesAndRebindsTheSamePort) {
   }
 }
 
-#ifndef _WIN32
 TEST_P(HostCreateTest, MarksTheControlSocketCloseOnExec) {
   ENetAddress address {};
   auto host = net::host_create(GetParam(), address, 0);
@@ -202,9 +197,7 @@ TEST_P(HostCreateTest, MarksTheControlSocketCloseOnExec) {
   ASSERT_NE(flags, -1);
   EXPECT_NE(flags & FD_CLOEXEC, 0);
 }
-#endif
 
-#ifdef __linux__
 TEST_P(HostCreateTest, VideoAndAudioPortsAreReleasedWhileAnExecutedHelperLives) {
   namespace ip = boost::asio::ip;
   boost::asio::io_context io;
@@ -284,7 +277,6 @@ TEST_P(HostCreateTest, ExecutedHelperWithAnInheritedControlSocketStillHoldsThePo
   EXPECT_FALSE(static_cast<bool>(retry));
   EXPECT_EQ(error, boost::asio::error::address_in_use);
 }
-#endif
 
 TEST(NetworkStartupRollbackTest, FailedSharedInitializationReleasesAnAcquiredPort) {
   struct context_t {

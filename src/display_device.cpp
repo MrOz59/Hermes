@@ -21,11 +21,6 @@
 #include "rtsp.h"
 
 // platform-specific includes
-#ifdef _WIN32
-  #include <display_device/windows/settings_manager.h>
-  #include <display_device/windows/win_api_layer.h>
-  #include <display_device/windows/win_display_device.h>
-#endif
 
 namespace display_device {
   namespace {
@@ -310,7 +305,7 @@ namespace display_device {
         case resolution_option_e::automatic:
           {
             if (!session.enable_sops) {
-              BOOST_LOG(warning) << R"(Sunshine is configured to change resolution automatically, but the "Optimize game settings" is not set in the client! Resolution will not be changed.)";
+              BOOST_LOG(warning) << R"(Hermes is configured to change resolution automatically, but the "Optimize game settings" is not set in the client! Resolution will not be changed.)";
             } else if (session.width >= 0 && session.height >= 0) {
               config.m_resolution = Resolution {
                 static_cast<unsigned int>(session.width),
@@ -325,7 +320,7 @@ namespace display_device {
         case resolution_option_e::manual:
           {
             if (!session.enable_sops) {
-              BOOST_LOG(warning) << R"(Sunshine is configured to change resolution manually, but the "Optimize game settings" is not set in the client! Resolution will not be changed.)";
+              BOOST_LOG(warning) << R"(Hermes is configured to change resolution manually, but the "Optimize game settings" is not set in the client! Resolution will not be changed.)";
             } else {
               if (!parse_resolution_string(video_config.dd.manual_resolution, config.m_resolution)) {
                 BOOST_LOG(error) << "Failed to parse manual resolution string!";
@@ -613,20 +608,7 @@ namespace display_device {
      * @return An interface or nullptr if the OS does not support the interface.
      */
     std::unique_ptr<SettingsManagerInterface> make_settings_manager([[maybe_unused]] const std::filesystem::path &persistence_filepath, [[maybe_unused]] const config::video_t &video_config) {
-#ifdef _WIN32
-      return std::make_unique<SettingsManager>(
-        std::make_shared<WinDisplayDevice>(std::make_shared<WinApiLayer>()),
-        std::make_shared<sunshine_audio_context_t>(),
-        std::make_unique<PersistentState>(
-          std::make_shared<FileSettingsPersistence>(persistence_filepath)
-        ),
-        WinWorkarounds {
-          .m_hdr_blank_delay = video_config.dd.wa.hdr_toggle_delay != std::chrono::milliseconds::zero() ? std::make_optional(video_config.dd.wa.hdr_toggle_delay) : std::nullopt
-        }
-      );
-#else
       return nullptr;
-#endif
     }
 
     /**

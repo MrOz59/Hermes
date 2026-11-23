@@ -41,6 +41,7 @@
 // platform includes
 #include <csignal>
 #include <fcntl.h>
+#include <linux/i2c-dev.h>
 #include <poll.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
@@ -50,7 +51,7 @@
 #include <sys/un.h>
 #include <sys/utsname.h>
 #include <unistd.h>
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
   #include <systemd/sd-bus.h>
   #include <systemd/sd-login.h>
 #endif
@@ -67,7 +68,7 @@
 #include "src/utility.h"
 #include "virtual_display.h"
 #include "window_placement.h"
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
   #include "wayland.h"
 #endif
 
@@ -79,69 +80,6 @@ namespace VDISPLAY {
   std::string systemdUserBusAddress(uint32_t uid) {
     return "unix:path=/run/user/" + std::to_string(uid) + "/bus";
   }
-
-#ifdef SUNSHINE_BUILD_SDBUS
-  /**
-   * Open the desktop's user bus even when Hermes carries a file capability.
-   *
-   * libsystemd deliberately reads DBUS_SESSION_BUS_ADDRESS and XDG_RUNTIME_DIR
-   * with secure_getenv(). Linux sets AT_SECURE for a file-capability binary, so
-   * sd_bus_open_user() then sees neither variable and returns ENOMEDIUM. The
-   * packaged binary carries cap_sys_admin+p for legacy KMS capture, which made
-   * every sd-bus feature fail even though its child tools could reach the bus.
-   *
-   * Try libsystemd's normal discovery first for non-systemd/custom sessions.
-   * Its standard user-bus fallback is deterministic, so reproduce that path
-   * explicitly when discovery is unavailable. The address contains only the
-   * kernel-provided real uid; no environment value crosses the capability
-   * boundary.
-   */
-  static int open_user_bus(sd_bus **result) {
-    if (!result) {
-      return -EINVAL;
-    }
-    *result = nullptr;
-
-    const int discovered = sd_bus_open_user(result);
-    if (discovered >= 0) {
-      return discovered;
-    }
-    if (*result) {
-      sd_bus_unref(*result);
-      *result = nullptr;
-    }
-    if (discovered != -ENOMEDIUM) {
-      return discovered;
-    }
-
-    sd_bus *bus = nullptr;
-    int status = sd_bus_new(&bus);
-    if (status < 0) {
-      return status;
-    }
-    const auto fail = [&bus](int error) {
-      sd_bus_unref(bus);
-      return error;
-    };
-
-    const auto address = systemdUserBusAddress(static_cast<uint32_t>(::getuid()));
-    status = sd_bus_set_address(bus, address.c_str());
-    if (status < 0) {
-      return fail(status);
-    }
-    status = sd_bus_set_bus_client(bus, 1);
-    if (status < 0) {
-      return fail(status);
-    }
-    status = sd_bus_start(bus);
-    if (status < 0) {
-      return fail(status);
-    }
-
-    *result = bus;
-    return 0;
-  }
-#endif
 
   /** Whether something accepts connections on a Unix socket. */
   static bool unix_socket_answers(const std::string &path, bool abstract_namespace = false) {
@@ -195,7 +133,7 @@ namespace VDISPLAY {
   }
 
   std::optional<bool> graphicalSessionPresent() {
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     char *session_raw = nullptr;
     const int status = sd_uid_get_display(::getuid(), &session_raw);
     const std::unique_ptr<char, decltype(&std::free)> session {session_raw, &std::free};
@@ -223,7 +161,7 @@ namespace VDISPLAY {
   }
 
   bool inLoginSession() {
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     char *session_raw = nullptr;
     const int status = sd_pid_get_session(0, &session_raw);
     std::free(session_raw);
@@ -234,9 +172,9 @@ namespace VDISPLAY {
   }
 
   std::optional<std::vector<std::string>> userManagerEnvironment() {
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     sd_bus *bus = nullptr;
-    if (open_user_bus(&bus) < 0 || !bus) {
+    if (platf::open_user_bus(&bus) < 0 || !bus) {
       return std::nullopt;
     }
     const std::unique_ptr<sd_bus, decltype(&sd_bus_unref)> bus_guard {bus, &sd_bus_unref};
@@ -271,7 +209,7 @@ namespace VDISPLAY {
   }
 
   bool unlockHostSessionIfLocked() {
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     // Hermes normally runs as a systemd user service, so its own PID is not a
     // reliable way to identify the graphical login session. Ask sd-login for
     // this uid's display session instead; this is the same session loginctl
@@ -2437,7 +2375,7 @@ namespace VDISPLAY {
    * for a greeter nobody saw, and one already kept is not released on a guess.
    */
   static std::optional<bool> greeter_holds_seat() {
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     char *session_raw = nullptr;
     const int status = sd_seat_get_active("seat0", &session_raw, nullptr);
     const std::unique_ptr<char, decltype(&std::free)> session {session_raw, &std::free};
@@ -2533,15 +2471,21 @@ namespace VDISPLAY {
 
     std::string command = "kscreen-doctor";
     if (layout != virtual_display_layout_e::detached) {
-      int next_priority = 1;
+      // Primary puts the virtual output first and moves every physical output
+      // down one place, keeping their order. Applications and games open on
+      // the primary output, so this is what puts them in the stream while the
+      // monitors stay on. restore() puts the recorded priorities back.
+      const bool virtual_primary = layout == virtual_display_layout_e::primary;
+      const int shift = virtual_primary ? 1 : 0;
+      int next_priority = 1 + shift;
       for (const auto &[output, priority] : enabled_before) {
         if (output == virtual_output || !safe_output_name(output)) {
           continue;
         }
         command += " output." + output + ".enable";
         if (priority > 0) {
-          command += " output." + output + ".priority." + std::to_string(priority);
-          next_priority = std::max(next_priority, priority + 1);
+          command += " output." + output + ".priority." + std::to_string(priority + shift);
+          next_priority = std::max(next_priority, priority + shift + 1);
         }
         // Enabling an output says nothing about where it lands, so KWin keeps
         // whatever the setup it replayed for this output combination said - which
@@ -2555,7 +2499,7 @@ namespace VDISPLAY {
       }
 
       command += " output." + virtual_output + ".enable";
-      command += " output." + virtual_output + ".priority." + std::to_string(next_priority);
+      command += " output." + virtual_output + ".priority." + std::to_string(virtual_primary ? 1 : next_priority);
     } else {
       // Detached mode deliberately does not name any physical output and does
       // not change the virtual output's priority. KWin may read the physical
@@ -3103,6 +3047,8 @@ namespace VDISPLAY {
                             " overlapping the primary output (mirror)" :
                           layout == virtual_display_layout_e::detached ?
                             " outside the physical output regions (detached; physical outputs preserved)" :
+                          layout == virtual_display_layout_e::primary ?
+                            " outside the pre-session output regions, as the primary output" :
                             " outside the pre-session output regions");
       return true;
     }
@@ -3544,7 +3490,7 @@ namespace VDISPLAY {
       return have("kreadconfig6") && have("kwriteconfig6");
     }
 
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     static constexpr const char *kwin_service = "org.kde.KWin";
     static constexpr const char *input_device_manager_path = "/org/kde/KWin/InputDevice";
     static constexpr const char *input_device_interface = "org.kde.KWin.InputDevice";
@@ -3746,7 +3692,7 @@ namespace VDISPLAY {
         started->previous_uuids[i] = std::move(previous);
       }
 
-      const int opened = open_user_bus(&started->bus);
+      const int opened = platf::open_user_bus(&started->bus);
       if (opened < 0 || !started->bus) {
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not connect to the user bus to bind touch input: "
                            << (opened < 0 ? std::strerror(-opened) : "no connection was returned")
@@ -3874,7 +3820,7 @@ namespace VDISPLAY {
     }
 #endif
 
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     /**
      * Windows of these classes, put on a session's virtual output by a KWin
      * script, keyed by the display the session made.
@@ -3945,7 +3891,7 @@ namespace VDISPLAY {
       }
 
       sd_bus *bus = nullptr;
-      if (open_user_bus(&bus) < 0 || !bus) {
+      if (platf::open_user_bus(&bus) < 0 || !bus) {
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] Could not reach KWin to place windows on " << output << '.';
         return;
       }
@@ -3986,7 +3932,7 @@ namespace VDISPLAY {
         placements.erase(it);
       }
       sd_bus *bus = nullptr;
-      if (open_user_bus(&bus) >= 0 && bus) {
+      if (platf::open_user_bus(&bus) >= 0 && bus) {
         call_kwin_scripting(bus, "/Scripting", "org.kde.kwin.Scripting", "unloadScript", nullptr, "s", plugin.c_str());
         sd_bus_unref(bus);
       }
@@ -5554,7 +5500,7 @@ namespace VDISPLAY {
     /// stale geometry and reinitialises.
     static std::atomic<uint64_t> layout_generation {1};
 
-#ifdef SUNSHINE_BUILD_SDBUS
+#ifdef HERMES_BUILD_SDBUS
     struct watcher_t {
       sd_bus *bus {nullptr};
       sd_bus_slot *slot {nullptr};
@@ -5606,7 +5552,7 @@ namespace VDISPLAY {
       }
 
       auto started = std::make_unique<watcher_t>();
-      const int opened = open_user_bus(&started->bus);
+      const int opened = platf::open_user_bus(&started->bus);
       if (opened < 0 || !started->bus) {
         BOOST_LOG(debug) << "[VDISPLAY/Mutter] Could not connect to the user bus to watch for layout changes: "
                          << (opened < 0 ? std::strerror(-opened) : "no connection was returned") << '.';
@@ -6130,7 +6076,7 @@ namespace VDISPLAY {
     facts.wayland = window_system == window_system_e::WAYLAND;
     facts.x11 = window_system == window_system_e::X11;
 
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     if (facts.wayland) {
       const auto protocols = wl::probe_protocols();
       facts.output_management = protocols.output_management;
@@ -6178,13 +6124,13 @@ namespace VDISPLAY {
                                      window_system == window_system_e::WAYLAND ? "wayland" : "unknown";
     bool exclusive_layout_supported = window_system == window_system_e::X11;
     std::string output_layout_backend = exclusive_layout_supported ? "xrandr" : "unavailable";
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND && kscreen::available()) {
       exclusive_layout_supported = true;
       output_layout_backend = "kscreen-doctor";
     }
 #endif
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND) {
       if (!exclusive_layout_supported && wl::output_management_supported()) {
         exclusive_layout_supported = true;
@@ -6408,10 +6354,21 @@ namespace VDISPLAY {
     return -1;
   }
 
-  // EVDI device indexes and DRM card indexes are independent.  In particular,
-  // card0 is usually the physical GPU, even when the first EVDI device is 0.
-  // Discover the card through sysfs instead of assuming they are the same.
+  // libevdi numbers devices by their DRM card: evdi_check_device(N) and
+  // evdi_open(N) use /dev/dri/cardN. That index is not the N of the evdi.N
+  // platform device - the first EVDI device (evdi.0) is usually card1, and a
+  // second one added later can become card0. Use the card the handle was opened
+  // on, and fall back to the platform device for anything else.
   static int find_evdi_drm_card(int device_index) {
+    {
+      std::error_code ec;
+      const fs::path card = "/sys/class/drm/card" + std::to_string(device_index);
+      const auto module = fs::read_symlink(card / "device" / "driver" / "module", ec).filename().string();
+      if (!ec && module == "evdi") {
+        return device_index;
+      }
+    }
+
     const auto expected_device = "evdi." + std::to_string(device_index);
     std::vector<int> evdi_cards;
 
@@ -6897,7 +6854,7 @@ namespace VDISPLAY {
       BOOST_LOG(info) << "[VDISPLAY] EVDI available - real virtual displays supported!";
     } else {
       BOOST_LOG(warning) << "[VDISPLAY] EVDI is unavailable; virtual-display sessions are disabled.";
-      BOOST_LOG(warning) << "[VDISPLAY] Install libevdi and load the evdi kernel module, then restart Apollo.";
+      BOOST_LOG(warning) << "[VDISPLAY] Install libevdi and load the evdi kernel module, then restart Hermes.";
       driver_status = DRIVER_STATUS::NOT_SUPPORTED;
       return driver_status;
     }
@@ -7900,7 +7857,7 @@ namespace VDISPLAY {
     if (mutter::available()) {
       return mutter::apply_output_mode(connector, width, height, refresh_mhz, deadline_ms);
     }
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     const bool applied = wl::configure_virtual_output(connector, width, height, refresh_mhz, false);
     if (applied && !getHyprlandOutputName(displayName).empty()) {
       if (virtual_display_layout(displayName) == virtual_display_layout_e::mirror) {
@@ -7959,6 +7916,19 @@ namespace VDISPLAY {
     apply_physical_binding_locked();
   }
 
+  std::string primaryPhysicalOutputName() {
+    if (window_system != window_system_e::WAYLAND || !kscreen::available()) {
+      return {};
+    }
+    for (const auto &output : kscreen::outputs()) {
+      if (output.connected && output.enabled && output.priority == 1) {
+        // A virtual output made primary is not a monitor to prefer.
+        return output.name.starts_with("Virtual") ? std::string {} : output.name;
+      }
+    }
+    return {};
+  }
+
   void beginPhysicalOutputSession() {
     std::lock_guard<std::mutex> lock(physical_input_mutex);
     physical_session_active = true;
@@ -7977,6 +7947,229 @@ namespace VDISPLAY {
       kscreen::unmap_input_devices(physical_binding_owner);
       physical_bound_output.clear();
     }
+  }
+
+  namespace {
+    /**
+     * Whether connector @p name ("DP-2") on the DRM device behind @p fd is
+     * scanning out: bound to a CRTC that has a mode and a framebuffer.
+     */
+    bool connector_scanning_out(int fd, const std::string &name) {
+      drmModeRes *res = drmModeGetResources(fd);
+      if (!res) {
+        return false;
+      }
+      bool scanning_out = false;
+      for (int i = 0; i < res->count_connectors && !scanning_out; ++i) {
+        drmModeConnector *conn = drmModeGetConnectorCurrent(fd, res->connectors[i]);
+        if (!conn) {
+          continue;
+        }
+        const char *type = drmModeGetConnectorTypeName(conn->connector_type);
+        const bool match = type && name == std::string {type} + '-' + std::to_string(conn->connector_type_id);
+        drmModeEncoder *enc = match && conn->encoder_id ? drmModeGetEncoder(fd, conn->encoder_id) : nullptr;
+        drmModeCrtc *crtc = enc && enc->crtc_id ? drmModeGetCrtc(fd, enc->crtc_id) : nullptr;
+        scanning_out = crtc && crtc->mode_valid && crtc->buffer_id;
+        drmModeFreeCrtc(crtc);
+        drmModeFreeEncoder(enc);
+        drmModeFreeConnector(conn);
+      }
+      drmModeFreeResources(res);
+      return scanning_out;
+    }
+
+    /** Tell the desktop's screen saver that the user is active. */
+    void simulate_user_activity() {
+#ifdef HERMES_BUILD_SDBUS
+      sd_bus *bus = nullptr;
+      if (platf::open_user_bus(&bus) < 0 || !bus) {
+        return;
+      }
+      // A wedged screensaver must not hold up starting a stream.
+      sd_bus_set_method_call_timeout(bus, 2'000'000);
+      sd_bus_call_method(bus, "org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver", "SimulateUserActivity", nullptr, nullptr, "");
+      sd_bus_flush_close_unref(bus);
+#endif
+    }
+
+    /** Whether any DRM card scans out connector @p name. */
+    bool output_scanning_out(const std::string &name) {
+      std::error_code ec;
+      for (const auto &entry : std::filesystem::directory_iterator {"/dev/dri", ec}) {
+        if (!entry.path().filename().string().starts_with("card")) {
+          continue;
+        }
+        const int fd = platf::open_drm_node(entry.path().c_str(), O_RDONLY);
+        if (fd < 0) {
+          continue;
+        }
+        const bool scanning_out = connector_scanning_out(fd, name);
+        ::close(fd);
+        if (scanning_out) {
+          return true;
+        }
+      }
+      return false;
+    }
+  }  // namespace
+
+  namespace {
+    /** The kernel's hot-plug state of a /sys/class/drm connector, e.g. "connected". */
+    std::string connector_status(const std::filesystem::path &connector) {
+      std::ifstream in {connector / "status"};
+      std::string status;
+      std::getline(in, status);
+      return status;
+    }
+
+    /**
+     * The I2C adapter that runs over a DisplayPort connector's AUX channel,
+     * e.g. "/dev/i2c-9". It is a child of the connector in sysfs. The
+     * connector's "ddc" link is not it: on amdgpu that names the hardware DDC
+     * bus, which a sleeping DisplayPort monitor does not listen on.
+     */
+    std::string aux_i2c_device(const std::filesystem::path &connector) {
+      std::error_code ec;
+      for (const auto &entry : std::filesystem::directory_iterator {connector, ec}) {
+        const auto name = entry.path().filename().string();
+        if (name.starts_with("i2c-")) {
+          return "/dev/" + name;
+        }
+      }
+      return {};
+    }
+
+    /**
+     * Read the first byte of the monitor's EDID over @p device.
+     * @return 1 if the monitor answered, 0 if it did not, -1 if the device
+     * could not be opened.
+     */
+    int read_edid_byte(const std::string &device) {
+      const int fd = ::open(device.c_str(), O_RDWR | O_CLOEXEC);
+      if (fd < 0) {
+        return -1;
+      }
+      constexpr long edid_address = 0x50;
+      unsigned char byte = 0;
+      const bool answered = ::ioctl(fd, I2C_SLAVE, edid_address) == 0 && ::write(fd, &byte, 1) == 1 && ::read(fd, &byte, 1) == 1;
+      ::close(fd);
+      return answered ? 1 : 0;
+    }
+
+    /**
+     * Wake DisplayPort monitors from deep sleep, and wait for them.
+     *
+     * Woken by a modeset, a monitor in deep sleep fails link training (its AUX
+     * channel is not answering yet), drops off and returns seconds later. One
+     * read on its AUX channel wakes it instead: the read times out, the
+     * monitor starts, and the compositor lights it by itself once it has
+     * reconnected, with no failed training. Measured on an ASUS VG32V on an
+     * RX 9070 XT: lit 6.2 to 6.5 seconds after the read, either way.
+     *
+     * A monitor that answers the read is not in deep sleep, and nothing waits
+     * for it. Nothing more is sent while a monitor wakes.
+     * @return Whether a monitor was woken and has come up.
+     */
+    bool wake_displayport_monitors_from_deep_sleep() {
+      std::vector<std::string> waking;
+      std::error_code ec;
+      for (const auto &entry : std::filesystem::directory_iterator {"/sys/class/drm", ec}) {
+        const auto name = entry.path().filename().string();  // "card1-DP-2"
+        const auto dash = name.find('-');
+        if (!name.starts_with("card") || dash == std::string::npos) {
+          continue;
+        }
+        const auto connector = name.substr(dash + 1);
+        // Read the state first: a waking monitor drops it at once.
+        if (!connector.starts_with("DP-") || connector_status(entry.path()) != "connected" || output_scanning_out(connector)) {
+          continue;
+        }
+        const auto device = aux_i2c_device(entry.path());
+        if (device.empty()) {
+          continue;
+        }
+        const int answered = read_edid_byte(device);
+        if (answered < 0) {
+          BOOST_LOG(info) << "[VDISPLAY] Can't open " << device << " to wake " << connector << ": " << std::strerror(errno);
+        } else if (answered == 0) {
+          waking.push_back(connector);
+        }
+      }
+      if (waking.empty()) {
+        return false;
+      }
+
+      const auto start = std::chrono::steady_clock::now();
+      const auto all_lit = [&waking]() {
+        return std::ranges::all_of(waking, output_scanning_out);
+      };
+      bool lit = false;
+      while (!(lit = all_lit()) && std::chrono::steady_clock::now() - start < 8s) {
+        std::this_thread::sleep_for(100ms);
+      }
+      const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+      if (lit) {
+        BOOST_LOG(info) << "[VDISPLAY] Woke " << waking.front() << " from deep sleep over AUX; lit after " << waited << " ms.";
+      } else {
+        BOOST_LOG(warning) << "[VDISPLAY] " << waking.front() << " was woken from deep sleep over AUX but is not lit after " << waited << " ms.";
+      }
+      return lit;
+    }
+
+    struct physical_output_t {
+      std::string name;
+      bool primary = false;
+    };
+
+    /** The primary physical output, or failing that any enabled physical output. */
+    physical_output_t enabled_physical_output() {
+      physical_output_t result;
+      for (const auto &output : kscreen::outputs()) {
+        if (!output.connected || !output.enabled || output.name.starts_with("Virtual")) {
+          continue;
+        }
+        if (result.name.empty() || output.priority == 1) {
+          result = {output.name, output.priority == 1};
+        }
+      }
+      return result;
+    }
+  }  // namespace
+
+  bool wakeSleepingMonitor() {
+    if (window_system != window_system_e::WAYLAND || !kscreen::available()) {
+      return false;
+    }
+
+    const bool woken = wake_displayport_monitors_from_deep_sleep();
+
+    const auto monitor = enabled_physical_output();
+    if (monitor.name.empty()) {
+      return false;
+    }
+    // Count as user activity, so the idle timer that put the screens to sleep
+    // doesn't turn them off again before capture starts.
+    simulate_user_activity();
+    if (woken && output_scanning_out(monitor.name)) {
+      return true;  // The compositor lit it when it reconnected.
+    }
+
+    BOOST_LOG(info) << "[VDISPLAY/KScreen] " << monitor.name
+                    << " is enabled but dark (power saving); waking it instead of creating a virtual display.";
+    if (!kscreen::run_layout_command("kscreen-doctor --dpms on")) {
+      return false;
+    }
+
+    // The screens come back one at a time, and each reads as enabled before
+    // the compositor has drawn on it. Capture can only open it once it does.
+    for (int i = 0; i < 30; ++i) {
+      std::this_thread::sleep_for(100ms);
+      if (output_scanning_out(monitor.name)) {
+        return true;
+      }
+    }
+    BOOST_LOG(warning) << "[VDISPLAY/KScreen] " << monitor.name << " did not show a frame within 3 seconds.";
+    return false;
   }
 
   bool activateVirtualDisplayOutput(const std::string &displayName) {
@@ -8005,7 +8198,7 @@ namespace VDISPLAY {
       return false;
     }
 
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND) {
       int width = 0;
       int height = 0;
@@ -8231,7 +8424,7 @@ namespace VDISPLAY {
       return enabled;
     }
 
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND) {
       int width = 0;
       int height = 0;
@@ -8295,7 +8488,7 @@ namespace VDISPLAY {
       return;
     }
 
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
     if (window_system == window_system_e::WAYLAND) {
       if (!wl::restore_virtual_output_layout()) {
         BOOST_LOG(warning) << "[VDISPLAY] Failed to restore the Wayland display layout.";

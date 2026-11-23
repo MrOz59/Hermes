@@ -30,6 +30,7 @@
 #include "cuda.h"
 #include "dmabuf_mapping.h"
 #include "graphics.h"
+#include "misc.h"
 #include "pyrowave.h"
 #include "src/config.h"
 #include "src/logging.h"
@@ -723,7 +724,7 @@ namespace platf {
       }
     }
 
-#ifdef SUNSHINE_TESTS
+#ifdef HERMES_TESTS
     void blend_hermes_cursor_for_test(
       img_t &img,
       bool visible,
@@ -751,7 +752,7 @@ namespace platf {
 
       int init(const char *path) {
         cap_sys_admin admin;
-        fd.el = open(path, O_RDWR);
+        fd.el = platf::open_drm_node(path, O_RDWR);
 
         if (fd.el < 0) {
           BOOST_LOG(error) << "Couldn't open: "sv << path << ": "sv << strerror(errno);
@@ -768,7 +769,11 @@ namespace platf {
           BOOST_LOG(debug) << "Opening render node: "sv << rendernode_path;
           render_fd.el = open(rendernode_path, O_RDWR);
           if (render_fd.el < 0) {
-            BOOST_LOG(warning) << "Couldn't open render node: "sv << rendernode_path << ": "sv << strerror(errno);
+            // Hermes-KMS grants read-write on its render node to root only, so
+            // generic GPU probes skip it; Hermes reaches it read-only through
+            // its own path. Failing here is expected for it, not worth a warning.
+            const bool hermes_kms = errno == EACCES && ver && ver->name && ver->name == "hermes-kms"sv;
+            BOOST_LOG(hermes_kms ? debug : warning) << "Couldn't open render node: "sv << rendernode_path << ": "sv << strerror(errno);
             render_fd.el = dup(fd.el);
           }
           free(rendernode_path);
@@ -784,7 +789,7 @@ namespace platf {
 
         if (drmSetClientCap(fd.el, DRM_CLIENT_CAP_ATOMIC, 1)) {
           BOOST_LOG(warning) << "GPU driver doesn't support atomic mode-setting: "sv << path;
-#if defined(SUNSHINE_BUILD_X11)
+#if defined(HERMES_BUILD_X11)
           // We won't be able to capture the mouse cursor with KMS on non-atomic drivers,
           // so fall back to X11 if it's available and the user didn't explicitly force KMS.
           if (window_system == window_system_e::X11 && config::video.capture != "kms") {
@@ -1000,7 +1005,7 @@ namespace platf {
       }
     };
 
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
     /// A CPU-copied frame in page-locked memory, which the CUDA upload reads by DMA.
     struct cuda_host_img_t: public img_t {
       ~cuda_host_img_t() override {
@@ -1601,9 +1606,19 @@ namespace platf {
 
         auto fb = card.fb(plane.get());
         if (!fb) {
-          // This can happen if the display is being reconfigured while streaming
-          BOOST_LOG(warning) << "Couldn't get drm fb for plane ["sv << plane->fb_id << "]: "sv << strerror(errno);
+          // The plane shows nothing while its output is off (framebuffer 0)
+          // or being reconfigured. Capture retries every frame until it
+          // returns, so say so once rather than on every frame.
+          if (!plane_lost) {
+            BOOST_LOG(warning) << "Couldn't get drm fb for plane ["sv << plane->fb_id << "]: "sv << strerror(errno)
+                               << "; waiting for the display to show a picture again"sv;
+            plane_lost = true;
+          }
           return capture_e::timeout;
+        }
+        if (plane_lost) {
+          BOOST_LOG(info) << "The display shows a picture again; capture resumed"sv;
+          plane_lost = false;
         }
 
         if (!fb->handles[0]) {
@@ -1660,6 +1675,7 @@ namespace platf {
       int plane_id;
       int crtc_id;
       int crtc_index;
+      bool plane_lost = false;  ///< The plane had no framebuffer at the last refresh().
 
       std::optional<uint32_t> connector_id;
       std::optional<uint64_t> hdr_metadata_blob_id;
@@ -1759,13 +1775,13 @@ namespace platf {
 #endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
           return va::make_avcodec_encode_device(width, height, false);
         }
 #endif
 
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           return cuda::make_avcodec_encode_device(width, height, false);
         }
@@ -1912,6 +1928,9 @@ namespace platf {
                         bool *) override {
         auto next_frame = std::chrono::steady_clock::now();
         auto last_frame = buffer->frame_number();
+        // The first frame is always copied, so a new session starts with a picture.
+        bool copied_any = false;
+        std::uint64_t copied_frame = 0;
 
         while (true) {
           const auto now = std::chrono::steady_clock::now();
@@ -1928,8 +1947,19 @@ namespace platf {
           if (!pull_free_image_cb(img_out)) {
             return capture_e::interrupted;
           }
+          // Nothing was drawn since the last copy: report no new frame, like
+          // the other backends do on a timeout. The encoder then repeats the
+          // previous frame at its minimum rate instead of encoding an
+          // identical frame at the full frame rate.
+          if (copied_any && buffer->frame_number() == copied_frame) {
+            if (!push_captured_image_cb(std::move(img_out), false)) {
+              return capture_e::ok;
+            }
+            continue;
+          }
           const auto t0 = std::chrono::steady_clock::now();
-          buffer->copy_to(img_out->data, img_out->row_pitch);
+          copied_frame = buffer->copy_to(img_out->data, img_out->row_pitch);
+          copied_any = true;
           const auto t1 = std::chrono::steady_clock::now();
           accumulate_capture_metric("evdi", std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
           img_out->frame_timestamp = std::chrono::steady_clock::now();
@@ -1946,12 +1976,12 @@ namespace platf {
 #endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e) override {
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
           return va::make_avcodec_encode_device(width, height, false);
         }
 #endif
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           return cuda::make_avcodec_encode_device(width, height, false);
         }
@@ -1990,13 +2020,13 @@ namespace platf {
 #endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
           return va::make_avcodec_encode_device(width, height, dup(card.render_fd.el), img_offset_x, img_offset_y, true);
         }
 #endif
 
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           return cuda::make_avcodec_gl_encode_device(width, height, img_offset_x, img_offset_y);
         }
@@ -2118,14 +2148,14 @@ namespace platf {
           return -1;
         }
 
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi && !va::validate(card.render_fd.el)) {
           BOOST_LOG(warning) << "Monitor "sv << display_name << " doesn't support hardware encoding. Reverting back to GPU -> RAM -> GPU"sv;
           return -1;
         }
 #endif
 
-#ifndef SUNSHINE_BUILD_CUDA
+#ifndef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           BOOST_LOG(warning) << "Attempting to use NVENC without CUDA support. Reverting back to GPU -> RAM -> GPU"sv;
           return -1;
@@ -2327,14 +2357,14 @@ namespace platf {
           return -1;
         }
 
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi && !va::validate(encode_render_fd.el)) {
           BOOST_LOG(warning) << "Encoding GPU doesn't support VAAPI."sv;
           return -1;
         }
 #endif
 
-#ifndef SUNSHINE_BUILD_CUDA
+#ifndef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           BOOST_LOG(warning) << "Hermes-KMS NVENC path requested but Hermes was built without CUDA support."sv;
           return -1;
@@ -2354,13 +2384,13 @@ namespace platf {
 #endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
           // Encode on the real GPU, importing the Hermes DMA-BUFs (vram=true).
           return va::make_avcodec_encode_device(width, height, dup(encode_render_fd.el), img_offset_x, img_offset_y, true);
         }
 #endif
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           // Same descriptor flow as display_vram_t: the GL/CUDA device imports
           // the Hermes DMA-BUFs through EGL on the NVIDIA GPU and encodes with
@@ -2663,7 +2693,7 @@ namespace platf {
           img.row_pitch = static_cast<std::int32_t>(row_pitch);
         };
 
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           if (auto *pinned = static_cast<std::uint8_t *>(cuda::alloc_host(size))) {
             std::memset(pinned, 0, size);
@@ -2700,7 +2730,7 @@ namespace platf {
 #endif
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) override {
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
           // One CUDA kernel decodes the frame's layout and writes NV12 or
           // P010 from pinned memory; no OpenGL context, and no GL-CUDA
@@ -2708,7 +2738,7 @@ namespace platf {
           return cuda::make_avcodec_encode_device(width, height, false, hermes_cuda_layout(source_fourcc));
         }
 #endif
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
           // Only reachable through HERMES_KMS_FORCE_CPU_COPY; the VAAPI upload
           // reads 8-bit BGRA.
@@ -3149,6 +3179,7 @@ namespace platf {
 
     std::vector<kms::card_descriptor_t> cds;
     std::vector<std::string> display_names;
+    std::map<std::string, int> index_by_connector;
 
     fs::path card_dir {"/dev/dri"sv};
     for (auto &entry : fs::directory_iterator {card_dir}) {
@@ -3175,7 +3206,16 @@ namespace platf {
         }
       }
 
-      auto crtc_to_monitor = kms::map_crtc_to_monitor(card.monitors(conn_type_count));
+      const auto monitors = card.monitors(conn_type_count);
+      auto crtc_to_monitor = kms::map_crtc_to_monitor(monitors);
+
+      // Kernel connector names ("DP-2") by CRTC, to find the desktop's primary output.
+      std::map<std::uint32_t, std::string> connector_by_crtc;
+      for (const auto &monitor : monitors) {
+        if (auto conn = card.connector(monitor.connector_id)) {
+          connector_by_crtc.emplace(monitor.crtc_id, kms::kernel_connector_name(conn->connector_type, conn->connector_type_id));
+        }
+      }
 
       auto end = std::end(card);
       for (auto plane = std::begin(card); plane != end; ++plane) {
@@ -3221,6 +3261,10 @@ namespace platf {
           it->second.monitor_index = count;
         }
 
+        if (const auto name = connector_by_crtc.find(plane->crtc_id); name != connector_by_crtc.end() && !name->second.empty()) {
+          index_by_connector.emplace(name->second, count);
+        }
+
         kms::env_width = std::max(kms::env_width, (int) (crtc->x + crtc->width));
         kms::env_height = std::max(kms::env_height, (int) (crtc->y + crtc->height));
 
@@ -3257,6 +3301,26 @@ namespace platf {
     BOOST_LOG(debug) << "Desktop resolution: "sv << kms::env_width << 'x' << kms::env_height;
 
     kms::card_descriptors = std::move(cds);
+
+    // Monitor numbers follow DRM plane order, which has nothing to do with the
+    // desktop layout: monitor 0 can be a capture device or a dummy plug. When
+    // no display is configured, the first name in this list is streamed, so
+    // put the desktop's primary output first. Every number keeps its meaning,
+    // so a configured display number still selects the same monitor.
+    if (const auto primary = VDISPLAY::primaryPhysicalOutputName(); !primary.empty()) {
+      const auto it = index_by_connector.find(primary);
+      if (it == index_by_connector.end()) {
+        BOOST_LOG(info) << "The desktop's primary output "sv << primary
+                        << " is dark (switched off or asleep), so it can't be the default display yet."sv;
+      } else {
+        const auto pos = std::find(display_names.begin(), display_names.end(), std::to_string(it->second));
+        if (pos != display_names.end() && pos != display_names.begin()) {
+          std::rotate(display_names.begin(), pos, pos + 1);
+          BOOST_LOG(info) << "Monitor "sv << it->second << " ("sv << primary
+                          << ") is the desktop's primary output; it is streamed when no display is configured."sv;
+        }
+      }
+    }
 
     // Active Hermes-KMS virtual displays are capturable through their render
     // node even when no physical framebuffer handle is readable (no DRM

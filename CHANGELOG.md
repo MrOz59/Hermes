@@ -12,6 +12,48 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- Hermes names an application whose audio misses the stream (from PunkUnity).
+  A stream follows the default sink unless an output was chosen for it, in
+  the desktop's sound settings or remembered by the sound server for that
+  application; such a stream stays on its output when Hermes makes its own
+  sink the default, so the client hears nothing from it. During a stream on
+  the host's sound server, Hermes now logs a warning once per application
+  and output: `Audio from <app> -> <sink> does not reach the client, which
+  hears <stream sink>`.
+- VAAPI rolling intra refresh (`vaapi_intra_refresh`, on by default; from PunkUnity).
+  The encoder refreshes a band of rows in every frame, the whole picture every
+  half second, so a frame lost on the network heals on its own. Hermes then offers
+  reference frame invalidation: a client that lost frames keeps decoding instead
+  of freezing until a key frame, and no key frame burst follows each loss. It
+  needs an FFmpeg whose VAAPI encoders have the `intra_refresh` option (a
+  build-deps patch) and a driver that refreshes rows (Mesa radeonsi); otherwise
+  nothing changes.
+- Per-app `limit-fps` (Linux, off by default; from PunkUnity): cap what the app
+  starts at the stream's frame rate, so games don't render frames the stream
+  drops. Hermes sets `DXVK_FRAME_RATE` and `VKD3D_FRAME_RATE` (DXVK and
+  VKD3D-Proton builds that keep their limiter, such as Proton-CachyOS) and adds
+  `fps_limit` to `MANGOHUD_CONFIG` for MangoHud users, keeping their
+  MangoHud.conf. Nothing extra is required, and MangoHud is never turned on.
+  The previous values come back when the app ends.
+- `virtual-display-layout: primary` (Linux, KDE/KWin; from PunkUnity): extend,
+  with the virtual display as the primary monitor for the session. Games launched
+  from Big Picture open on the primary output, so in the extend layout they
+  opened on the physical monitor instead of the stream; with primary they open
+  in the stream while the monitors stay on. The physical monitors keep their
+  order one place down, and their priorities are put back when the session ends.
+  Elsewhere it behaves like extend.
+- At the end of a stream, Hermes logs the video the client lost on the way to it
+  (from PunkUnity): `Client [name] lost N of M video packets (x%): … frame blocks
+  repaired by FEC, … frames dropped`. Moonlight-family clients already report
+  every frame block that lost packets (`SS_FRAME_FEC_STATUS`), and Hermes ignored
+  those reports, so loss on the network (Wi-Fi, a slow port, a congested hop)
+  was invisible on the host. Nothing is logged when nothing was lost.
+- Fedora 45 packages: CI now builds `hermes-<version>-1.fc45.x86_64.rpm`,
+  installs it and runs the secure-loader checks on Fedora 45 alongside 43 and 44.
+- `inhibit_screen_lock` (off by default) keeps the host's screensaver and
+  screen lock from engaging while a client is connected. On Linux it holds an
+  inhibition through `org.freedesktop.ScreenSaver` on the D-Bus session bus and
+  releases it when the last client disconnects.
 - Double-NAT UPnP forwarding using the existing `upnp` setting, with ownership-aware
   cleanup on both routers and recovery of permanent rules after a restart (#126).
   Flatpak includes the MiniUPnPc XML bounds fixes for CVE-2026-110655 and CVE-2026-110656.
@@ -58,6 +100,17 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 
 ### Fixed
+- The Gamescope Steam Session app no longer ends within a second when a Steam
+  is already running (from PunkUnity). Gamescope's own client is a new
+  `steam -bigpicture`; Steam runs once per user, so it handed the request to
+  the running Steam and exited, Gamescope exited with it, and the client saw
+  the app quit (Hestia retried, and each retry ended the same way). Before
+  starting a nested Gamescope that runs Steam, Hermes now shuts the other
+  Steam down the way independent sessions already do (`stop-desktop-steam`,
+  `auto`; `off` keeps it), and starts it again, in the tray, when the app
+  ends. A Steam Hermes started itself is not started again. Inside a
+  standalone Gamescope session (SteamOS Game Mode) the running Steam is left
+  alone.
 - Fix configuration of fetched Boost 1.89 Locale headers with newer CMake,
   and install libc development files for the Ubuntu package-loader CI fixture.
 - Use `hermes` as the suggested username on the initial setup page.
@@ -75,9 +128,102 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   the lookup always came back empty. Activating the output and exclusive mode
   then stopped with "DRM connector was not found". The driver is now read from
   the card's own device.
+- Starting a stream while the screens are asleep no longer opens an empty
+  virtual display beside the desktop ([#133], from PunkUnity). KWin's power
+  saving leaves every connector disabled, so Hermes found no lit monitor and
+  created one. When KScreen still lists a connected, enabled output, Hermes now
+  wakes the screens and streams the primary output as soon as it shows a
+  picture, waiting at most 3 seconds. A DisplayPort monitor in deep sleep is
+  woken with one read on its AUX channel instead, and Hermes waits until the
+  compositor has lit it: woken by a modeset, it failed link training
+  (`dpcd_set_link_settings ... failed` on amdgpu), dropped off and came back
+  seconds later. A monitor that answers the read is not waited for. Outputs
+  turned off in the display settings are left alone, so a host without a
+  monitor still gets a virtual display.
+- On KWin, touch and pen land on the monitor being streamed ([#131], from
+  PunkUnity). KWin bound new touch devices to an output of its own choosing,
+  so with more than one monitor a Multi touch client often did nothing. When
+  Hermes captures a physical output, the touch and pen devices are now bound
+  to it for the session and released afterwards.
+- With no display configured, Hermes streams the desktop's primary monitor
+  ([#138], from PunkUnity). Monitor numbers follow DRM plane order, not the
+  desktop layout, so monitor 0 could be a KVM capture input or a dummy plug.
+  On KWin, the output KScreen marks as primary is now listed first; a
+  configured display number still selects the same monitor as before.
+- Ending an app now stops what its detached commands started (from
+  PunkUnity). Detached commands were let go as soon as they were spawned, so
+  the Steam the Steam Big Picture entry opens kept running after the stream:
+  its undo command only closes Big Picture. The next app that runs Steam, a
+  detached Steam desktop included, then handed its launch to that Steam. On
+  Linux each detached command now runs in a transient scope of the user's
+  systemd manager, which Hermes stops when the app ends, after its undo
+  commands. A command that only handed a request to a program already
+  running, such as a Steam the user opened, leaves nothing to stop. The new
+  per-app option `stop-detached` (on by default) keeps the old behaviour.
+- Hermes no longer locks the compositor out of a GPU (from PunkUnity). The
+  kernel makes whoever opens `/dev/dri/cardN` while no one holds DRM master
+  that card's master, and Hermes kept it. Start a stream while the desktop
+  session is inactive (a text console, or the moment between the login screen
+  and the desktop), and when the session came back logind could not hand the
+  card back to KWin, so that GPU's outputs stayed frozen until the stream
+  ended. Hermes now gives master back as soon as it opens a card, as logind
+  and KWin do; capture never needed it. Its card descriptors are also
+  close-on-exec, so launched apps no longer inherit them.
+- An idle EVDI virtual display no longer keeps the encoder busy ([#132], from
+  itkawa). The capture loop copied the pixel buffer and pushed it as a new frame
+  on every tick, even when the driver had delivered nothing new, so an idle
+  desktop was encoded at almost the full frame rate. An unchanged frame is now
+  reported as not captured, and the encoder repeats the previous one at its
+  minimum rate. On an idle 1280x720 desktop this went from 53 to 18 fps and
+  from 22% to 9% of one thread.
+- Quit in the Web UI no longer crashes Hermes when shutting down takes longer
+  than 5 seconds ([#136], from itkawa). `/api/quit` answered from a detached
+  thread after 5 s, which then wrote to, or released, a response whose HTTPS
+  server had already been destroyed. Closing an EVDI virtual display can take
+  that long, and on GNOME under Wayland the quit ended in a segfault (exit 139).
+  The thread now lets go of the response before the server stops.
+- With more than one EVDI device, Hermes watches the connector of the card it
+  opened ([#140], from itkawa). libevdi numbers devices by their DRM card
+  (`/dev/dri/cardN`), but Hermes looked the same number up as the `evdi.N`
+  platform device, which can be another card. It then waited for a connector
+  that never appeared, and the client got a 503. The card libevdi opened is now
+  checked first.
+- Quieter capture logs (from PunkUnity). While a captured monitor is off or
+  being reconfigured, KMS capture logged `Couldn't get drm fb for plane [0]`
+  on every frame, about 60 lines a second; it now says so once, and once more
+  when the picture returns. Opening the Hermes-KMS render node, which only
+  root may open read-write by design, is no longer a warning on every monitor
+  scan. And the note that encoder testing may log errors now comes before
+  those errors, not after a configured encoder's.
+- A frame too large for the protocol's four FEC blocks keeps as much FEC as
+  still fits, instead of none (from PunkUnity). At the default 20%, frames
+  over about 800 packets were sent with no parity at all, so a single lost
+  packet dropped them, and they were often key frames. AMD's VAAPI encoder
+  produced such frames at every bitrate tested, from 2 to 300 Mbps; a
+  920-packet frame now goes out with 10% FEC.
+- AMD encoders on Linux keep frames near their size budget (from PunkUnity).
+  radeonsi accepts the single-frame VBV in VBR but does not hold frames to
+  it, so key frames and frames after a still stretch came out many times
+  over budget, too large for FEC and dropped whole when a packet was lost.
+  On radeonsi, Hermes now uses CBR with the single-frame VBV, and removes
+  the filler data CBR pads H.264 and HEVC frames with, so a still screen
+  does not stream at the full bitrate.
+- Games in a detached desktop see Steam Input's controller again (from
+  PunkUnity). Hermes gives the desktop Steam's virtual pads only when the
+  processes holding /dev/uinput belong to it, and counted only those in the
+  desktop's own mount namespace. The Steam client runs in its runtime's
+  namespace inside the desktop, so its pads stayed on the host: Steam's menus
+  took the controller, the game got nothing. A process now belongs to the
+  desktop when it descends from one in its namespace.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99
+[#131]: https://github.com/MrOz59/Hermes/pull/131
+[#132]: https://github.com/MrOz59/Hermes/pull/132
+[#133]: https://github.com/MrOz59/Hermes/pull/133
+[#136]: https://github.com/MrOz59/Hermes/pull/136
+[#138]: https://github.com/MrOz59/Hermes/pull/138
+[#140]: https://github.com/MrOz59/Hermes/pull/140
 
 ## [0.7.0] - 2026-11-02
 

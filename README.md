@@ -49,14 +49,14 @@ A successful modularization should make it easier to:
 - Introducing focused tests around the boundaries being refactored.
 - Evaluating **C++ Modules** for suitable components, gradually and only after
   architectural boundaries are clear.
-- Adjusting CMake and CI as required to support these changes safely.
+- Adjusting the mcpp build and CI as required to support these changes safely.
 
 **Out of scope for this workstream**
 
 - A complete rewrite of Hermes.
 - Adding features unrelated to the subsystem currently being refactored.
 - Bulk-importing features from other forks as part of the same refactor.
-- Requiring C++26 solely to enable modules.
+- Changing the toolchain as a side effect of a module experiment.
 - Replacing working capture, encoding, or protocol paths without a separately
   justified change and appropriate tests.
 
@@ -140,8 +140,8 @@ test coverage and no unexplained runtime regressions.
 ### Phase 3 — Optional C++ Modules pilot
 
 C++ Modules are a **possible build/language mechanism**, not the goal of the
-refactor. They are available from C++20 and do not require switching the
-whole project to C++26. Hermes currently configures its main target as C++23.
+refactor. Hermes uses C++26 for its first-party Linux C++ targets. Evaluate
+modules where they make component interfaces clearer.
 
 - [ ] Select a self-contained, relatively dependency-light component.
 - [ ] Prototype a module interface without forcing module adoption across
@@ -153,9 +153,8 @@ whole project to C++26. Hermes currently configures its main target as C++23.
 - [ ] Keep a practical fallback if supported build environments cannot
       consume the module reliably.
 
-The top-level build currently declares **CMake 3.20**. A conventional CMake
-`FILE_SET CXX_MODULES` integration needs a newer CMake (3.28 or later), so any
-minimum-version change needs a separate compatibility assessment.
+Hermes uses [mcpp for its Linux build](docs/building.md). Verify module
+changes against the supported compiler and CI configurations.
 
 **Exit condition:** the pilot is reproducible in the supported build matrix
 and provides a demonstrated benefit. If not, retain conventional C++ units.
@@ -192,7 +191,7 @@ documented behavior change has been approved:
   methods building; do not infer platform support from untested code.
 
 CUDA is an independent compilation concern. The existing build intentionally
-keeps CUDA at C++17 and uses a compatible host compiler for NVCC; do not
+keeps CUDA at C++20 and uses a compatible host compiler for NVCC; do not
 change those settings as an accidental consequence of C++ refactoring.
 
 Passing CI is necessary but not sufficient for GPU/compositor-sensitive

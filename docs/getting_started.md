@@ -24,19 +24,14 @@ Packages are built in CI and published at
 |:-------------|:------|
 | Arch / CachyOS | `hermes-streaming-{version}-1-x86_64.pkg.tar.zst` |
 | Ubuntu 24.04, 26.04 | `hermes_{version}_ubuntu{release}_amd64.deb` |
-| Fedora 43, 44 | `hermes-{version}-1.fc{release}.x86_64.rpm` |
+| Fedora 43, 44, 45 | `hermes-{version}-1.fc{release}.x86_64.rpm` |
 
 Match the release in the filename to the one you run. Each `.deb` and `.rpm` is
 built inside that release's own container, so its dependencies are the sonames
 that release ships; a package built for another release will refuse to install.
 
-> [!IMPORTANT]
-> No AppImage, Flatpak, Homebrew or macOS package is published, and no Windows
-> installer is attached to a release — CI builds a Windows binary on every run,
-> but only as a workflow artifact. The code for those platforms is inherited
-> from upstream Sunshine and still builds (see [Building](building.md)); none of
-> it is exercised here. Third-party packages of *Sunshine* are not packages of
-> Hermes.
+Hermes is a Linux host. Release assets are listed above, and the source build
+is covered in [Building](building.md).
 
 ### CUDA compatibility
 
@@ -368,24 +363,6 @@ why it never asks you to log in.
 The console is not required for streaming; it is only needed when somebody has
 to act on the host itself.
 
-### macOS
-
-> [!NOTE]
-> Hermes publishes no macOS package; this section describes the inherited
-> upstream behaviour for anyone building it there.
-
-The first time you start it, you will be asked to grant access to screen recording and your microphone.
-
-Only microphones can be accessed on macOS due to system limitations. To stream system audio use
-[Soundflower](https://github.com/mattingalls/Soundflower) or
-[BlackHole](https://github.com/ExistentialAudio/BlackHole).
-
-> [!NOTE]
-> Command Keys are not forwarded by Moonlight. Right Option-Key is mapped to CMD-Key.
-
-> [!CAUTION]
-> Gamepads are not currently supported.
-
 ## Usage
 
 ### Basic usage
@@ -453,13 +430,13 @@ by default. You may replace *localhost* with your internal ip address.
 
 1. Add games and applications.
 2. Adjust any configuration settings as needed.
-3. In Moonlight, you may need to add the PC manually.
-4. When Moonlight requests for you insert the pin:
+3. In [Hestia](https://github.com/MrOz59/Hestia) or another compatible client, you may need to add the PC manually.
+4. When the client displays a PIN:
 
    - Login to the web ui
    - Go to "PIN" in the Navbar
    - Type in your PIN and press Enter, you should get a Success Message
-   - In Moonlight, select one of the Applications listed
+   - In your client, select an application from the list
 
 ### Arguments
 To get a list of available arguments, run the following command.
@@ -484,9 +461,6 @@ All shortcuts start with `Ctrl+Alt+Shift`, just like Moonlight.
   This can only be changed by modifying the `apps.json` file directly.
 
 ### Considerations
-* On Windows, Hermes uses the Desktop Duplication API which only supports capturing from the GPU used for display.
-  If you want to capture and encode on the eGPU, connect a display or HDMI dummy display dongle to it and run the games
-  on that display.
 * When an application is started, if there is an application already running, it will be terminated.
 * If any of the prep-commands fail, starting the application is aborted.
 * When the application has been shutdown, the stream shuts down as well.
@@ -502,8 +476,7 @@ All shortcuts start with `Ctrl+Alt+Shift`, just like Moonlight.
 * If inputs (mouse, keyboard, gamepads...) aren't working after connecting, add the user running hermes to the `input` group.
 
 ### HDR Support
-Streaming HDR content is experimental on Linux hosts. The Windows notes below are inherited from upstream Sunshine;
-Hermes does not publish or exercise a Windows build.
+Streaming HDR content is experimental.
 
 On a Hermes-KMS virtual display, HDR10 capture targets AMD through VAAPI (Intel shares the path but is untested) and
 NVIDIA through NVENC, by way of the CPU copy that backend always uses there. It needs `virtual_display_backend = hermes_kms`, Hermes-KMS
@@ -514,7 +487,7 @@ in the client; EVDI has no HDR path. See [Hermes-KMS HDR10](hermes_kms_hdr.md).
 
   * HDR must be activated in the host OS, which may require an HDR-capable display or EDID emulator dongle
     connected to your host PC.
-  * You must also enable the HDR option in your Moonlight client settings, otherwise the stream will be SDR
+  * Enable HDR in Hestia or your compatible client, otherwise the stream will be SDR
     (and probably overexposed if your host is HDR).
   * A good HDR experience relies on proper HDR display calibration both in the OS and in game. HDR calibration can
     differ significantly between client and host displays.
@@ -525,22 +498,12 @@ in the client; EVDI has no HDR path. See [Hermes-KMS HDR10](hermes_kms_hdr.md).
 
 Additional information:
 
-@tabs{
-  @tab{ Windows |
-  - HDR streaming is supported for Intel, AMD, and NVIDIA GPUs that support encoding HEVC Main 10 or AV1 10-bit profiles.
-  - We recommend calibrating the display by streaming the Windows HDR Calibration app to your client device and saving an HDR calibration profile to use while streaming.
-  - Older games that use NVIDIA-specific NVAPI HDR rather than native Windows HDR support may not display properly in HDR.
-  }
+- HDR streaming is supported for Intel and AMD GPUs that support encoding HEVC Main 10 or AV1 10-bit profiles using VAAPI.
+- The KMS capture backend is required for HDR capture. Other capture methods, like NvFBC or X11, do not support HDR.
+- You will need a desktop environment with a compositor that supports HDR rendering, such as Gamescope or KDE Plasma 6.
 
-@tab{ Linux |
-  - HDR streaming is supported for Intel and AMD GPUs that support encoding HEVC Main 10 or AV1 10-bit profiles using VAAPI.
-  - The KMS capture backend is required for HDR capture. Other capture methods, like NvFBC or X11, do not support HDR.
-  - You will need a desktop environment with a compositor that supports HDR rendering, such as Gamescope or KDE Plasma 6.
-
-  @seealso{[Arch wiki on HDR Support for Linux](https://wiki.archlinux.org/title/HDR_monitor_support) and
-  [Reddit Guide for HDR Support for AMD GPUs](https://www.reddit.com/r/linux_gaming/comments/10m2gyx/guide_alpha_test_hdr_on_linux)}
-  }
-}
+@seealso{[Arch wiki on HDR Support for Linux](https://wiki.archlinux.org/title/HDR_monitor_support) and
+[Reddit Guide for HDR Support for AMD GPUs](https://www.reddit.com/r/linux_gaming/comments/10m2gyx/guide_alpha_test_hdr_on_linux)}
 
 ### Tutorials and Guides
 Tutorial videos are available [here](https://www.youtube.com/playlist?list=PLMYr5_xSeuXAbhxYHz86hA1eCDugoxXY0).

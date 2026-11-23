@@ -9,9 +9,7 @@
 #include <cstring>
 #include <sstream>
 
-#ifndef _WIN32
   #include <fcntl.h>
-#endif
 
 // local includes
 #include "config.h"
@@ -209,19 +207,12 @@ namespace net {
 
     // Maximum of 128 clients, which should be enough for anyone
     errno = 0;
-#ifdef _WIN32
-    WSASetLastError(0);
-#endif
     auto host = host_t {enet_host_create(af == IPV4 ? AF_INET : AF_INET6, &addr, 128, 0, 0, 0)};
     if (!host) {
       // Snapshot before logging can change the OS error. ENet can also fail
       // allocating memory, so a null host alone does not prove EADDRINUSE.
       const int allocation_error = errno;
-#ifdef _WIN32
-      const int socket_error = WSAGetLastError();
-#else
       const int socket_error = allocation_error;
-#endif
       if (socket_error) {
         fail({socket_error, boost::system::system_category()});
       } else if (allocation_error) {
@@ -249,18 +240,11 @@ namespace net {
 
   bool prevent_socket_inheritance(boost::asio::ip::udp::socket::native_handle_type socket, boost::system::error_code &error) {
     error.clear();
-#ifdef _WIN32
-    if (!SetHandleInformation(reinterpret_cast<HANDLE>(socket), HANDLE_FLAG_INHERIT, 0)) {
-      error = {static_cast<int>(GetLastError()), boost::system::system_category()};
-      return false;
-    }
-#else
     const int flags = fcntl(socket, F_GETFD);
     if (flags == -1 || fcntl(socket, F_SETFD, flags | FD_CLOEXEC) == -1) {
       error = {errno, boost::system::system_category()};
       return false;
     }
-#endif
     return true;
   }
 

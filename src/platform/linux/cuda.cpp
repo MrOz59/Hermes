@@ -23,20 +23,21 @@ extern "C" {
 // local includes
 #include "cuda.h"
 #include "graphics.h"
+#include "misc.h"
 #include "src/logging.h"
 #include "src/utility.h"
 #include "src/video.h"
 #include "wayland.h"
 
-#define SUNSHINE_STRINGVIEW_HELPER(x) x##sv
-#define SUNSHINE_STRINGVIEW(x) SUNSHINE_STRINGVIEW_HELPER(x)
+#define HERMES_STRINGVIEW_HELPER(x) x##sv
+#define HERMES_STRINGVIEW(x) HERMES_STRINGVIEW_HELPER(x)
 
 #define CU_CHECK(x, y) \
-  if (check((x), SUNSHINE_STRINGVIEW(y ": "))) \
+  if (check((x), HERMES_STRINGVIEW(y ": "))) \
   return -1
 
 #define CU_CHECK_IGNORE(x, y) \
-  check((x), SUNSHINE_STRINGVIEW(y ": "))
+  check((x), HERMES_STRINGVIEW(y ": "))
 
 namespace fs = std::filesystem;
 
@@ -376,7 +377,7 @@ namespace cuda {
 
         fs::path dri_path {"/dev/dri"sv};
         auto device_path = dri_path / file;
-        return open(device_path.c_str(), O_RDWR);
+        return platf::open_drm_node(device_path.c_str(), O_RDWR);
       }
     } catch (const std::filesystem::filesystem_error &err) {
       BOOST_LOG(error) << "Failed to read sysfs: "sv << err.what();

@@ -135,7 +135,7 @@ namespace platf {
       }
 
       std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e) override {
-#ifdef SUNSHINE_BUILD_VAAPI
+#ifdef HERMES_BUILD_VAAPI
         if (memory_type == mem_type_e::vaapi) {
           // The best GPU, as the encoder probe chose it, not whichever one
           // happens to be renderD128 this boot.
@@ -147,7 +147,7 @@ namespace platf {
           return va::make_avcodec_encode_device(width, height, std::move(card), 0, 0, false);
         }
 #endif
-#ifdef SUNSHINE_BUILD_CUDA
+#ifdef HERMES_BUILD_CUDA
         if (memory_type == mem_type_e::cuda) {
           return cuda::make_avcodec_encode_device(width, height, false);
         }

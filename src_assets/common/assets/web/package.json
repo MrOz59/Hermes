@@ -1,0 +1,29 @@
+{
+  "name": "hermes",
+  "version": "0.7.0",
+  "scripts": {
+    "build": "bun --bun vite build",
+    "dev": "bun --bun vite build --watch",
+    "serve": "bun ../../../../tests/fixtures/http/serve.ts",
+    "test": "bun test tests",
+    "typecheck": "bun --bun vue-tsc --noEmit && bun --bun tsc --project tsconfig.tools.json",
+    "docs:assets": "bun build --target browser --format iife --outdir ../../../../target/docs-assets ../../../../docs/api.ts ../../../../docs/configuration.ts"
+  },
+  "type": "module",
+  "dependencies": {
+    "@fortawesome/fontawesome-free": "7.3.1",
+    "@intlify/core-base": "11.4.23",
+    "bootstrap": "5.3.8",
+    "vue": "3.5.46",
+    "vue-i18n": "11.4.23"
+  },
+  "devDependencies": {
+    "@types/bootstrap": "5.2.11",
+    "@types/bun": "1.4.5",
+    "@vitejs/plugin-vue": "6.0.11",
+    "typescript": "6.0.3",
+    "vite": "8.3.8",
+    "vue-tsc": "3.3.14"
+  },
+  "packageManager": "bun@1.4.5"
+}

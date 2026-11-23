@@ -1,11 +1,12 @@
-<script setup>
+<script setup lang="ts">
+import type { Configuration } from '../../../config-types'
 import { ref } from 'vue'
 import Checkbox from "../../../Checkbox.vue";
 
-const props = defineProps([
-  'platform',
-  'config',
-])
+const props = defineProps<{
+  platform: string;
+  config: Configuration;
+}>()
 
 const config = ref(props.config)
 </script>
@@ -18,6 +19,13 @@ const config = ref(props.config)
               locale-prefix="config"
               v-model="config.vaapi_strict_rc_buffer"
               default="false"
+    ></Checkbox>
+    <!-- Rolling intra refresh -->
+    <Checkbox class="mb-3"
+              id="vaapi_intra_refresh"
+              locale-prefix="config"
+              v-model="config.vaapi_intra_refresh"
+              default="true"
     ></Checkbox>
   </div>
 </template>

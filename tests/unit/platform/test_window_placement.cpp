@@ -2,13 +2,13 @@
  * @file tests/unit/platform/test_window_placement.cpp
  * @brief Placement must recognize supported command quoting and Steam entry types.
  */
-#ifdef __linux__
 #include <gtest/gtest.h>
 #include <boost/program_options/parsers.hpp>
 #include <src/platform/linux/window_placement.h>
 
 namespace {
   using boost::program_options::split_unix;
+  using platf::window_placement::gamescope_runs_steam;
   using platf::window_placement::launches_gamescope;
   using platf::window_placement::opens_big_picture;
 }
@@ -46,4 +46,23 @@ TEST(WindowPlacement, RecognizesQuotedGamescopeAndTheShippedLauncher) {
   EXPECT_TRUE(launches_gamescope(split_unix("'/path with spaces/hermes-gamescope-launch'")));
   EXPECT_FALSE(launches_gamescope(split_unix("steam -bigpicture")));
 }
-#endif
+
+TEST(WindowPlacement, RecognizesAGamescopeThatStartsSteam) {
+  for (const auto *command : {
+         "hermes-gamescope-launch",
+         "'/path with spaces/hermes-gamescope-launch'",
+         "gamescope -W 1920 -H 1080 -e -- steam -bigpicture",
+         "\"/usr/bin/gamescope\" -f -- /usr/bin/steam -gamepadui",
+         "gamescope -e -- flatpak run com.valvesoftware.Steam -gamepadui",
+       }) {
+    EXPECT_TRUE(gamescope_runs_steam(split_unix(command))) << command;
+  }
+  for (const auto *command : {
+         "setsid steam steam://open/bigpicture",
+         "steam -bigpicture",
+         "gamescope -f -- game",
+         "",
+       }) {
+    EXPECT_FALSE(gamescope_runs_steam(split_unix(command))) << command;
+  }
+}

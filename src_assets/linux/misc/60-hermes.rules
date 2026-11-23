@@ -1,7 +1,7 @@
-# Allows Sunshine to acces /dev/uinput
+# Allows Hermes to access /dev/uinput
 KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", GROUP="input", MODE="0660", TAG+="uaccess"
 
-# Allows Sunshine to access /dev/uhid
+# Allows Hermes to access /dev/uhid
 KERNEL=="uhid", GROUP="input", MODE="0660", TAG+="uaccess"
 
 # libvirtualhid's UHID controllers are renamed by kernel drivers (for example,
@@ -41,7 +41,10 @@ SUBSYSTEMS=="input", ATTRS{name}=="Sunshine Nintendo (virtual) pad", GROUP="inpu
 # into the session. The session is the one whose mount namespace (in Hermes'
 # seat flag) alone holds /dev/uinput, Hermes aside; a uinput device records
 # no creator.
-SUBSYSTEM=="input", KERNEL=="event*|js*", DEVPATH=="/devices/virtual/input/*", ATTRS{id/vendor}=="28de", ATTRS{phys}=="", IMPORT{program}="/bin/sh -c 'uid=$$(cat /etc/hermes-kms/session-user) || exit 0; holders=$$(find /proc/[0-9]*/fd -lname /dev/uinput 2>/dev/null | cut -d/ -f3 | sort -u); for flag in /run/user/$$uid/hermes/isolated/hermes-kms-* /run/user/$$uid/hermes/isolated/hermes-detached-*; do [ -f $$flag ] || continue; read ns hermes < $$flag; found=0; for pid in $$holders; do [ $$pid = $$hermes ] && continue; [ x$$(readlink /proc/$$pid/ns/mnt) = x$$ns ] || { found=0; break; }; found=1; done; [ $$found = 1 ] && echo ID_SEAT=$${flag##*/} && exit 0; done; exit 0'"
+# A holder counts as the session's when it, or a process it descends from,
+# runs in that namespace: the session's Steam runs in its runtime's mount
+# namespace inside the session's (session_lineage.h).
+SUBSYSTEM=="input", KERNEL=="event*|js*", DEVPATH=="/devices/virtual/input/*", ATTRS{id/vendor}=="28de", ATTRS{phys}=="", IMPORT{program}="/bin/sh -c 'uid=$$(cat /etc/hermes-kms/session-user) || exit 0; holders=$$(find /proc/[0-9]*/fd -lname /dev/uinput 2>/dev/null | cut -d/ -f3 | sort -u); for flag in /run/user/$$uid/hermes/isolated/hermes-kms-* /run/user/$$uid/hermes/isolated/hermes-detached-*; do [ -f $$flag ] || continue; read ns hermes < $$flag; found=0; for pid in $$holders; do [ $$pid = $$hermes ] && continue; p=$$pid; d=0; in=0; while [ $$d -lt 64 ] && [ $${p:-0} -gt 1 ]; do [ x$$(readlink /proc/$$p/ns/mnt) = x$$ns ] && { in=1; break; }; p=$$(while read k v; do [ x$$k = xPPid: ] && echo $$v; done < /proc/$$p/status); d=$$((d+1)); done; [ $$in = 1 ] || { found=0; break; }; found=1; done; [ $$found = 1 ] && echo ID_SEAT=$${flag##*/} && exit 0; done; exit 0'"
 SUBSYSTEM=="input", ENV{ID_SEAT}=="hermes-kms-*", TAG+="seat", GROUP:="input", MODE:="0660", TAG+="uaccess"
 # Detached desktops run as the same user as the host desktop, so no group, mode
 # or ACL could give one of them a device that the user's host applications

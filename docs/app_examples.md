@@ -1,6 +1,6 @@
 # App Examples
 Since not all applications behave the same, we decided to create some examples to help you get started adding games
-and applications to Sunshine.
+and applications to Hermes.
 
 > [!TIP]
 > Throughout these examples, any fields not shown are left blank. You can enhance your experience by
@@ -24,6 +24,17 @@ and applications to Sunshine.
 > [!NOTE]
 > Steam is launched as a detached command because Steam starts with a process that self updates itself and the original
 > process is killed.
+>
+> On Linux, ending the app stops the Steam this entry started, and any game started from it, after the undo command
+> closes Big Picture. A Steam that was already running when the stream started is left alone. Turn off
+> "Stop detached commands with the app" (`stop-detached`) to keep Steam running after the stream.
+>
+> "Limit the game to the stream's frame rate" (`limit-fps`, Linux, off by default) caps the games this entry's Steam
+> starts at the client's frame rate:
+> - `DXVK_FRAME_RATE` and `VKD3D_FRAME_RATE` for Proton games, in DXVK/VKD3D-Proton builds that keep their limiter;
+> - `fps_limit` in `MANGOHUD_CONFIG` (after `read_cfg`) where MangoHud is enabled. Hermes never turns MangoHud on.
+>
+> It reaches only games started by a Steam that Hermes starts.
 
 > [!IMPORTANT]
 > This entry does not put Steam on a virtual display, and turning on "Always create Virtual Display" for it will not
@@ -36,77 +47,22 @@ and applications to Sunshine.
 > a fullscreen window of the desktop compositor, which would normally place that window on the primary monitor. The
 > entry therefore ships with `virtual-display-layout: mirror`, which makes Hermes position the virtual display over
 > the primary output, so the desktop (and the Gamescope window on it) is cloned into the stream. Set the app's
-> `virtual-display-layout` to `exclusive` instead to hand the desktop to the virtual display and turn the
+> `virtual-display-layout` to `primary` to keep the monitors on but make the virtual display the primary one, so
+> games launched from Big Picture open in the stream, or to `exclusive` to hand the desktop to the virtual display and turn the
 > physical monitors off for the session (native resolution, no clone), or to `extend` for the default side-by-side
-> placement. Gamescope's own log is at `~/.local/state/hermes/gamescope.log`.
+> placement. Gamescope's own log is at `~/.local/state/hermes/gamescope.log`. A Steam already running on the
+> desktop is shut down first (`stop-desktop-steam`, below): Gamescope's Steam would hand its request to it and exit.
 >
 > Keeping this entry is still useful for the opposite case: reaching the Steam on the host's own desktop.
 > If you do give this entry a virtual display, a `virtual-display-layout` of `mirror` will clone the desktop —
 > Steam included — into the stream; that is the mirror doing it, not the window being placed.
 
-@tabs{
-  @tab{Linux | <!-- -->
-    \| Field                        \| Value                                                \|
-    \|------------------------------\|------------------------------------------------------\|
-    \| Application Name             \| @code{}Steam Big Picture@endcode                     \|
-    \| Command Preporations -> Undo \| @code{}setsid steam steam://close/bigpicture@endcode \|
-    \| Detached Commands            \| @code{}setsid steam steam://open/bigpicture@endcode  \|
-    \| Image                        \| @code{}steam.png@endcode                             \|
-  }
-  @tab{macOS | <!-- -->
-    \| Field                        \| Value                                          \|
-    \|------------------------------\|------------------------------------------------\|
-    \| Application Name             \| @code{}Steam Big Picture@endcode               \|
-    \| Command Preporations -> Undo \| @code{}open steam://close/bigpicture@endcode   \|
-    \| Detached Commands            \| @code{}open steam://open/bigpicture@endcode    \|
-    \| Image                        \| @code{}steam.png@endcode                       \|
-  }
-  @tab{Windows | <!-- -->
-    \| Field                        \| Value                                     \|
-    \|------------------------------\|-------------------------------------------\|
-    \| Application Name             \| @code{}Steam Big Picture@endcode          \|
-    \| Command Preporations -> Undo \| @code{}steam://close/bigpicture@endcode   \|
-    \| Detached Commands            \| @code{}steam://open/bigpicture@endcode    \|
-    \| Image                        \| @code{}steam.png@endcode                  \|
-  }
-}
-
-### Epic Game Store game
-
-> [!NOTE]
-> Using the URI method will be the most consistent between various games.
-
-#### URI
-
-@tabs{
-  @tab{Windows | <!-- -->
-    \| Field            \| Value                                                                                                                                                 \|
-    \|------------------\|-------------------------------------------------------------------------------------------------------------------------------------------------------\|
-    \| Application Name \| @code{}Surviving Mars@endcode                                                                                                                         \|
-    \| Commands         \| @code{}com.epicgames.launcher://apps/d759128018124dcabb1fbee9bb28e178%3A20729b9176c241f0b617c5723e70ec2d%3AOvenbird?action=launch&silent=true@endcode \|
-  }
-}
-
-#### Binary (w/ working directory
-@tabs{
-  @tab{Windows | <!-- -->
-    \| Field             \| Value                                                      \|
-    \|-------------------\|------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                              \|
-    \| Command           \| @code{}MarsEpic.exe@endcode                                \|
-    \| Working Directory \| @code{}"C:\Program Files\Epic Games\SurvivingMars"@endcode \|
-  }
-}
-
-#### Binary (w/o working directory)
-@tabs{
-  @tab{Windows | <!-- -->
-    \| Field             \| Value                                                                   \|
-    \|-------------------\|-------------------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                           \|
-    \| Command           \| @code{}"C:\Program Files\Epic Games\SurvivingMars\MarsEpic.exe"@endcode \|
-  }
-}
+| Field                        | Value                                                |
+|------------------------------|------------------------------------------------------|
+| Application Name             | @code{}Steam Big Picture@endcode                     |
+| Command Preparations -> Undo | @code{}setsid steam steam://close/bigpicture@endcode |
+| Detached Commands            | @code{}setsid steam steam://open/bigpicture@endcode  |
+| Image                        | @code{}steam.png@endcode                             |
 
 ### Steam game
 
@@ -115,73 +71,25 @@ and applications to Sunshine.
 
 #### URI
 
-@tabs{
-  @tab{Linux | <!-- -->
-    \| Field             \| Value                                                \|
-    \|-------------------\|------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                        \|
-    \| Detached Commands \| @code{}setsid steam steam://rungameid/464920@endcode \|
-  }
-  @tab{macOS | <!-- -->
-    \| Field             \| Value                                        \|
-    \|-------------------\|----------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                \|
-    \| Detached Commands \| @code{}open steam://rungameid/464920@endcode \|
-  }
-  @tab{Windows | <!-- -->
-    \| Field             \| Value                                   \|
-    \|-------------------\|-----------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode           \|
-    \| Detached Commands \| @code{}steam://rungameid/464920@endcode \|
-  }
-}
+| Field             | Value                                                |
+|-------------------|------------------------------------------------------|
+| Application Name  | @code{}Surviving Mars@endcode                        |
+| Detached Commands | @code{}setsid steam steam://rungameid/464920@endcode |
 
-#### Binary (w/ working directory
-@tabs{
-  @tab{Linux | <!-- -->
-    \| Field             \| Value                                                        \|
-    \|-------------------\|--------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                \|
-    \| Command           \| @code{}MarsSteam@endcode                                     \|
-    \| Working Directory \| @code{}~/.steam/steam/SteamApps/common/Survivng Mars@endcode \|
-  }
-  @tab{macOS | <!-- -->
-    \| Field             \| Value                                                        \|
-    \|-------------------\|--------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                \|
-    \| Command           \| @code{}MarsSteam@endcode                                     \|
-    \| Working Directory \| @code{}~/.steam/steam/SteamApps/common/Survivng Mars@endcode \|
-  }
-  @tab{Windows | <!-- -->
-    \| Field             \| Value                                                                         \|
-    \|-------------------\|-------------------------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                                 \|
-    \| Command           \| @code{}MarsSteam.exe@endcode                                                  \|
-    \| Working Directory \| @code{}"C:\Program Files (x86)\Steam\steamapps\common\Surviving Mars"@endcode \|
-  }
-}
+#### Binary (with a working directory)
 
-#### Binary (w/o working directory)
-@tabs{
-  @tab{Linux | <!-- -->
-    \| Field             \| Value                                                                  \|
-    \|-------------------\|------------------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                          \|
-    \| Command           \| @code{}~/.steam/steam/SteamApps/common/Survivng Mars/MarsSteam@endcode \|
-  }
-  @tab{macOS | <!-- -->
-    \| Field             \| Value                                                                  \|
-    \|-------------------\|------------------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                          \|
-    \| Command           \| @code{}~/.steam/steam/SteamApps/common/Survivng Mars/MarsSteam@endcode \|
-  }
-  @tab{Windows | <!-- -->
-    \| Field             \| Value                                                                                       \|
-    \|-------------------\|---------------------------------------------------------------------------------------------\|
-    \| Application Name  \| @code{}Surviving Mars@endcode                                                               \|
-    \| Command           \| @code{}"C:\Program Files (x86)\Steam\steamapps\common\Surviving Mars\MarsSteam.exe"@endcode \|
-  }
-}
+| Field             | Value                                                        |
+|-------------------|--------------------------------------------------------------|
+| Application Name  | @code{}Surviving Mars@endcode                                |
+| Command           | @code{}MarsSteam@endcode                                     |
+| Working Directory | @code{}~/.steam/steam/SteamApps/common/Survivng Mars@endcode |
+
+#### Binary (without a working directory)
+
+| Field             | Value                                                                  |
+|-------------------|------------------------------------------------------------------------|
+| Application Name  | @code{}Surviving Mars@endcode                                          |
+| Command           | @code{}~/.steam/steam/SteamApps/common/Survivng Mars/MarsSteam@endcode |
 
 ### Prep Commands
 
@@ -193,7 +101,7 @@ and applications to Sunshine.
 
 | Prep Step | Command                                                                                                                               |
 |-----------|---------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "xrandr --output HDMI-1 --mode ${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT} --rate ${SUNSHINE_CLIENT_FPS}"@endcode |
+| Do        | @code{}sh -c "xrandr --output HDMI-1 --mode ${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT} --rate ${HERMES_CLIENT_FPS}"@endcode |
 | Undo      | @code{}xrandr --output HDMI-1 --mode 3840x2160 --rate 120@endcode                                                                     |
 
 > [!TIP]
@@ -202,7 +110,7 @@ and applications to Sunshine.
 >
 > You can update the ``Do`` command to this:
 > ```bash
-> bash -c "${HOME}/scripts/set-custom-res.sh \"${SUNSHINE_CLIENT_WIDTH}\" \"${SUNSHINE_CLIENT_HEIGHT}\" \"${SUNSHINE_CLIENT_FPS}\""
+> bash -c "${HOME}/scripts/set-custom-res.sh \"${HERMES_CLIENT_WIDTH}\" \"${HERMES_CLIENT_HEIGHT}\" \"${HERMES_CLIENT_FPS}\""
 > ```
 >
 > The `set-custom-res.sh` will have this content:
@@ -244,7 +152,7 @@ and applications to Sunshine.
 
 | Prep Step | Command                                                                                                                                  |
 |-----------|------------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "wlr-xrandr --output HDMI-1 --mode \"${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT}@${SUNSHINE_CLIENT_FPS}Hz\""@endcode |
+| Do        | @code{}sh -c "wlr-xrandr --output HDMI-1 --mode \"${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}@${HERMES_CLIENT_FPS}Hz\""@endcode |
 | Undo      | @code{}wlr-xrandr --output HDMI-1 --mode 3840x2160@120Hz@endcode                                                                         |
 
 > [!TIP]
@@ -254,14 +162,14 @@ and applications to Sunshine.
 
 | Prep Step | Command                                                                                                                               |
 |-----------|---------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "xrandr --output HDMI-1 --mode ${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT} --rate ${SUNSHINE_CLIENT_FPS}"@endcode |
+| Do        | @code{}sh -c "xrandr --output HDMI-1 --mode ${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT} --rate ${HERMES_CLIENT_FPS}"@endcode |
 | Undo      | @code{}xrandr --output HDMI-1 --mode 3840x2160 --rate 120@endcode                                                                     |
 
 ###### Gnome (Wayland)
 
 | Prep Step | Command                                                                                                                                                                                               |
 |-----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "displayconfig-mutter set --connector HDMI-1 --resolution ${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT} --refresh-rate ${SUNSHINE_CLIENT_FPS} --hdr ${SUNSHINE_CLIENT_HDR}"@endcode |
+| Do        | @code{}sh -c "displayconfig-mutter set --connector HDMI-1 --resolution ${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT} --refresh-rate ${HERMES_CLIENT_FPS} --hdr ${HERMES_CLIENT_HDR}"@endcode |
 | Undo      | @code{}displayconfig-mutter set --connector HDMI-1 --resolution 3840x2160 --refresh-rate 120 --hdr false@endcode                                                                                      |
 
 Installation instructions for displayconfig-mutter can be [found here](https://github.com/eaglesemanation/displayconfig-mutter). Alternatives include
@@ -279,7 +187,7 @@ unmaintained and do not support newer Mutter features such as HDR and VRR.
 
 | Prep Step | Command                                                                                                                              |
 |-----------|--------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "kscreen-doctor output.HDMI-A-1.mode.${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT}@${SUNSHINE_CLIENT_FPS}"@endcode |
+| Do        | @code{}sh -c "kscreen-doctor output.HDMI-A-1.mode.${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}@${HERMES_CLIENT_FPS}"@endcode |
 | Undo      | @code{}kscreen-doctor output.HDMI-A-1.mode.3840x2160@120@endcode                                                                     |
 
 > [!CAUTION]
@@ -288,7 +196,7 @@ unmaintained and do not support newer Mutter features such as HDR and VRR.
 > e.g., On X11, the monitor may be called ``HDMI-A-0``, but on Wayland, it may be called ``HDMI-A-1``.
 
 > [!TIP]
-> Replace ``HDMI-A-1`` with the display name of the monitor you would like to use for Moonlight.
+> Replace ``HDMI-A-1`` with the display name of the monitor you would like to stream.
 > You can list the monitors available to you with:
 > ```
 > kscreen-doctor -o
@@ -296,44 +204,15 @@ unmaintained and do not support newer Mutter features such as HDR and VRR.
 >
 > These will also give you the supported display properties for each monitor. You can select them either by
 > hard-coding their corresponding number (e.g. ``kscreen-doctor output.HDMI-A1.mode.0``) or using the above
-> ``do`` command to fetch the resolution requested by your Moonlight client
+> ``do`` command to fetch the resolution requested by your client
 > (which has a chance of not being supported by your monitor).
 
 ###### NVIDIA
 
 | Prep Step | Command                                                                                                                                                                                                                        |
 |-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "nvidia-settings -a CurrentMetaMode=\"HDMI-1: nvidia-auto-select { ViewPortIn=${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT}, ViewPortOut=${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT}+0+0 }\""@endcode |
+| Do        | @code{}sh -c "nvidia-settings -a CurrentMetaMode=\"HDMI-1: nvidia-auto-select { ViewPortIn=${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}, ViewPortOut=${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}+0+0 }\""@endcode |
 | Undo      | @code{}nvidia-settings -a CurrentMetaMode=\"HDMI-1: nvidia-auto-select { ViewPortIn=3840x2160, ViewPortOut=3840x2160+0+0 }"@endcode                                                                                            |
-
-##### macOS
-
-###### displayplacer
-
-> [!NOTE]
-> This example uses the `displayplacer` tool to change the resolution.
-> This tool can be installed following instructions in their
-> [GitHub repository](https://github.com/jakehilborn/displayplacer).
-
-| Prep Step | Command                                                                                                                                                                  |
-|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "displayplacer \"id:<screenId> res:${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT} hz:${SUNSHINE_CLIENT_FPS} scaling:on origin:(0,0) degree:0\""@endcode |
-| Undo      | @code{}displayplacer "id:<screenId> res:3840x2160 hz:120 scaling:on origin:(0,0) degree:0"@endcode                                                                       |
-
-##### Windows
-Sunshine has built-in support for changing the resolution and refresh rate on Windows. If you prefer to use a
-third-party tool, you can use *QRes* as an example.
-
-###### QRes
-
-> [!NOTE]
-> This example uses the *QRes* tool to change the resolution and refresh rate.
-> This tool can be downloaded from their [SourceForge repository](https://sourceforge.net/projects/qres).
-
-| Prep Step | Command                                                                                                                   |
-|-----------|---------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}cmd /C "FullPath\qres.exe /x:%SUNSHINE_CLIENT_WIDTH% /y:%SUNSHINE_CLIENT_HEIGHT% /r:%SUNSHINE_CLIENT_FPS%"@endcode |
-| Undo      | @code{}FullPath\qres.exe /x:3840 /y:2160 /r:120@endcode                                                                   |
 
 ### Additional Considerations
 
@@ -351,7 +230,7 @@ can select an `isolation-method` in the Web UI or `apps.json`:
 - `default`: follow the global `isolation_method` when the launch requests a
   virtual display, and stay on the shared host session otherwise. Under
   `gamescope`, an entry with no `cmd` becomes a KWin desktop, as there is nothing
-  to run in Gamescope. An explicit `extend`, `mirror` or `exclusive`
+  to run in Gamescope. An explicit `extend`, `primary`, `mirror` or `exclusive`
   `virtual-display-layout` stays on the host session;
 - `gamescope`: always start only the configured application inside an
   independent DRM Gamescope session, without a desktop panel;
@@ -384,7 +263,7 @@ Three fields tune it:
   command's program is `steam`; `on`/`off` force it. Steam mode passes
   `-e --xwayland-count 2`: Steam then picks the visible app and draws its
   overlay, and games run on their own Xwayland so the overlay cannot take
-  their X focus (Wine games minimize when it does). Windows without a Steam
+  their X focus (Wine games minimize when it does). App windows without a Steam
   app ID cannot take focus in Steam mode. Off passes `--xwayland-count 1`.
 - `gamescope-args`: replaces the default
   `--expose-wayland --force-windows-fullscreen`; empty keeps it. These flags
@@ -417,7 +296,13 @@ Steam runs once per user and hands a second launch to the running client. If
 the pid in `~/.steam/steam.pid` is a live Steam outside Hermes' sessions,
 Hermes sends it SIGTERM (it logs off and saves its settings, usually in a few
 seconds) before starting the session, and kills it and its children if it is
-still running after 30 seconds.
+still running after 30 seconds. The same applies to an app on the desktop that
+starts Steam in a nested Gamescope, such as Gamescope Steam Session: otherwise
+Gamescope's Steam hands its request to the running one and exits, and
+Gamescope ends with it. When such an app ends, Hermes starts the desktop's
+Steam again (`steam -silent`, in the tray) once the app's own Steam has
+exited, as a unit of the user's service manager so later apps leave it alone.
+Big Picture on the desktop is unaffected; it is meant to use the running Steam.
 
 With `hermes_kms_session_compositor = plasma`, the default, the `kwin_virtual`
 method is the user's own Plasma desktop on KWin's virtual backend: it runs as the
@@ -448,35 +333,7 @@ socket to the compositor automatically.
 
 > [!CAUTION]
 > Because Flatpak packages run in a sandboxed environment and do not normally have access to the
-> host, a Flatpak build requires commands to be prefixed with `flatpak-spawn --host`. Hermes
-> publishes no Flatpak of its own; this applies to a Flatpak you build from `packaging/linux/flatpak`.
-
-#### Windows
-**Elevating Commands (Windows)**
-
-If you've installed Sunshine as a service (default), you can specify if a command should be elevated with
-administrative privileges. Simply enable the elevated option in the WEB UI, or add it to the JSON configuration.
-This is an option for both prep-cmd and regular commands and will launch the process with the current user without a
-UAC prompt.
-
-**Example**
-```json
-{
-  "name": "Game With AntiCheat that Requires Admin",
-  "output": "",
-  "cmd": "ping 127.0.0.1",
-  "exclude-global-prep-cmd": false,
-  "elevated": true,
-  "prep-cmd": [
-    {
-      "do": "powershell.exe -command \"Start-Streaming\"",
-      "undo": "powershell.exe -command \"Stop-Streaming\"",
-      "elevated": false
-    }
-  ],
-  "image-path": ""
-}
-```
+> host. A downstream Flatpak with host access may require `flatpak-spawn --host` before a host command.
 
 <div class="section_buttons">
 

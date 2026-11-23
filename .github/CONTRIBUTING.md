@@ -9,10 +9,10 @@ Thank you for your interest in contributing to this project! We welcome contribu
   request lands unless you say otherwise, and it is the right target for
   anything users are waiting on.
 - **`dev`** — the transport and virtual-display migration (the `H*` phases in
-  `HERMES-PRODUCT-ROADMAP.md`). It reorganizes internals and moves faster than
-  a release can absorb, which is exactly why it is kept separate. Help is
-  welcome here too; just say in the pull request that you are targeting `dev`,
-  so review can account for ground that is still moving.
+  [product roadmap](../docs/product-roadmap.md)). It reorganizes internals and
+  moves faster than a release can absorb, which is exactly why it is kept
+  separate. Help is welcome here too; just say in the pull request that you are
+  targeting `dev`, so review can account for ground that is still moving.
 
 `dev` merges `main` regularly; `main` never merges `dev`. A fix that users are
 waiting on therefore belongs in `main` first and reaches `dev` on the next

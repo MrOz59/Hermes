@@ -1,0 +1,355 @@
+<script lang="ts">
+import { defineComponent } from 'vue'
+import Navbar from './Navbar.vue'
+
+interface Metrics {
+  encoder?: { name: string; hardware: boolean; codecs: string[] };
+  sessions?: { active: number; streaming: boolean };
+  pipeline?: {
+    fps: number;
+    bitrate_kbps: number;
+    encode_ms: number;
+    capture_to_encode_ms: number;
+    frames_dropped: number;
+  };
+}
+
+export default defineComponent({
+  components: {
+    Navbar
+  },
+  data() {
+    return {
+      clients: [],
+      closeAppPressed: false,
+      closeAppStatus: null as boolean | null,
+      logs: 'Loading...',
+      logFilter: null as string | null,
+      logInterval: undefined as number | undefined,
+      serverRestarting: false,
+      serverQuitting: false,
+      serverQuit: false,
+      platform: "",
+      metrics: null as Metrics | null,
+      metricsInterval: undefined as number | undefined,
+    };
+  },
+  computed: {
+    actualLogs() {
+      if (!this.logFilter) return this.logs;
+      let lines = this.logs.split("\n");
+      const filter = this.logFilter;
+      lines = lines.filter((line: string) => line.includes(filter));
+      return lines.join("\n");
+    }
+  },
+  created() {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((r) => {
+        this.platform = r.platform;
+      });
+
+    this.logInterval = window.setInterval(() => {
+      this.refreshLogs();
+    }, 5000);
+    this.refreshLogs();
+
+    this.metricsInterval = window.setInterval(() => {
+      this.refreshMetrics();
+    }, 1000);
+    this.refreshMetrics();
+  },
+  beforeUnmount() {
+    clearInterval(this.logInterval);
+    clearInterval(this.metricsInterval);
+  },
+  methods: {
+    refreshMetrics() {
+      fetch("./api/metrics", { credentials: 'include' })
+        .then(r => r.ok ? r.json() : null)
+        .then(r => { this.metrics = r; })
+        .catch(() => { /* keep last known metrics on transient errors */ });
+    },
+    refreshLogs() {
+      fetch("./api/logs", {
+        credentials: 'include'
+      })
+        .then(response => {
+          // Retrieve the Content-Type header
+          const contentType = response.headers.get("Content-Type") || "";
+          // Attempt to extract charset from the header
+          const charsetMatch = contentType.match(/charset=([^;]+)/i);
+          const charset = charsetMatch ? charsetMatch[1].trim() : "utf-8";
+
+          // Read response as an ArrayBuffer and decode it with the correct charset
+          return response.arrayBuffer().then(buffer => {
+            const decoder = new TextDecoder(charset);
+            return decoder.decode(buffer);
+          });
+        })
+        .then(text => {
+          this.logs = text;
+        })
+        .catch(error => console.error("Error fetching logs:", error));
+    },
+    closeApp() {
+      this.closeAppPressed = true;
+      fetch("./api/apps/close", {
+        credentials: 'include',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      })
+        .then((r) => r.json())
+        .then((r) => {
+          this.closeAppPressed = false;
+          this.closeAppStatus = r.status;
+          setTimeout(() => {
+            this.closeAppStatus = null;
+          }, 5000);
+        });
+    },
+    copyLogs() {
+      navigator.clipboard.writeText(this.actualLogs);
+    },
+    restart() {
+      this.serverRestarting = true;
+      setTimeout(() => {
+        this.serverRestarting = false;
+      }, 5000);
+      fetch("./api/restart", {
+        credentials: 'include',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      })
+      .then((resp) => {
+        if (resp.status !== 200) {
+          setTimeout(() => {
+            location.reload();
+          }, 1000);
+          return;
+        }
+      })
+      .catch((e) => {
+        this.serverRestarting = false
+        console.error(e);
+        setTimeout(() => {
+          location.reload();
+        }, 1000);
+        return;
+      });
+    },
+    quit() {
+      if (window.confirm(this.$t('troubleshooting.quit_hermes_confirm'))) {
+        this.serverQuitting = true;
+        fetch("./api/quit", {
+          credentials: 'include',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        })
+        .then(() => {
+          this.serverQuitting = false;
+          this.serverQuit = false;
+          alert("Exit failed!");
+        })
+        .catch(() => {
+          this.serverQuitting = false;
+          this.serverQuit = true;
+        });
+      }
+    },
+  },
+});
+</script>
+
+<template>
+  <Navbar></Navbar>
+  <div class="container">
+    <h1 class="my-4">{{ $t('troubleshooting.troubleshooting') }}</h1>
+
+    <!-- Live server status / metrics -->
+    <div class="card p-2 my-4">
+      <div class="card-body">
+        <h2 id="status">Server status</h2>
+        <br>
+        <div class="row" v-if="metrics">
+          <!-- Encoder -->
+          <div class="col-md-6 mb-3">
+            <div class="fw-bold">Encoder</div>
+            <div v-if="metrics.encoder && metrics.encoder.name">
+              {{ metrics.encoder.name }}
+              <span class="badge"
+                    :class="metrics.encoder.hardware ? 'bg-success' : 'bg-warning text-dark'">
+                {{ metrics.encoder.hardware ? 'hardware' : 'software' }}
+              </span>
+              <span v-if="metrics.encoder.codecs && metrics.encoder.codecs.length"
+                    class="text-muted ms-2">
+                {{ metrics.encoder.codecs.join(', ') }}
+              </span>
+            </div>
+            <div v-else class="text-muted">Not probed yet</div>
+          </div>
+          <!-- Clients -->
+          <div class="col-md-6 mb-3">
+            <div class="fw-bold">Clients</div>
+            <div>
+              {{ metrics.sessions ? metrics.sessions.active : 0 }} connected
+              <span v-if="metrics.sessions && metrics.sessions.streaming"
+                    class="badge bg-primary">streaming</span>
+            </div>
+          </div>
+          <!-- Pipeline metrics (only while streaming) -->
+          <template v-if="metrics.pipeline">
+            <div class="col-6 col-md-3 mb-2">
+              <div class="text-muted small">Stream FPS</div>
+              <div class="fs-5">{{ metrics.pipeline.fps.toFixed(1) }}</div>
+            </div>
+            <div class="col-6 col-md-3 mb-2">
+              <div class="text-muted small">Bitrate</div>
+              <div class="fs-5">{{ (metrics.pipeline.bitrate_kbps / 1000).toFixed(1) }} Mbps</div>
+            </div>
+            <div class="col-6 col-md-3 mb-2">
+              <div class="text-muted small">Encode time</div>
+              <div class="fs-5">{{ metrics.pipeline.encode_ms.toFixed(2) }} ms</div>
+            </div>
+            <div class="col-6 col-md-3 mb-2">
+              <div class="text-muted small">Capture→encode</div>
+              <div class="fs-5">{{ metrics.pipeline.capture_to_encode_ms.toFixed(2) }} ms</div>
+            </div>
+            <div class="col-6 col-md-3 mb-2">
+              <div class="text-muted small">Frames dropped</div>
+              <div class="fs-5"
+                   :class="metrics.pipeline.frames_dropped > 0 ? 'text-danger' : ''">
+                {{ metrics.pipeline.frames_dropped }}
+              </div>
+            </div>
+          </template>
+          <div v-else class="col-12 text-muted">
+            No active stream — pipeline metrics appear while streaming.
+          </div>
+        </div>
+        <div v-else class="text-muted">Loading status…</div>
+      </div>
+    </div>
+
+    <!-- Force Close App -->
+    <div class="card p-2 my-4">
+      <div class="card-body">
+        <h2 id="close_apps">{{ $t('troubleshooting.force_close') }}</h2>
+        <br>
+        <p>{{ $t('troubleshooting.force_close_desc') }}</p>
+        <div class="alert alert-success" v-if="closeAppStatus === true">
+          {{ $t('troubleshooting.force_close_success') }}
+        </div>
+        <div class="alert alert-danger" v-if="closeAppStatus === false">
+          {{ $t('troubleshooting.force_close_error') }}
+        </div>
+        <div>
+          <button class="btn btn-warning" :disabled="closeAppPressed" @click="closeApp">
+            {{ $t('troubleshooting.force_close') }}
+          </button>
+        </div>
+      </div>
+    </div>
+    <!-- Restart Hermes -->
+    <div class="card p-2 my-4">
+      <div class="card-body">
+        <h2 id="restart">{{ $t('troubleshooting.restart_hermes') }}</h2>
+        <br>
+        <p>{{ $t('troubleshooting.restart_hermes_desc') }}</p>
+        <div class="alert alert-success" v-if="serverRestarting">
+          {{ $t('troubleshooting.restart_hermes_success') }}
+        </div>
+        <div>
+          <button class="btn btn-warning" :disabled="serverQuitting || serverRestarting" @click="restart">
+            {{ $t('troubleshooting.restart_hermes') }}
+          </button>
+        </div>
+      </div>
+    </div>
+    <!-- Quit Hermes -->
+    <div class="card p-2 my-4">
+      <div class="card-body">
+        <h2 id="quit">{{ $t('troubleshooting.quit_hermes') }}</h2>
+        <br>
+        <p>{{ $t('troubleshooting.quit_hermes_desc') }}</p>
+        <div class="alert alert-success" v-if="serverQuit">
+          {{ $t('troubleshooting.quit_hermes_success') }}
+        </div>
+        <div class="alert alert-success" v-if="serverQuitting">
+          {{ $t('troubleshooting.quit_hermes_success_ongoing') }}
+        </div>
+        <div>
+          <button class="btn btn-warning" :disabled="serverQuitting || serverRestarting" @click="quit">
+            {{ $t('troubleshooting.quit_hermes') }}
+          </button>
+        </div>
+      </div>
+    </div>
+    <!-- Diagnostic report -->
+    <div class="card p-2 my-4">
+      <div class="card-body">
+        <h2 id="report">{{ $t('troubleshooting.report') }}</h2>
+        <br>
+        <p>{{ $t('troubleshooting.report_desc') }}</p>
+        <a class="btn btn-primary" href="./api/diagnostics/report" download>
+          <i class="fas fa-file-arrow-down"></i> {{ $t('troubleshooting.report_download') }}
+        </a>
+      </div>
+    </div>
+    <!-- Logs -->
+    <div class="card p-2 my-4">
+      <div class="card-body">
+        <h2 id="logs">{{ $t('troubleshooting.logs') }}</h2>
+        <br>
+        <div class="d-flex justify-content-between align-items-baseline py-2">
+          <p>{{ $t('troubleshooting.logs_desc') }}</p>
+          <input type="text" class="form-control" v-model="logFilter" :placeholder="$t('troubleshooting.logs_find')" style="width: 300px">
+        </div>
+        <div>
+          <div class="troubleshooting-logs">
+            <button class="copy-icon"><i class="fas fa-copy " @click="copyLogs"></i></button>{{actualLogs}}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style>
+.troubleshooting-logs {
+          white-space: pre;
+          font-family: monospace;
+          overflow: auto;
+          max-height: 500px;
+          min-height: 500px;
+          font-size: 16px;
+          position: relative;
+        }
+
+        .copy-icon {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          padding: 8px;
+          cursor: pointer;
+          color: rgba(0, 0, 0, 1);
+          appearance: none;
+          border: none;
+          background: none;
+        }
+
+        .copy-icon:hover {
+          color: rgba(0, 0, 0, 0.75);
+        }
+
+        .copy-icon:active {
+          color: rgba(0, 0, 0, 1);
+        }
+</style>

@@ -30,7 +30,6 @@
 #include <utility>
 #include <vector>
 
-#ifndef _WIN32
   #include <fcntl.h>
   #include <poll.h>
   #include <signal.h>
@@ -39,9 +38,7 @@
   #include <unistd.h>
   #include <xf86drm.h>
 
-  #ifdef __linux__
     #include "platform/linux/bounded_command.h"
-  #endif
   #include "platform/linux/gamescope_session.h"
   #include "platform/linux/window_placement.h"
   // For the GBM allocation probe: picking the render node an isolated session
@@ -49,7 +46,6 @@
   // same answer rather than a second heuristic. Compiles to "yes" where Wayland
   // is not built, which leaves the search as it was.
   #include "platform/linux/wayland.h"
-#endif
 
 // lib includes
 #include <boost/algorithm/string.hpp>
@@ -70,6 +66,7 @@
 #include "logging.h"
 #include "platform/common.h"
 #include "process.h"
+#include "frame_limit_env.h"
 #include "httpcommon.h"
 #include "system_tray.h"
 #include "utility.h"
@@ -77,25 +74,16 @@
 #include "video.h"
 #include "uuid.h"
 
-#ifdef _WIN32
-  // from_utf8() string conversion function
-  #include "platform/windows/misc.h"
-  #include "platform/windows/utils.h"
-  #include "platform/windows/virtual_display.h"
-
-  // _SH constants for _wfsopen()
-  #include <share.h>
-#else
   #include "platform/linux/session_audio.h"
   #include "platform/linux/session_broker.h"
   #include "platform/linux/process_group.h"
+  #include "platform/linux/detached_scope.h"
   #include "platform/linux/session_devices.h"
   #include "platform/linux/virtual_display.h"
   #include <sys/stat.h>
   #include <unistd.h>
-#endif
 
-#define DEFAULT_APP_IMAGE_PATH SUNSHINE_ASSETS_DIR "/box.png"
+#define DEFAULT_APP_IMAGE_PATH HERMES_ASSETS_DIR "/box.png"
 
 namespace proc {
   using namespace std::literals;
@@ -149,7 +137,7 @@ namespace proc {
     }
 
     const auto &layout = app.virtual_display_layout;
-    if (layout == "extend" || layout == "mirror" || layout == "exclusive") {
+    if (layout == "extend" || layout == "primary" || layout == "mirror" || layout == "exclusive") {
       return session_route_e::shared;
     }
 
@@ -159,7 +147,6 @@ namespace proc {
              session_route_e::isolated_application;
   }
 
-#ifndef _WIN32
   namespace {
     VDISPLAY::virtual_display_layout_e linux_virtual_display_layout(const std::string &layout) {
       if (layout == "mirror") {
@@ -167,6 +154,9 @@ namespace proc {
       }
       if (layout == "detached") {
         return VDISPLAY::virtual_display_layout_e::detached;
+      }
+      if (layout == "primary") {
+        return VDISPLAY::virtual_display_layout_e::primary;
       }
       return VDISPLAY::virtual_display_layout_e::extend;
     }
@@ -341,33 +331,35 @@ namespace proc {
      * one. SIGTERM shuts it down cleanly (logs off, saves its config) in a few
      * seconds even when its window is unmapped; `steam -shutdown` would start
      * Steam's updater if no client were left by then.
+     *
+     * @return Whether a Steam was running and has been stopped.
      */
-    void stop_desktop_steam() {
+    bool stop_desktop_steam(std::string_view tag = "[IsolatedSession]") {
       const char *home = std::getenv("HOME");
       pid_t pid = 0;
       std::ifstream {std::string {home ? home : ""} + "/.steam/steam.pid"} >> pid;
       // The pid file outlives the client.
       if (pid <= 0 || read_proc_line(pid, "comm") != "steam") {
-        return;
+        return false;
       }
       const auto own = read_proc_line(getpid(), "cgroup");
       if (own.ends_with(".service") && read_proc_line(pid, "cgroup").starts_with(own)) {
-        return;
+        return false;
       }
 
-      BOOST_LOG(info) << "[IsolatedSession] Shutting down the desktop's Steam (pid " << pid << ") first.";
+      BOOST_LOG(info) << tag << " Shutting down the desktop's Steam (pid " << pid << ") first.";
       ::kill(pid, SIGTERM);
       const auto deadline = std::chrono::steady_clock::now() + 30s;
       while (std::filesystem::exists("/proc/" + std::to_string(pid)) && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(100ms);
       }
       if (!std::filesystem::exists("/proc/" + std::to_string(pid))) {
-        BOOST_LOG(info) << "[IsolatedSession] The desktop's Steam has exited.";
-        return;
+        BOOST_LOG(info) << tag << " The desktop's Steam has exited.";
+        return true;
       }
 
       // Not graceful: no log-off, unsaved config and cloud sync are lost.
-      BOOST_LOG(warning) << "[IsolatedSession] The desktop's Steam ignored SIGTERM for 30 s; killing it.";
+      BOOST_LOG(warning) << tag << " The desktop's Steam ignored SIGTERM for 30 s; killing it.";
       std::vector<pid_t> tree {pid};
       std::error_code ec;
       for (bool grew = true; grew;) {
@@ -391,6 +383,7 @@ namespace proc {
       for (const auto member : tree) {
         ::kill(member, SIGKILL);
       }
+      return true;
     }
 
     std::string isolated_runtime_root() {
@@ -466,7 +459,7 @@ namespace proc {
       const auto file = name + ".conf";
       return {
         std::filesystem::path {platf::appdata()} / "session-compositors" / file,
-        std::filesystem::path {SUNSHINE_ASSETS_DIR} / "session-compositors" / file,
+        std::filesystem::path {HERMES_ASSETS_DIR} / "session-compositors" / file,
       };
     }
 
@@ -542,7 +535,7 @@ namespace proc {
 
       BOOST_LOG(error) << "[IsolatedSession] No session compositor profile named \"" << name
                        << "\" under " << (std::filesystem::path {platf::appdata()} / "session-compositors")
-                       << " or " << (std::filesystem::path {SUNSHINE_ASSETS_DIR} / "session-compositors")
+                       << " or " << (std::filesystem::path {HERMES_ASSETS_DIR} / "session-compositors")
                        << '.';
       return std::nullopt;
     }
@@ -1036,6 +1029,14 @@ namespace proc {
       env["HERMES_CLIENT_RENDER_WIDTH"] = std::to_string(render_width);
       env["HERMES_CLIENT_RENDER_HEIGHT"] = std::to_string(render_height);
       env["HERMES_CLIENT_FPS"] = fps_buffer;
+      if (app.limit_fps) {
+        const auto existing = env.find("MANGOHUD_CONFIG");
+        for (const auto &[name, value] : frame_limit::environment(
+               static_cast<int>(std::lround(static_cast<double>(fps_millihz) / 1000.0)),
+               existing != env.end() ? existing->to_string() : std::string {})) {
+          env[name] = value;
+        }
+      }
       env["HERMES_SESSION_ID"] = runtime.runtime_id;
       env["HERMES_SESSION_SEAT"] = runtime.seat_id;
       env["HERMES_SEATD_SOCKET"] = runtime.seatd_socket;
@@ -1093,6 +1094,60 @@ namespace proc {
     std::string find_program(const std::string &name) {
       const auto path = boost::process::v1::search_path(name);
       return path.empty() ? std::string {} : boost::filesystem::absolute(path).string();
+    }
+
+    /**
+     * @brief Start the desktop's Steam again, after an app that had to shut it down.
+     *
+     * Runs in the background: it first waits for the app's own Steam to exit,
+     * because a Steam started while another is running hands itself to that
+     * one. The new Steam is a unit of the user's service manager, not a child
+     * of Hermes, so ending a later app leaves it alone. `-silent` brings it
+     * back to the tray, as a Steam started at login runs.
+     *
+     * @param environment `NAME=value` pairs it needs to reach the desktop.
+     */
+    void reopen_desktop_steam(std::vector<std::string> environment) {
+      const auto systemd_run = find_program("systemd-run");
+      const auto steam = find_program("steam");
+      if (systemd_run.empty() || steam.empty()) {
+        BOOST_LOG(warning) << "[Gamescope] Cannot start the desktop's Steam again: "
+                           << (systemd_run.empty() ? "systemd-run" : "steam") << " is not in PATH.";
+        return;
+      }
+      std::thread {[systemd_run, steam, environment = std::move(environment)]() {
+        const char *home = std::getenv("HOME");
+        const auto pid_file = std::string {home ? home : ""} + "/.steam/steam.pid";
+        const auto steam_running = [&pid_file]() {
+          pid_t pid = 0;
+          std::ifstream {pid_file} >> pid;
+          return pid > 0 && read_proc_line(pid, "comm") == "steam";
+        };
+        const auto deadline = std::chrono::steady_clock::now() + 30s;
+        while (steam_running() && std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(250ms);
+        }
+        if (steam_running()) {
+          BOOST_LOG(warning) << "[Gamescope] The app's Steam is still running after 30 s; "
+                                "not starting the desktop's Steam again.";
+          return;
+        }
+
+        const auto unit = "hermes-desktop-steam-" +
+                          std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+                                           std::chrono::system_clock::now().time_since_epoch())
+                                           .count());
+        std::vector<std::string> arguments {systemd_run, "--user", "--quiet", "--collect", "--unit=" + unit};
+        for (const auto &variable : environment) {
+          arguments.push_back("--setenv=" + variable);
+        }
+        arguments.insert(arguments.end(), {"--", steam, "-silent"});
+        if (run_program(arguments, 30s) == 0) {
+          BOOST_LOG(info) << "[Gamescope] Started the desktop's Steam again (" << unit << ").";
+        } else {
+          BOOST_LOG(warning) << "[Gamescope] Could not start the desktop's Steam again.";
+        }
+      }}.detach();
     }
 
     /**
@@ -1370,7 +1425,7 @@ namespace proc {
         // The desktop's gamepads, kept between its streams, go with it.
         platf::forget_kept_gamepads(runtime->seat_id);
       }
-#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+#ifdef HERMES_BUILD_KWIN_TRANSPORT
       if (runtime->user_unit && !runtime->kwin_wayland_socket.empty()) {
         // So do its pointer and keyboard.
         platf::forget_private_kwin_input(runtime->kwin_wayland_socket);
@@ -1413,7 +1468,7 @@ namespace proc {
     }
   }  // namespace
 
-  #ifdef SUNSHINE_TESTS
+  #ifdef HERMES_TESTS
   // Exercise the production registry/RPC lock ordering without a compositor,
   // display card or account manager. The test owns this synthetic entry.
   void seed_isolated_runtime_for_test(uint32_t id, const std::string &client_uuid) {
@@ -1433,7 +1488,6 @@ namespace proc {
     isolated_runtimes.erase(id);
   }
   #endif
-#endif
 
   void onVDisplayWatchdogFailed() {
     vDisplayDriverStatus = VDISPLAY::DRIVER_STATUS::WATCHDOG_FAILED;
@@ -1462,14 +1516,12 @@ namespace proc {
   };
 
   std::unique_ptr<platf::deinit_t> init() {
-#ifndef _WIN32
     // Detached desktops are units of the user's manager, not children of this
     // process, so a Hermes that crashed or was killed leaves them running with
     // nothing to stream them. None of them can belong to this instance yet.
     if (const auto systemctl = find_program("systemctl"); !systemctl.empty()) {
       run_program({systemctl, "--user", "--quiet", "stop", "hermes-detached-*.scope", "hermes-detached-*.service"}, 30s);
     }
-#endif
     return std::make_unique<deinit_t>();
   }
 
@@ -1477,11 +1529,9 @@ namespace proc {
     if (group.valid()) {
       const auto handle = (std::uintptr_t) group.native_handle();
       const auto running = [handle]() {
-#ifdef __linux__
         // Reap our own terminated children while waiting; zombies alone must
         // not keep signal-0 liveness true until the entire grace period expires.
         platf::process_group::reap_children(handle);
-#endif
         return platf::process_group_running(handle);
       };
       if (running()) {
@@ -1506,7 +1556,6 @@ namespace proc {
         if (ec && ec != std::errc::no_such_process) {
           BOOST_LOG(warning) << "Unable to terminate app process group [" << handle << "]: " << ec.message();
         }
-#ifdef __linux__
         // SIGKILL delivery is asynchronous. Give reaping a bounded window before
         // releasing process/pipe/display ownership and handing control to systemd.
         const auto deadline = std::chrono::steady_clock::now() + 1s;
@@ -1516,7 +1565,6 @@ namespace proc {
         if (running()) {
           BOOST_LOG(warning) << "App process group [" << handle << "] still exists after forced termination.";
         }
-#endif
       }
       // Also detach an already-exited group so resetting its Boost wrapper
       // cannot issue an implicit, unlogged kill later in cleanup.
@@ -1533,7 +1581,6 @@ namespace proc {
     boost::process::v1::group &group,
     std::chrono::seconds exit_timeout
   ) {
-#ifdef __linux__
     std::error_code ec;
     const bool finished = platf::process_group::wait_for_exit([&]() {
       return child.running(ec);
@@ -1550,23 +1597,11 @@ namespace proc {
     }
     group.detach();
     child.detach();
-#else
-    (void) exit_timeout;
-    child.wait();
-    if (child.exit_code() != 0) {
-      BOOST_LOG(warning) << "Undo command exited with code [" << child.exit_code() << ']';
-    }
-    group.detach();
-#endif
   }
 
   boost::filesystem::path find_working_directory(const std::string &cmd, const boost::process::v1::environment &env) {
     // Parse the raw command string into parts to get the actual command portion
-#ifdef _WIN32
-    auto parts = boost::program_options::split_winmain(cmd);
-#else
     auto parts = boost::program_options::split_unix(cmd);
-#endif
     if (parts.empty()) {
       BOOST_LOG(error) << "Unable to parse command: "sv << cmd;
       return boost::filesystem::path();
@@ -1603,7 +1638,7 @@ namespace proc {
     allow_client_commands = false;
     placebo = true;
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_playing(_app_name);
 #endif
   }
@@ -1615,14 +1650,6 @@ namespace proc {
     std::optional<uid_t> session_owner_uid,
     bool isolated_session
   ) {
-#ifdef _WIN32
-    (void) launch_session;
-    (void) apply_scale;
-    (void) session_app;
-    (void) session_owner_uid;
-    (void) isolated_session;
-    return 0;
-#else
     if (config::video.virtual_display_backend != "hermes_kms" ||
         (isolated_session ?
            !config::video.hermes_kms_isolated_sessions :
@@ -1754,18 +1781,12 @@ namespace proc {
                             "sessions remain active.";
     }
     return 0;
-#endif
   }
 
   int proc_t::execute_isolated(
     const ctx_t &app,
     std::shared_ptr<rtsp_stream::launch_session_t> launch_session
   ) {
-#ifdef _WIN32
-    (void) app;
-    (void) launch_session;
-    return -1;
-#else
     if (!config::video.hermes_kms_isolated_sessions ||
         config::video.virtual_display_backend != "hermes_kms") {
       launch_session->launch_error_message = "Independent-session capability is unavailable.";
@@ -1993,7 +2014,7 @@ namespace proc {
         return 503;
       };
 
-  #ifndef SUNSHINE_BUILD_KWIN_TRANSPORT
+  #ifndef HERMES_BUILD_KWIN_TRANSPORT
       return plasma_failed(
         "is not available: Hermes was built without the KWin transport, which needs "
         "plasma-wayland-protocols 1.23 or newer"
@@ -2902,11 +2923,9 @@ namespace proc {
                     << " ready at " << active_width << 'x' << active_height
                     << '@' << refresh_hz << "Hz";
     return 0;
-#endif
   }
 
   void proc_t::terminate_isolated(uint32_t launch_session_id) {
-#ifndef _WIN32
     std::shared_ptr<isolated_runtime_t> runtime;
     {
       std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
@@ -2918,13 +2937,9 @@ namespace proc {
       isolated_runtimes.erase(it);
     }
     stop_isolated_runtime(runtime);
-#else
-    (void) launch_session_id;
-#endif
   }
 
   void proc_t::disconnect_isolated(uint32_t launch_session_id) {
-#ifndef _WIN32
     bool terminate_on_pause = false;
     {
       std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
@@ -2940,13 +2955,9 @@ namespace proc {
       }
     }
     terminate_isolated(launch_session_id);
-#else
-    (void) launch_session_id;
-#endif
   }
 
   void proc_t::terminate_isolated_client(const std::string &client_uuid) {
-#ifndef _WIN32
     std::shared_ptr<isolated_runtime_t> runtime;
     {
       std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
@@ -2961,24 +2972,15 @@ namespace proc {
       }
     }
     stop_isolated_runtime(runtime);
-#else
-    (void) client_uuid;
-#endif
   }
 
   bool proc_t::isolated_client_present(const std::string &client_uuid) {
-#ifndef _WIN32
     std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
     return isolated_launching_clients.contains(client_uuid) ||
            find_isolated_client_locked(client_uuid) != nullptr;
-#else
-    (void) client_uuid;
-    return false;
-#endif
   }
 
   void proc_t::terminate_all_isolated() {
-#ifndef _WIN32
     std::vector<std::shared_ptr<isolated_runtime_t>> runtimes;
     {
       std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
@@ -2995,11 +2997,9 @@ namespace proc {
     for (const auto &runtime : runtimes) {
       stop_isolated_runtime(runtime);
     }
-#endif
   }
 
   int proc_t::running_for_client(const std::string &client_uuid) {
-#ifndef _WIN32
     std::shared_ptr<isolated_runtime_t> runtime;
     {
       std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
@@ -3022,14 +3022,9 @@ namespace proc {
     }
     stop_isolated_runtime(runtime);
     return 0;
-#else
-    (void) client_uuid;
-    return running();
-#endif
   }
 
   std::string proc_t::running_app_uuid_for_client(const std::string &client_uuid) {
-#ifndef _WIN32
     std::shared_ptr<isolated_runtime_t> runtime;
     {
       std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
@@ -3043,14 +3038,9 @@ namespace proc {
     return it != isolated_runtimes.end() && it->second == runtime && !runtime->stopping.load() ?
              runtime->app.uuid :
              std::string {};
-#else
-    (void) client_uuid;
-    return get_running_app_uuid();
-#endif
   }
 
   bool proc_t::any_running() {
-#ifndef _WIN32
     // Liveness is asked for outside the lock, the way list_isolated() does it:
     // where the session is a systemd unit the answer comes from the broker
     // over a socket, and holding the registry lock across that stalls every
@@ -3093,24 +3083,20 @@ namespace proc {
     if (isolated_running) {
       return true;
     }
-#endif
     return running() != 0;
   }
 
   boost::process::v1::environment proc_t::get_session_env(uint32_t launch_session_id) {
-#ifndef _WIN32
     std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
     const auto it = isolated_runtimes.find(launch_session_id);
     if (it != isolated_runtimes.end() && it->second) {
       return it->second->env;
     }
-#endif
     return _env;
   }
 
   std::vector<proc_t::isolated_session_t> proc_t::list_isolated() {
     std::vector<isolated_session_t> sessions;
-#ifndef _WIN32
     std::vector<std::shared_ptr<isolated_runtime_t>> runtimes;
     {
       std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
@@ -3178,20 +3164,15 @@ namespace proc {
     std::ranges::sort(sessions, [](const auto &left, const auto &right) {
       return left.launch_session_id < right.launch_session_id;
     });
-#endif
     return sessions;
   }
 
   std::string proc_t::isolated_audio_sink(uint32_t launch_session_id) {
-#ifndef _WIN32
     std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
     const auto it = isolated_runtimes.find(launch_session_id);
     if (it != isolated_runtimes.end() && it->second) {
       return it->second->audio_sink;
     }
-#else
-    (void) launch_session_id;
-#endif
     // Empty for every session that is not isolated, and for one whose private
     // sink could not be made - both of which mean "capture the way you always
     // did".
@@ -3199,46 +3180,32 @@ namespace proc {
   }
 
   std::string proc_t::isolated_audio_server(uint32_t launch_session_id) {
-#ifndef _WIN32
     std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
     const auto it = isolated_runtimes.find(launch_session_id);
     if (it != isolated_runtimes.end() && it->second && it->second->audio_server) {
       return it->second->audio_server->pulse_server();
     }
-#else
-    (void) launch_session_id;
-#endif
     return {};
   }
 
   std::string proc_t::isolated_mic_source(uint32_t launch_session_id) {
-#ifndef _WIN32
     std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
     const auto it = isolated_runtimes.find(launch_session_id);
     if (it != isolated_runtimes.end() && it->second) {
       return it->second->mic_source;
     }
-#else
-    (void) launch_session_id;
-#endif
     return {};
   }
 
   bool proc_t::isolated_session_has_account(uint32_t launch_session_id) {
-#ifndef _WIN32
     std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
     const auto it = isolated_runtimes.find(launch_session_id);
     return it != isolated_runtimes.end() && it->second && it->second->account;
-#else
-    (void) launch_session_id;
-    return false;
-#endif
   }
 
   bool proc_t::prepare_isolated_resume(
     std::shared_ptr<rtsp_stream::launch_session_t> launch_session
   ) {
-#ifndef _WIN32
     std::shared_ptr<isolated_runtime_t> runtime;
     {
       std::lock_guard<std::mutex> lock(isolated_runtimes_mutex);
@@ -3305,10 +3272,6 @@ namespace proc {
       launch_session->client_undo_cmds.clear();
     }
     return true;
-#else
-    (void) launch_session;
-    return false;
-#endif
   }
 
   int proc_t::execute(const ctx_t& app, std::shared_ptr<rtsp_stream::launch_session_t> launch_session) {
@@ -3355,14 +3318,12 @@ namespace proc {
     this->initial_display = config::video.output_name;
     // Executed when returning from function
     auto fg = util::fail_guard([&]() {
-#ifndef _WIN32
       if (launch_session->session_virtual_display_cleanup_pending) {
         VDISPLAY::removeVirtualDisplay(launch_session->display_guid);
         launch_session->session_virtual_display_cleanup_pending = false;
         launch_session->session_scoped_virtual_display = false;
         launch_session->display_name.clear();
       }
-#endif
       // Restore to user defined output name
       config::video.output_name = this->initial_display;
       terminate();
@@ -3397,6 +3358,10 @@ namespace proc {
       config::video.headless_mode         // Headless mode
       || launch_session->virtual_display  // User requested virtual display
       || _app.virtual_display;            // App is configured to use virtual display
+    // Screens put to sleep read as unlit, the same as no monitor at all.
+    if (!virtual_display_requested && !gamescope_session && !video::display_present()) {
+      VDISPLAY::wakeSleepingMonitor();
+    }
     const bool needs_virtual_display =
       !gamescope_session &&                 // Not in a standalone Gamescope session
       (virtual_display_requested ||
@@ -3407,7 +3372,6 @@ namespace proc {
       BOOST_LOG(info) << "No monitor is lit on this host; using a virtual display for this session.";
     }
 
-#ifndef _WIN32
     // A nested application launched into the host compositor cannot appear above
     // the desktop's screen locker. For unattended same-session streaming, an app
     // may explicitly ask Hermes to unlock the host graphical session first. This
@@ -3419,7 +3383,6 @@ namespace proc {
       BOOST_LOG(warning) << "[Session] Host-session unlock was requested for '" << _app.name
                          << "' but could not be completed; launch will continue.";
     }
-#endif
 
     // Two independent reports arrived from users whose Hermes-KMS status panel
     // read "ready", who then found their physical monitor being streamed and no
@@ -3440,16 +3403,13 @@ namespace proc {
                            "use one, or headless mode. 'virtual_display_backend' and "
                            "'hermes_kms_multi_output' pick which backend serves the request, never "
                            "whether one is made.";
-#ifndef _WIN32
         // Bind touch and pen to the monitor this session streams once the capture
         // reports it, instead of wherever KWin puts an unbound touchscreen.
         VDISPLAY::beginPhysicalOutputSession();
-#endif
       }
     }
 
     bool session_scoped_display_prepared = false;
-#ifndef _WIN32
     if (needs_virtual_display &&
         config::video.virtual_display_backend == "hermes_kms" &&
         config::video.hermes_kms_multi_output) {
@@ -3461,7 +3421,6 @@ namespace proc {
       this->display_name = launch_session->display_name;
       config::video.output_name = display_device::map_display_name(this->display_name);
     }
-#endif
 
     if (needs_virtual_display && !session_scoped_display_prepared) {
       if (vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
@@ -3472,11 +3431,7 @@ namespace proc {
       if (vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
         // Try set the render adapter matching the capture adapter if user has specified one
         if (!config::video.adapter_name.empty()) {
-#ifdef _WIN32
-          VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name));
-#else
           VDISPLAY::setRenderAdapterByName(config::video.adapter_name);
-#endif
         }
 
         std::string device_name;
@@ -3504,11 +3459,7 @@ namespace proc {
           device_uuid = uuid_util::uuid_t::parse(launch_session->unique_id);
         }
 
-#ifdef _WIN32
-        memcpy(&launch_session->display_guid, &device_uuid, sizeof(GUID));
-#else
         launch_session->display_guid = device_uuid;
-#endif
 
         int target_fps = launch_session->fps ? launch_session->fps : 60000;
 
@@ -3523,13 +3474,14 @@ namespace proc {
         // Per-app virtual display layout: "mirror" overlaps the primary
         // output so the desktop is cloned, "exclusive" hands the desktop to
         // the virtual display for the session, "extend" forces the default
-        // side-by-side placement, "detached" places it beside the physical
+        // side-by-side placement, "primary" does the same with the virtual
+        // display as the primary output, "detached" places it beside the physical
         // desktop without intentionally rewriting physical-output state, and
         // "auto" follows the global exclusive option. Any explicit non-exclusive
         // placement also disables the global exclusive option for this session.
         const std::string &vd_layout = _app.virtual_display_layout;
         const bool vd_layout_explicit =
-          vd_layout == "extend" || vd_layout == "detached" || vd_layout == "mirror";
+          vd_layout == "extend" || vd_layout == "primary" || vd_layout == "detached" || vd_layout == "mirror";
         const bool want_exclusive = vd_layout == "exclusive" ||
                                     (config::video.isolated_virtual_display_option && !vd_layout_explicit);
         if (config::video.isolated_virtual_display_option && vd_layout_explicit) {
@@ -3538,16 +3490,6 @@ namespace proc {
                              "Select Auto or Exclusive in this application's Virtual Display Layout to disable them.";
         }
 
-#ifdef _WIN32
-        std::wstring vdisplayName = VDISPLAY::createVirtualDisplay(
-          device_uuid_str.c_str(),
-          device_name.c_str(),
-          render_width,
-          render_height,
-          target_fps,
-          launch_session->display_guid
-        );
-#else
         std::string vdisplayName = VDISPLAY::createVirtualDisplay(
           device_uuid_str.c_str(),
           device_name.c_str(),
@@ -3558,7 +3500,6 @@ namespace proc {
           std::nullopt,
           linux_virtual_display_layout(vd_layout)
         );
-#endif
 
         // No matter we get the display name or not, the virtual display might still be created.
         // We need to track it properly to remove the display when the session terminates.
@@ -3570,21 +3511,14 @@ namespace proc {
           // Don't change display settings when no params are given
           if (launch_session->width && launch_session->height && launch_session->fps) {
             // Apply display settings
-#ifdef _WIN32
             const int mode_result = VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
-#else
-            const int mode_result = VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
-#endif
             if (mode_result != 0) {
-              // DISP_CHANGE_SUCCESSFUL is 0 on Windows too, so this reads the
-              // same on both. Capture follows the display's real mode from
-              // here, which is worth saying rather than leaving to be noticed.
+              // Capture follows the display's active mode when mode setting fails.
               BOOST_LOG(warning) << "Virtual display did not reach "sv << render_width << 'x' << render_height
                                  << "; streaming the display's active mode instead."sv;
             }
           }
 
-#ifndef _WIN32
           // Some Wayland compositors expose the DRM connector but cannot add it
           // to their output layout; encoding that untouched virtual buffer
           // yields a black stream while audio continues normally. Streaming a
@@ -3598,7 +3532,6 @@ namespace proc {
               "Virtual display setup failed. Physical display fallback was not attempted.";
             return 503;
           }
-#endif
 
           // Rearrange the displays when this session asked for the virtual
           // display exclusively - through the global ISOLATED DISPLAY setting
@@ -3613,40 +3546,24 @@ namespace proc {
             audio::hold_host_sink();
 
             // Apply the isolated display settings
-#ifdef _WIN32
-            VDISPLAY::changeDisplaySettings2(vdisplayName.c_str(), render_width, render_height, target_fps, true);
-#else
             VDISPLAY::changeDisplaySettings2(vdisplayName.c_str(), render_width, render_height, target_fps, true);
             if (!VDISPLAY::enableExclusiveVirtualDisplay(vdisplayName)) {
               BOOST_LOG(warning) << "Virtual display is active, but exclusive mode could not disable physical outputs.";
             }
-#endif
           }
 
           this->virtual_display = true;
-#ifdef _WIN32
-          this->display_name = platf::to_utf8(vdisplayName);
-#else
           this->display_name = vdisplayName;
-#endif
 
-#ifndef _WIN32
           if (!VDISPLAY::configureVirtualDisplayHdr(this->display_name, launch_session->enable_hdr)) {
             return -1;
           }
-#endif
 
           // When using virtual display, we don't care which display user configured to use.
           // So we always set output_name to the newly created virtual display as a workaround for
           // empty name when probing graphics cards.
           //
-          // map_display_name resolves a device id on Windows but returns an
-          // empty string on platforms without a settings manager (Linux).
-          // Wiping output_name here would make the pre-stream encoder probe
-          // look up an empty display and fail, so keep the virtual display's
-          // own name in that case (e.g. HERMES-1).
-          auto mapped_name = display_device::map_display_name(this->display_name);
-          config::video.output_name = mapped_name.empty() ? this->display_name : std::move(mapped_name);
+          config::video.output_name = this->display_name;
         } else {
           BOOST_LOG(error) << "Virtual display was requested but creation failed or no display name became available; "
                            << "refusing physical-display fallback.";
@@ -3666,7 +3583,6 @@ namespace proc {
     display_device::configure_display(config::video, *launch_session);
 
     // We should not preserve display state when using virtual display.
-    // It is already handled by Windows properly.
     if (this->virtual_display) {
       display_device::reset_persistence();
     }
@@ -3743,6 +3659,25 @@ namespace proc {
       _env["PROTON_ENABLE_HDR"] = "0";
     }
 
+    if (_app.limit_fps) {
+      const auto existing = _env.find("MANGOHUD_CONFIG");
+      const auto limits = frame_limit::environment(
+        static_cast<int>(std::lround(static_cast<double>(launch_session->fps) / 1000.0)),
+        existing != _env.end() ? existing->to_string() : std::string {}
+      );
+      // _env outlives the app: remember what was there, so terminate() can
+      // give the next app the environment without this app's limit.
+      for (const auto &[name, value] : limits) {
+        const auto previous = _env.find(name);
+        _frame_limit_restore.emplace_back(name, previous != _env.end() ? std::optional<std::string> {previous->to_string()} : std::nullopt);
+        _env[name] = value;
+      }
+      if (!limits.empty()) {
+        BOOST_LOG(info) << "Capping " << _app.name << " at the stream's " << limits.front().second
+                        << " FPS (DXVK, VKD3D-Proton, and MangoHud where it is enabled)";
+      }
+    }
+
     int channelCount = launch_session->surround_info & 65535;
     switch (channelCount) {
       case 2:
@@ -3762,18 +3697,7 @@ namespace proc {
     _env["APOLLO_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session->surround_params;
 
     if (!_app.output.empty() && _app.output != "null"sv) {
-#ifdef _WIN32
-      // fopen() interprets the filename as an ANSI string on Windows, so we must convert it
-      // to UTF-16 and use the wchar_t variants for proper Unicode log file path support.
-      auto woutput = platf::from_utf8(_app.output);
-
-      // Use _SH_DENYNO to allow us to open this log file again for writing even if it is
-      // still open from a previous execution. This is required to handle the case of a
-      // detached process executing again while the previous process is still running.
-      _pipe.reset(_wfsopen(woutput.c_str(), L"a", _SH_DENYNO));
-#else
       _pipe.reset(fopen(_app.output.c_str(), "a"));
-#endif
     }
 
     std::error_code ec;
@@ -3814,7 +3738,6 @@ namespace proc {
 
     _env["APOLLO_APP_STATUS"] = "RUNNING";
 
-#ifdef __linux__
     // Parse exactly as application commands are parsed elsewhere. Quoted
     // executable paths and Flatpak Steam entries must not silently miss this.
     const auto placement_arguments = [](const std::string &command) {
@@ -3831,24 +3754,58 @@ namespace proc {
                               (platf::window_placement::launches_gamescope(app_arguments) ||
                                launch_session->launch_mode == "gamescope");
     std::vector<std::uint32_t> gamescope_pids;
-#endif
 
+    // A Gamescope nested in the desktop starts a Steam of its own. Steam runs
+    // once per user: with another Steam running, that one takes the request,
+    // the new one exits, and Gamescope and the app end within a second. Shut
+    // the other Steam down first, as independent sessions do. Inside a
+    // standalone Gamescope session the running Steam is the session's own and
+    // is meant to take the request.
+    if (!gamescope_session && _app.stop_desktop_steam != "off") {
+      bool nested_steam = platf::window_placement::gamescope_runs_steam(app_arguments) ||
+                          (launch_session->launch_mode == "gamescope" && runs_steam(_app));
+      for (const auto &cmd : _app.detached) {
+        nested_steam = nested_steam || platf::window_placement::gamescope_runs_steam(placement_arguments(cmd));
+      }
+      // It was the user's, so it comes back when the app ends.
+      if (nested_steam && stop_desktop_steam("[Gamescope]")) {
+        _reopen_desktop_steam = true;
+      }
+    }
+
+    // Detached commands outlive the process Hermes starts (Steam's first
+    // process updates itself and exits), so a process group cannot hold them.
+    // A scope of the user's systemd manager does, however they fork, setsid or
+    // enter containers, and ending the app stops it (terminate()).
+    _detached_units.clear();
+    const auto systemd_run = find_program("systemd-run");
+    const bool scoped = _app.stop_detached && !_app.elevated && !systemd_run.empty() &&
+                        std::filesystem::exists("/run/user/" + std::to_string(::getuid()) + "/bus");
+    static std::atomic<unsigned> detached_launches {0};
+    const unsigned launch = ++detached_launches;
     for (auto &cmd : _app.detached) {
       boost::filesystem::path working_dir = _app.working_dir.empty() ?
                                               find_working_directory(cmd, _env) :
                                               boost::filesystem::path(_app.working_dir);
       BOOST_LOG(info) << "Spawning ["sv << cmd << "] in ["sv << working_dir << ']';
-      auto child = platf::run_command(_app.elevated, true, cmd, working_dir, _env, _pipe.get(), ec, nullptr);
+      std::string spawn = cmd;
+      std::string unit;
+      if (scoped) {
+        unit = platf::detached_scope::unit_name(::getpid(), launch, _detached_units.size());
+        spawn = platf::detached_scope::wrap(systemd_run, unit, std::max(_app.exit_timeout, std::chrono::seconds {15}), cmd);
+      }
+      auto child = platf::run_command(_app.elevated, true, spawn, working_dir, _env, _pipe.get(), ec, nullptr);
       if (ec) {
         BOOST_LOG(warning) << "Couldn't spawn ["sv << cmd << "]: System: "sv << ec.message();
       } else {
-#ifdef __linux__
         const auto arguments = placement_arguments(cmd);
         place_steam = place_steam || platf::window_placement::opens_big_picture(arguments);
         if (!gamescope_session && platf::window_placement::launches_gamescope(arguments)) {
           gamescope_pids.push_back(static_cast<std::uint32_t>(child.id()));
         }
-#endif
+        if (!unit.empty()) {
+          _detached_units.push_back(unit);
+        }
         child.detach();
       }
     }
@@ -3862,9 +3819,6 @@ namespace proc {
                                               boost::filesystem::path(_app.working_dir);
       std::string launch_command = _app.cmd;
       if (launch_session->launch_mode == "gamescope") {
-#ifdef _WIN32
-        BOOST_LOG(warning) << "Gamescope launch mode is only available on Linux; using the configured application command";
-#else
         if (gamescope_session) {
           // We are already inside a standalone Gamescope session (SteamOS Game
           // Mode). Nesting another Gamescope here would be redundant, so run the
@@ -3899,7 +3853,6 @@ namespace proc {
                                        gamescope_fps,
                                        _app.cmd);
         }
-#endif
       }
 
       BOOST_LOG(info) << "Executing: ["sv << launch_command << "] in ["sv << working_dir << ']';
@@ -3910,7 +3863,6 @@ namespace proc {
       }
     }
 
-#ifdef __linux__
     if (!this->display_name.empty()) {
       if (app_gamescope && _process.valid()) {
         gamescope_pids.push_back(static_cast<std::uint32_t>(_process.id()));
@@ -3923,69 +3875,13 @@ namespace proc {
         VDISPLAY::placeWindowsOnVirtualDisplay(this->display_name, {"steam"});
       }
     }
-#endif
 
     _app_launch_time = std::chrono::steady_clock::now();
 
-  #ifdef _WIN32
-    auto resetHDRThread = std::thread([this, enable_hdr = launch_session->enable_hdr]{
-      // Windows doesn't seem to be able to set HDR correctly when a display is just connected / changed resolution,
-      // so we have tooggle HDR for the virtual display manually after a delay.
-      auto retryInterval = 200ms;
-      while (is_changing_settings_going_to_fail()) {
-        if (retryInterval > 2s) {
-          BOOST_LOG(warning) << "Restoring HDR settings failed due to retry timeout!";
-          return;
-        }
-        std::this_thread::sleep_for(retryInterval);
-        retryInterval *= 2;
-      }
-
-      retryInterval = 200ms;
-      while (this->display_name.empty()) {
-        if (retryInterval > 2s) {
-          BOOST_LOG(warning) << "Not getting current display in time! HDR will not be toggled.";
-          return;
-        }
-        std::this_thread::sleep_for(retryInterval);
-        retryInterval *= 2;
-      }
-
-      // We should have got the actual streaming display by now
-      std::string currentDisplay = this->display_name;
-      auto currentDisplayW = platf::from_utf8(currentDisplay);
-
-      initial_hdr = VDISPLAY::getDisplayHDRByName(currentDisplayW.c_str());
-
-      if (config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic) {
-        mode_changed_display = currentDisplay;
-
-        // Try turn off HDR whatever
-        // As we always have to apply the workaround by turining off HDR first
-        VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), false);
-
-        if (enable_hdr) {
-          if (VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), true)) {
-            BOOST_LOG(info) << "HDR enabled for display " << currentDisplay;
-          } else {
-            BOOST_LOG(info) << "HDR enable failed for display " << currentDisplay;
-          }
-        }
-      } else if (initial_hdr) {
-        if (VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), false) && VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), true)) {
-          BOOST_LOG(info) << "HDR toggled successfully for display " << currentDisplay;
-        } else {
-          BOOST_LOG(info) << "HDR toggle failed for display " << currentDisplay;
-        }
-      }
-    });
-
-    resetHDRThread.detach();
-  #endif
 
     fg.disable();
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_playing(_app.name);
 #endif
 
@@ -3993,13 +3889,11 @@ namespace proc {
   }
 
   int proc_t::running() {
-#ifndef _WIN32
     // On POSIX OSes, we must periodically wait for our children to avoid
     // them becoming zombies. This must be synchronized carefully with
     // calls to bp::wait() and platf::process_group_running() which both
     // invoke waitpid() under the hood.
     auto reaper = util::fail_guard([]() {
-  #ifdef __linux__
       // A bounded command (kscreen-doctor and the like) reaps its own child.
       // Reaping it here would take its exit status, and its complete reply
       // would be thrown away. Skip this round while one runs; whatever exits
@@ -4008,10 +3902,8 @@ namespace proc {
       if (!lock) {
         return;
       }
-  #endif
       while (waitpid(-1, nullptr, WNOHANG) > 0);
     });
-#endif
 
     if (placebo) {
       return _app_id;
@@ -4026,7 +3918,7 @@ namespace proc {
       BOOST_LOG(info) << "Adjust this behavior in the Applications tab or apps.json if this is not what you want."sv;
       placebo = true;
 
-    #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+    #if defined HERMES_TRAY && HERMES_TRAY >= 1
       if (_process.native_exit_code() != 0) {
         system_tray::update_tray_launch_error(proc::proc.get_last_run_app_name(), _process.native_exit_code());
       }
@@ -4140,7 +4032,7 @@ namespace proc {
       exec_thread.detach();
     }
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_pausing(proc::proc.get_last_run_app_name());
 #endif
   }
@@ -4149,10 +4041,8 @@ namespace proc {
     std::error_code ec;
     placebo = false;
 
-#ifndef _WIN32
     // Put back the touch and pen binding a physical-monitor session made.
     VDISPLAY::endPhysicalOutputSession();
-#endif
 
     if (!immediate) {
       terminate_process_group(_process, _process_group, _app.exit_timeout);
@@ -4185,18 +4075,49 @@ namespace proc {
       finish_undo_command(child, undo_group, _app.exit_timeout);
     }
 
+    // After the undo commands, which may still talk to them (Steam's
+    // steam://close/bigpicture). A command that handed its work to a program
+    // already running, such as a Steam the user opened, has left its scope
+    // empty and gone; only what Hermes started is stopped.
+    if (!_detached_units.empty()) {
+      if (const auto systemctl = find_program("systemctl"); !systemctl.empty()) {
+        const auto timeout = std::max(_app.exit_timeout, std::chrono::seconds {15});
+        for (const auto &unit : _detached_units) {
+          BOOST_LOG(info) << "Stopping "sv << unit << ", what this app's detached commands started"sv;
+          run_program({systemctl, "--user", "--quiet", "stop", unit}, timeout + 10s);
+        }
+      }
+      _detached_units.clear();
+    }
+
     _pipe.reset();
+
+    // Undo this app's frame limit, newest first, so a variable set twice ends
+    // with the value it had before either.
+    for (auto it = _frame_limit_restore.rbegin(); it != _frame_limit_restore.rend(); ++it) {
+      if (it->second) {
+        _env[it->first] = *it->second;
+      } else {
+        _env.erase(it->first);
+      }
+    }
+    _frame_limit_restore.clear();
+
+    if (std::exchange(_reopen_desktop_steam, false)) {
+      std::vector<std::string> environment;
+      for (const char *name : {"DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"}) {
+        if (const auto variable = _env.find(name); variable != _env.end()) {
+          environment.push_back(std::string {name} + '=' + variable->to_string());
+        }
+      }
+      reopen_desktop_steam(std::move(environment));
+    }
 
     bool has_run = _app_id > 0;
 
     // Revert HDR state
     if (has_run && !mode_changed_display.empty()) {
-#ifdef _WIN32
-      auto displayNameW = platf::from_utf8(mode_changed_display);
-      if (VDISPLAY::setDisplayHDRByName(displayNameW.c_str(), initial_hdr)) {
-#else
       if (VDISPLAY::setDisplayHDRByName(mode_changed_display.c_str(), initial_hdr)) {
-#endif
         BOOST_LOG(info) << "HDR reverted for display " << mode_changed_display;
       } else {
         BOOST_LOG(info) << "HDR revert failed for display " << mode_changed_display;
@@ -4207,12 +4128,10 @@ namespace proc {
     const bool session_scoped_virtual_display =
       used_virtual_display && _launch_session->session_scoped_virtual_display;
     if (used_virtual_display && !session_scoped_virtual_display) {
-#ifndef _WIN32
       // Unconditionally: exclusive mode is also reachable per app, through the
       // app's virtual-display-layout, and those sessions have to give the
       // monitors back too. The call knows whether it took them.
       VDISPLAY::restoreExclusiveVirtualDisplay();
-#endif
       if (VDISPLAY::removeVirtualDisplay(_launch_session->display_guid)) {
         BOOST_LOG(info) << "Virtual Display removed successfully";
       } else if (this->virtual_display) {
@@ -4239,7 +4158,7 @@ namespace proc {
         display_device::revert_configuration();
       }
 
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
       system_tray::update_tray_stopped(proc::proc.get_last_run_app_name());
 #endif
     }
@@ -4353,18 +4272,6 @@ namespace proc {
               auto var_end = find_match(next, std::end(val_raw));
               auto var_name = std::string {var_begin, var_end};
 
-#ifdef _WIN32
-              // Windows treats environment variable names in a case-insensitive manner,
-              // so we look for a case-insensitive match here. This is critical for
-              // correctly appending to PATH on Windows.
-              auto itr = std::find_if(env.cbegin(), env.cend(), [&](const auto &e) {
-                return boost::iequals(e.get_name(), var_name);
-              });
-              if (itr != env.cend()) {
-                // Use an existing case-insensitive match
-                var_name = itr->get_name();
-              }
-#endif
 
               ss << env[var_name].to_string();
 
@@ -4406,12 +4313,12 @@ namespace proc {
     }
 
     // check if image is in assets directory
-    auto full_image_path = std::filesystem::path(SUNSHINE_ASSETS_DIR) / app_image_path;
+    auto full_image_path = std::filesystem::path(HERMES_ASSETS_DIR) / app_image_path;
     if (std::filesystem::exists(full_image_path)) {
       return full_image_path.string();
     } else if (app_image_path == "./assets/steam.png") {
       // handle old default steam image definition
-      return SUNSHINE_ASSETS_DIR "/steam.png";
+      return HERMES_ASSETS_DIR "/steam.png";
     }
 
     // check if specified image exists
@@ -4721,7 +4628,6 @@ namespace proc {
    */
   void migration_v5(nlohmann::json& fileTree) {
     static const int this_version = 5;
-#ifdef __linux__
     if (!fileTree.contains("apps") || !fileTree["apps"].is_array()) {
       fileTree["apps"] = nlohmann::json::array();
     }
@@ -4756,7 +4662,6 @@ namespace proc {
       {"cmd", "steam steam://open/bigpicture"},
       {"allow-client-commands", false},
     });
-#endif
     fileTree["version"] = this_version;
   }
 
@@ -4768,7 +4673,6 @@ namespace proc {
    */
   void migration_v6(nlohmann::json& fileTree) {
     static const int this_version = 6;
-#ifdef __linux__
     if (fileTree.contains("apps") && fileTree["apps"].is_array()) {
       static const std::array<std::array<const char *, 3>, 3> covers {{
         {"Low Res Desktop", "desktop.png", "desktop-low-res.png"},
@@ -4787,7 +4691,6 @@ namespace proc {
         }
       }
     }
-#endif
     fileTree["version"] = this_version;
   }
 
@@ -4984,11 +4887,6 @@ namespace proc {
             ctx.cmd = parse_env_val(this_env, app_node.value("cmd", ""));
           if (app_node.contains("working-dir")) {
             ctx.working_dir = parse_env_val(this_env, app_node.value("working-dir", ""));
-    #ifdef _WIN32
-            // The working directory, unlike the command itself, should not be quoted.
-            boost::erase_all(ctx.working_dir, "\"");
-            ctx.working_dir += '\\';
-    #endif
           }
           if (app_node.contains("image-path"))
             ctx.image_path = parse_env_val(this_env, app_node.value("image-path", ""));
@@ -5004,6 +4902,8 @@ namespace proc {
           ctx.allow_client_commands = app_node.value("allow-client-commands", true);
           ctx.terminate_on_pause = app_node.value("terminate-on-pause", false);
           ctx.unlock_host_session = app_node.value("unlock-host-session", false);
+          ctx.stop_detached = app_node.value("stop-detached", true);
+          ctx.limit_fps = app_node.value("limit-fps", false);
           ctx.isolation_method = app_node.value("isolation-method", "default");
           if (ctx.isolation_method != "default" &&
               ctx.isolation_method != "gamescope" &&
@@ -5036,6 +4936,7 @@ namespace proc {
           ctx.virtual_display_layout = app_node.value("virtual-display-layout", "auto");
           if (ctx.virtual_display_layout != "auto" &&
               ctx.virtual_display_layout != "extend" &&
+              ctx.virtual_display_layout != "primary" &&
               ctx.virtual_display_layout != "detached" &&
               ctx.virtual_display_layout != "mirror" &&
               ctx.virtual_display_layout != "exclusive") {
@@ -5153,41 +5054,6 @@ namespace proc {
     }
 
     // Virtual Display entry
-  #ifdef _WIN32
-    if (vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
-      proc::ctx_t ctx;
-      ctx.idx = std::to_string(i);
-      ctx.uuid = VIRTUAL_DISPLAY_UUID;
-      ctx.name = "Virtual Display";
-      ctx.image_path = parse_env_val(this_env, "virtual_desktop.png");
-      ctx.virtual_display = true;
-      ctx.scale_factor = 100;
-      ctx.use_app_identity = false;
-      ctx.per_client_app_identity = false;
-      ctx.allow_client_commands = false;
-      ctx.terminate_on_pause = false;
-      ctx.unlock_host_session = false;
-      ctx.isolation_method = "default";
-
-      ctx.elevated = false;
-      ctx.auto_detach = true;
-      ctx.wait_all = false;
-      ctx.exit_timeout = 5s;
-
-      auto possible_ids = calculate_app_id(ctx.name, ctx.image_path, i++);
-      if (ids.count(std::get<0>(possible_ids)) == 0) {
-        // Avoid using index to generate id if possible
-        ctx.id = std::get<0>(possible_ids);
-      }
-      else {
-        // Fallback to include index on collision
-        ctx.id = std::get<1>(possible_ids);
-      }
-      ids.insert(ctx.id);
-
-      apps.emplace_back(std::move(ctx));
-    }
-  #endif
 
     if (config::input.enable_input_only_mode) {
       // Input Only entry
@@ -5279,18 +5145,6 @@ namespace proc {
       proc.terminate(false, false);
     }
 
-  #ifdef _WIN32
-    size_t fail_count = 0;
-    while (fail_count < 5 && vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
-      initVDisplayDriver();
-      if (vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
-        break;
-      }
-
-      fail_count += 1;
-      std::this_thread::sleep_for(1s);
-    }
-  #endif
 
     auto proc_opt = proc::parse(file_name);
 
@@ -5299,7 +5153,7 @@ namespace proc {
     }
   }
 
-#ifdef SUNSHINE_TESTS
+#ifdef HERMES_TESTS
   /**
    * @brief Load a session compositor profile from an explicit path and expand it.
    *

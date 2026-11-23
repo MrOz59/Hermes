@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <functional>
 #include <mutex>
+#include <set>
 #include <thread>
 
 // lib includes
@@ -19,9 +20,7 @@
 #include "globals.h"
 #include "logging.h"
 #include "platform/common.h"
-#ifndef _WIN32
   #include "platform/linux/session_audio.h"
-#endif
 #include "thread_safe.h"
 #include "utility.h"
 
@@ -149,6 +148,8 @@ namespace audio {
     auto frame_size = config.packetDuration * stream.sampleRate / 1000;
     std::function<std::unique_ptr<platf::mic_t>()> open_microphone;
     audio_ctx_ref_t ref;
+    // The host sink this stream records, when it shares the host's sound server.
+    std::string recorded_sink;
 
     auto init_failure_fg = util::fail_guard([&shutdown_event]() {
       BOOST_LOG(error) << "Unable to initialize audio capture. The stream will not have audio."sv;
@@ -159,7 +160,6 @@ namespace audio {
       return;
     });
 
-#ifndef _WIN32
     // A session with an audio server of its own is recorded there, without the
     // host's audio control and the virtual sinks it adds to the host's server.
     if (!config.session_server.empty()) {
@@ -167,7 +167,6 @@ namespace audio {
         return platf::session_audio::microphone(config.session_server, config.session_sink, stream.mapping, stream.channelCount, stream.sampleRate, frame_size);
       };
     }
-#endif
 
     if (!open_microphone) {
       ref = get_audio_ctx_ref();
@@ -210,6 +209,9 @@ namespace audio {
       }
 
       BOOST_LOG(info) << "Selected audio sink: "sv << *sink;
+      if (session_sink.empty()) {
+        recorded_sink = *sink;
+      }
 
       // Only the first to start a session may change the default sink, and an
       // isolated session is never that one. Moving the host's default is how the
@@ -248,11 +250,33 @@ namespace audio {
     auto samples = std::make_shared<sample_queue_t::element_type>(30);
     std::thread thread {encodeThread, samples, config, channel_data};
 
+    // An application whose output was chosen for it keeps playing there when
+    // Hermes makes its sink the default, so the client hears nothing from it
+    // and nothing says why. Name each one once per stream.
+    std::thread elsewhere_watch;
+    if (!recorded_sink.empty() && ref && ref->control) {
+      elsewhere_watch = std::thread {[&control = ref->control, recorded_sink, shutdown_event]() {
+        std::set<std::string> reported;
+        while (!shutdown_event->view(5s)) {
+          for (const auto &stream : control->streams_playing_elsewhere(recorded_sink)) {
+            if (reported.insert(stream).second) {
+              BOOST_LOG(warning) << "Audio from "sv << stream << " does not reach the client, which hears "sv << recorded_sink
+                                 << ". That output was chosen for the application, in the desktop's sound settings or "sv
+                                 << "remembered by the sound server; set it back to the default output to stream it."sv;
+            }
+          }
+        }
+      }};
+    }
+
     auto fg = util::fail_guard([&]() {
       samples->stop();
       thread.join();
 
       shutdown_event->view();
+      if (elsewhere_watch.joinable()) {
+        elsewhere_watch.join();
+      }
     });
 
     int samples_per_frame = frame_size * stream.channelCount;
@@ -521,11 +545,9 @@ namespace audio {
   }
 
   std::unique_ptr<client_mic_t> open_client_mic(const std::string &source) {
-#ifndef _WIN32
     if (auto writer = platf::session_audio::open_mic(source)) {
       return std::make_unique<client_mic_t>(std::move(writer));
     }
-#endif
     return nullptr;
   }
 

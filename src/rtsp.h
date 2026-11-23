@@ -16,9 +16,6 @@
 #include "thread_safe.h"
 #include "uuid.h"
 
-#ifdef _WIN32
-  #include <windows.h>
-#endif
 
 // Resolve circular dependencies
 namespace stream {
@@ -86,11 +83,7 @@ namespace rtsp_stream {
     std::list<crypto::command_entry_t> client_do_cmds;
     std::list<crypto::command_entry_t> client_undo_cmds;
 
-#ifdef _WIN32
-    GUID display_guid{};
-#else
     uuid_util::uuid_t display_guid{};
-#endif
   };
 
   /**

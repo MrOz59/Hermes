@@ -1,0 +1,9 @@
+[package]
+name = "hermes-build-support"
+version = "0.0.0"
+description = "Build-only helpers for Hermes' native build programs"
+license = "GPL-3.0-only"
+standard = "gnu++26"
+
+[targets.hermes-build-support]
+kind = "lib"

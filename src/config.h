@@ -40,9 +40,6 @@ namespace config {
     } sw;
 
     nvenc::nvenc_config nv;
-    bool nv_realtime_hags;
-    bool nv_opengl_vulkan_on_dxgi;
-    bool nv_sunshine_high_power_mode;
 
     struct {
       int preset;
@@ -53,37 +50,9 @@ namespace config {
     } nv_legacy;
 
     struct {
-      std::optional<int> qsv_preset;
-      std::optional<int> qsv_cavlc;
-      bool qsv_slow_hevc;
-    } qsv;
-
-    struct {
-      std::optional<int> amd_usage_h264;
-      std::optional<int> amd_usage_hevc;
-      std::optional<int> amd_usage_av1;
-      std::optional<int> amd_rc_h264;
-      std::optional<int> amd_rc_hevc;
-      std::optional<int> amd_rc_av1;
-      std::optional<int> amd_enforce_hrd;
-      std::optional<int> amd_quality_h264;
-      std::optional<int> amd_quality_hevc;
-      std::optional<int> amd_quality_av1;
-      std::optional<int> amd_preanalysis;
-      std::optional<int> amd_vbaq;
-      int amd_coder;
-    } amd;
-
-    struct {
-      int vt_allow_sw;
-      int vt_require_sw;
-      int vt_realtime;
-      int vt_coder;
-    } vt;
-
-    struct {
       bool strict_rc_buffer;
       int quality;  // ffmpeg VAAPI quality option, -1 = leave codec default.
+      bool intra_refresh;  // rolling intra refresh, so a lost frame heals without a key frame
     } vaapi;
 
     std::string capture;
@@ -163,10 +132,8 @@ namespace config {
 
   struct audio_t {
     std::string sink;
-    std::string virtual_sink;
     bool stream;
     bool stream_mic;
-    bool install_steam_drivers;
     bool keep_default;
     bool auto_capture;
   };
@@ -220,7 +187,6 @@ namespace config {
     bool mouse;
     bool controller;
 
-    bool always_send_scancodes;
 
     bool high_resolution_scrolling;
     bool native_pen_touch;
@@ -313,6 +279,11 @@ namespace config {
     std::vector<prep_cmd_t> prep_cmds;
     std::vector<prep_cmd_t> state_cmds;
     std::vector<server_cmd_t> server_cmds;
+
+    /// Inhibit screen locking while a client is connected. Linux only: the
+    /// inhibition is held through org.freedesktop.ScreenSaver on the D-Bus
+    /// session bus.
+    bool inhibit_screen_lock;
   };
 
   extern video_t video;

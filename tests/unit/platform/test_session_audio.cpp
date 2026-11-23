@@ -2,7 +2,6 @@
  * @file test_session_audio.cpp
  * @brief Real private PipeWire graphs, independent of a GPU or desktop server.
  */
-#ifdef __linux__
   #include <algorithm>
   #include <chrono>
   #include <filesystem>
@@ -178,4 +177,3 @@ namespace {
     EXPECT_FALSE(audio::open_mic("source-session-failed"));
   }
 }  // namespace
-#endif

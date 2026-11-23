@@ -7,6 +7,7 @@
 #include <csignal>
 #include <fstream>
 #include <future>
+#include <iomanip>
 #include <queue>
 #include <system_error>
 
@@ -22,7 +23,6 @@ extern "C" {
 }
 
 // local includes
-#include "client_link_monitor.h"
 #include "client_mic_router.h"
 #include "config.h"
 #include "crypto.h"
@@ -33,11 +33,16 @@ extern "C" {
 #include "network.h"
 #include "platform/common.h"
 #include "process.h"
+#include "session_activity_counter.h"
 #include "stream.h"
 #include "sync.h"
 #include "system_tray.h"
 #include "thread_safe.h"
 #include "utility.h"
+#include "video_fec_budget.h"
+#include "video_loss_monitor.h"
+
+import hermes.client_link_monitor;
 
 #define IDX_START_A 0
 #define IDX_START_B 1
@@ -367,7 +372,6 @@ namespace stream {
 
   struct session_t {
     ~session_t() {
-#ifdef __linux__
       if (isolated_session) {
         proc::proc.disconnect_isolated(isolated_runtime_owner_id);
       } else if (session_scoped_virtual_display) {
@@ -375,7 +379,6 @@ namespace stream {
           BOOST_LOG(warning) << "Failed to release session-scoped virtual display " << display_name;
         }
       }
-#endif
     }
 
     config_t config;
@@ -455,11 +458,7 @@ namespace stream {
     std::string isolated_seat_id;
     bool session_scoped_virtual_display {false};
     std::string display_name;
-#ifndef _WIN32
     uuid_util::uuid_t display_guid {};
-#else
-    GUID display_guid {};
-#endif
     crypto::PERM permission;
 
     std::list<crypto::command_entry_t> do_cmds;
@@ -475,6 +474,9 @@ namespace stream {
     client_link_monitor_t client_link;
     /// Silences logged individually so far; the control thread owns it.
     unsigned int client_silences_logged {0};
+
+    /// Video the client reported losing on the way to it.
+    video_loss_monitor_t video_loss;
   };
 
   // A client on a bad link can go silent every second; past this many the
@@ -879,8 +881,8 @@ namespace stream {
    */
   int send_feedback_msg(session_t *session, platf::gamepad_feedback_msg_t &msg) {
     if (!session->control.peer) {
-      BOOST_LOG(warning) << "Couldn't send gamepad feedback data, still waiting for PING from Moonlight"sv;
-      // Still waiting for PING from Moonlight
+      BOOST_LOG(warning) << "Couldn't send gamepad feedback data, still waiting for PING from the client"sv;
+      // Still waiting for PING from the client
       return -1;
     }
 
@@ -984,8 +986,8 @@ namespace stream {
 
   int send_hdr_mode(session_t *session, video::hdr_info_t hdr_info) {
     if (!session->control.peer) {
-      BOOST_LOG(warning) << "Couldn't send HDR mode, still waiting for PING from Moonlight"sv;
-      // Still waiting for PING from Moonlight
+      BOOST_LOG(warning) << "Couldn't send HDR mode, still waiting for PING from the client"sv;
+      // Still waiting for PING from the client
       return -1;
     }
 
@@ -1015,6 +1017,17 @@ namespace stream {
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
       session->client_link.on_periodic_ping();
+    });
+
+    server->map(frame_fec_status_type, [](session_t *session, const std::string_view &payload) {
+      const auto report = video_loss_monitor_t::parse(payload);
+      if (!report) {
+        BOOST_LOG(debug) << "Ignoring a malformed frame FEC status report ("sv << payload.size() << " bytes)"sv;
+        return;
+      }
+      BOOST_LOG(verbose) << "Client lost "sv << report->missing_packets() << " packets of frame "sv << report->frame_index
+                         << (report->lost() ? " and dropped it"sv : "; parity repaired them"sv);
+      session->video_loss.on_report(*report);
     });
 
     server->map(packetTypes[IDX_START_A], [&](session_t *session, const std::string_view &payload) {
@@ -1565,11 +1578,17 @@ namespace stream {
       auto max_data_per_fec_block = max_data_shards_per_fec_block * blocksize;
       auto fec_blocks_needed = (payload.size() + (max_data_per_fec_block - 1)) / max_data_per_fec_block;
 
-      // If the number of FEC blocks needed exceeds the protocol limit, turn off FEC for this frame.
-      // For normal FEC percentages, this should only happen for enormous frames (over 800 packets at 20%).
+      // A frame that needs more FEC blocks than the protocol carries (over 800
+      // packets at 20%) keeps as much FEC as still fits in MAX_FEC_BLOCKS,
+      // rather than none: one lost packet would otherwise drop the frame.
       if (fec_blocks_needed > MAX_FEC_BLOCKS) {
-        BOOST_LOG(warning) << "Skipping FEC for abnormally large encoded frame (needed "sv << fec_blocks_needed << " FEC blocks)"sv;
-        fecPercentage = 0;
+        static_assert(static_cast<std::size_t>(MAX_FEC_BLOCKS) == max_fec_blocks);
+        const auto data_packets = (payload.size() + blocksize - 1) / blocksize;
+        const auto reduced = large_frame_fec_percentage(data_packets, fecPercentage, session->config.minRequiredFecPackets);
+        BOOST_LOG(warning) << "Abnormally large encoded "sv << (packet->is_idr() ? "key frame"sv : "frame"sv) << " ("sv
+                           << payload.size() / 1024 << " KiB in "sv << data_packets << " packets) needed "sv << fec_blocks_needed
+                           << " FEC blocks; sending it with "sv << reduced << "% FEC instead of "sv << fecPercentage << '%';
+        fecPercentage = reduced;
         fec_blocks_needed = MAX_FEC_BLOCKS;
       }
 
@@ -1778,6 +1797,7 @@ namespace stream {
 
           ++blockIndex;
           lowseq += shards.size();
+          session->video_loss.on_sent(shards.size());
         });
 
         session->video.lowseq = lowseq;
@@ -1904,7 +1924,7 @@ namespace stream {
    */
   static void report_stream_start_failure(const std::string &reason) {
     BOOST_LOG(error) << reason;
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+#if defined HERMES_TRAY && HERMES_TRAY >= 1
     system_tray::update_tray_session_error(reason);
 #endif
   }
@@ -2182,7 +2202,7 @@ namespace stream {
   }
 
   namespace session {
-    std::atomic_uint running_sessions;
+    session_activity_counter_t running_sessions;
     std::atomic_uint shared_running_sessions;
 
     state_e state(session_t &session) {
@@ -2303,6 +2323,15 @@ namespace stream {
                         << client_link_monitor_t::silence_threshold.count() << " ms or more (longest "sv
                         << session.client_link.longest_silence().count() << " ms, "sv
                         << session.client_link.total_silence().count() << " ms in all)"sv;
+      }
+
+      if (const auto missing = session.video_loss.missing_packets()) {
+        const auto sent = session.video_loss.sent_packets();
+        const auto dropped = session.video_loss.dropped_frames();
+        BOOST_LOG(info) << "Client ["sv << session.device_name << "] lost "sv << missing << " of "sv << sent
+                        << " video packets ("sv << std::fixed << std::setprecision(2) << (sent ? 100.0 * missing / sent : 0.0) << "%): "sv
+                        << session.video_loss.repaired_blocks() << " frame blocks repaired by FEC, "sv
+                        << dropped << (dropped == 1 ? " frame"sv : " frames"sv) << " dropped"sv;
       }
 
       if (reason == termination_reason_e::CLIENT_LOST) {
@@ -2433,9 +2462,9 @@ namespace stream {
       }
 
       // Platform-wide streaming state still spans both ownership domains.
-      if (--running_sessions == 0) {
+      running_sessions.stopped([] {
         platf::streaming_will_stop();
-      }
+      });
 
       BOOST_LOG(debug) << "Session ended"sv;
     }
@@ -2496,9 +2525,9 @@ namespace stream {
 
       // Platform-wide callbacks track every stream, while the legacy process
       // lifecycle belongs only to streams attached to the shared host session.
-      if (++running_sessions == 1) {
+      running_sessions.started([] {
         platf::streaming_will_start();
-      }
+      });
 
       if (!session.isolated_session && ++shared_running_sessions == 1) {
         proc::proc.resume();

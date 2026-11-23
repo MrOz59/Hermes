@@ -21,11 +21,7 @@
 #include "logging.h"
 
 // conditional includes
-#ifdef __ANDROID__
-  #include <android/log.h>
-#else
   #include <display_device/logging.h>
-#endif
 
 extern "C" {
 #include <libavutil/log.h>
@@ -43,7 +39,7 @@ bl::sources::severity_logger<int> info(2);  // Should be informed about
 bl::sources::severity_logger<int> warning(3);  // Strange events
 bl::sources::severity_logger<int> error(4);  // Recoverable errors
 bl::sources::severity_logger<int> fatal(5);  // Unrecoverable errors
-#ifdef SUNSHINE_TESTS
+#ifdef HERMES_TESTS
 bl::sources::severity_logger<int> tests(10);  // Automatic tests output
 #endif
 
@@ -86,7 +82,7 @@ namespace logging {
       case 5:
         log_type = "Fatal: "sv;
         break;
-#ifdef SUNSHINE_TESTS
+#ifdef HERMES_TESTS
       case 10:
         log_type = "Tests: "sv;
         break;
@@ -104,48 +100,6 @@ namespace logging {
     os << "["sv << std::put_time(&lt, "%Y-%m-%d %H:%M:%S.") << boost::format("%03u") % ms.count() << "]: "sv
        << log_type << view.attribute_values()[message].extract<std::string>();
   }
-#ifdef __ANDROID__
-  namespace sinks = boost::log::sinks;
-  namespace expr = boost::log::expressions;
-
-  void android_log(const std::string &message, int severity) {
-    android_LogPriority android_priority;
-    switch (severity) {
-      case 0:
-        android_priority = ANDROID_LOG_VERBOSE;
-        break;
-      case 1:
-        android_priority = ANDROID_LOG_DEBUG;
-        break;
-      case 2:
-        android_priority = ANDROID_LOG_INFO;
-        break;
-      case 3:
-        android_priority = ANDROID_LOG_WARN;
-        break;
-      case 4:
-        android_priority = ANDROID_LOG_ERROR;
-        break;
-      case 5:
-        android_priority = ANDROID_LOG_FATAL;
-        break;
-      default:
-        android_priority = ANDROID_LOG_UNKNOWN;
-        break;
-    }
-    __android_log_print(android_priority, "Hermes", "%s", message.c_str());
-  }
-
-  // custom sink backend for android
-  struct android_sink_backend: public sinks::basic_sink_backend<sinks::concurrent_feeding> {
-    void consume(const bl::record_view &rec) {
-      int log_sev = rec[severity].get();
-      const std::string log_msg = rec[expr::smessage].get();
-      // log to android
-      android_log(log_msg, log_sev);
-    }
-  };
-#endif
 
   [[nodiscard]] std::unique_ptr<deinit_t> init(int min_log_level, const std::string &log_file) {
     if (sink) {
@@ -168,14 +122,12 @@ namespace logging {
       }
     }
 
-#ifndef __ANDROID__
     setup_av_logging(min_log_level);
     setup_libdisplaydevice_logging(min_log_level);
-#endif
 
     sink = boost::make_shared<text_sink>();
 
-#ifndef SUNSHINE_TESTS
+#ifndef HERMES_TESTS
     boost::shared_ptr<std::ostream> stream {&std::cout, boost::null_deleter()};
     sink->locked_backend()->add_stream(stream);
 #endif
@@ -185,19 +137,13 @@ namespace logging {
     sink->set_formatter(&formatter);
 
     // Flush after each log record to ensure log file contents on disk isn't stale.
-    // This is particularly important when running from a Windows service.
     sink->locked_backend()->auto_flush(true);
 
     bl::core::get()->add_sink(sink);
 
-#ifdef __ANDROID__
-    auto android_sink = boost::make_shared<sinks::synchronous_sink<android_sink_backend>>();
-    bl::core::get()->add_sink(android_sink);
-#endif
     return std::make_unique<deinit_t>();
   }
 
-#ifndef __ANDROID__
   void setup_av_logging(int min_log_level) {
     if (min_log_level >= 1) {
       av_log_set_level(AV_LOG_QUIET);
@@ -255,7 +201,6 @@ namespace logging {
       }
     });
   }
-#endif
 
   void log_flush() {
     if (sink) {
@@ -273,10 +218,8 @@ namespace logging {
       << "    --help                    | print help"sv << std::endl
       << "    --creds username password | set user credentials for the Web manager"sv << std::endl
       << "    --version                 | print the version of Hermes"sv << std::endl
-#ifdef __linux__
       << "    --prelogin status|enable|disable"sv << std::endl
       << "                              | check or set up being reachable before anyone logs in"sv << std::endl
-#endif
       << std::endl
       << "    flags"sv << std::endl
       << "        -0 | Read PIN from stdin"sv << std::endl

@@ -19,6 +19,16 @@ interface GameCover {
   cover?: { url?: string };
 }
 
+/** A game installed in Steam or Lutris, from /api/library. */
+interface LibraryGame {
+  source: 'steam' | 'lutris';
+  id: string;
+  name: string;
+  cmd: string;
+  /** An app already starts it. */
+  added: boolean;
+}
+
 const newApp = {
   "name": "New App",
   "output": "",
@@ -104,8 +114,17 @@ export default defineComponent({
       draggingApp: -1,
       hostName: "",
       hostUUID: "",
-      listReordered: false
+      listReordered: false,
+      showLibrary: false,
+      libraryLoading: false,
+      libraryGames: [] as LibraryGame[],
+      librarySelected: [] as LibraryGame[]
     };
+  },
+  computed: {
+    librarySelectable(): LibraryGame[] {
+      return this.libraryGames.filter(game => !game.added);
+    }
   },
   created() {
     this.loadApps();
@@ -117,6 +136,59 @@ export default defineComponent({
       .then(r => this.platform = r.platform);
   },
   methods: {
+    /** An app already starts this game when one of its commands opens it by ID. */
+    libraryGameAdded(game: Omit<LibraryGame, 'added'>): boolean {
+      const uri = game.source === 'steam' ? `steam://rungameid/${game.id}` : `lutris:rungameid/${game.id}`;
+      const ends = (cmd: string) => {
+        const at = (cmd || '').indexOf(uri);
+        return at >= 0 && !/[0-9]/.test(cmd.charAt(at + uri.length));
+      };
+      return this.apps.some(app => ends(app.cmd) || (app.detached || []).some(ends));
+    },
+    openLibrary() {
+      this.showLibrary = true;
+      this.libraryLoading = true;
+      this.libraryGames = [];
+      this.librarySelected = [];
+      fetch("./api/library", {
+        credentials: 'include'
+      })
+        .then(r => r.json())
+        .then((r: { games?: Omit<LibraryGame, 'added'>[] }) => {
+          this.libraryGames = (r.games || []).map(game => ({...game, added: this.libraryGameAdded(game)}));
+        })
+        .finally(() => this.libraryLoading = false);
+    },
+    selectAllLibrary(checked: boolean) {
+      this.librarySelected = checked ? [...this.librarySelectable] : [];
+    },
+    async importLibrary() {
+      this.actionDisabled = true;
+      const failed: string[] = [];
+      try {
+        // One at a time: each save rewrites the apps file.
+        for (const game of this.librarySelected) {
+          const r = await fetch("./api/apps", {
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            method: 'POST',
+            body: JSON.stringify({...createApplicationDraft(), name: game.name, detached: [game.cmd]}),
+          }).then(r => r.json()).catch(() => ({status: false}));
+          if (!r.status) {
+            failed.push(game.name);
+          }
+        }
+      } finally {
+        this.actionDisabled = false;
+      }
+      if (failed.length > 0) {
+        alert(this.$t('apps.save_failed') + failed.join(', '));
+      }
+      this.showLibrary = false;
+      this.loadApps();
+    },
     onDragStart(e: DragEvent, idx: number) {
       if (this.showEditForm) {
         e.preventDefault();
@@ -495,7 +567,46 @@ export default defineComponent({
           </button>
         </div>
     </div>
-    <div class="card p-4" v-if="!showEditForm">
+    <div class="card p-4" v-if="!showEditForm && showLibrary">
+      <h5>{{ $t('apps.library_title') }}</h5>
+      <p class="text-muted">{{ $t('apps.library_desc') }}</p>
+      <div v-if="libraryLoading" class="text-center my-4">
+        <span class="spinner-border position-static" role="status"></span>
+      </div>
+      <div v-else-if="libraryGames.length === 0" class="alert alert-info">
+        {{ $t('apps.library_empty') }}
+      </div>
+      <table class="table" v-else>
+        <thead>
+          <tr>
+            <th scope="col" style="width: 2em">
+              <input class="form-check-input" type="checkbox" :checked="librarySelectable.length > 0 && librarySelected.length === librarySelectable.length"
+                     @change="selectAllLibrary(($event.target as HTMLInputElement).checked)" :disabled="librarySelectable.length === 0" />
+            </th>
+            <th scope="col">{{ $t('apps.name') }}</th>
+            <th scope="col">{{ $t('apps.library_source') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="game in libraryGames" :key="game.source + ':' + game.id">
+            <td>
+              <input class="form-check-input" type="checkbox" :value="game" v-model="librarySelected" :disabled="game.added" />
+            </td>
+            <td>{{ game.name }}<span v-if="game.added" class="text-muted ms-2">({{ $t('apps.library_added') }})</span></td>
+            <td>{{ game.source === 'steam' ? 'Steam' : 'Lutris' }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="mt-2">
+        <button class="btn btn-secondary me-2" @click="showLibrary = false" :disabled="actionDisabled">
+          <i class="fas fa-xmark"></i> {{ $t('_common.cancel') }}
+        </button>
+        <button class="btn btn-primary" @click="importLibrary" :disabled="actionDisabled || librarySelected.length === 0">
+          <i class="fas fa-plus"></i> {{ $t('apps.library_import', { count: librarySelected.length }) }}
+        </button>
+      </div>
+    </div>
+    <div class="card p-4" v-if="!showEditForm && !showLibrary">
       <table class="table">
         <thead>
           <tr>
@@ -539,6 +650,9 @@ export default defineComponent({
         <button class="btn btn-primary" @click="newApp" :disabled="actionDisabled">
           <i class="fas fa-plus"></i> {{ $t('apps.add_new') }}
         </button>
+        <button class="btn btn-outline-primary ms-2" @click="openLibrary" :disabled="actionDisabled" v-if="platform === 'linux'">
+          <i class="fas fa-gamepad"></i> {{ $t('apps.library_open') }}
+        </button>
         <button class="btn btn-secondary float-end" @click="alphabetizeApps" :disabled="actionDisabled" v-if="!listReordered">
           <i class="fas fa-sort-alpha-up"></i> {{ $t('apps.alphabetize') }}
         </button>
@@ -547,7 +661,7 @@ export default defineComponent({
         </button>
       </div>
     </div>
-    <div class="edit-form card mt-2" v-else>
+    <div class="edit-form card mt-2" v-else-if="showEditForm">
       <div class="p-4">
         <!-- Application Name -->
         <div class="mb-3">

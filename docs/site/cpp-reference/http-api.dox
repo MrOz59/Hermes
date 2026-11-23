@@ -31,6 +31,9 @@
  * @section post-api-apps-close POST /api/apps/close
  * @copydoc confighttp::closeApp()
  *
+ * @section get-api-library GET /api/library
+ * @copydoc confighttp::getLibrary()
+ *
  * @section post-api-covers-upload POST /api/covers/upload
  * @copydoc confighttp::uploadCover()
  *

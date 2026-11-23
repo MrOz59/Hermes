@@ -59,6 +59,10 @@ See the [C++ reference](pathname:///reference/cpp/index.htm) for host internals.
 
 [Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-apps-close).
 
+## GET /api/library
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-library).
+
 ## POST /api/covers/upload
 
 [Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-covers-upload).

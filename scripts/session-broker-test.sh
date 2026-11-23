@@ -8,14 +8,15 @@
 # exist on a machine where it really happened. Run it in a disposable guest:
 #
 #   vng --systemd --run /usr/lib/modules/$(uname -r)/vmlinuz
-#   # then, inside:  ./scripts/session-broker-test.sh
+#   # then, inside:
+#   ./scripts/session-broker-test.sh /path/to/hermes-session-broker
 #
 # It installs the packaged units, sysusers file and polkit rule, so it is not
 # safe on a machine you care about.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BROKER="${1:-$REPO/build/hermes-session-broker}"
+BROKER="${1:?pass the path to the hermes-session-broker binary}"
 CLIENT_A="5f3ab1c2-0000-4000-8000-000000000001"
 CLIENT_B="5f3ab1c2-0000-4000-8000-000000000002"
 SOCKET="/run/hermes/session-broker.sock"
@@ -47,7 +48,7 @@ trap cleanup_input_probe EXIT
 
 [ "$(id -u)" -eq 0 ] || { printf 'must run as root; this creates accounts\n' >&2; exit 2; }
 systemd-detect-virt --vm --quiet || { printf 'must run inside a disposable VM; this installs system units and creates accounts\n' >&2; exit 2; }
-[ -x "$BROKER" ] || { printf 'broker not found: %s\n  build: cmake --build build --target hermes-session-broker\n' "$BROKER" >&2; exit 2; }
+[ -x "$BROKER" ] || { printf 'broker not found: %s\n  build: mcpp build --offline -p hermes-session-broker\n' "$BROKER" >&2; exit 2; }
 
 # virtme-ng shares the host's filesystem as the host user and bind-mounts a few
 # files over the overlay, so /etc/shadow, /etc/gshadow and the passwd lock are

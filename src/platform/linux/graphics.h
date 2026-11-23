@@ -19,10 +19,10 @@
 #include "src/utility.h"
 #include "src/video_colorspace.h"
 
-#define SUNSHINE_STRINGIFY_HELPER(x) #x
-#define SUNSHINE_STRINGIFY(x) SUNSHINE_STRINGIFY_HELPER(x)
+#define HERMES_STRINGIFY_HELPER(x) #x
+#define HERMES_STRINGIFY(x) HERMES_STRINGIFY_HELPER(x)
 #define gl_drain_errors_helper(x) gl::drain_errors(x)
-#define gl_drain_errors gl_drain_errors_helper(__FILE__ ":" SUNSHINE_STRINGIFY(__LINE__))
+#define gl_drain_errors gl_drain_errors_helper(__FILE__ ":" HERMES_STRINGIFY(__LINE__))
 
 extern "C" int close(int __fd);
 

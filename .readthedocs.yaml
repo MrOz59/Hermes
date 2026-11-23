@@ -11,6 +11,18 @@ build:
     python: "miniconda-latest"
   commands:
     - |
+      set -e
+      bun_version="$(python3 -c 'import json; print(json.load(open("src_assets/common/assets/web/package.json"))["packageManager"].removeprefix("bun@"))')"
+      mkdir -p target/docs-tools
+      curl --fail --location --retry 3 \
+        "https://github.com/oven-sh/bun/releases/download/bun-v${bun_version}/bun-linux-x64.zip" \
+        --output target/docs-tools/bun.zip
+      python3 -m zipfile -e target/docs-tools/bun.zip target/docs-tools
+      chmod +x target/docs-tools/bun-linux-x64/bun
+      # Nested package scripts resolve Bun through PATH.
+      export PATH="$PWD/target/docs-tools/bun-linux-x64:$PATH"
+      bun run --cwd src_assets/common/assets/web docs:assets
+    - |
       if [ -f readthedocs_build.sh ]; then
         doxyconfig_dir="."
       else

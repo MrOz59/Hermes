@@ -1,0 +1,25 @@
+[workspace]
+members = [
+    "mcpp/host",
+    "mcpp/card-broker",
+    "mcpp/session-broker",
+    "mcpp/detached-session",
+    "mcpp/gamemode",
+    "tests/network_lifecycle",
+    "tests/display_restore",
+]
+
+[workspace.package]
+mcpp = ">=2026.11.20.1"
+version = "0.7.0"
+license = "GPL-3.0-only"
+
+[workspace.target.x86_64-linux-gnu]
+sysroot = "glibc@system"
+
+[workspace.profile.arch-package]
+opt = 3
+debug = true
+ndebug = true
+trim_paths = true
+split_debuginfo = "off"

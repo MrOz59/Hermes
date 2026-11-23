@@ -20,9 +20,7 @@
 #include "globals.h"
 #include "logging.h"
 #include "platform/common.h"
-#ifndef _WIN32
   #include "platform/linux/session_audio.h"
-#endif
 #include "thread_safe.h"
 #include "utility.h"
 
@@ -162,7 +160,6 @@ namespace audio {
       return;
     });
 
-#ifndef _WIN32
     // A session with an audio server of its own is recorded there, without the
     // host's audio control and the virtual sinks it adds to the host's server.
     if (!config.session_server.empty()) {
@@ -170,7 +167,6 @@ namespace audio {
         return platf::session_audio::microphone(config.session_server, config.session_sink, stream.mapping, stream.channelCount, stream.sampleRate, frame_size);
       };
     }
-#endif
 
     if (!open_microphone) {
       ref = get_audio_ctx_ref();
@@ -549,11 +545,9 @@ namespace audio {
   }
 
   std::unique_ptr<client_mic_t> open_client_mic(const std::string &source) {
-#ifndef _WIN32
     if (auto writer = platf::session_audio::open_mic(source)) {
       return std::make_unique<client_mic_t>(std::move(writer));
     }
-#endif
     return nullptr;
   }
 

@@ -34,7 +34,7 @@ def main():
         probe = work / "hermes-wayland-peer-check"
         compiler = shlex.split(os.environ.get("CXX", "c++"))
         for source, binary in (("hermes-detached-session.cpp", helper), ("hermes-wayland-peer-check.cpp", probe)):
-            checked(compiler + ["-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread", str(root / "tools" / source), "-o", str(binary)])
+            checked(compiler + ["-std=c++26", "-Wall", "-Wextra", "-Werror", "-pthread", str(root / "tools" / source), "-o", str(binary)])
         print("PASS: actual supervisor/helper and production connection consumer compile")
 
         # Exercise descriptor receipt, handshake lifetime and reaping through

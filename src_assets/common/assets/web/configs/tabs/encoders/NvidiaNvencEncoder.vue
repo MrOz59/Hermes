@@ -1,11 +1,12 @@
-<script setup>
+<script setup lang="ts">
+import type { Configuration } from '../../../config-types'
 import { ref } from 'vue'
 import Checkbox from "../../../Checkbox.vue";
 
-const props = defineProps([
-  'platform',
-  'config',
-])
+const props = defineProps<{
+  platform: string;
+  config: Configuration;
+}>()
 
 const config = ref(props.config)
 </script>
@@ -70,36 +71,8 @@ const config = ref(props.config)
         <div id="panelsStayOpen-collapseOne" class="accordion-collapse collapse show"
              aria-labelledby="panelsStayOpen-headingOne">
           <div class="accordion-body">
-            <!-- NVENC Realtime HAGS priority -->
-            <Checkbox v-if="platform === 'windows'"
-                      class="mb-3"
-                      id="nvenc_realtime_hags"
-                      locale-prefix="config"
-                      v-model="config.nvenc_realtime_hags"
-                      default="true"
-            >
-              <br>
-              <br>
-              <a href="https://devblogs.microsoft.com/directx/hardware-accelerated-gpu-scheduling/">HAGS</a>
-            </Checkbox>
 
-            <!-- Prefer lower encoding latency over power savings -->
-            <Checkbox v-if="platform === 'windows'"
-                      class="mb-3"
-                      id="nvenc_latency_over_power"
-                      locale-prefix="config"
-                      v-model="config.nvenc_latency_over_power"
-                      default="true"
-            ></Checkbox>
 
-            <!-- Present OpenGL/Vulkan on top of DXGI -->
-            <Checkbox v-if="platform === 'windows'"
-                      class="mb-3"
-                      id="nvenc_opengl_vulkan_on_dxgi"
-                      locale-prefix="config"
-                      v-model="config.nvenc_opengl_vulkan_on_dxgi"
-                      default="true"
-            ></Checkbox>
 
             <!-- NVENC H264 CAVLC -->
             <Checkbox class="mb-3"

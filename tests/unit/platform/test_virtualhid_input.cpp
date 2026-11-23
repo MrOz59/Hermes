@@ -2,7 +2,6 @@
  * @file tests/unit/platform/test_virtualhid_input.cpp
  * @brief Linux input translation and independent-session regression tests.
  */
-#ifdef __linux__
   #include "../../tests_common.h"
   #include "src/globals.h"
   #include "src/input.h"
@@ -831,7 +830,9 @@ namespace {
     };
     ASSERT_EQ(run({"/usr/bin/setfacl", "-m", "u:65534:rw", "--", own}), 0);
     ASSERT_EQ(run({"/usr/bin/setfacl", "-m", "u:65533:rw", "--", foreign}), 0);
-    ASSERT_EQ(run({"/usr/bin/setpriv", "--reuid=65534", "--regid=65534", "--clear-groups", HERMES_TEST_HID_CONSUMER, own, foreign}), 0);
+    const auto *consumer_path = std::getenv("HERMES_TEST_HID_CONSUMER_PATH");
+    const auto *consumer = consumer_path && *consumer_path ? consumer_path : HERMES_TEST_HID_CONSUMER;
+    ASSERT_EQ(run({"/usr/bin/setpriv", "--reuid=65534", "--regid=65534", "--clear-groups", consumer, own, foreign}), 0);
     bool observed_rumble = false;
     while (const auto message = feedback->pop(50ms)) {
       if (message->type == platf::gamepad_feedback_e::rumble && message->data.rumble.lowfreq == 0x1234 && message->data.rumble.highfreq == 0x5678) {
@@ -1020,4 +1021,3 @@ namespace {
   INSTANTIATE_TEST_SUITE_P(ControllerProfiles, VirtualHidKernelTest, testing::Values("generic", "x360", "xone", "xseries", "ds4", "ds5", "switch"));
   INSTANTIATE_TEST_SUITE_P(XboxEventProfiles, VirtualHidEventKernelTest, testing::Values("xone", "xseries"));
 }  // namespace
-#endif

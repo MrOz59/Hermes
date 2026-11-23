@@ -9,7 +9,7 @@
 #include <cstdint>
 
 namespace platf::kwin_input {
-#ifdef SUNSHINE_BUILD_KWIN_TRANSPORT
+#ifdef HERMES_BUILD_KWIN_TRANSPORT
   /** Whether this input drives a private KWin desktop instead of virtual devices. */
   bool active(const input_raw_t *raw);
 

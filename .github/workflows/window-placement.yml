@@ -7,6 +7,7 @@ on:
       - 'src/platform/linux/window_placement.h'
       - 'src/platform/linux/virtual_display.*'
       - 'tests/window_placement/**'
+      - 'src_assets/common/assets/web/package.json'
       - '.github/workflows/window-placement.yml'
   workflow_dispatch:
 
@@ -18,10 +19,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version-file: src_assets/common/assets/web/package.json
+
+      - name: Install GCC 14 for C++26
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-14
       - name: Compile the production KWin script generator
-        run: g++ -std=c++23 -Wall -Wextra -Werror -I. tests/window_placement/script.cc -o /tmp/hermes-placement-script
+        run: g++-14 -std=c++2c -Wall -Wextra -Werror -I. tests/window_placement/script.cc -o /tmp/hermes-placement-script
       - name: Preserve unrelated local windows and fullscreen state
         env:
           HERMES_PLACEMENT_SCRIPT_GENERATOR: /tmp/hermes-placement-script
-        run: node --test tests/window_placement/kwin_script.cjs
+        run: bun test tests/window_placement/kwin_script.test.ts

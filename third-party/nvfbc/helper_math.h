@@ -1141,10 +1141,13 @@ max(uint4 a, uint4 b) {
 // - linear interpolation between a and b, based on value t in [0, 1] range
 ////////////////////////////////////////////////////////////////////////////////
 
+// CUDA's C++20 headers make the standard scalar lerp available.
+#if __cplusplus < 202002L
 inline __device__ __host__ float
 lerp(float a, float b, float t) {
   return a + t * (b - a);
 }
+#endif
 inline __device__ __host__ float2
 lerp(float2 a, float2 b, float t) {
   return a + t * (b - a);

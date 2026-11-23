@@ -290,6 +290,9 @@ nas bases de contas do guest. Há detalhes de virtme-ng/shadow documentados nele
 
 ## Retomar em outra máquina
 
+Os comandos abaixo registram a verificação no branch experimental da época.
+No checkout atual do Hermes, use o [guia de build com mcpp](building.md).
+
 ```bash
 git clone --recursive --branch experimental/libvirtualhid-input https://github.com/MrOz59/Hermes.git
 cd Hermes

@@ -1,10 +1,12 @@
-<script>
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   DEFAULT_FEED_URL,
   fetchFeed,
   loadDismissed,
   saveDismissed,
   selectMessages,
+  type FeedMessage,
 } from './feed'
 
 const LEVEL_ICONS = {
@@ -22,52 +24,34 @@ const LEVEL_ICONS = {
  * The parent decides whether to render this component at all, so mounting is
  * itself the consent to make the outbound request.
  */
-export default {
-  name: 'AnnouncementFeed',
-  props: {
-    /** Installed version, used to match each message's `affects` range. */
-    version: {
-      type: String,
-      default: null,
-    },
-    feedUrl: {
-      type: String,
-      default: DEFAULT_FEED_URL,
-    },
-  },
-  data() {
-    return {
-      messages: [],
-      dismissed: loadDismissed(),
-    };
-  },
-  async created() {
-    try {
-      this.messages = await fetchFeed(this.feedUrl);
-    } catch (e) {
-      // An unreachable feed is not a problem the user can act on, and an error
-      // box for it would be exactly the noise this feature exists to reduce.
-      console.warn('Announcement feed unavailable', e);
-    }
-  },
-  computed: {
-    visible() {
-      return selectMessages(this.messages, {
-        version: this.version,
-        dismissed: this.dismissed,
-      });
-    },
-  },
-  methods: {
-    iconFor(level) {
-      return LEVEL_ICONS[level] ?? LEVEL_ICONS.info;
-    },
-    dismiss(message) {
-      // Replace rather than mutate so the computed list re-evaluates.
-      this.dismissed = { ...this.dismissed, [message.id]: message.revision };
-      saveDismissed(this.dismissed);
-    },
-  },
+const { version = null, feedUrl = DEFAULT_FEED_URL } = defineProps<{
+  version?: string | null;
+  feedUrl?: string;
+}>();
+const messages = ref<FeedMessage[]>([]);
+const dismissed = ref(loadDismissed());
+const request = new AbortController();
+const visible = computed(() => selectMessages(messages.value, {
+  version,
+  dismissed: dismissed.value,
+}));
+
+onMounted(async () => {
+  try {
+    messages.value = await fetchFeed(feedUrl, { signal: request.signal });
+  } catch (error) {
+    if (!request.signal.aborted) console.warn('Announcement feed unavailable', error);
+  }
+});
+onUnmounted(() => request.abort());
+
+function iconFor(level: FeedMessage['level']): string {
+  return LEVEL_ICONS[level] ?? LEVEL_ICONS.info;
+}
+
+function dismiss(message: FeedMessage): void {
+  dismissed.value = { ...dismissed.value, [message.id]: message.revision };
+  saveDismissed(dismissed.value);
 }
 </script>
 

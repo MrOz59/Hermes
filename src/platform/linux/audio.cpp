@@ -347,7 +347,7 @@ namespace platf {
        */
       std::uint32_t find_sink_module(const std::string &name) {
         auto alarm = safe::make_alarm<int>();
-        std::uint32_t module = PA_INVALID_INDEX;
+        std::uint32_t module_index = PA_INVALID_INDEX;
 
         cb_t<pa_sink_info *> f = [&](ctx_t::pointer ctx, const pa_sink_info *sink_info, int eol) {
           if (!sink_info) {
@@ -361,7 +361,7 @@ namespace platf {
           }
 
           if (sink_info->name && name == sink_info->name) {
-            module = sink_info->owner_module;
+            module_index = sink_info->owner_module;
           }
         };
 
@@ -374,7 +374,7 @@ namespace platf {
         }
 
         alarm->wait();
-        return *alarm->status() ? PA_INVALID_INDEX : module;
+        return *alarm->status() ? PA_INVALID_INDEX : module_index;
       }
 
       /**

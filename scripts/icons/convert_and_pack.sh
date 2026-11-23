@@ -41,7 +41,7 @@ echo ${icon_sizes[@]}
 src_vectors=("../../src_assets/common/assets/web/public/images/hermes-locked.svg"
              "../../src_assets/common/assets/web/public/images/hermes-pausing.svg"
              "../../src_assets/common/assets/web/public/images/hermes-playing.svg"
-             "../../hermes.svg")
+             "../../src_assets/common/branding/hermes.svg")
 
 echo "using sources vectors:"
 # shellcheck disable=SC2068  # intentionally word split

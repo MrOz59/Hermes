@@ -15,7 +15,7 @@
  */
 #include "../../tests_common.h"
 
-#ifdef SUNSHINE_BUILD_WAYLAND
+#ifdef HERMES_BUILD_WAYLAND
 
   #include <src/platform/linux/wayland.h>
 

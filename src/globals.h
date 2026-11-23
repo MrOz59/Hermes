@@ -18,15 +18,6 @@ extern thread_pool_util::ThreadPool task_pool;
  */
 extern bool display_cursor;
 
-#ifdef _WIN32
-  // Declare global singleton used for NVIDIA control panel modifications
-  #include "platform/windows/nvprefs/nvprefs_interface.h"
-
-/**
- * @brief A global singleton used for NVIDIA control panel modifications.
- */
-extern nvprefs::nvprefs_interface nvprefs_instance;
-#endif
 
 /**
  * @brief Handles process-wide communication.

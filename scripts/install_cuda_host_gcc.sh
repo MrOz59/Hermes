@@ -10,11 +10,11 @@
 # fails just as hard, a few thousand errors further in. An older GCC, with its
 # own headers, is the only thing that works.
 #
-# Only src/platform/linux/cuda.cu goes through nvcc, at C++17 against a handful
+# Only src/platform/linux/cuda.cu goes through nvcc, at C++20 against a handful
 # of standard headers, so pointing CUDAHOSTCXX here leaves every other
 # translation unit on the compiler the release ships.
 #
-# Usage: install_cuda_host_gcc.sh <gcc-major-version>
+# Usage: install_cuda_host_gcc.sh <gcc-major-version> [arch-ci-work-dir]
 #   Progress is written to stderr; the path to g++ is printed on stdout.
 
 set -euo pipefail
@@ -28,8 +28,8 @@ log() {
     echo "$*" >&2
 }
 
-# Fail here, with something readable, rather than several layers into CMake's
-# compiler detection. This catches the ways a compiler can be present but not
+# Verify the compiler before asking nvcc to use it. This catches compilers
+# that are present but not
 # usable - most of all the unpacked Arch one, whose cc1plus resolves libisl and
 # libmpc against whatever the running system installed.
 verify() {
@@ -40,9 +40,9 @@ verify() {
     printf '#include <memory>\n#include <string>\n#include <vector>\nint main() { std::vector<std::string> v{"x"}; return static_cast<int>(v.size()) - 1; }\n' \
         > "${probe}/probe.cpp"
 
-    if ! "${cxx}" -std=c++17 -o "${probe}/probe" "${probe}/probe.cpp" >&2; then
+    if ! "${cxx}" -std=c++20 -o "${probe}/probe" "${probe}/probe.cpp" >&2; then
         rm -rf "${probe}"
-        log "${cxx} cannot compile a trivial C++17 program; see the errors above."
+        log "${cxx} cannot compile a trivial C++20 program; see the errors above."
         exit 1
     fi
 
@@ -95,55 +95,48 @@ case "${ID}" in
         ;;
 
     arch)
-        # Arch keeps no compat compilers, but every package it has ever shipped
-        # stays in the archive. GCC locates its own headers and libraries
-        # relative to the driver binary, so the package works unpacked under a
-        # prefix without being installed - which is what is wanted here, since
-        # installing it would displace the compiler the rest of the build uses.
-        #
-        # Refresh from https://archive.archlinux.org/packages/g/gcc/ if a newer
-        # point release of the same major is ever needed; the archive is
-        # permanent, so a pinned URL keeps working.
-        case "${gcc_major}" in
-            14) package="gcc-14.2.1%2Br753%2Bg1cd744a6828f-1-x86_64.pkg.tar.zst" ;;
-            *)
-                log "No pinned Arch archive package for GCC ${gcc_major}."
-                exit 1
-                ;;
-        esac
-
-        prefix="/opt/gcc${gcc_major}"
-        log "Unpacking ${package} under ${prefix}"
-
-        archive="$(mktemp)"
-        trap 'rm -f "${archive}"' EXIT
-
-        download_options=(--fail --location --silent --show-error
-                          --connect-timeout 10 --max-time 90 --retry 1 --retry-max-time 30)
-        if ! curl "${download_options[@]}" -o "${archive}" \
-                "https://archive.archlinux.org/packages/g/gcc/${package}"; then
-            # The historical archive carries an earlier package revision of
-            # GCC 14.2.1. Its SHA-256 was verified using the Arch package
-            # signature before pinning it here.
-            historical="gcc-14.2.1%2Br134%2Bgab884fffe3fc-1-x86_64.pkg.tar.zst"
-            log "Arch Linux Archive unavailable, fetching ${historical} from the historical archive"
-            curl "${download_options[@]}" -o "${archive}" \
-                "https://archive.org/download/archlinux_pkg_gcc/${historical}"
-            printf '%s  %s\n' efcf9a912bb674205fe8cbc2f205ca3d64ec0e8e48700c74bac8952834dc4415 "${archive}" | sha256sum -c - >&2
+        if [[ ${gcc_major} != 14 || $(uname -m) != x86_64 ]]; then
+            log "The pinned Arch CUDA host compiler is GCC 14 for x86_64."
+            exit 1
         fi
-
-        mkdir -p "${prefix}"
-        # The package carries .PKGINFO and friends beside the tree; only /usr
-        # is wanted.
-        tar --use-compress-program=unzstd -xf "${archive}" -C "${prefix}" usr
-
-        # libgcc_s lives in gcc-libs, which is deliberately not unpacked: the
-        # host compiler must not bring a second runtime alongside the one the
-        # rest of the build links against. The installed libgcc_s is newer and
-        # a strict superset, so the link name is pointed at it.
-        ln -sfn /usr/lib/libgcc_s.so.1 "${prefix}/usr/lib/libgcc_s.so"
-
-        host_cxx="${prefix}/usr/bin/g++"
+        if (( EUID == 0 )); then
+            log "Unpack the Arch CUDA host compiler as an unprivileged user."
+            exit 1
+        fi
+        work_dir="$(realpath -m -- "${2:?pass the Arch CI workspace directory}")"
+        version=14.4.1+r175+gafa9b4ecc082-1
+        repository=MrOz59/gcc-packages
+        tag="gcc14-${version}-cuda1"
+        release="https://github.com/${repository}/releases/download/${tag}"
+        mkdir -p "${work_dir}"
+        prefix="$(mktemp -d -- "${work_dir}/gcc14.XXXXXX")"
+        trap 'rm -rf -- "${prefix}"' EXIT
+        gcc_archive="gcc14-${version}-x86_64.pkg.tar.zst"
+        runtime_archive="gcc14-libs-${version}-x86_64.pkg.tar.zst"
+        for archive in "${gcc_archive}" "${runtime_archive}"; do
+            log "Downloading pinned Arch CUDA compiler package ${archive}"
+            curl --fail --location --silent --show-error --retry 3 \
+                --connect-timeout 15 --max-time 180 \
+                "${release}/${archive}" --output "${prefix}/${archive}"
+        done
+        # Pin both asset hashes from the tagged CUDA-specific release.
+        (
+            cd "${prefix}"
+            sha256sum --check >&2 <<CHECKSUMS
+8eaf0b50351cf8badf0fda4bc9daa45cdc08b00e689b70b00039c85be2a9835b  ${gcc_archive}
+3bdb4e6ff366bdf7cfc60ee1d20e4d7d33e95fb21afdb52f8577aa6df651ab8e  ${runtime_archive}
+CHECKSUMS
+        )
+        for archive in "${gcc_archive}" "${runtime_archive}"; do
+            tar --zstd -xf "${prefix}/${archive}" -C "${prefix}" usr
+            rm -- "${prefix}/${archive}"
+        done
+        host_cxx="${prefix}/usr/bin/g++-14"
+        actual_version="$("${host_cxx}" -dumpfullversion)"
+        if [[ ${actual_version} != "${version%%+*}" ]]; then
+            log "Expected GCC ${version%%+*}, got ${actual_version} from ${host_cxx}."
+            exit 1
+        fi
         ;;
 
     *)
@@ -153,4 +146,7 @@ case "${ID}" in
 esac
 
 verify "${host_cxx}"
+if [[ ${ID} == arch ]]; then
+    trap - EXIT
+fi
 echo "${host_cxx}"

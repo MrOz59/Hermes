@@ -106,6 +106,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 
 ### Fixed
+- 7.1 surround audio plays each channel on its own speaker (from PunkUnity).
+  The mapping Hermes advertises is rotated to undo the rotation Moonlight
+  applies, but over a fixed 6 entries, which is right for 5.1 only; 7.1
+  advertised 01245367 instead of 01245673, so its last channels landed on the
+  wrong speakers. The rotation now covers each layout's own channels (as
+  Sunshine fixed in #6019).
 - Stopping the desktop's Steam before a session, and starting it again after a
   nested Gamescope app, works with Flatpak Steam too (from PunkUnity). Its pid
   file is in the Flatpak's home and holds a pid from inside the sandbox, so

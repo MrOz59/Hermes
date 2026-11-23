@@ -921,6 +921,28 @@ namespace rtsp_stream {
     respond(sock, session, &option, 200, "OK", req->sequenceNumber, {});
   }
 
+  std::string surround_params(int config) {
+    const auto &stream_config = audio::stream_configs[config];
+    std::uint8_t mapping[platf::speaker::MAX_SPEAKERS];
+    std::copy_n(stream_config.mapping, stream_config.channelCount, mapping);
+
+    /**
+     * GFE advertises incorrect mapping for normal quality configurations,
+     * as a result, Moonlight rotates all channels from index '3' to the right
+     * To work around this, rotate channels to the left from index '3', over
+     * the channels of this layout: 6 for 5.1, 8 for 7.1.
+     */
+    if (config == audio::SURROUND51 || config == audio::SURROUND71) {
+      std::rotate(mapping + 3, mapping + 4, mapping + stream_config.channelCount);
+    }
+
+    std::string params = std::to_string(stream_config.channelCount) + std::to_string(stream_config.streams) + std::to_string(stream_config.coupledStreams);
+    std::for_each_n(mapping, stream_config.channelCount, [&params](std::uint8_t digit) {
+      params += static_cast<char>(digit + '0');
+    });
+    return params;
+  }
+
   void cmd_describe(rtsp_server_t *server, tcp::socket &sock, launch_session_t &session, msg_t &&req) {
     OPTION_ITEM option {};
 
@@ -995,30 +1017,7 @@ namespace rtsp_stream {
     }
 
     for (int x = 0; x < audio::MAX_STREAM_CONFIG; ++x) {
-      auto &stream_config = audio::stream_configs[x];
-      std::uint8_t mapping[platf::speaker::MAX_SPEAKERS];
-
-      auto mapping_p = stream_config.mapping;
-
-      /**
-       * GFE advertises incorrect mapping for normal quality configurations,
-       * as a result, Moonlight rotates all channels from index '3' to the right
-       * To work around this, rotate channels to the left from index '3'
-       */
-      if (x == audio::SURROUND51 || x == audio::SURROUND71) {
-        std::copy_n(mapping_p, stream_config.channelCount, mapping);
-        std::rotate(mapping + 3, mapping + 4, mapping + audio::MAX_STREAM_CONFIG);
-
-        mapping_p = mapping;
-      }
-
-      ss << "a=fmtp:97 surround-params="sv << stream_config.channelCount << stream_config.streams << stream_config.coupledStreams;
-
-      std::for_each_n(mapping_p, stream_config.channelCount, [&ss](std::uint8_t digit) {
-        ss << (char) (digit + '0');
-      });
-
-      ss << std::endl;
+      ss << "a=fmtp:97 surround-params="sv << surround_params(x) << std::endl;
     }
 
     respond(sock, session, &option, 200, "OK", req->sequenceNumber, ss.str());

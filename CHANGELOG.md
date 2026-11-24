@@ -106,6 +106,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 
 ### Fixed
+- A reload of `apps.json` that fails keeps the current application list (from
+  PunkUnity). One entry Hermes could not read made it re-migrate the whole
+  file from scratch and write the result back, which can add back entries you
+  removed, and if loading still failed the list became just "Desktop
+  (fallback)"; unreadable JSON left only the built-in entries. A retry now
+  re-migrates in memory without writing the file, and a reload that fails
+  logs a warning and keeps the list. At startup, with no list to keep, the
+  fallback Desktop is still used. (Vibepollo made the same change.)
 - Stopping the desktop's Steam before a session, and starting it again after a
   nested Gamescope app, works with Flatpak Steam too (from PunkUnity). Its pid
   file is in the Flatpak's home and holds a pid from inside the sandbox, so

@@ -4741,7 +4741,7 @@ namespace proc {
     fileTree["version"] = this_version;
   }
 
-  void migrate(nlohmann::json& fileTree, const std::string& fileName) {
+  void migrate(nlohmann::json& fileTree, const std::string& fileName, bool persist = true) {
     int file_version = 0;
     if (fileTree.contains("version")) {
       file_version = fileTree["version"].get<int>();
@@ -4768,12 +4768,12 @@ namespace proc {
       migration_v7(fileTree);
       changed = true;
     }
-    if (changed) {
+    if (changed && persist) {
       file_handler::write_file(fileName.c_str(), fileTree.dump(4));
     }
   }
 
-  std::optional<proc::proc_t> parse(const std::string &file_name) {
+  std::optional<proc::proc_t> parse(const std::string &file_name, bool fallback_on_failure) {
 
     // Prepare environment variables.
     auto this_env = boost::this_process::environment();
@@ -4783,6 +4783,11 @@ namespace proc {
     int i = 0;
 
     size_t fail_count = 0;
+    // Whether every app in the file was loaded. A retry re-migrates from
+    // scratch in memory only and never writes the file: a from-scratch
+    // migration can add back entries the user removed (migration_v5 inserts
+    // the detached apps when they're missing).
+    bool loaded = false;
     do {
       // Read the JSON file into a tree.
       nlohmann::json tree;
@@ -4990,6 +4995,7 @@ namespace proc {
         }
 
         fail_count = 0;
+        loaded = true;
       } catch (std::exception &e) {
         BOOST_LOG(error) << "Error happened during app loading: "sv << e.what();
 
@@ -5007,7 +5013,7 @@ namespace proc {
         tree["version"] = 0;
 
         try {
-          migrate(tree, file_name);
+          migrate(tree, file_name, false);
         } catch (std::exception &e) {
           BOOST_LOG(error) << "Error happened during migration: "sv << e.what();
           break;
@@ -5023,6 +5029,13 @@ namespace proc {
 
       break;
     } while (fail_count < 3);
+
+    if (!loaded && !fallback_on_failure) {
+      // A reload that fails must not replace a working list with a fallback
+      // (or with nothing but the built-in entries).
+      BOOST_LOG(warning) << "Keeping the current application list: "sv << file_name << " could not be loaded"sv;
+      return std::nullopt;
+    }
 
     if (fail_count > 0) {
       BOOST_LOG(warning) << "No applications configured, adding fallback Desktop entry.";
@@ -5152,7 +5165,9 @@ namespace proc {
     }
 
 
-    auto proc_opt = proc::parse(file_name);
+    // At startup there is no list to keep, so a file that can't be loaded
+    // still gives the fallback Desktop entry.
+    auto proc_opt = proc::parse(file_name, proc.get_apps().empty());
 
     if (proc_opt) {
       proc = std::move(*proc_opt);

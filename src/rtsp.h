@@ -141,4 +141,14 @@ namespace rtsp_stream {
    * @brief Runs the RTSP server loop.
    */
   void start();
+
+  /**
+   * @brief The `surround-params` value the RTSP DESCRIBE reply advertises for an audio layout.
+   *
+   * Channel count, stream count, coupled-stream count, then the channel
+   * mapping, with the normal-quality 5.1 and 7.1 mappings rotated to undo the
+   * rotation Moonlight applies to them.
+   * @param config An `audio::stream_config_e` value.
+   */
+  std::string surround_params(int config);
 }  // namespace rtsp_stream

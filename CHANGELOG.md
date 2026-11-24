@@ -187,6 +187,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   commands. A command that only handed a request to a program already
   running, such as a Steam the user opened, leaves nothing to stop. The new
   per-app option `stop-detached` (on by default) keeps the old behaviour.
+- 7.1 surround audio plays each channel on its own speaker (from PunkUnity).
+  The mapping Hermes advertises is rotated to undo the rotation Moonlight
+  applies, but over a fixed 6 entries, which is right for 5.1 only; 7.1
+  advertised 01245367 instead of 01245673, so its last channels landed on the
+  wrong speakers. The rotation now covers each layout's own channels (as
+  Sunshine fixed in #6019).
 - Hermes no longer locks the compositor out of a GPU (from PunkUnity). The
   kernel makes whoever opens `/dev/dri/cardN` while no one holds DRM master
   that card's master, and Hermes kept it. Start a stream while the desktop

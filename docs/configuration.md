@@ -2057,11 +2057,12 @@ The fixes are in upstream commits `3cfb4fb78d5ac04ed0dadc8dd842fc9e448916db` and
   <tbody>
     <tr>
         <td>Description</td>
-        <td colSpan={2}>Set the address family that Hermes will use.</td>
+        <td colSpan={2}>Set the address family that Hermes will use. With `both`, every port listens on IPv4 and
+IPv6 (dual-stack `::`), and Hestia clients prefer IPv6 where the network has it.</td>
     </tr>
     <tr>
         <td>Default</td>
-        <td colSpan={2}>`ipv4`</td>
+        <td colSpan={2}>`both`</td>
     </tr>
     <tr>
         <td>Example</td>
@@ -2113,7 +2114,17 @@ Changing this value will offset other ports as shown in config UI.
   <tbody>
     <tr>
         <td>Description</td>
-        <td colSpan={2}>The origin of the remote endpoint address that is not denied for HTTPS Web UI.</td>
+        <td colSpan={2}>
+
+The origin of the remote endpoint address that is not denied for HTTPS Web UI.
+
+The LAN is the private, shared and link-local ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+`100.64.0.0/10`, `169.254.0.0/16`, `fc00::/7`, `fe80::/64`) and any address on a subnet one of the host's
+interfaces is attached to, such as an IPv6 global address of the home network. A VPN that gives the host a
+single-address route (`/32`, `/128`, as Tailscale does) adds nothing to it. The same rule picks between
+`lan_encryption_mode` and `wan_encryption_mode`.
+
+    </td>
     </tr>
     <tr>
         <td>Default</td>
@@ -2166,7 +2177,8 @@ Changing this value will offset other ports as shown in config UI.
         <td>Description</td>
         <td colSpan={2}>
 
-This determines when encryption will be used when streaming over your local network.
+This determines when encryption will be used when streaming over your local network (what counts as local
+is described under `origin_web_ui_allowed`).
 
 :::warning
 

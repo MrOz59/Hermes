@@ -78,6 +78,10 @@ TEST(WindowPlacement, RecognizesEveryWayAnAppStartsSteam) {
          "\"/usr/bin/steam\" -silent",
          "setsid flatpak run com.valvesoftware.Steam steam://rungameid/2358720",
          "xdg-open steam://rungameid/2358720",
+         // The Gamescope Steam Session app: its Steam is inside the launcher
+         // script, so the command itself never names steam.
+         "hermes-gamescope-launch",
+         "'/path with spaces/hermes-gamescope-launch'",
        }) {
     EXPECT_TRUE(launches_steam(split_unix(command))) << command;
   }
@@ -85,6 +89,7 @@ TEST(WindowPlacement, RecognizesEveryWayAnAppStartsSteam) {
          "setsid lutris lutris:rungameid/3",
          "steamtinkerlaunch",
          "konsole -e steam-runtime-check",
+         "gamescope -f -- game",
          "",
        }) {
     EXPECT_FALSE(launches_steam(split_unix(command))) << command;

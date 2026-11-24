@@ -131,6 +131,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   calls `localhost`.
 
 ### Fixed
+- The Gamescope Steam Session app starts in an isolated session (from
+  PunkUnity). Hermes stops the desktop's Steam before an isolated session only
+  when the app starts Steam, and it did not count `hermes-gamescope-launch`,
+  whose `steam -bigpicture` is inside the script. The session's Steam handed
+  its request to the desktop's Steam and exited, Gamescope and the session's
+  compositor with it, and the launch failed with error 503 ("Compositor exited
+  before scanout became ready").
 - A game that starts Steam from a detached command (games added with Import
   Games, `setsid steam steam://rungameid/<id>`) now starts in an isolated
   session's stream (from PunkUnity). Hermes recognised Steam only when `cmd`

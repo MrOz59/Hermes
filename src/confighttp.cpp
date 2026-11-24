@@ -77,7 +77,10 @@ namespace confighttp {
 
   bool local_api_token_origin_allowed(std::string_view address) {
     try {
-      return net::from_address(address) <= net::LAN;
+      // The fixed ranges only: sharing a subnet with this host does not make a
+      // public address private (a PC on a cable modem shares a public /22 with
+      // its neighbours), and the console the token is for never runs there.
+      return net::from_address_ranges(address) <= net::LAN;
     } catch (const std::exception &) {
       // Authentication policy must fail closed if it is ever handed an address
       // that the network classifier cannot parse.

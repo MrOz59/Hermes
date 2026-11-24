@@ -4,9 +4,11 @@
  */
 #include "../tests_common.h"
 
+#include <algorithm>
+#include <boost/asio/ip/address.hpp>
 #include <src/config.h>
 #include <src/confighttp.h>
-
+#include <src/network.h>
 #include <unordered_map>
 
 TEST(GameModeLocalTokenOriginTest, AllowsOnlyPcAndLanAddresses) {
@@ -20,6 +22,36 @@ TEST(GameModeLocalTokenOriginTest, AllowsOnlyPcAndLanAddresses) {
   EXPECT_FALSE(confighttp::local_api_token_origin_allowed("8.8.8.8"));
   EXPECT_FALSE(confighttp::local_api_token_origin_allowed("2001:4860:4860::8888"));
   EXPECT_FALSE(confighttp::local_api_token_origin_allowed("not-an-address"));
+}
+
+TEST(GameModeLocalTokenOriginTest, RefusesPublicAddressesOnTheHostsOwnSubnet) {
+  // A neighbour on a public subnet this host is attached to counts as LAN for
+  // the Web UI, but it is still not a private network.
+  for (const auto &link : net::interface_addresses()) {
+    const auto bits = static_cast<unsigned>(link.address.size() * 8);
+    if (link.prefix == 0 || link.prefix >= bits) {
+      continue;
+    }
+    auto neighbour = link.address;
+    neighbour.bytes[link.address.size() - 1] ^= 1;
+    std::string text;
+    if (link.address.v6) {
+      boost::asio::ip::address_v6::bytes_type bytes;
+      std::copy_n(neighbour.bytes.begin(), bytes.size(), bytes.begin());
+      text = boost::asio::ip::make_address_v6(bytes).to_string();
+    } else {
+      boost::asio::ip::address_v4::bytes_type bytes;
+      std::copy_n(neighbour.bytes.begin(), bytes.size(), bytes.begin());
+      text = boost::asio::ip::make_address_v4(bytes).to_string();
+    }
+    if (net::from_address_ranges(text) != net::WAN) {
+      continue;
+    }
+    EXPECT_EQ(net::from_address(text), net::LAN) << text;
+    EXPECT_FALSE(confighttp::local_api_token_origin_allowed(text)) << text;
+    return;
+  }
+  GTEST_SKIP() << "no interface on a public subnet";
 }
 
 // The preflight aggregation reads platform-derived state (encoder probe result,

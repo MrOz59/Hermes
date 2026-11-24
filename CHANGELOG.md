@@ -148,6 +148,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   the lookup always came back empty. Activating the output and exclusive mode
   then stopped with "DRM connector was not found". The driver is now read from
   the card's own device.
+- The video and audio sockets no longer share one sender address while both
+  wait for a packet (from PunkUnity). A client's video and audio pings arriving
+  together could overwrite each other's address, so Hermes could send a stream
+  to the wrong port and the stream started without picture or sound. Each
+  socket now has its own (as Sunshine fixed in #6021).
 - Starting a stream while the screens are asleep no longer opens an empty
   virtual display beside the desktop ([#133], from PunkUnity). KWin's power
   saving leaves every connector disabled, so Hermes found no lit monitor and
@@ -160,6 +165,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   seconds later. A monitor that answers the read is not waited for. Outputs
   turned off in the display settings are left alone, so a host without a
   monitor still gets a virtual display.
+- Ending a stream from the host no longer crashes Hermes (from PunkUnity).
+  Hestia's stop-session request, the web UI's End session button and
+  unpairing a streaming device stop the session gracefully, and that path
+  sent the termination message from the web server's thread, racing the
+  control thread for the session's cipher, then let the session be freed
+  while the control server still listed it. The control thread then encrypted
+  a message for the freed session and Hermes died with SIGSEGV. The control
+  thread now sends the message itself and releases the session afterwards.
 - On KWin, touch and pen land on the monitor being streamed ([#131], from
   PunkUnity). KWin bound new touch devices to an output of its own choosing,
   so with more than one monitor a Multi touch client often did nothing. When
@@ -180,6 +193,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   commands. A command that only handed a request to a program already
   running, such as a Steam the user opened, leaves nothing to stop. The new
   per-app option `stop-detached` (on by default) keeps the old behaviour.
+- 7.1 surround audio plays each channel on its own speaker (from PunkUnity).
+  The mapping Hermes advertises is rotated to undo the rotation Moonlight
+  applies, but over a fixed 6 entries, which is right for 5.1 only; 7.1
+  advertised 01245367 instead of 01245673, so its last channels landed on the
+  wrong speakers. The rotation now covers each layout's own channels (as
+  Sunshine fixed in #6019).
 - Hermes no longer locks the compositor out of a GPU (from PunkUnity). The
   kernel makes whoever opens `/dev/dri/cardN` while no one holds DRM master
   that card's master, and Hermes kept it. Start a stream while the desktop
@@ -196,6 +215,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   reported as not captured, and the encoder repeats the previous one at its
   minimum rate. On an idle 1280x720 desktop this went from 53 to 18 fps and
   from 22% to 9% of one thread.
+- Surround audio keeps its channel order for clients that send their own
+  channel mapping (from PunkUnity). Hermes gave PulseAudio that mapping as the
+  capture layout, so PulseAudio reordered the samples, and the encoder then
+  applied the same mapping that the client undoes, leaving them permuted
+  (webOS Moonlight's 0,1,4,5,2,3, for one). Capture now always uses the
+  canonical layout, as Sunshine fixed in #5743.
 - Quit in the Web UI no longer crashes Hermes when shutting down takes longer
   than 5 seconds ([#136], from itkawa). `/api/quit` answered from a detached
   thread after 5 s, which then wrote to, or released, a response whose HTTPS
@@ -215,6 +240,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   root may open read-write by design, is no longer a warning on every monitor
   scan. And the note that encoder testing may log errors now comes before
   those errors, not after a configured encoder's.
+- A reload of `apps.json` that fails keeps the current application list (from
+  PunkUnity). One entry Hermes could not read made it re-migrate the whole
+  file from scratch and write the result back, which can add back entries you
+  removed, and if loading still failed the list became just "Desktop
+  (fallback)"; unreadable JSON left only the built-in entries. A retry now
+  re-migrates in memory without writing the file, and a reload that fails
+  logs a warning and keeps the list. At startup, with no list to keep, the
+  fallback Desktop is still used. (Vibepollo made the same change.)
 - A frame too large for the protocol's four FEC blocks keeps as much FEC as
   still fits, instead of none (from PunkUnity). At the default 20%, frames
   over about 800 packets were sent with no parity at all, so a single lost

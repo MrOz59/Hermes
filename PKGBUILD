@@ -47,7 +47,6 @@ makedepends=(
   'bun>=1.4.5'
   'patchelf'
   'plasma-wayland-protocols'
-  'python'
   'vulkan-headers'
 )
 

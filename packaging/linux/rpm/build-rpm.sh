@@ -9,20 +9,13 @@ if [[ $# -gt 2 || ! $release =~ ^[0-9]+$ || ! -x "$payload/usr/bin/hermes" ]]; t
     printf 'usage: %s [staged-payload [rpm-release-number]]\n' "$0" >&2
     exit 2
 fi
-version="$(python3 - "$payload" <<'PY'
-from pathlib import Path
-import re
-import sys
-from xml.etree import ElementTree
-
-metainfo = Path(sys.argv[1]) / "usr/share/metainfo/io.github.mroz59.Hermes.metainfo.xml"
-release = ElementTree.parse(metainfo).find("releases/release")
-version = release.get("version", "") if release is not None else ""
-if not re.fullmatch(r"[A-Za-z0-9._+~^]+", version):
-    sys.exit(f"Invalid or missing RPM version in {metainfo}")
-print(version)
-PY
-)"
+metainfo="$payload/usr/share/metainfo/io.github.mroz59.Hermes.metainfo.xml"
+# The stager renders the project's first <release version="..."> on one line.
+version="$(sed -nE 's/^[[:space:]]*<release[[:space:]]+version="([A-Za-z0-9._+~^]+)".*/\1/p' "$metainfo" | head -n1)"
+if [[ ! $version =~ ^[A-Za-z0-9._+~^]+$ ]]; then
+    printf 'Invalid or missing RPM version in %s\n' "$metainfo" >&2
+    exit 1
+fi
 
 mkdir -p "$repo/target"
 work="$(mktemp -d "$repo/target/rpmbuild.XXXXXXXX")"

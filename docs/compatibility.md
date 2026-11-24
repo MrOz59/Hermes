@@ -468,7 +468,7 @@ Requires driver v0.4.0 or newer (Hermes refuses anything below UAPI 11), loaded
 with `initial_enabled=0` and its card left on the active seat. Hermes 0.6.0
 needs the `v0.4.0` tag specifically: driver `main` grants only read access to
 the render node, which 0.6.0 opens read-write — see the pairing table in the
-[README](../README.md#installing-the-hermes-kms-driver).
+[README](https://github.com/MrOz59/Hermes/blob/e1cbddf53a55578d5d750541219782fa0b29838f/README.md#installing-the-hermes-kms-driver).
 
 Zero-copy capture on AMD/Intel, HDR10, multi-output, independent sessions,
 streaming before login and the driver's capture counters in diagnostics exist
@@ -593,16 +593,3 @@ A useful report includes:
   `cat /sys/module/hermes_kms/parameters/initial_enabled`;
 - for display-adoption problems, the compositor's view of its outputs
   (`kscreen-doctor -o`, `wlr-randr`, or Mutter's `GetCurrentState` over D-Bus).
-
-<div class="section_buttons">
-
-| Previous                              |                      Next |
-|:--------------------------------------|--------------------------:|
-| [Getting Started](getting_started.md) | [Changelog](changelog.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>

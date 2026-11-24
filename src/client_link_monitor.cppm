@@ -10,6 +10,7 @@ module;
 #include <optional>
 #include <utility>
 
+/// Records gaps in client control traffic and correlates them with key-frame requests.
 export module hermes.client_link_monitor;
 
 export namespace stream {

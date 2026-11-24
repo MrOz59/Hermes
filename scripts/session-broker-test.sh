@@ -9,7 +9,7 @@
 #
 #   vng --systemd --run /usr/lib/modules/$(uname -r)/vmlinuz
 #   # then, inside:
-#   ./scripts/session-broker-test.sh /path/to/hermes-session-broker
+#   ./scripts/session-broker-test.sh /path/to/hermes-session-broker [socket-fixture-binary]
 #
 # It installs the packaged units, sysusers file and polkit rule, so it is not
 # safe on a machine you care about.
@@ -27,6 +27,7 @@ HID_PROBE_PID=""
 SDL_A_PID=""
 SDL_B_PID=""
 INPUT_TEST_ROOT=""
+SOCKET_TEST_ROOT=""
 BROKER_FROZEN=0
 
 cleanup_input_probe() {
@@ -43,12 +44,26 @@ cleanup_input_probe() {
 		wait "$INPUT_PROBE_PID" 2>/dev/null || true
 	fi
 	[ -z "$INPUT_TEST_ROOT" ] || rm -rf -- "$INPUT_TEST_ROOT"
+	[ -z "$SOCKET_TEST_ROOT" ] || rm -rf -- "$SOCKET_TEST_ROOT"
 }
 trap cleanup_input_probe EXIT
 
 [ "$(id -u)" -eq 0 ] || { printf 'must run as root; this creates accounts\n' >&2; exit 2; }
 systemd-detect-virt --vm --quiet || { printf 'must run inside a disposable VM; this installs system units and creates accounts\n' >&2; exit 2; }
 [ -x "$BROKER" ] || { printf 'broker not found: %s\n  build: mcpp build --offline -p hermes-session-broker\n' "$BROKER" >&2; exit 2; }
+
+# Copy or build the test utility in the guest so other UIDs can execute it.
+SOCKET_TEST_ROOT="$(mktemp -d)"
+chmod 755 "$SOCKET_TEST_ROOT"
+SOCKET_TEST="$SOCKET_TEST_ROOT/hermes-broker-socket-test"
+if [ "$#" -ge 2 ]; then
+	[ -x "$2" ] || { printf 'socket fixture binary not found: %s\n' "$2" >&2; exit 2; }
+	install -m755 -- "$2" "$SOCKET_TEST"
+else
+	"${CXX:-c++}" -std=c++2c -O2 -Wall -Wextra -Werror \
+		"$REPO/tests/fixtures/broker_socket.cpp" -o "$SOCKET_TEST"
+	chmod 755 "$SOCKET_TEST"
+fi
 
 # virtme-ng shares the host's filesystem as the host user and bind-mounts a few
 # files over the overlay, so /etc/shadow, /etc/gshadow and the passwd lock are
@@ -87,17 +102,7 @@ fail() {
 }
 
 ask() {
-	python3 - "$SOCKET" "$1" <<-'PY'
-		import socket, sys
-		with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-		    client.connect(sys.argv[1])
-		    client.sendall(sys.argv[2].encode())
-		    client.shutdown(socket.SHUT_WR)
-		    data = b""
-		    while chunk := client.recv(4096):
-		        data += chunk
-		    print(data.decode().strip())
-	PY
+	"$SOCKET_TEST" request "$SOCKET" "$1"
 }
 
 expect() {
@@ -214,44 +219,14 @@ expect 'STATUS reports it active' $'STATUS '"$CLIENT_A"$'\n' 'OK active hermes-s
 
 # Simulate a slow account-database operation by holding its real mutation lock.
 # A second ENSURE must queue, while the active client's liveness remains usable.
-SECOND_ACCOUNT="$(python3 - "$SOCKET" "$CLIENT_A" "$CLIENT_B" <<-'PY'
-	import fcntl, select, socket, sys
-	def connect(request, timeout):
-	    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-	    peer.settimeout(timeout)
-	    peer.connect(sys.argv[1])
-	    peer.sendall(request.encode())
-	    peer.shutdown(socket.SHUT_WR)
-	    return peer
-	def response(peer):
-	    text = b''
-	    while b'\n' not in text:
-	        chunk = peer.recv(4096)
-	        assert chunk, 'broker closed before replying'
-	        text += chunk
-	    return text.decode().strip()
-	with open('/run/hermes/session-broker.lock', 'r+') as lock:
-	    fcntl.flock(lock, fcntl.LOCK_EX)
-	    with connect('ENSURE ' + sys.argv[3] + '\n', 180) as pending:
-	        assert not select.select([pending], [], [], 0.05)[0], 'ENSURE did not queue behind the mutation lock'
-	        with connect('STATUS ' + sys.argv[2] + '\n', 2) as status:
-	            assert response(status) == 'OK active hermes-session-01.service', 'liveness was blocked or lost'
-	        fcntl.flock(lock, fcntl.LOCK_UN)
-	        print(response(pending))
-PY
-)"
+SECOND_ACCOUNT="$("$SOCKET_TEST" queued-ensure "$SOCKET" /run/hermes/session-broker.lock "$CLIENT_A" "$CLIENT_B")"
 [[ "$SECOND_ACCOUNT" == "OK hermes-s02 "* ]] || fail 'the second account was not provisioned' "$SECOND_ACCOUNT"
 ok 'a second client gets slot 2'
 ok 'an active session remains queryable during queued account provisioning'
 expect 'LIST reports both' $'LIST\n' "OK $CLIENT_A=hermes-s01 $CLIENT_B=hermes-s02"
 expect 'no Wayland socket yet'    $'SOCKET '"$CLIENT_A"$'\n' 'ERR notfound*'
 
-python3 -c "
-import socket, sys
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.bind('/run/user/$UID_A/wayland-1')
-s.listen(1)
-" && expect 'a Wayland socket is found by name' $'SOCKET '"$CLIENT_A"$'\n' 'OK wayland-1'
+"$SOCKET_TEST" bind-socket "/run/user/$UID_A/wayland-1" && expect 'a Wayland socket is found by name' $'SOCKET '"$CLIENT_A"$'\n' 'OK wayland-1'
 
 SCOPED=$'START '"$CLIENT_A"$'\nARG /usr/bin/sleep\nARG 600\nSCOPE app\nEND\n'
 expect 'a scoped unit is a second unit' "$SCOPED" 'OK hermes-session-01-app.service'
@@ -343,14 +318,7 @@ start_input_probe() {
 }
 
 can_open_input() {
-	runuser -u "$1" -- python3 - "$2" <<-'PY'
-		import os, sys
-		try:
-		    fd = os.open(sys.argv[1], os.O_RDWR | os.O_NONBLOCK)
-		except (PermissionError, FileNotFoundError):
-		    raise SystemExit(1)
-		os.close(fd)
-	PY
+	runuser -u "$1" -- "$SOCKET_TEST" open-input "$2"
 }
 
 wait_input_access() {

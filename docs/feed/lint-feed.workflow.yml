@@ -16,16 +16,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the feed
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       # The linter has a single copy, on main.
       - name: Checkout the linter
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           ref: main
           path: .hermes-main
-          sparse-checkout: scripts/feed_lint.py
+          sparse-checkout: |
+            scripts/feed_lint.sh
+            scripts/feed_lint.jq
           sparse-checkout-cone-mode: false
 
       - name: Validate feed.json
-        run: python3 .hermes-main/scripts/feed_lint.py feed.json
+        run: .hermes-main/scripts/feed_lint.sh feed.json

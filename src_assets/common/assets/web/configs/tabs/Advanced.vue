@@ -21,6 +21,21 @@ const config = ref(props.config)
       <div class="form-text">{{ $t('config.fec_percentage_desc') }}</div>
     </div>
 
+    <!-- Adaptive FEC -->
+    <Checkbox class="mb-3"
+              id="adaptive_fec"
+              locale-prefix="config"
+              v-model="config.adaptive_fec"
+              default="true"
+    ></Checkbox>
+
+    <!-- Adaptive FEC Maximum Percentage -->
+    <div class="mb-3">
+      <label for="adaptive_fec_max_percentage" class="form-label">{{ $t('config.adaptive_fec_max_percentage') }}</label>
+      <input type="number" class="form-control" id="adaptive_fec_max_percentage" placeholder="50" min="1" max="50" v-model="config.adaptive_fec_max_percentage" />
+      <div class="form-text">{{ $t('config.adaptive_fec_max_percentage_desc') }}</div>
+    </div>
+
     <!-- Quantization Parameter -->
     <div class="mb-3">
       <label for="qp" class="form-label">{{ $t('config.qp') }}</label>

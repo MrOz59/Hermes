@@ -5,14 +5,17 @@
 #pragma once
 
 // standard includes
+#include <span>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 // lib includes
 #include <boost/asio.hpp>
 #include <enet/enet.h>
 
 // local includes
+#include "network_link.h"
 #include "utility.h"
 
 namespace net {
@@ -47,7 +50,48 @@ namespace net {
   net_e from_enum_string(const std::string_view &view);
   std::string_view to_enum_string(net_e net);
 
+  /**
+   * @brief Classify the network an address belongs to.
+   * @details PC for loopback, LAN for the private, shared and link-local ranges
+   * and for any address on a subnet this host is attached to (an IPv6 global
+   * address of the home network, for one), WAN otherwise.
+   * @param view The address.
+   * @return The network type.
+   */
   net_e from_address(const std::string_view &view);
+
+  /**
+   * @brief Classify an address against the given interface subnets.
+   * @details from_address() with the subnets passed in instead of read from
+   * the host's interfaces.
+   * @param view The address.
+   * @param links The host's interface addresses and their prefixes.
+   * @return The network type.
+   */
+  net_e from_address(const std::string_view &view, std::span<const interface_address_t> links);
+
+  /**
+   * @brief Classify an address by the fixed ranges alone.
+   * @details PC or LAN only for loopback and the private, shared and link-local
+   * ranges, whatever this host is attached to. For questions about an address
+   * itself, such as whether a router's external address is private.
+   * @param view The address.
+   * @return The network type.
+   */
+  net_e from_address_ranges(const std::string_view &view);
+
+  /**
+   * @brief The addresses of every interface that is up, loopback aside, with their prefix lengths.
+   * @return The addresses; empty when they cannot be listed, so nothing counts as on-link.
+   */
+  std::vector<interface_address_t> interface_addresses();
+
+  /**
+   * @brief The raw bytes of an address, IPv4-mapped IPv6 as IPv4, the IPv6 scope kept.
+   * @param address The address.
+   * @return The raw address.
+   */
+  raw_address_t to_raw_address(const boost::asio::ip::address &address);
 
   // Optional error output describes initialization/socket failures without
   // assuming that every ENet failure is a port conflict. Cleared on success.

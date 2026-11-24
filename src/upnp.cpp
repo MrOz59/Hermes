@@ -153,7 +153,9 @@ namespace upnp {
   static bool is_private_ipv4(std::string_view address) {
     boost::system::error_code ec;
     const auto addr = boost::asio::ip::make_address_v4(std::string {address}, ec);
-    return !ec && net::from_address(addr.to_string()) == net::LAN;
+    // The fixed ranges only: whether this host shares a subnet with the address
+    // says nothing about whether the address itself is private.
+    return !ec && net::from_address_ranges(addr.to_string()) == net::LAN;
   }
 
   int shared_prefix_length(std::string_view a, std::string_view b) {

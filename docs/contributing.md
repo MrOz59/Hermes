@@ -7,9 +7,9 @@ internals — the Web UI, localization and the test suites.
 
 ## Recommended Tools
 
-| Tool                                                                                                                                                                           | Description                                                                                                                                                                           |
-|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
-| <a href="https://www.jetbrains.com/clion/"><img src="https://resources.jetbrains.com/storage/products/company/brand/logos/CLion_icon.svg" width="30" height="30"></a><br>CLion | Recommended IDE for C and C++ development. Free for non-commercial use. |
+| Tool | Description |
+|---|---|
+| [CLion](https://www.jetbrains.com/clion/) | Recommended IDE for C and C++ development. Free for non-commercial use. |
 
 ## Project Patterns
 
@@ -23,11 +23,66 @@ internals — the Web UI, localization and the test suites.
 #### Building
 
 From `src_assets/common/assets/web`, run `bun install --frozen-lockfile`, then
-`bun run dev` for front-end development. Run `bun run docs:assets` from the same
-directory before invoking Doxygen.
-Read the Docs runs this step automatically. Use the
+`bun run dev` for front-end development. Use the
 [`web-assets` build feature](building.md#build-locally) to build and stage the
 production pages with the Hermes executable.
+
+### Documentation
+
+The documentation site uses [Docusaurus](https://docusaurus.io/). Use the Node.js
+version pinned in `docs/site/.node-version` with Doxygen and Graphviz on PATH.
+Start a local preview from the repository root.
+
+```bash
+npm --prefix docs/site ci
+npm --prefix docs/site run start
+```
+
+Run `npm --prefix docs/site run build` to check links and generate the
+production site in `docs/site/build/`. Preview that build with
+`npm --prefix docs/site run serve`.
+
+For a hosted build, set `HERMES_DOCS_URL` to the site's origin and
+`HERMES_DOCS_BASE_URL` to its path, such as `/Hermes/`. Use the same values for
+the build and preview. CI uploads the built site as an artifact. GitHub Pages
+setup is documented in `docs/site/README.md`.
+
+Edit guides in `docs/`, group them in `docs/site/sidebars.ts`, and edit the
+homepage in `docs/site/src/pages/index.tsx`. Edit the C++ source comments to
+update the generated API reference. Use `.cppm` for
+named module interfaces and place a brief Doxygen comment before the
+`export module` declaration. Doxygen reads these declarations directly and
+lists them in the [C++ module index](pathname:///reference/cpp/modules.htm).
+
+#### Documentation sources
+
+The site uses one Docusaurus collection so the guides, package docs, and
+companion docs share link checking and search. Routes are relative to the
+site's base path.
+
+| Source | Where it appears |
+| --- | --- |
+| Hermes guides in `docs/` | Existing routes such as `/building` and `/configuration` |
+| Package READMEs and `docs/` under `rust/` or `mcpp/` | Developers → Package docs, at `/developers/rust` or under `/developers/mcpp/` |
+| Selected Hestia-rs and Hermes-KMS Markdown | Project → Companion projects, under `/companions/<project>/` |
+
+Edit local docs in place. Use relative Markdown links, such as a link from
+`docs/building.md` to `../rust/README.md`, so they work in GitHub and Docusaurus.
+For a new source directory, add its Markdown pattern to `localDocs` in
+`docs/site/content-sources.mjs` and wire its route and sidebar. New READMEs and
+Markdown in package `docs/` directories already match the allowlist.
+
+Add or update a companion in `remoteSources` in the same registry. Set the
+repository, full commit SHA, license, and selected Markdown paths, including
+its root README. Imported pages retain a link to the pinned original and the
+upstream license. Builds and previews fetch the selected files into
+`target/docs-content/`, with the download cache under `cache/`.
+
+After the first build has warmed the cache, use it for an offline build.
+
+```bash
+HERMES_DOCS_OFFLINE=1 npm --prefix docs/site run build
+```
 
 ### Localization
 The strings Hermes ships are inherited from Sunshine's localization, and the default language is `en` (English).
@@ -99,21 +154,20 @@ some situations. For example the system tray icon could be localized as it is us
 > The below is for information only. Contributors should never include manually updated template files, or
 > manually compiled language files in Pull Requests.
 
-Strings are extracted from the code to the `locale/sunshine.po` template file. Upstream generates it from a
+Strings are extracted from the code to the `locale/hermes.po` template file. Upstream generates it from a
 `localize.yml` workflow; this fork has no such workflow, so extract locally when you add a translatable C++ string.
 
-When testing locally it may be desirable to manually extract, initialize, update, and compile strings. Python is
-required for this, along with the python dependencies in the `./scripts/requirements.txt` file. Additionally,
-[xgettext](https://www.gnu.org/software/gettext) must be installed.
+To maintain native translations locally, install [GNU gettext](https://www.gnu.org/software/gettext), which
+supplies `xgettext`, `msginit`, `msgmerge`, and `msgfmt`. This is separate from the Web UI's JSON translations.
 
 * Extract, initialize, and update
   ```bash
-  python ./scripts/_locale.py --extract --init --update
+  ./scripts/_locale.sh --extract --init --update
   ```
 
 * Compile
   ```bash
-  python ./scripts/_locale.py --compile
+  ./scripts/_locale.sh --compile
   ```
 
 > [!IMPORTANT]
@@ -193,18 +247,5 @@ find ./ -iname *.cpp -o -iname *.h -iname *.m -iname *.mm | xargs clang-format -
 
 Option 2 (will modify files):
 ```bash
-python ./scripts/update_clang_format.py
+./scripts/update_clang_format.sh
 ```
-
-<div class="section_buttons">
-
-| Previous                |                                                         Next |
-|:------------------------|-------------------------------------------------------------:|
-| [Building](building.md) | [Source Code](../third-party/doxyconfig/docs/source_code.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>

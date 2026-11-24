@@ -33,6 +33,19 @@ namespace platf::window_placement {
     });
   }
 
+  /**
+   * Whether a command starts Steam: `steam` itself (also behind a wrapper
+   * such as `setsid`), the Flatpak, or a `steam://` link, which the running
+   * Steam handles.
+   */
+  inline bool launches_steam(const std::vector<std::string> &arguments) {
+    return names_program(arguments, "steam") ||
+           std::find(arguments.begin(), arguments.end(), "com.valvesoftware.Steam") != arguments.end() ||
+           std::any_of(arguments.begin(), arguments.end(), [](std::string_view argument) {
+             return argument.starts_with("steam://");
+           });
+  }
+
   inline bool launches_gamescope(const std::vector<std::string> &arguments) {
     return names_program(arguments, "gamescope") || names_program(arguments, "hermes-gamescope-launch");
   }

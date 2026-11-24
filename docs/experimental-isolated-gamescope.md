@@ -95,7 +95,7 @@ layer.
 | `first-frame-timeout` | seconds | time to the first frame; `0` = 30 s (application), 5 s (desktop) |
 | `isolate-devices` | `auto` / `on` / `off` | private `/dev`; `auto` when Hermes has the capabilities |
 | `isolate-sound` | `auto` / `on` / `off` | no `/dev/snd` |
-| `stop-desktop-steam` | `auto` / `on` / `off` | stop the desktop's Steam first; `auto` when `cmd` runs `steam` |
+| `stop-desktop-steam` | `auto` / `on` / `off` | stop the desktop's Steam first; `auto` when `cmd` or a detached command starts Steam (`steam`, also behind `setsid`, the Flatpak, or a `steam://` link) |
 
 Server environment: `HERMES_GAMESCOPE`, `HERMES_ISOLATED_GAMESCOPE_DRM_FLAG`,
 and `HERMES_ISOLATED_GAMESCOPE_STEAM_MODE=1` (Steam mode for every app).

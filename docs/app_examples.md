@@ -291,7 +291,7 @@ Both profiles take two fields for what the session sees of the host's `/dev`
 - `isolate-sound`: no `/dev/snd`, so applications only reach sound through
   the session's own audio server.
 
-`stop-desktop-steam` (`auto`, `on`, `off`; `auto` when `cmd` runs `steam`):
+`stop-desktop-steam` (`auto`, `on`, `off`; `auto` when `cmd` runs `steam`, or, for an isolated session, when `cmd` or a detached command starts Steam):
 Steam runs once per user and hands a second launch to the running client. If
 the pid in `~/.steam/steam.pid` is a live Steam outside Hermes' sessions,
 Hermes sends it SIGTERM (it logs off and saves its settings, usually in a few

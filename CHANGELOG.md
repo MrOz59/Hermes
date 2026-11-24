@@ -198,6 +198,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   reported as not captured, and the encoder repeats the previous one at its
   minimum rate. On an idle 1280x720 desktop this went from 53 to 18 fps and
   from 22% to 9% of one thread.
+- Surround audio keeps its channel order for clients that send their own
+  channel mapping (from PunkUnity). Hermes gave PulseAudio that mapping as the
+  capture layout, so PulseAudio reordered the samples, and the encoder then
+  applied the same mapping that the client undoes, leaving them permuted
+  (webOS Moonlight's 0,1,4,5,2,3, for one). Capture now always uses the
+  canonical layout, as Sunshine fixed in #5743.
 - Quit in the Web UI no longer crashes Hermes when shutting down takes longer
   than 5 seconds ([#136], from itkawa). `/api/quit` answered from a detached
   thread after 5 s, which then wrote to, or released, a response whose HTTPS

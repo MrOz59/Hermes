@@ -70,16 +70,26 @@ namespace platf {
     }
   };
 
-  std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, std::string source_name, const char *server = nullptr) {
+  std::unique_ptr<mic_t> microphone([[maybe_unused]] const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, std::string source_name, const char *server = nullptr) {
+    // Capture in the canonical layout, never in the order the Opus mapping
+    // describes: the multistream encoder applies that mapping and the client
+    // undoes it, so the two cancel. Handing it to PulseAudio as well made
+    // PulseAudio reorder the samples a second time, which nothing undoes. The
+    // built-in mappings are identities, so only a client's own surround-params
+    // (webOS Moonlight sends 0,1,4,5,2,3) came out permuted.
+    if (channels < 1 || channels > static_cast<int>(std::size(position_mapping))) {
+      BOOST_LOG(error) << "Unsupported audio channel count: "sv << channels;
+      return nullptr;
+    }
+
     auto mic = std::make_unique<mic_attr_t>();
 
     pa_sample_spec ss {PA_SAMPLE_FLOAT32, sample_rate, (std::uint8_t) channels};
     pa_channel_map pa_map;
+    pa_channel_map_init(&pa_map);
 
     pa_map.channels = channels;
-    std::for_each_n(pa_map.map, pa_map.channels, [mapping](auto &channel) mutable {
-      channel = position_mapping[*mapping++];
-    });
+    std::copy_n(std::begin(position_mapping), channels, pa_map.map);
 
     pa_buffer_attr pa_attr = {
       .maxlength = uint32_t(-1),

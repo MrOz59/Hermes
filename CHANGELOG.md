@@ -121,11 +121,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   per-session addresses.
 - A client on a subnet the host is attached to counts as LAN, as Hestia RS
   already treats it: an IPv6 global address of the home network now gets
-  `lan_encryption_mode`, the Web UI under `origin_web_ui_allowed = lan` and the
-  local API token, where it used to count as WAN because no private range
-  covers it. The fixed private, shared and link-local ranges are unchanged, a
-  VPN's single-address route (Tailscale's `/32`, `/128`) adds nothing, and the
-  UPnP double-NAT check still looks at the ranges alone.
+  `lan_encryption_mode` and the Web UI under `origin_web_ui_allowed = lan`,
+  where it used to count as WAN because no private range covers it. The fixed
+  private, shared and link-local ranges are unchanged, a VPN's single-address
+  route (Tailscale's `/32`, `/128`) adds nothing, and the UPnP double-NAT check
+  and the Game Mode console's local API token still look at the ranges alone:
+  a public subnet the host shares (a PC on a cable modem shares a public `/22`
+  with its neighbours) is not a private network, and the console only ever
+  calls `localhost`.
 
 ### Fixed
 - A game that starts Steam from a detached command (games added with Import

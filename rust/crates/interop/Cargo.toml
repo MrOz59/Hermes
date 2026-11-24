@@ -1,0 +1,13 @@
+[package]
+name = "hermes-rust-interop"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+hermes-rtp = { path = "../rtp" }
+
+[lints]
+workspace = true

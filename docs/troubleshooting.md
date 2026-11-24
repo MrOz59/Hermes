@@ -161,7 +161,7 @@ sudo usermod -aG input $USER
 ### Hermes-KMS virtual display
 Hermes-KMS is opt-in (`virtual_display_backend = hermes_kms`) and labeled experimental; EVDI is the default. The
 driver has to match the Hermes build — see the pairing table in the
-[README](../README.md#installing-the-hermes-kms-driver).
+[README](https://github.com/MrOz59/Hermes/blob/e1cbddf53a55578d5d750541219782fa0b29838f/README.md#installing-the-hermes-kms-driver).
 
 * **`UAPI <n> is too old; need 11`** — the loaded driver predates v0.4.0. Install v0.4.0 or newer and reboot if
   `make dkms-install` says an older module is still loaded.
@@ -223,16 +223,3 @@ high as long as the encoder is used.
 
 ### Gamescope compatibility
 Some users have reported stuttering issues when streaming games running within Gamescope.
-
-<div class="section_buttons">
-
-| Previous      |                    Next |
-|:--------------|------------------------:|
-| [API](api.md) | [Building](building.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>

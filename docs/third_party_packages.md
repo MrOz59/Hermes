@@ -16,16 +16,3 @@ built by CI and published at
 
 If you package Hermes for a distribution, open an issue — a packaged route that
 is maintained by someone who runs that distribution is worth linking here.
-
-<div class="section_buttons">
-
-| Previous                      |                                            Next |
-|:------------------------------|------------------------------------------------:|
-| [Docker](container.md) | [Gamestream Migration](gamestream_migration.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>

@@ -1,0 +1,55 @@
+#include <algorithm>
+#include <filesystem>
+#include <stdexcept>
+#include <string_view>
+#include <vector>
+
+import mcpp;
+
+int main() {
+  namespace fs = std::filesystem;
+  if (std::string_view(mcpp::target()) != "x86_64-linux-gnu") {
+    throw std::runtime_error("Hermes Rust interop currently requires the x86_64-linux-gnu target");
+  }
+
+  const auto rust = fs::path(mcpp::manifest_dir());
+  const auto out = fs::path(mcpp::out_dir()) / "cargo";
+  const auto target = "x86_64-unknown-linux-gnu";
+  const auto archive = out / target / "release/libhermes_rust_interop.a";
+  const auto depfile = out / target / "release/libhermes_rust_interop.d";
+
+  mcpp::action cargo;
+  cargo.id = "cargo-staticlib";
+  cargo.role = mcpp::roles::source;
+  // Cargo records the Rust source graph. Manifests and toolchain configuration
+  // are explicit inputs because the Rust depfile does not track them.
+  cargo.depfile = depfile.c_str();
+  cargo.cwd(rust.c_str()).env("RUSTUP_AUTO_INSTALL", "0")
+    .arg("cargo").arg("rustc").arg("--offline").arg("--locked").arg("--release")
+    .arg("--target").arg(target).arg("--target-dir").arg(out.c_str())
+    .arg("-p").arg("hermes-rust-interop").arg("--lib").arg("--crate-type").arg("staticlib");
+  for (const char *path : {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo/config.toml"}) {
+    cargo.input((rust / path).c_str());
+  }
+  mcpp::rerun_if_changed_glob("crates/*/Cargo.toml");
+  mcpp::rerun_if_changed_glob("crates/*/build.rs");
+  std::vector<fs::path> crate_inputs;
+  for (const auto &entry : fs::directory_iterator(rust / "crates")) {
+    for (const char *name : {"Cargo.toml", "build.rs"}) {
+      auto input = entry.path() / name;
+      if (fs::is_regular_file(input)) {
+        crate_inputs.push_back(input);
+      }
+    }
+  }
+  std::sort(crate_inputs.begin(), crate_inputs.end());
+  for (const auto &input : crate_inputs) {
+    cargo.input(input.c_str());
+  }
+  cargo.output(archive.c_str()).submit();
+  // Pass the archive and its Rust std link dependencies to every consumer.
+  mcpp::link_flag(archive.c_str());
+  for (const char *library : {"-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl", "-lc"}) {
+    mcpp::link_flag(library);
+  }
+}

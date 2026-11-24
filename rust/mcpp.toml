@@ -1,0 +1,15 @@
+[package]
+name = "hermes-rust-interop"
+mcpp = ">=2026.11.21.1"
+version = "0.1.0"
+license = "GPL-3.0-only"
+description = "Optional C++26 module for the Hermes Rust C ABI"
+standard = "c++26"
+
+[build]
+sources = ["native/abi.cppm"]
+cxx_runtime = "host-coupled"
+cxxflags = ["-Wall", "-Wextra", "-Werror"]
+
+[target.x86_64-linux-gnu]
+sysroot = "glibc@system"

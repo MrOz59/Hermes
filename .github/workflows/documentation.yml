@@ -1,0 +1,122 @@
+name: Documentation
+
+on:
+  push:
+    paths:
+      - '.github/workflows/documentation.yml'
+      - 'docs/**'
+      - 'rust/**/README.md'
+      - 'rust/**/docs/**'
+      - 'mcpp/**/README.md'
+      - 'mcpp/**/docs/**'
+      - 'src/**'
+      - 'src_assets/common/branding/**'
+      - 'VERSION'
+  pull_request:
+    paths:
+      - '.github/workflows/documentation.yml'
+      - 'docs/**'
+      - 'rust/**/README.md'
+      - 'rust/**/docs/**'
+      - 'mcpp/**/README.md'
+      - 'mcpp/**/docs/**'
+      - 'src/**'
+      - 'src_assets/common/branding/**'
+      - 'VERSION'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: documentation-${{ github.ref }}
+  cancel-in-progress: ${{ github.repository != 'MrOz59/Hermes' || github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    env:
+      PUBLISH_PAGES: ${{ github.repository == 'MrOz59/Hermes' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    defaults:
+      run:
+        working-directory: docs/site
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: docs/site/.node-version
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+      - name: Install C++ reference tools
+        env:
+          DOXYGEN_VERSION: '1.18.0'
+          DOXYGEN_SHA256: 14fa81bdc34171edb5f1f02b1d60e74802f0439b77fa44e592565d517d72df90
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends graphviz libtinfo6
+          archive="$RUNNER_TEMP/doxygen.tar.gz"
+          bin="$RUNNER_TEMP/doxygen/bin"
+          release="Release_${DOXYGEN_VERSION//./_}"
+          mkdir -p "$bin"
+          url="https://github.com/doxygen/doxygen/releases/download/$release/doxygen-$DOXYGEN_VERSION.linux.bin.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 --output "$archive" "$url"
+          printf '%s  %s\n' "$DOXYGEN_SHA256" "$archive" | sha256sum --check --strict
+          tar -xf "$archive" -C "$bin" --strip-components=2 "doxygen-$DOXYGEN_VERSION/bin/doxygen"
+          "$bin/doxygen" --version
+          echo "$bin" >> "$GITHUB_PATH"
+      - run: npm ci
+      - name: Build documentation
+        run: |
+          if [[ "$PUBLISH_PAGES" == true ]]; then
+            export HERMES_DOCS_URL=https://mroz59.github.io
+            export HERMES_DOCS_BASE_URL=/Hermes/
+          fi
+          npm run build
+      - name: Verify reference and search artifacts
+        run: |
+          test -s build/developers/rust/index.html
+          test -s build/reference/cpp/http_api.htm
+          test -s build/reference/cpp/modules.htm
+          test -s build/reference/cpp/confighttp_8cpp__incl.svg
+          node -e 'if (!require("./build/search-index.json").some(({documents}) => documents.length)) process.exit(1)'
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: hermes-documentation
+          path: docs/site/build
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload GitHub Pages artifact
+        if: env.PUBLISH_PAGES == 'true'
+        uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: docs/site/build
+
+  deploy:
+    if: github.repository == 'MrOz59/Hermes' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: build
+    runs-on: ubuntu-26.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@v6.0.0
+      - name: Verify the Pages address
+        env:
+          PAGES_ORIGIN: ${{ steps.pages.outputs.origin }}
+          PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: |
+          if [[ "$PAGES_ORIGIN" != https://mroz59.github.io || "${PAGES_BASE_PATH%/}" != /Hermes ]]; then
+            echo "::error::Hermes docs expect GitHub Pages at https://mroz59.github.io/Hermes/."
+            exit 1
+          fi
+      - name: Deploy GitHub Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v5.0.1

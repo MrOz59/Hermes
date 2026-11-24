@@ -148,10 +148,12 @@ both event and hidraw access for two UIDs, cross-seat denial, SDL consumers
 started before device creation, replacement devices, persisted leases after
 restart, STOP and PURGE. This is separate from
 pure identity/ACL tests, which touch only temporary fixtures.
-`python3 scripts/session-broker-concurrency-test.py /path/to/hermes-session-broker`
-also runs the actual daemon with a private socket/map/allow-file. It creates no
-accounts or devices and requires no systemd; it verifies incomplete requests,
-queued mutations and immediate refusal of unsafe locks.
+Build `hermes-posix-fixtures` with mcpp and run
+`hermes-broker-socket-test session-concurrency /path/to/hermes-session-broker`
+to exercise the actual daemon using a private socket, state map and allow file.
+It verifies incomplete requests, queued mutations and immediate refusal of
+unsafe locks without accounts, devices or systemd. The VM script accepts
+that same fixture executable as an optional second argument.
 
 ## Building
 
@@ -165,7 +167,7 @@ MCPP_HOME="$PWD/.mcpp/local-home" MCPP_TOOLCHAIN="path:$PWD/.toolchain" \
 ```
 
 Linux builds use libvirtualhid for input. The focused dependency suite and its
-SDL3 probe are built by the [Linux input CI workflow](../.github/workflows/libvirtualhid-experimental.yml).
+SDL3 probe are built by the [Linux input CI workflow](https://github.com/MrOz59/Hermes/blob/main/.github/workflows/libvirtualhid-experimental.yml).
 
 ## Manual validation with a DS4 and DualSense
 

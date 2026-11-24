@@ -9,6 +9,7 @@
 # path to a machine with the module loaded.
 set -euo pipefail
 
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BROKER="${1:?pass the path to the hermes-kms-card-broker binary}"
 
 if [ ! -x "$BROKER" ]; then
@@ -19,6 +20,16 @@ fi
 
 ROOT="$(mktemp -d)"
 trap 'kill "${BROKER_PID:-}" 2>/dev/null || true; rm -rf "$ROOT"' EXIT
+
+SOCKET_TEST="${2:-"$ROOT/hermes-broker-socket-test"}"
+if [ "$#" -lt 2 ]; then
+	"${CXX:-c++}" -std=c++2c -O2 -Wall -Wextra -Werror \
+		"$REPO/tests/fixtures/broker_socket.cpp" -o "$SOCKET_TEST"
+fi
+if [ ! -x "$SOCKET_TEST" ]; then
+	printf 'socket fixture binary not found: %s\n' "$SOCKET_TEST" >&2
+	exit 2
+fi
 
 CONFIGFS="$ROOT/configfs"
 PLATFORM="$ROOT/platform"
@@ -45,14 +56,7 @@ start_broker() {
 }
 
 ask() {
-	python3 - "$SOCKET" "$1" <<-'PY'
-		import socket, sys
-		with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-		    client.connect(sys.argv[1])
-		    client.sendall((sys.argv[2] + "\n").encode())
-		    client.shutdown(socket.SHUT_WR)
-		    print(client.recv(4096).decode().strip())
-	PY
+	"$SOCKET_TEST" request "$SOCKET" "$1"$'\n'
 }
 
 expect() {

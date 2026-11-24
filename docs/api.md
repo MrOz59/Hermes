@@ -20,90 +20,120 @@ Two different callers are authenticated in two different ways:
 
 Unless otherwise specified, authentication is required for all API calls.
 
-@htmlonly
-<script src="api.js"></script>
-@endhtmlonly
+See the [C++ reference](pathname:///reference/cpp/index.htm) for host internals.
+
 
 ## POST /api/login
-@copydoc confighttp::login()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-login).
 
 ## POST /api/otp
-@copydoc confighttp::getOTP()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-otp).
 
 ## POST /api/pin
-@copydoc confighttp::savePin()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-pin).
 
 ## GET /api/apps
-@copydoc confighttp::getApps()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-apps).
 
 ## POST /api/apps
-@copydoc confighttp::saveApp()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-apps).
 
 ## POST /api/apps/delete
-@copydoc confighttp::deleteApp()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-apps-delete).
 
 ## POST /api/apps/reorder
-@copydoc confighttp::reorderApps()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-apps-reorder).
 
 ## POST /api/apps/launch
-@copydoc confighttp::launchApp()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-apps-launch).
 
 ## POST /api/apps/close
-@copydoc confighttp::closeApp()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-apps-close).
+
+## GET /api/library
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-library).
 
 ## POST /api/covers/upload
-@copydoc confighttp::uploadCover()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-covers-upload).
 
 ## GET /api/clients/list
-@copydoc confighttp::getClients()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-clients-list).
 
 ## POST /api/clients/update
-@copydoc confighttp::updateClient()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-clients-update).
 
 ## POST /api/clients/disconnect
-@copydoc confighttp::disconnect()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-clients-disconnect).
 
 ## POST /api/clients/unpair
-@copydoc confighttp::unpair()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-clients-unpair).
 
 ## POST /api/clients/unpair-all
-@copydoc confighttp::unpairAll()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-clients-unpair-all).
 
 ## GET /api/config
-@copydoc confighttp::getConfig()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-config).
 
 ## GET /api/configLocale
-@copydoc confighttp::getLocale()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-configlocale).
 
 ## POST /api/config
-@copydoc confighttp::saveConfig()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-config).
 
 ## POST /api/password
-@copydoc confighttp::savePassword()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-password).
 
 ## GET /api/logs
-@copydoc confighttp::getLogs()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-logs).
 
 ## GET /api/metrics
-@copydoc confighttp::getMetrics()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-metrics).
 
 ## GET /api/gamemode/status
-@copydoc confighttp::getGameModeStatus()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-gamemode-status).
 
 ## GET /api/sessions/list
-@copydoc confighttp::getSessions()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-sessions-list).
 
 ## POST /api/sessions/terminate
-@copydoc confighttp::terminateSession()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-sessions-terminate).
 
 ## POST /api/reset-display-device-persistence
-@copydoc confighttp::resetDisplayDevicePersistence()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-reset-display-device-persistence).
 
 ## POST /api/restart
-@copydoc confighttp::restart()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-restart).
 
 ## POST /api/quit
-@copydoc confighttp::quit()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-quit).
 
 ## Virtual display drivers
 
@@ -112,16 +142,20 @@ settings tab. They are Linux-only; on other platforms they answer with
 `error` set.
 
 ### GET /api/evdi/status
-@copydoc confighttp::getEvdiStatus()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-evdi-status).
 
 ### POST /api/evdi/install
-@copydoc confighttp::installEvdi()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-evdi-install).
 
 ### GET /api/evdi/install/status
-@copydoc confighttp::getEvdiInstallStatus()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-evdi-install-status).
 
 ### GET /api/hermes-kms/status
-@copydoc confighttp::getHermesKmsStatus()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-hermes-kms-status).
 
 ## Clipboard sharing
 
@@ -141,13 +175,15 @@ capabilities response and fall back to the standard Moonlight/Sunshine flow when
 these endpoints are absent.
 
 ### GET /api/hestia/v1/capabilities
-@copydoc confighttp::getHestiaCapabilities()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#get-api-hestia-v1-capabilities).
 
 `GET /api/hestia/v1` answers with the same document. This is the only endpoint
 on this page that requires no authentication.
 
 ### POST /api/hestia/v1/session/prepare
-@copydoc confighttp::prepare_hestia_session()
+
+[Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-hestia-v1-session-prepare).
 
 ### POST /api/hestia/v1/session/stop
 Clear this client's prepared session and stop the stream it owns, if one is
@@ -182,16 +218,3 @@ Requires the `server_cmd` permission.
 
 ### POST /api/hestia/v1/commands/run
 Run one of those server commands by name. Requires the `server_cmd` permission.
-
-<div class="section_buttons">
-
-| Previous                                    |                                  Next |
-|:--------------------------------------------|--------------------------------------:|
-| [Performance Tuning](performance_tuning.md) | [Troubleshooting](troubleshooting.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>

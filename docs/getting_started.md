@@ -62,7 +62,7 @@ packages. Only one of the three can *run* at a time: they all bind ports
 browser as `Failed to fetch` on the login page.
 
 To build the package from the source tree instead, see
-[CachyOS/Arch package build](../README.md) in the overview.
+[CachyOS/Arch package build](https://github.com/MrOz59/Hermes/blob/e1cbddf53a55578d5d750541219782fa0b29838f/README.md#cachyosarch-package-build) in the overview.
 
 Uninstall:
 ```bash
@@ -148,14 +148,14 @@ A virtual display needs a kernel module, installed separately from Hermes:
   labeled experimental for now) — <https://github.com/MrOz59/Hermes-KMS>,
   installed through DKMS. Hermes 0.6.0 needs the driver's `v0.4.0` tag; a
   nightly works with `v0.4.0` or `main`.
-  [The overview](../README.md#installing-the-hermes-kms-driver) covers the
+  [The overview](https://github.com/MrOz59/Hermes/blob/e1cbddf53a55578d5d750541219782fa0b29838f/README.md#installing-the-hermes-kms-driver) covers the
   install and the `initial_enabled=0` module option it needs. Hermes does not
   fall back to EVDI on its own when Hermes-KMS is selected but unavailable.
 
 Several features exist only on Hermes-KMS: zero-copy capture on AMD/Intel,
 HDR10 on a virtual display, multi-output, independent sessions and streaming
 before login — see
-[What needs Hermes-KMS](../README.md#what-needs-hermes-kms).
+[What needs Hermes-KMS](https://github.com/MrOz59/Hermes/blob/e1cbddf53a55578d5d750541219782fa0b29838f/README.md#what-needs-hermes-kms).
 
 The Audio/Video settings tab shows a live diagnostic and a step-by-step install
 guide when either driver is missing.
@@ -411,10 +411,14 @@ ssh <user>@<ip_address> 'startx &; export DISPLAY=:0; hermes'
 > [!TIP]
 > You could also use the `~/.bash_profile` or `~/.bashrc` files to set up the `DISPLAY` variable.
 
-@seealso{Upstream's [Remote SSH Headless Setup](https://app.lizardbyte.dev/2023-09-14-remote-ssh-headless-sunshine-setup)
+:::info[See also]
+
+Upstream's [Remote SSH Headless Setup](https://app.lizardbyte.dev/2023-09-14-remote-ssh-headless-sunshine-setup)
 guide covers a headless streaming server without autologin or dummy plugs (X11 + NVIDIA GPUs). It was written for
 Sunshine, so substitute the binary and unit names. On Wayland, Hermes-KMS replaces the dummy plug — see
-[Compatibility](compatibility.md).}
+[Compatibility](compatibility.md).
+
+:::
 
 ### Configuration
 
@@ -502,27 +506,20 @@ Additional information:
 - The KMS capture backend is required for HDR capture. Other capture methods, like NvFBC or X11, do not support HDR.
 - You will need a desktop environment with a compositor that supports HDR rendering, such as Gamescope or KDE Plasma 6.
 
-@seealso{[Arch wiki on HDR Support for Linux](https://wiki.archlinux.org/title/HDR_monitor_support) and
-[Reddit Guide for HDR Support for AMD GPUs](https://www.reddit.com/r/linux_gaming/comments/10m2gyx/guide_alpha_test_hdr_on_linux)}
+:::info[See also]
+
+[Arch wiki on HDR Support for Linux](https://wiki.archlinux.org/title/HDR_monitor_support) and
+[Reddit Guide for HDR Support for AMD GPUs](https://www.reddit.com/r/linux_gaming/comments/10m2gyx/guide_alpha_test_hdr_on_linux)
+
+:::
 
 ### Tutorials and Guides
 Tutorial videos are available [here](https://www.youtube.com/playlist?list=PLMYr5_xSeuXAbhxYHz86hA1eCDugoxXY0).
 
 Guides are available [here](guides.md).
 
-@admonition{Community! |
-Tutorials and Guides are community generated. Want to contribute? Reach out to us on our discord server.}
+:::info[Community!]
 
-<div class="section_buttons">
+Tutorials and Guides are community generated. Want to contribute? Reach out to us on our discord server.
 
-| Previous                 |                              Next |
-|:-------------------------|----------------------------------:|
-| [Overview](../README.md) | [Compatibility](compatibility.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>
-
+:::

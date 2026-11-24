@@ -101,7 +101,6 @@ jobs:
             git-lfs \
             unzip \
             ninja \
-            python \
             nlohmann-json \
             openssl \
             opus \
@@ -332,7 +331,6 @@ jobs:
             jq \
             nlohmann-json \
             patchelf \
-            python \
             openssl \
             opus \
             ffmpeg \
@@ -502,7 +500,7 @@ jobs:
             nlohmann-json3-dev \
             patchelf \
             pkg-config \
-            python3 \
+            jq \
             libpulse-dev \
             libopus-dev \
             libavcodec-dev \
@@ -608,7 +606,7 @@ jobs:
           fi
 
           "$MCPP_HOME/bin/mcpp" build --offline --release -p hermes-host --features "$features"
-          host_result="$(python3 -c 'import json; print(json.load(open("target/.last-result.json"))["data"]["result"])')"
+          host_result="$(jq -er '.data.result | strings | select(length > 0)' target/.last-result.json)"
           echo "HERMES_HOST_RESULT=${host_result}" >> "$GITHUB_ENV"
           "$MCPP_HOME/bin/mcpp" build --offline --release "${tools[@]}"
 
@@ -773,7 +771,7 @@ jobs:
           dnf install -y \
             git \
             curl \
-            python3 \
+            jq \
             libstdc++-static \
             unzip \
             patchelf \
@@ -877,7 +875,7 @@ jobs:
             tools+=(-p hermes-detached-session)
           fi
           "$MCPP_HOME/bin/mcpp" build --offline --release -p hermes-host --features "$features"
-          host_result="$(python3 -c 'import json; print(json.load(open("target/.last-result.json"))["data"]["result"])')"
+          host_result="$(jq -er '.data.result | strings | select(length > 0)' target/.last-result.json)"
           echo "HERMES_HOST_RESULT=${host_result}" >> "$GITHUB_ENV"
           "$MCPP_HOME/bin/mcpp" build --offline --release "${tools[@]}"
 
@@ -1071,23 +1069,19 @@ jobs:
           test "$(find target/release-payload -name 'hermes-streaming-*.pkg.tar.zst' | wc -l)" -ge 1
           notes="docs/${tag}-notes.md"
           test -s "$notes"
-          export RC_TAG="$tag"
           printf 'RC_NOTES=%s\n' "$notes" >> "$GITHUB_ENV"
-          python3 - <<'PYTHON'
-          import hashlib, json, os
-          from pathlib import Path
-          payload = Path('target/release-payload')
-          files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(payload.iterdir())}
-          manifest = {
-              'tag': os.environ['RC_TAG'],
-              'source_commit': os.environ['GITHUB_SHA'],
-              'build_version': os.environ['BUILD_VERSION'],
-              'workflow_run': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-              'validation': ['host-tests', 'fedora-43-44-45-secure-loader', 'ubuntu-24.04-26.04-secure-loader', 'installed-rpm-deb-non-root-startup'],
-              'payload_sha256': files,
-          }
-          (payload / 'RC_MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n')
-          PYTHON
+          payload_digests="$(
+            for package in target/release-payload/*; do
+              hash="$(sha256sum < "$package")" || exit
+              jq -n --arg key "${package##*/}" --arg value "${hash%% *}" '{key: $key, value: $value}'
+            done | jq -s from_entries
+          )"
+          jq -n --arg tag "$tag" --arg source_commit "$GITHUB_SHA" --arg build_version "$BUILD_VERSION" \
+            --arg workflow_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --argjson payload_sha256 "$payload_digests" \
+            '{tag: $tag, source_commit: $source_commit, build_version: $build_version, workflow_run: $workflow_run,
+              validation: ["host-tests", "fedora-43-44-45-secure-loader", "ubuntu-24.04-26.04-secure-loader", "installed-rpm-deb-non-root-startup"],
+              payload_sha256: $payload_sha256}' > target/release-payload/RC_MANIFEST.json
           (cd target/release-payload && sha256sum *.deb *.rpm *.pkg.tar.zst RC_MANIFEST.json > SHA256SUMS)
           printf 'RC_TAG=%s\n' "$tag" >> "$GITHUB_ENV"
       - name: Publish tested release candidate

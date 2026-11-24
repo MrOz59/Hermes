@@ -11,7 +11,7 @@
 #   https://raw.githubusercontent.com/<owner>/<repo>/feed/feed.json
 # so a push is live within a few minutes (raw.githubusercontent.com caches
 # briefly). The format is documented in docs/announcements.md and enforced by
-# scripts/feed_lint.py.
+# scripts/feed_lint.sh.
 #
 # Usage:
 #   scripts/publish-feed.sh              # edit the live feed in $EDITOR, then publish
@@ -33,7 +33,7 @@ REMOTE="${HERMES_FEED_REMOTE:-origin}"
 BRANCH="${HERMES_FEED_BRANCH:-feed}"
 TEMPLATE="docs/feed/feed.example.json"
 WORKFLOW_TEMPLATE="docs/feed/lint-feed.workflow.yml"
-LINTER="scripts/feed_lint.py"
+LINTER="scripts/feed_lint.sh"
 
 WORKTREE=""
 
@@ -63,12 +63,11 @@ checkout_feed() {
         git -C "$WORKTREE" checkout --quiet --orphan "$BRANCH"
         git -C "$WORKTREE" rm -rqf . >/dev/null
         cp "$REPO_ROOT/$TEMPLATE" "$WORKTREE/feed.json"
-        # Ship the branch's own lint workflow, so an edit made in the GitHub web
-        # UI is validated too — that path never runs this script.
-        mkdir -p "$WORKTREE/.github/workflows"
-        cp "$REPO_ROOT/$WORKFLOW_TEMPLATE" "$WORKTREE/.github/workflows/lint-feed.yml"
-        git -C "$WORKTREE" add .github/workflows/lint-feed.yml
     fi
+    # Maintain the branch's browser-edit lint workflow alongside feed changes.
+    mkdir -p "$WORKTREE/.github/workflows"
+    cp "$REPO_ROOT/$WORKFLOW_TEMPLATE" "$WORKTREE/.github/workflows/lint-feed.yml"
+    git -C "$WORKTREE" add .github/workflows/lint-feed.yml
 }
 
 DRY_RUN=0
@@ -79,7 +78,7 @@ case "${1-}" in
         ;;
     --lint)
         [[ $# -eq 2 ]] || { echo "--lint needs a file path" >&2; exit 2; }
-        exec python3 "$LINTER" "$2"
+        exec "$LINTER" "$2"
         ;;
     --show)
         # Read-only: no worktree, so this never touches a local branch.
@@ -110,9 +109,9 @@ FEED="$WORKTREE/feed.json"
 
 # Validate before committing: the Web UI drops entries it cannot parse without
 # reporting anything, so a bad edit would look like a missing announcement.
-python3 "$LINTER" "$FEED"
+"$LINTER" "$FEED"
 
-if git -C "$WORKTREE" diff --quiet -- feed.json && git -C "$WORKTREE" diff --cached --quiet -- feed.json; then
+if git -C "$WORKTREE" diff --quiet -- feed.json && git -C "$WORKTREE" diff --cached --quiet -- feed.json .github/workflows/lint-feed.yml; then
     if [[ -n "$(git -C "$WORKTREE" status --porcelain -- feed.json)" ]]; then
         : # new file on a freshly created branch
     else

@@ -1,0 +1,24 @@
+[package]
+name = "hermes-rust-interop-smoke"
+mcpp = ">=2026.11.21.1"
+version = "0.1.0"
+license = "GPL-3.0-only"
+description = "C++26 consumption test for the Hermes Rust C ABI"
+standard = "c++26"
+
+[build]
+sources = []
+cxx_runtime = "host-coupled"
+cxxflags = ["-Wall", "-Wextra", "-Werror"]
+
+[features.rust-interop]
+
+[feature-deps.rust-interop]
+hermes-rust-interop = { path = "../../rust" }
+
+[target.x86_64-linux-gnu]
+sysroot = "glibc@system"
+
+[test]
+discover = ["tests/abi.cpp"]
+features = ["rust-interop"]

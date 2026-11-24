@@ -3,3 +3,6 @@ Dockerfile text eol=lf
 *.dockerfile text eol=lf
 *flatpak-lint-*.json text eol=lf
 *.sh text eol=lf
+
+# Collapse the generated documentation lockfile in GitHub reviews.
+docs/site/package-lock.json linguist-generated=true

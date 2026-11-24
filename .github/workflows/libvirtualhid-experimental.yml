@@ -108,7 +108,6 @@ jobs:
               const runtimeOnly = new Set([
                 '.github/workflows/libvirtualhid-experimental.yml',
                 'scripts/session-broker-test.sh',
-                'scripts/session-broker-concurrency-test.py',
                 'scripts/tests/test_input_artifact_reuse.ts',
                 'docs/libvirtualhid-experimental.md',
                 'docs/libvirtualhid-merge-handoff.md'
@@ -151,6 +150,8 @@ jobs:
           g++-14 -std=c++2c -O2 -Wall -Wextra -Werror \
             tools/hermes-session-broker.cpp tools/session-broker-input.cpp \
             -lacl -o target/session-broker-fixture/hermes-session-broker
+          g++-14 -std=c++2c -O2 -Wall -Wextra -Werror \
+            tests/fixtures/broker_socket.cpp -o target/session-broker-fixture/hermes-broker-socket-test
       - name: Compile and test broker RPCs, worker bounds and ACLs independently
         env:
           HERMES_TEST_REQUIRE_UNIX_SOCKETS: "1"
@@ -170,9 +171,10 @@ jobs:
           target/session-broker-fixture/hermes-session-broker-tests --gtest_color=yes
       - name: Test real accounts, hotplug, restart and per-seat revocation
         run: |
-          python3 scripts/session-broker-concurrency-test.py "$PWD/target/session-broker-fixture/hermes-session-broker"
+          fixture_dir="$PWD/target/session-broker-fixture"
+          "$fixture_dir/hermes-broker-socket-test" session-concurrency "$fixture_dir/hermes-session-broker"
           sudo udevadm verify src_assets/linux/misc/99-hermes-session-input.rules
-          sudo scripts/session-broker-test.sh "$PWD/target/session-broker-fixture/hermes-session-broker"
+          sudo scripts/session-broker-test.sh "$fixture_dir/hermes-session-broker" "$fixture_dir/hermes-broker-socket-test"
       - name: Broker journal
         if: always()
         run: sudo journalctl -u hermes-session-broker --no-pager -n 120
@@ -192,7 +194,7 @@ jobs:
           # Refresh/upgrade and install in one transaction, with a bounded retry.
           for attempt in 1 2 3; do
             if pacman -Syu --noconfirm --needed \
-              base-devel git ninja python jq nlohmann-json unzip openssl opus ffmpeg \
+              base-devel git ninja jq nlohmann-json unzip openssl opus ffmpeg \
               libdrm wayland libx11 libxrandr libxfixes libxcb \
               libxi libxtst libxss libxcursor libxkbcommon wayland-protocols \
               libva libvdpau libcap curl libevdev libinput sdl2 sdl3 systemd \

@@ -16,8 +16,8 @@ and applications to Hermes.
 
 | Field            | Value                      |
 |------------------|----------------------------|
-| Application Name | @code{}Desktop@endcode     |
-| Image            | @code{}desktop.png@endcode |
+| Application Name | `Desktop`     |
+| Image            | `desktop.png` |
 
 ### Steam Big Picture
 
@@ -59,10 +59,10 @@ and applications to Hermes.
 
 | Field                        | Value                                                |
 |------------------------------|------------------------------------------------------|
-| Application Name             | @code{}Steam Big Picture@endcode                     |
-| Command Preparations -> Undo | @code{}setsid steam steam://close/bigpicture@endcode |
-| Detached Commands            | @code{}setsid steam steam://open/bigpicture@endcode  |
-| Image                        | @code{}steam.png@endcode                             |
+| Application Name             | `Steam Big Picture`                     |
+| Command Preparations -> Undo | `setsid steam steam://close/bigpicture` |
+| Detached Commands            | `setsid steam steam://open/bigpicture`  |
+| Image                        | `steam.png`                             |
 
 ### Steam game
 
@@ -73,23 +73,23 @@ and applications to Hermes.
 
 | Field             | Value                                                |
 |-------------------|------------------------------------------------------|
-| Application Name  | @code{}Surviving Mars@endcode                        |
-| Detached Commands | @code{}setsid steam steam://rungameid/464920@endcode |
+| Application Name  | `Surviving Mars`                        |
+| Detached Commands | `setsid steam steam://rungameid/464920` |
 
 #### Binary (with a working directory)
 
 | Field             | Value                                                        |
 |-------------------|--------------------------------------------------------------|
-| Application Name  | @code{}Surviving Mars@endcode                                |
-| Command           | @code{}MarsSteam@endcode                                     |
-| Working Directory | @code{}~/.steam/steam/SteamApps/common/Survivng Mars@endcode |
+| Application Name  | `Surviving Mars`                                |
+| Command           | `MarsSteam`                                     |
+| Working Directory | `~/.steam/steam/SteamApps/common/Survivng Mars` |
 
 #### Binary (without a working directory)
 
 | Field             | Value                                                                  |
 |-------------------|------------------------------------------------------------------------|
-| Application Name  | @code{}Surviving Mars@endcode                                          |
-| Command           | @code{}~/.steam/steam/SteamApps/common/Survivng Mars/MarsSteam@endcode |
+| Application Name  | `Surviving Mars`                                          |
+| Command           | `~/.steam/steam/SteamApps/common/Survivng Mars/MarsSteam` |
 
 ### Prep Commands
 
@@ -101,8 +101,8 @@ and applications to Hermes.
 
 | Prep Step | Command                                                                                                                               |
 |-----------|---------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "xrandr --output HDMI-1 --mode ${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT} --rate ${HERMES_CLIENT_FPS}"@endcode |
-| Undo      | @code{}xrandr --output HDMI-1 --mode 3840x2160 --rate 120@endcode                                                                     |
+| Do        | `sh -c "xrandr --output HDMI-1 --mode ${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT} --rate ${HERMES_CLIENT_FPS}"` |
+| Undo      | `xrandr --output HDMI-1 --mode 3840x2160 --rate 120`                                                                     |
 
 > [!TIP]
 > The above only works if the xrandr mode already exists. You will need to create new modes to stream to macOS
@@ -152,8 +152,8 @@ and applications to Hermes.
 
 | Prep Step | Command                                                                                                                                  |
 |-----------|------------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "wlr-xrandr --output HDMI-1 --mode \"${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}@${HERMES_CLIENT_FPS}Hz\""@endcode |
-| Undo      | @code{}wlr-xrandr --output HDMI-1 --mode 3840x2160@120Hz@endcode                                                                         |
+| Do        | `sh -c "wlr-xrandr --output HDMI-1 --mode \"${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}@${HERMES_CLIENT_FPS}Hz\""` |
+| Undo      | `wlr-xrandr --output HDMI-1 --mode 3840x2160@120Hz`                                                                         |
 
 > [!TIP]
 > `wlr-xrandr` only works with wlroots-based compositors.
@@ -162,15 +162,15 @@ and applications to Hermes.
 
 | Prep Step | Command                                                                                                                               |
 |-----------|---------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "xrandr --output HDMI-1 --mode ${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT} --rate ${HERMES_CLIENT_FPS}"@endcode |
-| Undo      | @code{}xrandr --output HDMI-1 --mode 3840x2160 --rate 120@endcode                                                                     |
+| Do        | `sh -c "xrandr --output HDMI-1 --mode ${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT} --rate ${HERMES_CLIENT_FPS}"` |
+| Undo      | `xrandr --output HDMI-1 --mode 3840x2160 --rate 120`                                                                     |
 
 ###### Gnome (Wayland)
 
 | Prep Step | Command                                                                                                                                                                                               |
 |-----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "displayconfig-mutter set --connector HDMI-1 --resolution ${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT} --refresh-rate ${HERMES_CLIENT_FPS} --hdr ${HERMES_CLIENT_HDR}"@endcode |
-| Undo      | @code{}displayconfig-mutter set --connector HDMI-1 --resolution 3840x2160 --refresh-rate 120 --hdr false@endcode                                                                                      |
+| Do        | `sh -c "displayconfig-mutter set --connector HDMI-1 --resolution ${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT} --refresh-rate ${HERMES_CLIENT_FPS} --hdr ${HERMES_CLIENT_HDR}"` |
+| Undo      | `displayconfig-mutter set --connector HDMI-1 --resolution 3840x2160 --refresh-rate 120 --hdr false`                                                                                      |
 
 Installation instructions for displayconfig-mutter can be [found here](https://github.com/eaglesemanation/displayconfig-mutter). Alternatives include
 [gnome-randr-rust](https://github.com/maxwellainatchi/gnome-randr-rust) and [gnome-randr.py](https://gitlab.com/Oschowa/gnome-randr), but both of those are
@@ -187,8 +187,8 @@ unmaintained and do not support newer Mutter features such as HDR and VRR.
 
 | Prep Step | Command                                                                                                                              |
 |-----------|--------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "kscreen-doctor output.HDMI-A-1.mode.${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}@${HERMES_CLIENT_FPS}"@endcode |
-| Undo      | @code{}kscreen-doctor output.HDMI-A-1.mode.3840x2160@120@endcode                                                                     |
+| Do        | `sh -c "kscreen-doctor output.HDMI-A-1.mode.${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}@${HERMES_CLIENT_FPS}"` |
+| Undo      | `kscreen-doctor output.HDMI-A-1.mode.3840x2160@120`                                                                     |
 
 > [!CAUTION]
 > The names of your displays will differ between X11 and Wayland.
@@ -211,8 +211,8 @@ unmaintained and do not support newer Mutter features such as HDR and VRR.
 
 | Prep Step | Command                                                                                                                                                                                                                        |
 |-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Do        | @code{}sh -c "nvidia-settings -a CurrentMetaMode=\"HDMI-1: nvidia-auto-select { ViewPortIn=${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}, ViewPortOut=${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}+0+0 }\""@endcode |
-| Undo      | @code{}nvidia-settings -a CurrentMetaMode=\"HDMI-1: nvidia-auto-select { ViewPortIn=3840x2160, ViewPortOut=3840x2160+0+0 }"@endcode                                                                                            |
+| Do        | `sh -c "nvidia-settings -a CurrentMetaMode=\"HDMI-1: nvidia-auto-select { ViewPortIn=${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}, ViewPortOut=${HERMES_CLIENT_WIDTH}x${HERMES_CLIENT_HEIGHT}+0+0 }\""` |
+| Undo      | `nvidia-settings -a CurrentMetaMode=\"HDMI-1: nvidia-auto-select { ViewPortIn=3840x2160, ViewPortOut=3840x2160+0+0 }"`                                                                                            |
 
 ### Additional Considerations
 
@@ -334,16 +334,3 @@ socket to the compositor automatically.
 > [!CAUTION]
 > Because Flatpak packages run in a sandboxed environment and do not normally have access to the
 > host. A downstream Flatpak with host access may require `flatpak-spawn --host` before a host command.
-
-<div class="section_buttons">
-
-| Previous                          |                                    Next |
-|:----------------------------------|----------------------------------------:|
-| [Announcements](announcements.md) | [Awesome-Sunshine](awesome_sunshine.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>

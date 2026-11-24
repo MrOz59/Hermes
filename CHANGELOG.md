@@ -12,6 +12,8 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 ## [Unreleased]
 
 ### Added
+- A Rust 2024 Cargo workspace with C++26 module interop and browser WebAssembly
+  build and test targets for contributors.
 - Import Games on the Applications page (Linux; from PunkUnity): lists the games
   installed in Steam (native and Flatpak, every Steam library) and Lutris
   (native and Flatpak), and adds the ones you pick as apps that start the game

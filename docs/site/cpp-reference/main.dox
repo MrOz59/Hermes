@@ -1,0 +1,8 @@
+/**
+ * @mainpage Hermes C++ reference
+ *
+ * Browse the source files, namespaces, types, and diagrams generated from the Hermes host.
+ *
+ * - @ref http_api
+ * - [Hermes documentation](../../)
+ */

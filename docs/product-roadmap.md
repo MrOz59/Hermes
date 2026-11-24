@@ -10,7 +10,7 @@ Legend: `[x]` works · `[~]` works with a caveat named beside it · `[ ]` not st
 **Where the work lives.** Everything described in this file is committed to
 `main` and has shipped: Foundation, Tier 1 and Tier 2 in v0.5.1 and earlier,
 everything from "Isolation and multi-user" through "Game Mode" in v0.6.0,
-alongside Hermes-KMS v0.4.0. Work merged since then sits under [Unreleased](../CHANGELOG.md#unreleased) in
+alongside Hermes-KMS v0.4.0. Work merged since then sits under [Unreleased](https://github.com/MrOz59/Hermes/blob/main/CHANGELOG.md#unreleased) in
 the changelog. The priorities themselves are being re-evaluated in
 [#57](https://github.com/MrOz59/Hermes/issues/57); this file records what
 exists, not the order of what comes next.

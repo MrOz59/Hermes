@@ -14,7 +14,7 @@ cd Hermes
 ```
 
 Prepare the [local toolchain and development inputs](modularization/mcpp-migration.md)
-for your distribution. For the Web UI, install the project's locked dependencies with the Bun version in `src_assets/common/assets/web/package.json`
+for your distribution. For the Web UI, use the Bun version in `src_assets/common/assets/web/package.json` and install the locked frontend dependencies
 in the checkout before building.
 
 ```bash
@@ -35,22 +35,16 @@ GCC 14 for the CUDA translation unit in C++20, the newest dialect supported
 by the pinned nvcc. A separate host compiler builds the rest of Hermes. See the [local CUDA setup](modularization/mcpp-migration.md#build-and-check)
 for the project-local toolkit and compiler paths.
 
+## Rust interop
+
+To develop or test a Rust component alongside Hermes's C++26 modules,
+follow the [mcpp interop instructions](modularization/mcpp-migration.md#build-and-test-rust-components).
+The [Rust workspace guide](../rust/README.md) covers Cargo, code checks, and
+browser-targeted WebAssembly.
+
 ## Packages
 
 The [Linux package staging instructions](modularization/mcpp-migration.md#stage-a-fedora-package-payload)
 show how to build the host, brokers, and companion tools with their installed
 asset and library paths. Package CI jobs specify distribution-specific
-dependencies and artifact assembly. See the [build workflow](../.github/workflows/build.yml).
-
-<div class="section_buttons">
-
-| Previous                              |                            Next |
-|:--------------------------------------|--------------------------------:|
-| [Troubleshooting](troubleshooting.md) | [Contributing](contributing.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>
+dependencies and artifact assembly. See the [build workflow](https://github.com/MrOz59/Hermes/blob/main/.github/workflows/build.yml).

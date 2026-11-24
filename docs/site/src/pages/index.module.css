@@ -1,0 +1,250 @@
+.home {
+  width: min(100% - clamp(2rem, 7vw, 6rem), 75rem);
+  margin-inline: auto;
+  padding-block: clamp(1.25rem, 4vw, 3rem) clamp(2.5rem, 6vw, 5rem);
+}
+
+.hero {
+  --hero-ink: #fbf9ff;
+  --hero-muted: #d7cbe9;
+
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) minmax(0, .82fr);
+  align-items: center;
+  overflow: hidden;
+  min-height: 29rem;
+  color: var(--hero-ink);
+  background:
+    radial-gradient(ellipse at 79% 50%, #3b2071 0%, #211238 45%, transparent 76%),
+    #140d22;
+  border: 1px solid #432863;
+  border-radius: 1.5rem;
+}
+
+.heroContent {
+  z-index: 1;
+  padding: clamp(1.5rem, 5vw, 4.75rem);
+  padding-inline-end: 0;
+}
+
+.heroContent h1 {
+  margin: 0;
+  color: var(--hero-ink);
+  font-size: clamp(2.35rem, 5.8vw, 5.3rem);
+  font-weight: 750;
+  letter-spacing: -.06em;
+  line-height: 1;
+}
+
+.heroContent p {
+  max-width: 29rem;
+  margin: 1.3rem 0 1.8rem;
+  color: var(--hero-muted);
+  font-size: clamp(1rem, 1.6vw, 1.18rem);
+  line-height: 1.55;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+}
+
+.primaryAction,
+.secondaryAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .65rem;
+  min-height: 2.8rem;
+  padding: .55rem 1rem;
+  border: 1px solid transparent;
+  border-radius: .65rem;
+  font-weight: 650;
+  line-height: 1.3;
+  text-decoration: none;
+}
+
+.primaryAction {
+  color: #1d1036;
+  background: #d9c3ff;
+}
+
+.primaryAction:hover {
+  color: #1d1036;
+  background: #eadcff;
+  text-decoration: none;
+}
+
+.secondaryAction {
+  color: var(--hero-ink);
+  border-color: #8065a5;
+  background: #27183a;
+}
+
+.secondaryAction:hover {
+  color: white;
+  border-color: #c7a7f4;
+  background: #372451;
+  text-decoration: none;
+}
+
+.primaryAction:focus-visible,
+.secondaryAction:focus-visible {
+  outline-color: #f0e6ff;
+}
+
+.artwork {
+  position: relative;
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  overflow: hidden;
+  background: repeating-linear-gradient(
+    -36deg,
+    #bca1ff26 0 1px,
+    transparent 1px 24px
+  );
+  mask-image: linear-gradient(to right, transparent, black 24%);
+}
+
+.artwork::before,
+.artwork::after {
+  position: absolute;
+  width: min(76%, 20rem);
+  aspect-ratio: 1;
+  content: '';
+  border: 1px solid #bda1f75e;
+  border-radius: 50%;
+}
+
+.artwork::after {
+  width: min(94%, 25rem);
+  border-color: #bda1f735;
+}
+
+.mark {
+  z-index: 1;
+  width: clamp(8rem, 17vw, 14rem);
+  aspect-ratio: 1;
+  height: auto;
+  filter: drop-shadow(0 0 1.8rem #b39aff88);
+}
+
+.guideSection {
+  margin-top: clamp(1.7rem, 4vw, 3.4rem);
+}
+
+.sectionHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .4rem 1rem;
+  margin-bottom: .95rem;
+}
+
+.sectionHeading h2 {
+  margin: 0;
+  font-size: clamp(1.45rem, 2.7vw, 2rem);
+  letter-spacing: -.035em;
+}
+
+.sectionHeading > a {
+  font-weight: 650;
+}
+
+.guides {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guide {
+  position: relative;
+  display: block;
+  height: 100%;
+  min-height: 8.75rem;
+  padding: 1.15rem 2.8rem 1.15rem 1.15rem;
+  color: var(--ifm-font-color-base);
+  background: var(--hermes-surface);
+  border: 1px solid var(--hermes-border);
+  border-radius: .9rem;
+}
+
+.guide:hover {
+  color: var(--ifm-font-color-base);
+  background: var(--hermes-accent-surface);
+  border-color: var(--hermes-accent-border);
+  text-decoration: none;
+}
+
+.guide h3 {
+  margin: 0 0 .45rem;
+  font-size: 1.15rem;
+  letter-spacing: -.025em;
+}
+
+.guide p {
+  margin: 0;
+  color: var(--hermes-muted);
+  line-height: 1.52;
+}
+
+.guideArrow {
+  position: absolute;
+  top: 1.05rem;
+  right: 1rem;
+  color: var(--ifm-color-primary);
+  font-size: 1.2rem;
+}
+
+@media (max-width: 760px) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .heroContent {
+    padding-inline-end: clamp(1.5rem, 5vw, 4.75rem);
+  }
+
+  .artwork {
+    height: 9.5rem;
+    mask-image: linear-gradient(to bottom, transparent, black 24%);
+  }
+
+  .artwork::before {
+    width: 7.5rem;
+  }
+
+  .artwork::after {
+    width: 9.25rem;
+  }
+
+  .mark {
+    width: 5.4rem;
+  }
+
+  .guides {
+    grid-template-columns: minmax(0, 1fr);
+    gap: .65rem;
+  }
+
+  .guide {
+    min-height: auto;
+  }
+}
+
+@media (forced-colors: active) {
+  .primaryAction,
+  .secondaryAction,
+  .guide {
+    border-color: LinkText;
+  }
+}

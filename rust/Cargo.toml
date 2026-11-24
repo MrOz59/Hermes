@@ -1,0 +1,12 @@
+[workspace]
+members = ["crates/interop", "crates/rtp"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.100"
+license = "GPL-3.0-only"
+publish = false
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

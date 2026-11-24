@@ -31,16 +31,3 @@ to expose and where it came from.
 > [!NOTE]
 > Hermes publishes no container images. `lizardbyte/sunshine` on Docker Hub and
 > ghcr.io is upstream Sunshine, a different program.
-
-<div class="section_buttons">
-
-| Previous                       |                                                 Next |
-|:-------------------------------|-----------------------------------------------------:|
-| [Changelog](changelog.md) | [Third-Party Packages](third_party_packages.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>

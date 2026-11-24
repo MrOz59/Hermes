@@ -1,0 +1,20 @@
+[package]
+name = "hermes-posix-fixtures"
+standard = "c++26"
+
+[build]
+sources = []
+cxx_runtime = "host-coupled"
+cxxflags = ["-Wall", "-Wextra", "-Werror"]
+
+[targets.hermes-broker-socket-test]
+kind = "bin"
+main = "../fixtures/broker_socket.cpp"
+
+[targets.hermes-wayland-peer-test]
+kind = "bin"
+main = "../fixtures/wayland_peer.cpp"
+
+[targets.hermes-wayland-peer-check]
+kind = "bin"
+main = "../../tools/hermes-wayland-peer-check.cpp"

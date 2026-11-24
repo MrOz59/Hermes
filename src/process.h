@@ -364,7 +364,16 @@ namespace proc {
   std::string validate_app_image_path(std::string app_image_path);
   void refresh(const std::string &file_name, bool needs_terminate = true);
   void migrate_apps(nlohmann::json* fileTree_p, nlohmann::json* inputTree_p);
-  std::optional<proc::proc_t> parse(const std::string &file_name);
+  /**
+   * @brief Load the applications from apps.json.
+   * @param file_name The apps file.
+   * @param fallback_on_failure When the file can't be loaded, return the
+   *        fallback Desktop and built-in entries (startup) instead of nothing
+   *        (a reload, which keeps the current list).
+   * @return The loaded applications, or `std::nullopt` when the file couldn't
+   *         be loaded and no fallback was asked for.
+   */
+  std::optional<proc::proc_t> parse(const std::string &file_name, bool fallback_on_failure = true);
 
   /**
    * @brief Initialize proc functions

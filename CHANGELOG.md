@@ -209,6 +209,14 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   root may open read-write by design, is no longer a warning on every monitor
   scan. And the note that encoder testing may log errors now comes before
   those errors, not after a configured encoder's.
+- A reload of `apps.json` that fails keeps the current application list (from
+  PunkUnity). One entry Hermes could not read made it re-migrate the whole
+  file from scratch and write the result back, which can add back entries you
+  removed, and if loading still failed the list became just "Desktop
+  (fallback)"; unreadable JSON left only the built-in entries. A retry now
+  re-migrates in memory without writing the file, and a reload that fails
+  logs a warning and keeps the list. At startup, with no list to keep, the
+  fallback Desktop is still used. (Vibepollo made the same change.)
 - A frame too large for the protocol's four FEC blocks keeps as much FEC as
   still fits, instead of none (from PunkUnity). At the default 20%, frames
   over about 800 packets were sent with no parity at all, so a single lost

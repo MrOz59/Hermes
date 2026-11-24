@@ -6,8 +6,7 @@
     "dev": "bun --bun vite build --watch",
     "serve": "bun ../../../../tests/fixtures/http/serve.ts",
     "test": "bun test tests",
-    "typecheck": "bun --bun vue-tsc --noEmit && bun --bun tsc --project tsconfig.tools.json",
-    "docs:assets": "bun build --target browser --format iife --outdir ../../../../target/docs-assets ../../../../docs/api.ts ../../../../docs/configuration.ts"
+    "typecheck": "bun --bun vue-tsc --noEmit && bun --bun tsc --project tsconfig.tools.json"
   },
   "type": "module",
   "dependencies": {

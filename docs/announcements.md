@@ -42,7 +42,7 @@ typo would look like a missing announcement, not an error.
 You can equally edit `feed.json` directly in the GitHub web UI on the `feed`
 branch. That path does not run this script, so the branch carries
 `.github/workflows/lint-feed.yml`, which validates every push to it using
-`scripts/feed_lint.py` from `main`: a broken edit fails the check instead of
+`scripts/feed_lint.sh` from `main`: a broken edit fails the check instead of
 quietly not showing up. Nothing else runs on that branch — no build, no nightly
 tag move, no release.
 
@@ -105,16 +105,3 @@ problem is also reporting the exact commit they are on.
 Set `expires` to a date, or delete the entry. Deleting is fine — nothing else
 references it — but an `expires` written when the message is published means one
 less thing to remember.
-
-<div class="section_buttons">
-
-| Previous                          |                            Next |
-|:----------------------------------|--------------------------------:|
-| [Configuration](configuration.md) | [App Examples](app_examples.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>

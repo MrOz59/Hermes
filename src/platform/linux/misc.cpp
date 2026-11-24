@@ -61,6 +61,7 @@
 #include "src/config.h"
 #include "src/entry_handler.h"
 #include "src/logging.h"
+#include "src/network.h"
 #include "src/platform/common.h"
 #include "src/video.h"
 #include "vaapi.h"
@@ -409,9 +410,21 @@ namespace platf {
   }
 
   std::string get_mac_address(const std::string_view &address) {
+    // Compare addresses, not text: the address a client reached prints a
+    // link-local scope (`fe80::1%eth0`) that inet_ntop() leaves out, so a
+    // string match never found the interface of a link-local connection.
+    boost::system::error_code ec;
+    const auto parsed = boost::asio::ip::make_address(std::string {address}, ec);
+    if (ec) {
+      BOOST_LOG(warning) << "Unable to find MAC address for "sv << address << ": "sv << ec.message();
+      return "00:00:00:00:00:00"s;
+    }
+    const auto wanted = net::to_raw_address(parsed);
+
     auto ifaddrs = get_ifaddrs();
     for (auto pos = ifaddrs.get(); pos != nullptr; pos = pos->ifa_next) {
-      if (pos->ifa_addr && address == from_sockaddr(pos->ifa_addr)) {
+      const auto candidate = net::raw_from_sockaddr(pos->ifa_addr);
+      if (candidate && net::same_address(*candidate, wanted)) {
         std::ifstream mac_file("/sys/class/net/"s + pos->ifa_name + "/address");
         if (mac_file.good()) {
           std::string mac_address;

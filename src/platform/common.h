@@ -646,6 +646,13 @@ namespace platf {
 
   std::filesystem::path appdata();
 
+  /**
+   * @brief The MAC address of the interface that holds @p address.
+   * @details Addresses are compared as addresses, not text, so a link-local
+   * address printed with its scope (`fe80::1%eth0`) finds its interface.
+   * @param address The host address a client reached.
+   * @return The MAC address, or `00:00:00:00:00:00` when no interface holds it.
+   */
   std::string get_mac_address(const std::string_view &address);
 
   std::string get_local_ip_for_gateway();

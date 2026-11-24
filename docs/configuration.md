@@ -2443,65 +2443,71 @@ but at the cost of increasing bandwidth usage.
 ### adaptive_fec
 
 <table>
+  <tbody>
     <tr>
         <td>Description</td>
-        <td colspan="2">
-            Size FEC parity from what the client reports losing instead of using @code{fec_percentage} for every
-            frame. Clients that send @code{SS_FRAME_FEC_STATUS} report each block that needed parity or was dropped;
-            the host keeps the worst of the last ten seconds and asks for the smallest redundancy that leaves a
-            block unrecoverable less than 0.1% of the time.
-            <br><br>
-            Raising parity is immediate; lowering it waits five seconds so a single clean second does not start a
-            sawtooth. Only the client's own reports count as evidence: the sent-packet counter advances for every
-            block the host transmits, so it cannot tell a clean link from a client that never reports. Until the
-            first report arrives @code{fec_percentage} stands, and the first trustworthy second of reports starts
-            the five-second hold. A second counts once it covers at least three quarters of a second, because
-            jitter makes a rollover land slightly early; while no trustworthy second is in the window the last
-            value stands, since a stall is not a clean link.
-            @warning{Parity is counted against the stream's bitrate budget only at the configured
-            @code{fec_percentage}, so adaptive parity may briefly exceed it under heavy loss.}
-        </td>
+        <td colSpan={2}>
+
+Size FEC parity from what the client reports losing instead of using `fec_percentage` for every
+frame. Clients send `SS_FRAME_FEC_STATUS` for each block that needed parity or was dropped; the
+host keeps the worst of the last ten seconds and asks for the smallest redundancy that leaves a
+block unrecoverable less than 0.1% of the time.
+
+A lossy second raises parity as soon as it is counted; lowering waits five seconds, so a single
+clean second does not start a sawtooth. Only the client's own reports count as evidence: until
+the first report arrives `fec_percentage` stands as configured, and the first trustworthy second
+of reports starts the five-second hold. A second counts once it covers at least three quarters
+of a second, because jitter makes a rollover land slightly early; while no trustworthy second is
+in the window the last value stands, since a stall is not a clean link.
+
+:::warning
+
+Parity is counted against the stream's bitrate budget only at the configured `fec_percentage`,
+so adaptive parity may briefly exceed it under heavy loss.
+
+:::
+
+    </td>
     </tr>
     <tr>
         <td>Default</td>
-        <td colspan="2">@code{}
-            true
-            @endcode</td>
+        <td colSpan={2}>`enabled`</td>
     </tr>
     <tr>
         <td>Example</td>
-        <td colspan="2">@code{}
-            adaptive_fec = true
-            @endcode</td>
+        <td colSpan={2}>`adaptive_fec = enabled`</td>
     </tr>
+  </tbody>
 </table>
 
 ### adaptive_fec_max_percentage
 
 <table>
+  <tbody>
     <tr>
         <td>Description</td>
-        <td colspan="2">
-            Highest percentage adaptive FEC may ask for. Keep this at or below what the link can afford: parity is
-            bandwidth, and a client already losing packets has none to spare.
-        </td>
+        <td colSpan={2}>
+
+Highest percentage adaptive FEC may ask for. Keep this at or below what the link can afford:
+parity is bandwidth, and a client already losing packets has none to spare. A `fec_percentage`
+above it applies until the client's first report; turn `adaptive_fec` off to keep it for the
+whole stream.
+
+    </td>
     </tr>
     <tr>
         <td>Default</td>
-        <td colspan="2">@code{}
-            50
-            @endcode</td>
+        <td colSpan={2}>`50`</td>
     </tr>
     <tr>
         <td>Range</td>
-        <td colspan="2">1-50</td>
+        <td colSpan={2}>1-50</td>
     </tr>
     <tr>
         <td>Example</td>
-        <td colspan="2">@code{}
-            adaptive_fec_max_percentage = 50
-            @endcode</td>
+        <td colSpan={2}>`adaptive_fec_max_percentage = 50`</td>
     </tr>
+  </tbody>
 </table>
 
 ### qp

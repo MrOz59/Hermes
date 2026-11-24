@@ -417,7 +417,7 @@
         "adaptive_fec": "Adaptive FEC",
         "adaptive_fec_desc": "Sizes FEC from the client's own loss reports instead of holding the configured percentage: parity rises as soon as a second loses packets and falls again after five quiet seconds. It starts once the client has reported its first loss, so a link that never loses anything keeps the configured value.",
         "adaptive_fec_max_percentage": "Adaptive FEC Maximum Percentage",
-        "adaptive_fec_max_percentage_desc": "Highest percentage adaptive FEC may ask for. Parity is sent on top of the negotiated bitrate, so a high ceiling can push the stream past the bandwidth the client asked for.",
+        "adaptive_fec_max_percentage_desc": "Highest percentage adaptive FEC may ask for. Parity is sent on top of the negotiated bitrate, so a high ceiling can push the stream past the bandwidth the client asked for. A higher FEC Percentage applies only until the client's first loss report.",
         "ffmpeg_auto": "auto -- let ffmpeg decide (default)",
         "file_apps": "Apps File",
         "file_apps_desc": "The file where current apps of Hermes are stored.",

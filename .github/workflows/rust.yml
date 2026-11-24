@@ -1,0 +1,77 @@
+name: Rust interoperability
+
+on:
+  push:
+    paths:
+      - 'rust/**'
+      - 'mcpp/rust-interop-smoke/**'
+      - 'scripts/prepare-mcpp-ci.sh'
+      - 'src_assets/common/assets/web/package.json'
+      - '.github/workflows/rust.yml'
+  pull_request:
+    paths:
+      - 'rust/**'
+      - 'mcpp/rust-interop-smoke/**'
+      - 'scripts/prepare-mcpp-ci.sh'
+      - 'src_assets/common/assets/web/package.json'
+      - '.github/workflows/rust.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    container: fedora:45
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install build tools
+        run: dnf -y install ca-certificates curl git gcc-c++ libstdc++-static ninja-build rustup tar gzip unzip
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version-file: src_assets/common/assets/web/package.json
+      - name: Prepare pinned Rust and mcpp toolchains
+        run: |
+          export RUSTUP_HOME="$RUNNER_TEMP/hermes-rustup"
+          export CARGO_HOME="$RUNNER_TEMP/hermes-cargo"
+          export MCPP_HOME="$RUNNER_TEMP/hermes-mcpp"
+          export MCPP_TOOLCHAIN="path:$RUNNER_TEMP/hermes-gcc"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/hermes-runtime"
+          install -d -m700 "$XDG_RUNTIME_DIR"
+          rustup-init -y --no-modify-path --default-toolchain none
+          export PATH="$CARGO_HOME/bin:$PATH"
+          (
+            cd rust
+            rustc --version
+            rustup target add wasm32-unknown-unknown
+          )
+          scripts/prepare-mcpp-ci.sh
+          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\nMCPP_HOME=%s\nMCPP_TOOLCHAIN=%s\nXDG_RUNTIME_DIR=%s\n' \
+            "$RUSTUP_HOME" "$CARGO_HOME" "$MCPP_HOME" "$MCPP_TOOLCHAIN" "$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          printf '%s\n' "$CARGO_HOME/bin" "$MCPP_HOME/bin" >> "$GITHUB_PATH"
+      - name: Check formatting, lint and native Rust tests
+        working-directory: rust
+        env:
+          RUSTUP_AUTO_INSTALL: '0'
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --offline --locked -- -D warnings
+          cargo test --workspace --offline --locked
+      - name: Test the Rust ABI and borrowed buffers through C++26 and mcpp
+        working-directory: mcpp/rust-interop-smoke
+        run: mcpp test --offline
+      - name: Build and execute the browser-targeted WebAssembly module
+        working-directory: rust
+        env:
+          RUSTUP_AUTO_INSTALL: '0'
+        run: |
+          cargo rustc --offline --locked --release --target wasm32-unknown-unknown -p hermes-rust-interop --crate-type cdylib
+          HERMES_RUST_WASM="$GITHUB_WORKSPACE/target/rust/wasm32-unknown-unknown/release/hermes_rust_interop.wasm" bun test tests/wasm.test.ts

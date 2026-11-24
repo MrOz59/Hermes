@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Standalone regression-test consumer for scripts/test-wayland-peer.py.
+// Standalone regression-test consumer for the private Wayland socket fixture.
 #include "../src/platform/linux/wayland_peer.h"
 
 #include <iostream>

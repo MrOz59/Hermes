@@ -45,8 +45,7 @@ namespace {
   ///
   /// The first second of a session only starts the baseline, so a caller that wants
   /// an estimate has to feed at least two.
-  int run_seconds(adaptive_fec_t &fec, counters_t &counters, double loss, int seconds,
-                  int configured = 20, int ceiling = 50) {
+  int run_seconds(adaptive_fec_t &fec, counters_t &counters, double loss, int seconds, int configured = 20, int ceiling = 50) {
     int last = configured;
     for (auto i = 0; i < seconds; ++i) {
       last = run_second(fec, counters, loss, configured, ceiling);
@@ -62,8 +61,7 @@ namespace {
   /**
    * Like run_second, but the second is cut to @p span_ms, the way jitter cuts a rollover.
    */
-  int run_second_of_span(adaptive_fec_t &fec, counters_t &counters, double loss, std::int64_t span_ms,
-                         int configured = 20, int ceiling = 50) {
+  int run_second_of_span(adaptive_fec_t &fec, counters_t &counters, double loss, std::int64_t span_ms, int configured = 20, int ceiling = 50) {
     constexpr int shards_per_frame = 40;
     const auto start_ms = counters.now_ms;
     int last = configured;
@@ -91,6 +89,19 @@ TEST(AdaptiveFec, TrafficWithoutReportsKeepsTheOperatorsValue) {
     counters.now_ms += 1000;
     EXPECT_EQ(sample(fec, counters), 20) << "second " << second;
   }
+}
+
+TEST(AdaptiveFec, AConfiguredValueAboveTheCeilingStandsUntilTheFirstReport) {
+  // The ceiling bounds the estimate, not the operator's own value: a client that
+  // never reports keeps fec_percentage exactly, as it would with adaptive_fec off.
+  adaptive_fec_t fec;
+  counters_t counters;
+  counters.sent += 40 * 60;
+  counters.now_ms += 1000;
+  EXPECT_EQ(sample(fec, counters, 80, 50), 80);
+  // Once the client reports, the estimate takes over within the ceiling, after the hold.
+  EXPECT_EQ(run_seconds(fec, counters, 0.20, 2, 80, 50), 80);
+  EXPECT_EQ(run_seconds(fec, counters, 0.20, 6, 80, 50), 50);
 }
 
 TEST(AdaptiveFec, AReportedLossRaisesParity) {
@@ -141,9 +152,10 @@ TEST(AdaptiveFec, HoldsTheHigherValueThroughTheWindowThenRelaxes) {
 }
 
 TEST(AdaptiveFec, RespectsTheCeiling) {
+  // Heavy loss raises parity at once, but no further than the ceiling.
   adaptive_fec_t fec;
   counters_t counters;
-  EXPECT_EQ(run_seconds(fec, counters, 0.30, 2, 20, 12), 12);
+  EXPECT_EQ(run_seconds(fec, counters, 0.30, 2, 5, 12), 12);
 }
 
 TEST(AdaptiveFec, ASliverOfASecondIsNotAnEstimate) {

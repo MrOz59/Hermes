@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace stream {
 
@@ -21,9 +23,9 @@ namespace stream {
    * picture loss is caused by bursts, not by the average.
    *
    * The decision asks for the smallest redundancy whose chance of leaving a block
-   * unrecoverable is at most 0.1% at the observed loss rate. Raising is immediate;
-   * lowering waits five seconds, so a single clean second does not start a
-   * redundancy sawtooth.
+   * unrecoverable is at most 0.1% at the observed loss rate. A raise applies as
+   * soon as a lossy second is counted, with no hold; lowering waits five seconds,
+   * so a single clean second does not start a redundancy sawtooth.
    *
    * Header-only and dependency-free so it can be unit tested without a session.
    */
@@ -38,7 +40,7 @@ namespace stream {
     static constexpr double target_unrecoverable = 0.001;
     /// Data shards assumed per block when turning a target into a percentage.
     static constexpr int representative_data_shards = 10;
-    /// A second needs at least this many sent packets before its ratio is trusted.
+    /// A second needs at least this many sent data packets before its ratio is trusted.
     static constexpr std::uint64_t min_packets_per_bucket = 100;
     /// How long a lower estimate must hold before it is applied.
     static constexpr std::int64_t lower_cooldown_ms = 5000;
@@ -61,27 +63,27 @@ namespace stream {
     };
 
   public:
-
     /**
      * The percentage to encode the next frame with.
-     * @param sent_total Packets sent so far, parity included (video_loss_monitor_t::sent_packets()).
+     * @param sent_total Data packets sent so far (video_loss_monitor_t::sent_data_packets()): the
+     *        client only looks at a block until it can rebuild it, so loss is measured against data.
      * @param missing_total Packets the client reported missing (video_loss_monitor_t::missing_packets()).
      * @param reported_total Blocks the client reported on (video_loss_monitor_t::reported_blocks()).
      *        Zero means the client has never sent SS_FRAME_FEC_STATUS, which is not
      *        evidence of a clean link: the configured value stands.
      * @param now_ms Monotonic milliseconds.
-     * @param configured The operator's configured percentage, used until the window has data.
-     * @param ceiling The highest percentage this session may ask for.
+     * @param configured The operator's configured percentage, used as is until the window has data.
+     * @param ceiling The highest percentage the estimate may ask for.
      */
-    int percentage(std::uint64_t sent_total, std::uint64_t missing_total, std::uint64_t reported_total, std::int64_t now_ms,
-                 int configured, int ceiling) {
-      const auto bound = std::clamp(ceiling, min_percentage, max_percentage);
-
+    int percentage(std::uint64_t sent_total, std::uint64_t missing_total, std::uint64_t reported_total, std::int64_t now_ms, int configured, int ceiling) {
       if (reported_total == 0) {
         // Traffic alone proves nothing: on_sent() counts every block the host transmits,
         // while only the client's reports say what arrived. Gating on the sent counter
         // would make a client that never reports look like a perfect link.
-        current = std::clamp(configured, min_percentage, bound);
+        //
+        // The operator's value stands as configured, even above the ceiling: the ceiling
+        // bounds what the estimate may ask for, and there is no estimate yet.
+        current = std::max(configured, min_percentage);
         last_second = -1;
         return current;
       }
@@ -94,7 +96,8 @@ namespace stream {
         last_missing = missing_total;
         last_second = second;
         last_rollover_ms = now_ms;
-        current = std::clamp(configured, min_percentage, bound);
+        required.reset();
+        current = std::max(configured, min_percentage);
         return current;
       }
 
@@ -115,9 +118,17 @@ namespace stream {
         bucket.missing = delta_missing;
         bucket.covered_ms = covered_ms;
         last_second = second;
+
+        // The buckets and the window only move at a rollover, so the estimate is worked
+        // out here once a second instead of on every frame of the video thread.
+        if (has_sample(second)) {
+          required = percentage_for(worst_loss(second), ceiling);
+        } else {
+          required.reset();
+        }
       }
 
-      if (!has_sample(second)) {
+      if (!required) {
         // Either nothing has been sampled yet, or the last trustworthy second has aged
         // out of the window. Hold the last decision: silence is not a clean link, and
         // dropping back to the configured value here would hand back parity without a
@@ -131,18 +142,15 @@ namespace stream {
         last_lowered_ms = now_ms;
       }
 
-      const auto loss = worst_loss(second);
-      const auto required = percentage_for(loss, bound);
-
-      if (required > current) {
-        current = required;
+      if (*required > current) {
+        current = *required;
         // A raise restarts the hold, so the next reduction waits for five quiet
         // seconds after the last one rather than counting time since the last drop.
         last_lowered_ms = now_ms;
         return current;
       }
-      if (required < current && now_ms - last_lowered_ms >= lower_cooldown_ms) {
-        current = required;
+      if (*required < current && now_ms - last_lowered_ms >= lower_cooldown_ms) {
+        current = *required;
         last_lowered_ms = now_ms;
       }
       return current;
@@ -237,6 +245,8 @@ namespace stream {
     std::int64_t last_rollover_ms {0};
     /// Negative until the first trustworthy sample; it then holds the last reduction.
     std::int64_t last_lowered_ms {-1};
+    /// What the window asks for, as of the last rollover; empty while no second is trustworthy.
+    std::optional<int> required;
     int current {0};
   };
 

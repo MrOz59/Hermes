@@ -23,6 +23,7 @@ extern "C" {
 }
 
 // local includes
+#include "adaptive_fec.h"
 #include "client_mic_router.h"
 #include "config.h"
 #include "crypto.h"
@@ -481,6 +482,8 @@ namespace stream {
 
     /// Video the client reported losing on the way to it.
     video_loss_monitor_t video_loss;
+    /// Parity percentage for the next frame, from what the client reported losing.
+    adaptive_fec_t adaptive_fec;
   };
 
   // A client on a bad link can go silent every second; past this many the
@@ -1590,6 +1593,13 @@ namespace stream {
       }
 
       auto fecPercentage = config::stream.fec_percentage;
+      if (config::stream.adaptive_fec) {
+        // The client already reports what it lost (SS_FRAME_FEC_STATUS), so the host
+        // can size parity to the observed worst second instead of a fixed guess.
+        const auto since_epoch = std::chrono::steady_clock::now().time_since_epoch();
+        const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(since_epoch).count();
+        fecPercentage = session->adaptive_fec.percentage(session->video_loss.sent_data_packets(), session->video_loss.missing_packets(), session->video_loss.reported_blocks(), now_ms, config::stream.fec_percentage, config::stream.adaptive_fec_max_percentage);
+      }
 
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
@@ -1833,7 +1843,7 @@ namespace stream {
 
           ++blockIndex;
           lowseq += shards.size();
-          session->video_loss.on_sent(shards.size());
+          session->video_loss.on_sent(shards.size(), shards.data_shards);
         });
 
         session->video.lowseq = lowseq;

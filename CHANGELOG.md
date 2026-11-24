@@ -20,6 +20,19 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   (`steam steam://rungameid/<id>` or `lutris lutris:rungameid/<id>`, detached).
   Proton, the Steam Linux Runtime and redistributables are left out, and games
   that already have an app are marked. Nothing is added until you choose.
+- Adaptive FEC parity (`adaptive_fec`, on by default; `adaptive_fec_max_percentage`,
+  50; from SOVLOOKUP). The host already received the client's per-block FEC
+  status (`SS_FRAME_FEC_STATUS`) and only logged it when a stream ended; it now
+  sizes parity from the worst second of the last ten, asking for the smallest
+  redundancy that leaves a block unrecoverable less than 0.1% of the time.
+  A lossy second raises parity as soon as it is counted, lowering it waits five
+  seconds so one clean second cannot start a sawtooth, and a client that has
+  never reported a loss keeps `fec_percentage` as configured. A repaired block
+  counts only the packets missing below the highest one received: the client
+  reports it as soon as it can be rebuilt, before the rest of its parity
+  arrives, so the end-of-stream loss log reads the real loss as well. Parity is
+  still counted against the bitrate budget at the configured `fec_percentage`,
+  so adaptive parity may briefly exceed it under heavy loss.
 - Hermes names an application whose audio misses the stream (from PunkUnity).
   A stream follows the default sink unless an output was chosen for it, in
   the desktop's sound settings or remembered by the sound server for that

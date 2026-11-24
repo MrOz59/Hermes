@@ -168,6 +168,8 @@ export default defineComponent({
           name: "Advanced",
           options: {
             "fec_percentage": 20,
+            "adaptive_fec": "enabled",
+            "adaptive_fec_max_percentage": 50,
             "qp": 28,
             "min_threads": 2,
             "limit_framerate": "enabled",

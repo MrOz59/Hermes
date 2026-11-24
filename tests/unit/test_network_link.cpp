@@ -41,7 +41,7 @@ namespace {
     return *net::raw_from_sockaddr(sockaddr_of(text, scope).get());
   }
 
-  interface_address_t link(const std::string &text, unsigned prefix, std::uint32_t scope = 0) {
+  interface_address_t subnet(const std::string &text, unsigned prefix, std::uint32_t scope = 0) {
     return {raw(text, scope), prefix};
   }
 }  // namespace
@@ -49,14 +49,14 @@ namespace {
 TEST(NetworkLink, AGlobalAddressOfTheHomeNetworkIsOnLink) {
   // The case Hestia RS now streams as LAN: no private range covers a GUA, but
   // it shares the interface's /64.
-  const std::vector<interface_address_t> links {link("2001:db8:1:2::10", 64)};
+  const std::vector<interface_address_t> links {subnet("2001:db8:1:2::10", 64)};
   EXPECT_TRUE(net::on_link(raw("2001:db8:1:2:abcd::99"), links));
   EXPECT_FALSE(net::on_link(raw("2001:db8:1:3::99"), links)) << "the next /64 is another network";
   EXPECT_FALSE(net::on_link(raw("2001:db8:ffff::1"), links));
 }
 
 TEST(NetworkLink, IPv4SubnetsCountTheirPrefixBits) {
-  const std::vector<interface_address_t> links {link("203.0.113.10", 24), link("198.51.100.17", 20)};
+  const std::vector<interface_address_t> links {subnet("203.0.113.10", 24), subnet("198.51.100.17", 20)};
   EXPECT_TRUE(net::on_link(raw("203.0.113.200"), links));
   EXPECT_FALSE(net::on_link(raw("203.0.114.1"), links));
   // A /20 splits the third byte: 198.51.96.0 - 198.51.111.255.
@@ -66,13 +66,13 @@ TEST(NetworkLink, IPv4SubnetsCountTheirPrefixBits) {
 
 TEST(NetworkLink, AHostRouteCoversNoOtherAddress) {
   // Tailscale and other VPNs give the host a /32 or /128.
-  const std::vector<interface_address_t> links {link("100.101.102.103", 32), link("fd7a:115c:a1e0::1", 128)};
+  const std::vector<interface_address_t> links {subnet("100.101.102.103", 32), subnet("fd7a:115c:a1e0::1", 128)};
   EXPECT_FALSE(net::on_link(raw("100.101.102.104"), links));
   EXPECT_FALSE(net::on_link(raw("fd7a:115c:a1e0::2"), links));
 }
 
 TEST(NetworkLink, AnInterfaceWithoutANetmaskCoversNothing) {
-  const std::vector<interface_address_t> links {link("2001:db8::1", 0), link("192.0.2.1", 0)};
+  const std::vector<interface_address_t> links {subnet("2001:db8::1", 0), subnet("192.0.2.1", 0)};
   EXPECT_FALSE(net::on_link(raw("2001:db8::2"), links));
   EXPECT_FALSE(net::on_link(raw("8.8.8.8"), links)) << "a zero prefix would otherwise match everything";
 }
@@ -83,7 +83,7 @@ TEST(NetworkLink, FamiliesNeverMatch) {
 }
 
 TEST(NetworkLink, LinkLocalOnAnotherInterfaceIsNotOnLink) {
-  const std::vector<interface_address_t> links {link("fe80::1", 64, 2)};
+  const std::vector<interface_address_t> links {subnet("fe80::1", 64, 2)};
   EXPECT_TRUE(net::on_link(raw("fe80::99", 2), links));
   EXPECT_FALSE(net::on_link(raw("fe80::99", 3), links)) << "fe80::/64 exists once per interface";
 }
@@ -92,7 +92,7 @@ TEST(NetworkLink, IPv4MappedAddressesReadAsIPv4) {
   const auto mapped = raw("::ffff:192.0.2.33");
   EXPECT_FALSE(mapped.v6);
   EXPECT_EQ(mapped.size(), 4u);
-  const std::vector<interface_address_t> links {link("192.0.2.1", 24)};
+  const std::vector<interface_address_t> links {subnet("192.0.2.1", 24)};
   EXPECT_TRUE(net::on_link(mapped, links));
 }
 

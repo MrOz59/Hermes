@@ -10,6 +10,8 @@
 #include <sstream>
 
   #include <fcntl.h>
+  #include <ifaddrs.h>
+  #include <net/if.h>
 
 // local includes
 #include "config.h"
@@ -52,36 +54,99 @@ namespace net {
     return PC;
   }
 
-  net_e from_address(const std::string_view &view) {
-    auto addr = normalize_address(ip::make_address(view));
+  namespace {
+    /**
+     * @brief PC or LAN from the fixed ranges, WAN when none covers the address.
+     */
+    net_e from_ranges(const ip::address &addr) {
+      if (addr.is_v6()) {
+        for (auto &range : pc_ips_v6) {
+          if (range.hosts().find(addr.to_v6()) != range.hosts().end()) {
+            return PC;
+          }
+        }
 
-    if (addr.is_v6()) {
-      for (auto &range : pc_ips_v6) {
-        if (range.hosts().find(addr.to_v6()) != range.hosts().end()) {
-          return PC;
+        for (auto &range : lan_ips_v6) {
+          if (range.hosts().find(addr.to_v6()) != range.hosts().end()) {
+            return LAN;
+          }
+        }
+      } else {
+        for (auto &range : pc_ips_v4) {
+          if (range.hosts().find(addr.to_v4()) != range.hosts().end()) {
+            return PC;
+          }
+        }
+
+        for (auto &range : lan_ips_v4) {
+          if (range.hosts().find(addr.to_v4()) != range.hosts().end()) {
+            return LAN;
+          }
         }
       }
 
-      for (auto &range : lan_ips_v6) {
-        if (range.hosts().find(addr.to_v6()) != range.hosts().end()) {
-          return LAN;
-        }
-      }
-    } else {
-      for (auto &range : pc_ips_v4) {
-        if (range.hosts().find(addr.to_v4()) != range.hosts().end()) {
-          return PC;
-        }
-      }
-
-      for (auto &range : lan_ips_v4) {
-        if (range.hosts().find(addr.to_v4()) != range.hosts().end()) {
-          return LAN;
-        }
-      }
+      return WAN;
     }
+  }  // namespace
 
-    return WAN;
+  raw_address_t to_raw_address(const boost::asio::ip::address &address) {
+    raw_address_t raw;
+    const auto normalized = normalize_address(address);
+    if (normalized.is_v4()) {
+      const auto bytes = normalized.to_v4().to_bytes();
+      std::copy(bytes.begin(), bytes.end(), raw.bytes.begin());
+      return raw;
+    }
+    const auto v6 = normalized.to_v6();
+    const auto bytes = v6.to_bytes();
+    std::copy(bytes.begin(), bytes.end(), raw.bytes.begin());
+    raw.v6 = true;
+    raw.scope = static_cast<std::uint32_t>(v6.scope_id());
+    return raw;
+  }
+
+  net_e from_address_ranges(const std::string_view &view) {
+    return from_ranges(normalize_address(ip::make_address(view)));
+  }
+
+  net_e from_address(const std::string_view &view, std::span<const interface_address_t> links) {
+    const auto addr = normalize_address(ip::make_address(view));
+    if (const auto kind = from_ranges(addr); kind != WAN) {
+      return kind;
+    }
+    return on_link(to_raw_address(addr), links) ? LAN : WAN;
+  }
+
+  net_e from_address(const std::string_view &view) {
+    const auto addr = normalize_address(ip::make_address(view));
+    if (const auto kind = from_ranges(addr); kind != WAN) {
+      return kind;
+    }
+    // Only an address outside the fixed ranges pays for listing the interfaces.
+    // A client on the home network over an IPv6 global address is local: Hestia
+    // RS streams to it as LAN, and so should the host.
+    const auto links = interface_addresses();
+    return on_link(to_raw_address(addr), links) ? LAN : WAN;
+  }
+
+  std::vector<interface_address_t> interface_addresses() {
+    std::vector<interface_address_t> result;
+    ifaddrs *list = nullptr;
+    if (getifaddrs(&list) != 0) {
+      return result;
+    }
+    for (auto *entry = list; entry != nullptr; entry = entry->ifa_next) {
+      if ((entry->ifa_flags & IFF_UP) == 0 || (entry->ifa_flags & IFF_LOOPBACK) != 0) {
+        continue;
+      }
+      const auto address = raw_from_sockaddr(entry->ifa_addr);
+      if (!address) {
+        continue;
+      }
+      result.push_back({*address, prefix_from_netmask(entry->ifa_netmask, entry->ifa_addr->sa_family == AF_INET6)});
+    }
+    freeifaddrs(list);
+    return result;
   }
 
   std::string_view to_enum_string(net_e net) {

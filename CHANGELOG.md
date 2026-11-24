@@ -119,6 +119,13 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   (`virtualhid_stable_mac`, on by default; [#95], from d3adb5). It takes
   precedence over `virtualhid_randomize_mac`; turn it off for the previous
   per-session addresses.
+- A client on a subnet the host is attached to counts as LAN, as Hestia RS
+  already treats it: an IPv6 global address of the home network now gets
+  `lan_encryption_mode`, the Web UI under `origin_web_ui_allowed = lan` and the
+  local API token, where it used to count as WAN because no private range
+  covers it. The fixed private, shared and link-local ranges are unchanged, a
+  VPN's single-address route (Tailscale's `/32`, `/128`) adds nothing, and the
+  UPnP double-NAT check still looks at the ranges alone.
 
 ### Fixed
 - A game that starts Steam from a detached command (games added with Import
@@ -281,6 +288,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   namespace inside the desktop, so its pads stayed on the host: Steam's menus
   took the controller, the game got nothing. A process now belongs to the
   desktop when it descends from one in its namespace.
+- `serverinfo` reports the host's MAC address to a client connected over an
+  IPv6 link-local address. The address it reached is printed with its scope
+  (`fe80::…%eth0`) and the interface's without, so the lookup compared text
+  that never matched and answered `00:00:00:00:00:00`, leaving that client
+  without Wake-on-LAN.
+- The configuration docs give `address_family`'s real default, `both`.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

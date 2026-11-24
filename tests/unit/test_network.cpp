@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 #include <src/network.h>
 #include <src/thread_safe.h>
+#include <string>
+#include <vector>
 
   #include <fcntl.h>
 
@@ -318,4 +320,49 @@ TEST(NetworkStartupRollbackTest, FailedSharedInitializationReleasesAnAcquiredPor
   second_reference.release();
   EXPECT_TRUE(net::udp_port_available(net::IPV4, port));
   EXPECT_EQ(shutdowns, 1);
+}
+
+namespace {
+  net::interface_address_t interface_address(const std::string &address, unsigned prefix) {
+    return {net::to_raw_address(boost::asio::ip::make_address(address)), prefix};
+  }
+}  // namespace
+
+TEST(NetworkFromAddress, AnAddressOnTheHostsSubnetIsLan) {
+  // Hestia RS streams to an IPv6 global address of the home network as LAN;
+  // the host must agree, or it picks the WAN encryption mode and the Web UI
+  // turns the client away.
+  const std::vector links {interface_address("2001:db8:1:2::10", 64), interface_address("203.0.113.10", 24)};
+  EXPECT_EQ(net::from_address("2001:db8:1:2::99", links), net::LAN);
+  EXPECT_EQ(net::from_address("203.0.113.200", links), net::LAN);
+  EXPECT_EQ(net::from_address("::ffff:203.0.113.201", links), net::LAN);
+  EXPECT_EQ(net::from_address("2001:db8:1:3::99", links), net::WAN);
+  EXPECT_EQ(net::from_address("198.51.100.1", links), net::WAN);
+}
+
+TEST(NetworkFromAddress, TheFixedRangesDoNotDependOnTheInterfaces) {
+  const std::vector<net::interface_address_t> none;
+  EXPECT_EQ(net::from_address("127.0.0.1", none), net::PC);
+  EXPECT_EQ(net::from_address("::1", none), net::PC);
+  EXPECT_EQ(net::from_address("192.168.1.5", none), net::LAN);
+  EXPECT_EQ(net::from_address("fd00::5", none), net::LAN);
+  EXPECT_EQ(net::from_address("fe80::5", none), net::LAN);
+  EXPECT_EQ(net::from_address("2001:db8::5", none), net::WAN);
+}
+
+TEST(NetworkFromAddress, RangesAloneIgnoreTheHostsSubnets) {
+  // UPnP asks whether a router's external address is private; sharing a
+  // subnet with this host does not make it so.
+  EXPECT_EQ(net::from_address_ranges("10.1.2.3"), net::LAN);
+  EXPECT_EQ(net::from_address_ranges("203.0.113.200"), net::WAN);
+}
+
+TEST(NetworkFromAddress, RawAddressesKeepTheLinkLocalScope) {
+  const auto raw = net::to_raw_address(boost::asio::ip::make_address("fe80::1%7"));
+  EXPECT_TRUE(raw.v6);
+  EXPECT_EQ(raw.scope, 7u);
+  const auto mapped = net::to_raw_address(boost::asio::ip::make_address("::ffff:192.0.2.7"));
+  EXPECT_FALSE(mapped.v6);
+  EXPECT_EQ(mapped.bytes[0], 192);
+  EXPECT_EQ(mapped.bytes[3], 7);
 }

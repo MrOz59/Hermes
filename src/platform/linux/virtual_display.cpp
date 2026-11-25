@@ -2639,17 +2639,35 @@ namespace VDISPLAY {
     return true;
   }
 
-  std::optional<std::string> kscreenRefusedLayout(std::string_view output) {
-    constexpr std::string_view marker {"applying config failed"};
+  std::optional<std::string> kscreenLayoutFailure(std::string_view output) {
+    // Every way libkscreen's doctor.cpp reports an option it did not apply or a
+    // configuration KWin refused. Its debug lines ("kscreen.doctor: Set output
+    // position ...") and the mode it found are not failures.
+    constexpr std::string_view markers[] {
+      "applying config failed",  // KWin refused the configuration
+      " not found.",  // "Output with name or uuid X", "Output with id N", "Output mode M"
+      "Wrong input",
+      "Invalid ",
+      "Could not set ",
+      "No output ",
+      "DBus error from KWin",
+      "Unable to parse",  // a position or an argument
+      "does not support disabling",
+      "DPMS not supported",
+      "DPMS is only supported",
+      "argument not understood",  // --dpms
+    };
     std::size_t start = 0;
     while (start < output.size()) {
       const auto end = std::min(output.find('\n', start), output.size());
       auto line = output.substr(start, end - start);
-      if (line.find(marker) != std::string_view::npos) {
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
-          line.remove_suffix(1);
+      for (const auto marker : markers) {
+        if (line.find(marker) != std::string_view::npos) {
+          while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+            line.remove_suffix(1);
+          }
+          return std::string {line};
         }
-        return std::string {line};
       }
       start = end + 1;
     }
@@ -2844,9 +2862,9 @@ namespace VDISPLAY {
                            << (timed_out ? "did not finish in time and was stopped: " : "failed: ") << command;
         return false;
       }
-      // A configuration KWin refuses still exits 0; only the output says so.
-      if (const auto refused = kscreenRefusedLayout(*output)) {
-        BOOST_LOG(warning) << "[VDISPLAY/KScreen] KWin refused the layout (" << *refused << "): " << command;
+      // kscreen-doctor exits 0 whatever happened; only its output tells.
+      if (const auto failure = kscreenLayoutFailure(*output)) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] The layout was not applied (" << *failure << "): " << command;
         return false;
       }
       return true;

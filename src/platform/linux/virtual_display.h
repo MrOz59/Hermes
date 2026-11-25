@@ -1001,17 +1001,20 @@ namespace VDISPLAY {
   std::optional<kscreen_hdr_state_t> kscreenHdrState(const std::string &json_text, const std::string &output);
 
   /**
-   * @brief Why KWin refused a layout kscreen-doctor asked for, read from its output.
+   * @brief What went wrong with a kscreen-doctor layout command, read from its output.
    *
-   * kscreen-doctor reports a refused configuration as "applying config failed!"
-   * followed by KWin's reason (for example "Position of enabled output Virtual-1
-   * is negative (-323, 0)"), and still exits 0. Nothing of the request is
-   * applied then: not the position, the mode or the scale.
+   * kscreen-doctor exits 0 whatever happened: on an error it calls
+   * qApp->exit() with a code, then applies the configuration anyway and calls
+   * qApp->exit(0) (libkscreen src/doctor/doctor.cpp). Only its output tells.
+   * It stops reading the command at the first option it cannot use (an
+   * output or mode it cannot find, an invalid value) and applies the options
+   * before it, so the layout may be only partly applied; and KWin may refuse
+   * the whole configuration ("applying config failed!" and KWin's reason).
    *
    * @param output What kscreen-doctor printed, stdout and stderr together.
-   * @return The line that says so, or nothing when the layout was applied.
+   * @return The first line reporting a failure, or nothing when there was none.
    */
-  std::optional<std::string> kscreenRefusedLayout(std::string_view output);
+  std::optional<std::string> kscreenLayoutFailure(std::string_view output);
 
   /** What a virtual output streams for a client's HDR request. */
   struct hdr_launch_mode_t {

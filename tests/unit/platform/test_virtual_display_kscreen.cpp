@@ -620,30 +620,60 @@ TEST(KWinInputBinding, BindsOnlyHermesTouchAndPenDevices) {
   EXPECT_FALSE(VDISPLAY::isHermesKWinInputDevice("Hermes Session Touch", 0xBEEF, 0xDEAD));
 }
 
-TEST(KScreenRefusedLayout, ReadsKWinsReasonFromKscreenDoctor) {
-  // Haven, 2026-11-24: kscreen-doctor printed this and exited 0, and Hermes
-  // logged the layout as applied.
-  const auto refused = VDISPLAY::kscreenRefusedLayout(
+// Each line is what kscreen-doctor printed on Haven (KWin 6.8.3), where it
+// exited 0 every time; the others are its messages from libkscreen's doctor.cpp.
+TEST(KScreenLayoutFailure, KWinRefusingTheConfiguration) {
+  const auto failure = VDISPLAY::kscreenLayoutFailure(
     "kscreen.doctor: Set output position QPoint(-323,0)\n"
     "applying config failed! Position of enabled output Virtual-1 is negative (-323, 0)\n"
   );
-  ASSERT_TRUE(refused.has_value());
-  EXPECT_EQ(*refused, "applying config failed! Position of enabled output Virtual-1 is negative (-323, 0)");
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(*failure, "applying config failed! Position of enabled output Virtual-1 is negative (-323, 0)");
 }
 
-TEST(KScreenRefusedLayout, AnAppliedLayoutIsNotRefused) {
-  EXPECT_FALSE(VDISPLAY::kscreenRefusedLayout(
+TEST(KScreenLayoutFailure, AnOutputKWinDoesNotHave) {
+  // What a layout naming DP-2 meets while a waking monitor is off the link.
+  const auto failure = VDISPLAY::kscreenLayoutFailure("Output with name or uuid DP-9 not found.\n");
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(*failure, "Output with name or uuid DP-9 not found.");
+  EXPECT_TRUE(VDISPLAY::kscreenLayoutFailure("Output with id 7 not found.\n").has_value());
+}
+
+TEST(KScreenLayoutFailure, AModeTheOutputDoesNotHave) {
+  EXPECT_TRUE(VDISPLAY::kscreenLayoutFailure("Output mode 2992x1344@60 not found.\n").has_value());
+}
+
+TEST(KScreenLayoutFailure, AnOptionKscreenDoctorCannotUse) {
+  for (const auto *line : {
+         "kscreen.doctor: Invalid position: \"-x,0\"",
+         "kscreen.doctor: Could not set scale  0.1  to output  1",
+         "kscreen.doctor: Wrong input: Only allowed values for hdr are \"enable\", \"disable\" and \"toggle\"",
+         "kscreen.doctor: No output DP-9",
+         "kscreen.doctor: DBus error from KWin: org.freedesktop.DBus.Error.ServiceUnknown x",
+         "Unable to parse position: -x,0",
+         "Unable to parse arguments: output.DP-2",
+         "kscreen.doctor: Output 2 does not support disabling",
+         "kscreen.doctor: DPMS not supported in this system",
+         "DPMS is only supported on Wayland.",
+         "--dpms argument not understood (sleep)",
+       }) {
+    EXPECT_TRUE(VDISPLAY::kscreenLayoutFailure(line).has_value()) << line;
+  }
+}
+
+TEST(KScreenLayoutFailure, AnAppliedLayoutIsNoFailure) {
+  EXPECT_FALSE(VDISPLAY::kscreenLayoutFailure(
                  "kscreen.doctor: Set output position QPoint(0,0)\n"
                  "kscreen.doctor: Set output position QPoint(2560,0)\n"
                  "kscreen.doctor: Taddaaa! Found mode \"1\" \"2992x1344@60\"\n"
                  "kscreen.doctor: Output 1 set mode \"2992x1344@60\"\n"
   )
                  .has_value());
-  EXPECT_FALSE(VDISPLAY::kscreenRefusedLayout("").has_value());
+  EXPECT_FALSE(VDISPLAY::kscreenLayoutFailure("").has_value());
 }
 
-TEST(KScreenRefusedLayout, AReasonOnTheLastLineWithoutANewline) {
-  const auto refused = VDISPLAY::kscreenRefusedLayout("applying config failed! some reason\r");
-  ASSERT_TRUE(refused.has_value());
-  EXPECT_EQ(*refused, "applying config failed! some reason");
+TEST(KScreenLayoutFailure, AFailureOnTheLastLineWithoutANewline) {
+  const auto failure = VDISPLAY::kscreenLayoutFailure("applying config failed! some reason\r");
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(*failure, "applying config failed! some reason");
 }

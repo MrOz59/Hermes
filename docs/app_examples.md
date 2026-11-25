@@ -253,6 +253,11 @@ to every client, on or off. The shipped Gamescope Steam Session forces it,
 since Gamescope needs a display at the client's mode. Each launch logs the
 decision and who made it (`[Settings] Virtual display ...`).
 
+`"scale-factor"` works the same way: a client that sends its own resolution
+scale gets it, the app's applies to clients that send none (when it isn't
+100), then the host's `default_scale_factor`. `"force-scale-factor": true`
+applies the app's scale to every client (`[Settings] Resolution scale ...`).
+
 Launches without an explicit virtual-display request on the `default` method
 remain shared-host routes. Shared-host and
 independent sessions may run at the same time; enabling the capability does not

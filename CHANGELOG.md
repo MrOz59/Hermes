@@ -107,6 +107,12 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   (`[Settings] Virtual display on for [app]: the client asked for off, but
   forced by the app.`). The shipped Gamescope Steam Session forces it.
   Clients without `session/prepare` behave as before.
+- The app editor shows the app's Resolution Scale Factor, with "Force this
+  resolution scale" (`force-scale-factor`). A scale the client sends (Hestia's
+  Resolution Scale Factor) now wins over the app's, which applies to clients
+  that send none; forced, the app's applies to every client. Before, any app
+  scale other than 100% silently replaced the client's. The log names who
+  decided (`[Settings] Resolution scale ...`).
 
 ### Changed
 - Record the modularization dependency/lifecycle baseline and enable existing

@@ -107,6 +107,9 @@ namespace proc {
     /// virtual_display applies to every client, overriding the client's own
     /// choice. Unset, it is the default for clients that make none.
     bool force_virtual_display {false};
+    /// scale_factor applies to every client, overriding the client's own
+    /// resolution scale. Unset, it is the default for clients that send none.
+    bool force_scale_factor {false};
     bool virtual_display_primary;
     bool use_app_identity;
     bool per_client_app_identity;
@@ -190,6 +193,32 @@ namespace proc {
 
   /** A phrase for the log: "forced by the app", "the client's choice", ... */
   std::string_view describe(virtual_display_source_e source);
+
+  /** Who decided a launch's resolution scale. */
+  enum class scale_factor_source_e {
+    app_forced,   ///< The app forces its scale on every client.
+    client,       ///< The client sent a scale.
+    app,          ///< The client sent none; the app's own scale.
+    host_default  ///< Neither did; the host's default_scale_factor.
+  };
+
+  struct scale_factor_decision_t {
+    int percent;
+    scale_factor_source_e source;
+  };
+
+  /**
+   * Decide a launch's resolution scale: an app that forces its scale wins,
+   * then the client's, then the app's own when it is not 100, then the host
+   * default.
+   */
+  scale_factor_decision_t decide_scale_factor(
+    const ctx_t &app,
+    const rtsp_stream::launch_session_t &launch_session,
+    int host_default
+  );
+
+  std::string_view describe(scale_factor_source_e source);
 
   /**
    * Resolve a launch to the host session or an independent private session.

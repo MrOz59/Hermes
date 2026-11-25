@@ -44,6 +44,7 @@ const newApp = {
   "detached": [] as string[],
   "image-path": "",
   "scale-factor": 100,
+  "force-scale-factor": false,
   "use-app-identity": false,
   "per-client-app-identity": false,
   "allow-client-commands": true,
@@ -870,6 +871,20 @@ export default defineComponent({
                   desc="apps.stop_detached_desc"
                   v-model="editForm['stop-detached']"
                   default="true"
+        ></Checkbox>
+        <!-- resolution scale -->
+        <div class="mb-3">
+          <label for="scaleFactor" class="form-label">{{ $t('apps.resolution_scale_factor') }}</label>
+          <input type="number" class="form-control monospace" id="scaleFactor" aria-describedby="scaleFactorHelp"
+                 v-model="editForm['scale-factor']" min="1" max="500" placeholder="100" />
+          <div id="scaleFactorHelp" class="form-text">{{ $t('apps.resolution_scale_factor_desc') }}</div>
+        </div>
+        <Checkbox class="mb-3"
+                  id="forceScaleFactor"
+                  label="apps.force_scale_factor"
+                  desc="apps.force_scale_factor_desc"
+                  v-model="editForm['force-scale-factor']"
+                  default="false"
         ></Checkbox>
         <!-- exit timeout -->
         <div class="mb-3">

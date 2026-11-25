@@ -145,6 +145,37 @@ namespace proc {
     return decide_virtual_display(app, launch_session, headless_mode).use;
   }
 
+  scale_factor_decision_t decide_scale_factor(
+    const ctx_t &app,
+    const rtsp_stream::launch_session_t &launch_session,
+    int host_default
+  ) {
+    if (app.force_scale_factor) {
+      return {app.scale_factor, scale_factor_source_e::app_forced};
+    }
+    if (launch_session.client_scale_factor) {
+      return {*launch_session.client_scale_factor, scale_factor_source_e::client};
+    }
+    if (app.scale_factor != 100) {
+      return {app.scale_factor, scale_factor_source_e::app};
+    }
+    return {host_default, scale_factor_source_e::host_default};
+  }
+
+  std::string_view describe(scale_factor_source_e source) {
+    switch (source) {
+      case scale_factor_source_e::app_forced:
+        return "forced by the app";
+      case scale_factor_source_e::client:
+        return "the client's choice";
+      case scale_factor_source_e::app:
+        return "the app's setting (the client sent none)";
+      case scale_factor_source_e::host_default:
+        break;
+    }
+    return "the host default";
+  }
+
   session_route_e resolve_session_route(
     const ctx_t &app,
     bool isolated_sessions_enabled,
@@ -1713,12 +1744,8 @@ namespace proc {
     if (apply_scale) {
       uint32_t render_width = launch_session->width ? launch_session->width : 1920;
       uint32_t render_height = launch_session->height ? launch_session->height : 1080;
-      int scale_factor = launch_session->scale_factor;
-      if (app.scale_factor != 100) {
-        scale_factor = app.scale_factor;
-      } else if (scale_factor == 100 && config::video.default_scale_factor != 100) {
-        scale_factor = config::video.default_scale_factor;
-      }
+      const int scale_factor =
+        decide_scale_factor(app, *launch_session, config::video.default_scale_factor).percent;
       if (scale_factor != 100) {
         render_width = static_cast<uint32_t>(render_width * (static_cast<float>(scale_factor) / 100.0f)) & ~1U;
         render_height = static_cast<uint32_t>(render_height * (static_cast<float>(scale_factor) / 100.0f)) & ~1U;
@@ -3359,12 +3386,8 @@ namespace proc {
     uint32_t render_width = client_width;
     uint32_t render_height = client_height;
 
-    int scale_factor = launch_session->scale_factor;
-    if (_app.scale_factor != 100) {
-      scale_factor = _app.scale_factor;
-    } else if (scale_factor == 100 && config::video.default_scale_factor != 100) {
-      scale_factor = config::video.default_scale_factor;
-    }
+    const int scale_factor =
+      decide_scale_factor(_app, *launch_session, config::video.default_scale_factor).percent;
 
     if (scale_factor != 100) {
       render_width *= ((float)scale_factor / 100);
@@ -4576,7 +4599,8 @@ namespace proc {
         "use-app-identity",
         "per-client-app-identity",
         "virtual-display",
-        "force-virtual-display"
+        "force-virtual-display",
+        "force-scale-factor"
       };
 
       // List of keys to convert to integers.
@@ -4972,6 +4996,7 @@ namespace proc {
           ctx.exit_timeout = std::chrono::seconds { app_node.value("exit-timeout", 5) };
           ctx.virtual_display = app_node.value("virtual-display", false);
           ctx.force_virtual_display = app_node.value("force-virtual-display", false);
+          ctx.force_scale_factor = app_node.value("force-scale-factor", false);
           ctx.scale_factor = app_node.value("scale-factor", 100);
           ctx.use_app_identity = app_node.value("use-app-identity", false);
           ctx.per_client_app_identity = app_node.value("per-client-app-identity", false);

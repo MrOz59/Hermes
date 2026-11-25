@@ -520,6 +520,9 @@ namespace nvhttp {
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
     launch_session->virtual_display = util::from_view(get_arg(args, "virtualDisplay", "0")) || named_cert_p->always_use_virtual_display;
     launch_session->scale_factor = util::from_view(get_arg(args, "scaleFactor", "100"));
+    if (args.find("scaleFactor") != args.end()) {
+      launch_session->client_scale_factor = launch_session->scale_factor;
+    }
     launch_session->launch_mode = "normal";
 
     launch_session->client_do_cmds = named_cert_p->do_cmds;
@@ -1451,6 +1454,7 @@ namespace nvhttp {
         launch_session->virtual_display = hestia_prepare->virtual_display;
         launch_session->client_virtual_display = hestia_prepare->virtual_display;
         launch_session->scale_factor = hestia_prepare->scale_factor;
+        launch_session->client_scale_factor = static_cast<int>(hestia_prepare->scale_factor);
         launch_session->launch_mode = hestia_prepare->launch_mode;
         BOOST_LOG(info) << "[HestiaAPI] applying prepared session for client " << named_cert_p->uuid
                         << ": " << launch_session->width << 'x' << launch_session->height
@@ -1477,6 +1481,15 @@ namespace nvhttp {
       }
       launch_session->virtual_display = decision.use;
       launch_session->virtual_display_decided = true;
+      const auto scale = proc::decide_scale_factor(*requested_app, *launch_session, config::video.default_scale_factor);
+      if (launch_session->client_scale_factor && scale.percent != *launch_session->client_scale_factor) {
+        BOOST_LOG(info) << "[Settings] Resolution scale " << scale.percent << "% for [" << requested_app->name
+                        << "]: the client asked for " << *launch_session->client_scale_factor << "%, but "
+                        << proc::describe(scale.source) << '.';
+      } else {
+        BOOST_LOG(info) << "[Settings] Resolution scale " << scale.percent << "% for [" << requested_app->name
+                        << "]: " << proc::describe(scale.source) << '.';
+      }
       const bool virtual_display_requested = decision.use;
       session_route = proc::resolve_session_route(
         *requested_app,

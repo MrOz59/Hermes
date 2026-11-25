@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <sys/types.h>
@@ -998,6 +999,19 @@ namespace VDISPLAY {
     bool wcg;
   };
   std::optional<kscreen_hdr_state_t> kscreenHdrState(const std::string &json_text, const std::string &output);
+
+  /**
+   * @brief Why KWin refused a layout kscreen-doctor asked for, read from its output.
+   *
+   * kscreen-doctor reports a refused configuration as "applying config failed!"
+   * followed by KWin's reason (for example "Position of enabled output Virtual-1
+   * is negative (-323, 0)"), and still exits 0. Nothing of the request is
+   * applied then: not the position, the mode or the scale.
+   *
+   * @param output What kscreen-doctor printed, stdout and stderr together.
+   * @return The line that says so, or nothing when the layout was applied.
+   */
+  std::optional<std::string> kscreenRefusedLayout(std::string_view output);
 
   /** What a virtual output streams for a client's HDR request. */
   struct hdr_launch_mode_t {

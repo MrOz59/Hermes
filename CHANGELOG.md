@@ -131,6 +131,11 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   calls `localhost`.
 
 ### Fixed
+- Hermes notices when KWin refuses a screen layout (from PunkUnity).
+  kscreen-doctor reports a refused configuration only in its output
+  ("applying config failed!" and KWin's reason) and still exits 0, so Hermes
+  logged the layout as applied and never tried its own fallbacks: no mode, no
+  scale. It now logs KWin's reason and treats the command as failed.
 - A game that starts Steam from a detached command (games added with Import
   Games, `setsid steam steam://rungameid/<id>`) now starts in an isolated
   session's stream (from PunkUnity). Hermes recognised Steam only when `cmd`

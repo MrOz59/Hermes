@@ -2639,6 +2639,23 @@ namespace VDISPLAY {
     return true;
   }
 
+  std::optional<std::string> kscreenRefusedLayout(std::string_view output) {
+    constexpr std::string_view marker {"applying config failed"};
+    std::size_t start = 0;
+    while (start < output.size()) {
+      const auto end = std::min(output.find('\n', start), output.size());
+      auto line = output.substr(start, end - start);
+      if (line.find(marker) != std::string_view::npos) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+          line.remove_suffix(1);
+        }
+        return std::string {line};
+      }
+      start = end + 1;
+    }
+    return std::nullopt;
+  }
+
   kscreen_mode_state_e kscreenModeState(
     const std::string &json_text,
     const std::string &output,
@@ -2821,9 +2838,15 @@ namespace VDISPLAY {
 
     static bool run_layout_command(const std::string &command) {
       bool timed_out = false;
-      if (!boundedCommandOutput(command + " >/dev/null 2>&1", command_timeout, &timed_out)) {
+      const auto output = boundedCommandOutput(command + " 2>&1", command_timeout, &timed_out);
+      if (!output) {
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] Layout command "
                            << (timed_out ? "did not finish in time and was stopped: " : "failed: ") << command;
+        return false;
+      }
+      // A configuration KWin refuses still exits 0; only the output says so.
+      if (const auto refused = kscreenRefusedLayout(*output)) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] KWin refused the layout (" << *refused << "): " << command;
         return false;
       }
       return true;

@@ -619,3 +619,31 @@ TEST(KWinInputBinding, BindsOnlyHermesTouchAndPenDevices) {
   // KWin's.
   EXPECT_FALSE(VDISPLAY::isHermesKWinInputDevice("Hermes Session Touch", 0xBEEF, 0xDEAD));
 }
+
+TEST(KScreenRefusedLayout, ReadsKWinsReasonFromKscreenDoctor) {
+  // Haven, 2026-11-24: kscreen-doctor printed this and exited 0, and Hermes
+  // logged the layout as applied.
+  const auto refused = VDISPLAY::kscreenRefusedLayout(
+    "kscreen.doctor: Set output position QPoint(-323,0)\n"
+    "applying config failed! Position of enabled output Virtual-1 is negative (-323, 0)\n"
+  );
+  ASSERT_TRUE(refused.has_value());
+  EXPECT_EQ(*refused, "applying config failed! Position of enabled output Virtual-1 is negative (-323, 0)");
+}
+
+TEST(KScreenRefusedLayout, AnAppliedLayoutIsNotRefused) {
+  EXPECT_FALSE(VDISPLAY::kscreenRefusedLayout(
+                 "kscreen.doctor: Set output position QPoint(0,0)\n"
+                 "kscreen.doctor: Set output position QPoint(2560,0)\n"
+                 "kscreen.doctor: Taddaaa! Found mode \"1\" \"2992x1344@60\"\n"
+                 "kscreen.doctor: Output 1 set mode \"2992x1344@60\"\n"
+  )
+                 .has_value());
+  EXPECT_FALSE(VDISPLAY::kscreenRefusedLayout("").has_value());
+}
+
+TEST(KScreenRefusedLayout, AReasonOnTheLastLineWithoutANewline) {
+  const auto refused = VDISPLAY::kscreenRefusedLayout("applying config failed! some reason\r");
+  ASSERT_TRUE(refused.has_value());
+  EXPECT_EQ(*refused, "applying config failed! some reason");
+}

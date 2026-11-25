@@ -132,12 +132,15 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
 
 ### Fixed
 - The Gamescope Steam Session app starts in an isolated session (from
-  PunkUnity). Hermes stops the desktop's Steam before an isolated session only
-  when the app starts Steam, and it did not count `hermes-gamescope-launch`,
-  whose `steam -bigpicture` is inside the script. The session's Steam handed
-  its request to the desktop's Steam and exited, Gamescope and the session's
-  compositor with it, and the launch failed with error 503 ("Compositor exited
-  before scanout became ready").
+  PunkUnity). It failed with error 503 ("Compositor exited before scanout
+  became ready") for two reasons. Hermes stops the desktop's Steam before an
+  isolated session only when the app starts Steam, and it did not count
+  `hermes-gamescope-launch`, whose `steam -bigpicture` is inside the script.
+  And an isolated session of the Hermes user had no D-Bus session bus: Hermes
+  removes the desktop's, and only a session with a uid of its own gets one
+  from systemd, so Steam's runtime exited with "Can't find session bus" and
+  took the session with it. Such a session now runs under `dbus-run-session`,
+  as the KWin session already did.
 - A game that starts Steam from a detached command (games added with Import
   Games, `setsid steam steam://rungameid/<id>`) now starts in an isolated
   session's stream (from PunkUnity). Hermes recognised Steam only when `cmd`

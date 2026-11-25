@@ -318,6 +318,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   that never matched and answered `00:00:00:00:00:00`, leaving that client
   without Wake-on-LAN.
 - The configuration docs give `address_family`'s real default, `both`.
+- Apps that run in an isolated KWin desktop stream to a client that asks for
+  HDR. Their capture refused the stream (`Private KWin capture requires SDR`);
+  it now sends SDR in the 10-bit stream, as Hermes does for an SDR monitor.
 
 [#95]: https://github.com/MrOz59/Hermes/pull/95
 [#99]: https://github.com/MrOz59/Hermes/pull/99

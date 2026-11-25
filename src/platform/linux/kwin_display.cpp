@@ -21,9 +21,12 @@ namespace platf {
     class kwin_display_t final: public display_t {
     public:
       bool init(mem_type_e memory, const video::config_t &config) {
-        if (config.dynamicRange != 0 || config.framerate <= 0 ||
+        // The private KWin output is SDR (is_hdr() stays false), so a client
+        // that asks for HDR gets SDR in its 10-bit stream, as it does from an
+        // SDR monitor.
+        if (config.framerate <= 0 ||
             (memory != mem_type_e::system && memory != mem_type_e::vaapi && memory != mem_type_e::cuda)) {
-          BOOST_LOG(::error) << "Private KWin capture requires SDR and a supported mapped-frame encoder";
+          BOOST_LOG(::error) << "Private KWin capture requires a supported mapped-frame encoder";
           return false;
         }
         memory_type = memory;

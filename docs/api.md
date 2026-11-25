@@ -185,6 +185,12 @@ on this page that requires no authentication.
 
 [Source-generated reference](pathname:///reference/cpp/http_api.htm#post-api-hestia-v1-session-prepare).
 
+The response's `settings` says what the launch will apply for the requested
+app: for `virtual_display` and `scale_factor`, the `requested` and `effective`
+values and the `source` that decided (`client`, `app_forced`, `app`,
+`host_default`, `headless` or `isolated_session`). The client's choice wins
+unless an app forces its own setting; a client can show where that happened.
+
 ### POST /api/hestia/v1/session/stop
 Clear this client's prepared session and stop the stream it owns, if one is
 running. Requires the `launch` permission.

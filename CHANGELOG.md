@@ -113,6 +113,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   that send none; forced, the app's applies to every client. Before, any app
   scale other than 100% silently replaced the client's. The log names who
   decided (`[Settings] Resolution scale ...`).
+- Hestia's `session/prepare` response reports `settings`: for the virtual
+  display and the resolution scale, what was requested, what the launch will
+  apply, and who decided, so Hestia can say when a host app overrides it.
 
 ### Changed
 - Record the modularization dependency/lifecycle baseline and enable existing

@@ -112,6 +112,15 @@ namespace nvhttp {
   /** Consume unexpired preparation hints for a paired client's next launch. */
   std::optional<hestia_session_prepare_t> take_hestia_session_prepare(const std::string &client_uuid);
 
+  /**
+   * What the next launch of app `app_id` will apply for the settings a client
+   * asks for, and who decides each one: {"virtual_display": {"requested",
+   * "effective", "source"}, "scale_factor": {...}}. Sources: "client",
+   * "app_forced", "app", "host_default", "headless", "isolated_session".
+   * Null when no app has that id.
+   */
+  nlohmann::json describe_applied_settings(const std::string &app_id, bool virtual_display, int scale_factor);
+
   /** Remove any unconsumed preparation hints for a paired client. */
   void clear_hestia_session_prepare(const std::string &client_uuid);
 

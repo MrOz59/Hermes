@@ -61,6 +61,76 @@ namespace nvhttp {
     std::vector<p_named_cert_t> named_devices;
   };
 
+  namespace {
+    const char *source_name(proc::virtual_display_source_e source) {
+      switch (source) {
+        case proc::virtual_display_source_e::headless:
+          return "headless";
+        case proc::virtual_display_source_e::app_forced:
+          return "app_forced";
+        case proc::virtual_display_source_e::client:
+          return "client";
+        case proc::virtual_display_source_e::default_rule:
+          break;
+      }
+      return "app";
+    }
+
+    const char *source_name(proc::scale_factor_source_e source) {
+      switch (source) {
+        case proc::scale_factor_source_e::app_forced:
+          return "app_forced";
+        case proc::scale_factor_source_e::client:
+          return "client";
+        case proc::scale_factor_source_e::app:
+          return "app";
+        case proc::scale_factor_source_e::host_default:
+          break;
+      }
+      return "host_default";
+    }
+  }  // namespace
+
+  nlohmann::json describe_applied_settings(const std::string &app_id, bool virtual_display, int scale_factor) {
+    const auto apps = proc::proc.get_apps();
+    const auto app = std::find_if(apps.begin(), apps.end(), [&](const proc::ctx_t &candidate) {
+      return candidate.id == app_id;
+    });
+    if (app == apps.end()) {
+      return nullptr;
+    }
+
+    rtsp_stream::launch_session_t probe {};
+    probe.virtual_display = virtual_display;
+    probe.client_virtual_display = virtual_display;
+    probe.scale_factor = scale_factor;
+    probe.client_scale_factor = scale_factor;
+
+    const auto display = proc::decide_virtual_display(*app, probe, config::video.headless_mode);
+    bool display_effective = display.use;
+    std::string display_source = source_name(display.source);
+    // An isolated app runs on a display of its own whatever was asked.
+    if (proc::resolve_session_route(*app, experimental_isolated_sessions_enabled(), display.use,
+                                    config::video.isolation_method) != proc::session_route_e::shared) {
+      display_effective = true;
+      display_source = "isolated_session";
+    }
+    const auto scale = proc::decide_scale_factor(*app, probe, config::video.default_scale_factor);
+
+    return {
+      {"virtual_display", {
+        {"requested", virtual_display},
+        {"effective", display_effective},
+        {"source", display_source},
+      }},
+      {"scale_factor", {
+        {"requested", scale_factor},
+        {"effective", scale.percent},
+        {"source", source_name(scale.source)},
+      }},
+    };
+  }
+
   struct pair_session_t;
 
   crypto::cert_chain_t cert_chain;

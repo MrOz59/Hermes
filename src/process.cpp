@@ -80,6 +80,7 @@
   #include "platform/linux/process_group.h"
   #include "platform/linux/detached_scope.h"
   #include "platform/linux/session_devices.h"
+  #include "platform/linux/session_bus.h"
   #include "platform/linux/virtual_display.h"
   #include <sys/stat.h>
   #include <unistd.h>
@@ -2712,6 +2713,18 @@ namespace proc {
       const auto devices = session_device_options(app);
       if (!devices) {
         return 503;
+      }
+      // The desktop's bus was removed from the session's environment, and
+      // only a uid of its own would get a bus from systemd.
+      const bool has_bus = runtime->env.find("DBUS_SESSION_BUS_ADDRESS") != runtime->env.end();
+      if (const auto with_bus = platf::session_bus::with_private_bus(launch_command, has_bus, find_program("dbus-run-session"))) {
+        if (!has_bus) {
+          BOOST_LOG(info) << "[IsolatedSession] Session " << runtime->runtime_id << " gets a D-Bus session bus of its own.";
+        }
+        launch_command = *with_bus;
+      } else {
+        BOOST_LOG(warning) << "[IsolatedSession] dbus-run-session is not installed, so session " << runtime->runtime_id
+                           << " has no D-Bus session bus; applications that need one, Steam among them, will exit.";
       }
       std::unique_ptr<platf::session_devices::plan_t> plan;
       if (devices->devices || devices->sound) {

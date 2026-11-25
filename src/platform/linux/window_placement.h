@@ -33,19 +33,6 @@ namespace platf::window_placement {
     });
   }
 
-  /**
-   * Whether a command starts Steam: `steam` itself (also behind a wrapper
-   * such as `setsid`), the Flatpak, or a `steam://` link, which the running
-   * Steam handles.
-   */
-  inline bool launches_steam(const std::vector<std::string> &arguments) {
-    return names_program(arguments, "steam") ||
-           std::find(arguments.begin(), arguments.end(), "com.valvesoftware.Steam") != arguments.end() ||
-           std::any_of(arguments.begin(), arguments.end(), [](std::string_view argument) {
-             return argument.starts_with("steam://");
-           });
-  }
-
   inline bool launches_gamescope(const std::vector<std::string> &arguments) {
     return names_program(arguments, "gamescope") || names_program(arguments, "hermes-gamescope-launch");
   }
@@ -66,6 +53,22 @@ namespace platf::window_placement {
     return names_program(arguments, "gamescope") &&
            (names_program(arguments, "steam") ||
             std::find(arguments.begin(), arguments.end(), "com.valvesoftware.Steam") != arguments.end());
+  }
+
+  /**
+   * Whether a command starts Steam: `steam` itself (also behind a wrapper
+   * such as `setsid`), the Flatpak, a `steam://` link, which the running
+   * Steam handles, or a Gamescope whose own client is Steam, the shipped
+   * launcher included: its `steam -bigpicture` is in a script, not the
+   * command.
+   */
+  inline bool launches_steam(const std::vector<std::string> &arguments) {
+    return names_program(arguments, "steam") ||
+           std::find(arguments.begin(), arguments.end(), "com.valvesoftware.Steam") != arguments.end() ||
+           std::any_of(arguments.begin(), arguments.end(), [](std::string_view argument) {
+             return argument.starts_with("steam://");
+           }) ||
+           gamescope_runs_steam(arguments);
   }
 
   inline std::string kwin_script(const std::string &output, const std::vector<std::string> &classes, const std::vector<std::uint32_t> &gamescope_pids) {

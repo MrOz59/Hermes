@@ -122,8 +122,9 @@ namespace platf::gamescope {
    *
    * mode is the app's gamescope-steam-mode: "on" and "off" decide outright;
    * anything else is auto, which turns it on when the command's program is
-   * steam. The program is the first whitespace-separated word, as
-   * run_command() splits it.
+   * steam or the shipped launcher, which runs `steam -bigpicture` (inside a
+   * Gamescope session it starts Steam directly). The program is the first
+   * whitespace-separated word, as run_command() splits it.
    */
   inline bool steam_mode_for(std::string_view mode, std::string_view command) {
     if (mode == "on") {
@@ -140,7 +141,7 @@ namespace platf::gamescope {
     if (const auto slash = program.rfind('/'); slash != std::string_view::npos) {
       program.remove_prefix(slash + 1);
     }
-    return program == "steam";
+    return program == "steam" || program == "hermes-gamescope-launch" || program == "apollo-gamescope-launch";
   }
 
   /// The optional flags an application session gets when its app sets none.

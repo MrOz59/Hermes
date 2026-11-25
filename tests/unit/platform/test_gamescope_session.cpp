@@ -144,6 +144,11 @@ namespace {
     EXPECT_TRUE(steam_mode_for("auto", "steam -gamepadui"));
     EXPECT_TRUE(steam_mode_for("auto", "  /usr/bin/steam -gamepadui"));
     EXPECT_TRUE(steam_mode_for("", "steam"));
+    // The Gamescope Steam Session app: the launcher runs Steam itself.
+    EXPECT_TRUE(steam_mode_for("auto", "hermes-gamescope-launch"));
+    EXPECT_TRUE(steam_mode_for("auto", "/usr/bin/hermes-gamescope-launch"));
+    EXPECT_TRUE(steam_mode_for("auto", "apollo-gamescope-launch"));
+    EXPECT_FALSE(steam_mode_for("off", "hermes-gamescope-launch"));
     EXPECT_FALSE(steam_mode_for("auto", "steamtinkerlaunch run"));
     EXPECT_FALSE(steam_mode_for("auto", "env steam"));
     EXPECT_FALSE(steam_mode_for("auto", ""));

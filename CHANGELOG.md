@@ -140,7 +140,9 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   removes the desktop's, and only a session with a uid of its own gets one
   from systemd, so Steam's runtime exited with "Can't find session bus" and
   took the session with it. Such a session now runs under `dbus-run-session`,
-  as the KWin session already did.
+  as the KWin session already did. The app also gets Gamescope's Steam mode
+  there, as a `steam` command does: auto did not count the launcher, so Big
+  Picture ran without it.
 - A game that starts Steam from a detached command (games added with Import
   Games, `setsid steam steam://rungameid/<id>`) now starts in an isolated
   session's stream (from PunkUnity). Hermes recognised Steam only when `cmd`

@@ -2639,6 +2639,41 @@ namespace VDISPLAY {
     return true;
   }
 
+  std::optional<std::string> kscreenLayoutFailure(std::string_view output) {
+    // Every way libkscreen's doctor.cpp reports an option it did not apply or a
+    // configuration KWin refused. Its debug lines ("kscreen.doctor: Set output
+    // position ...") and the mode it found are not failures.
+    constexpr std::string_view markers[] {
+      "applying config failed",  // KWin refused the configuration
+      " not found.",  // "Output with name or uuid X", "Output with id N", "Output mode M"
+      "Wrong input",
+      "Invalid ",
+      "Could not set ",
+      "No output ",
+      "DBus error from KWin",
+      "Unable to parse",  // a position or an argument
+      "does not support disabling",
+      "DPMS not supported",
+      "DPMS is only supported",
+      "argument not understood",  // --dpms
+    };
+    std::size_t start = 0;
+    while (start < output.size()) {
+      const auto end = std::min(output.find('\n', start), output.size());
+      auto line = output.substr(start, end - start);
+      for (const auto marker : markers) {
+        if (line.find(marker) != std::string_view::npos) {
+          while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+            line.remove_suffix(1);
+          }
+          return std::string {line};
+        }
+      }
+      start = end + 1;
+    }
+    return std::nullopt;
+  }
+
   kscreen_mode_state_e kscreenModeState(
     const std::string &json_text,
     const std::string &output,
@@ -2821,9 +2856,15 @@ namespace VDISPLAY {
 
     static bool run_layout_command(const std::string &command) {
       bool timed_out = false;
-      if (!boundedCommandOutput(command + " >/dev/null 2>&1", command_timeout, &timed_out)) {
+      const auto output = boundedCommandOutput(command + " 2>&1", command_timeout, &timed_out);
+      if (!output) {
         BOOST_LOG(warning) << "[VDISPLAY/KScreen] Layout command "
                            << (timed_out ? "did not finish in time and was stopped: " : "failed: ") << command;
+        return false;
+      }
+      // kscreen-doctor exits 0 whatever happened; only its output tells.
+      if (const auto failure = kscreenLayoutFailure(*output)) {
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] The layout was not applied (" << *failure << "): " << command;
         return false;
       }
       return true;
@@ -3151,7 +3192,19 @@ namespace VDISPLAY {
         }
       }
       if (!apply_pre_session_layout(virtual_output, before, enabled_before, mode_width, mode_height, mode_refresh_hz, layout)) {
-        return false;
+        // KWin enables a hotplugged output by itself, so a layout it did not
+        // take (refused, or naming a monitor that dropped off the link while
+        // waking) costs the placement, not the session. Fail only when the
+        // output really is not enabled.
+        const auto current = outputs();
+        const bool enabled = std::ranges::any_of(current, [&](const auto &output) {
+          return output.name == virtual_output && output.connected && output.enabled;
+        });
+        if (!enabled) {
+          return false;
+        }
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Hermes' layout for " << virtual_output
+                           << " was not applied; streaming it where KWin placed it.";
       }
 
       std::lock_guard<std::mutex> lock(layouts_mutex);

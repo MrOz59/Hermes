@@ -208,6 +208,15 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   while the control server still listed it. The control thread then encrypted
   a message for the freed session and Hermes died with SIGSEGV. The control
   thread now sends the message itself and releases the session afterwards.
+- Hermes notices when a screen layout change is not applied (from PunkUnity).
+  kscreen-doctor exits 0 whatever happened, so Hermes logged layouts as
+  applied when KWin had refused them ("applying config failed!", for example
+  for a negative position) or when kscreen-doctor had stopped at an output it
+  could not find (a waking monitor drops off the link for a moment), and its
+  fallbacks never ran. Hermes now reads kscreen-doctor's output, logs what went
+  wrong and treats the command as failed. A session layout that is not applied
+  costs only the placement: KWin enables the virtual output by itself, and the
+  stream goes on where KWin placed it.
 - On KWin, touch and pen land on the monitor being streamed ([#131], from
   PunkUnity). KWin bound new touch devices to an output of its own choosing,
   so with more than one monitor a Multi touch client often did nothing. When

@@ -246,6 +246,13 @@ can select an `isolation-method` in the Web UI or `apps.json`:
 `"host-session": true` (available in `apps.json`) keeps an entry on the existing
 host desktop/session whatever its method.
 
+`"virtual-display"` is the app's default: a client that makes its own choice
+(Hestia's "Use Virtual Display", sent with `session/prepare`) gets that choice
+instead. `"force-virtual-display": true` applies the app's `"virtual-display"`
+to every client, on or off. The shipped Gamescope Steam Session forces it,
+since Gamescope needs a display at the client's mode. Each launch logs the
+decision and who made it (`[Settings] Virtual display ...`).
+
 Launches without an explicit virtual-display request on the `default` method
 remain shared-host routes. Shared-host and
 independent sessions may run at the same time; enabling the capability does not

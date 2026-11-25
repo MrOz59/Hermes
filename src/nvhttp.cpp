@@ -1449,6 +1449,7 @@ namespace nvhttp {
         launch_session->fps = hestia_prepare->fps * 1000;
         launch_session->enable_hdr = hestia_prepare->hdr;
         launch_session->virtual_display = hestia_prepare->virtual_display;
+        launch_session->client_virtual_display = hestia_prepare->virtual_display;
         launch_session->scale_factor = hestia_prepare->scale_factor;
         launch_session->launch_mode = hestia_prepare->launch_mode;
         BOOST_LOG(info) << "[HestiaAPI] applying prepared session for client " << named_cert_p->uuid
@@ -1460,12 +1461,23 @@ namespace nvhttp {
 
     auto session_route = proc::session_route_e::shared;
     if (requested_app) {
-      const bool virtual_display_requested =
-        proc::launch_requests_virtual_display(
-          *requested_app,
-          *launch_session,
-          config::video.headless_mode
-        );
+      const auto decision = proc::decide_virtual_display(
+        *requested_app,
+        *launch_session,
+        config::video.headless_mode
+      );
+      if (launch_session->client_virtual_display && decision.use != *launch_session->client_virtual_display) {
+        BOOST_LOG(info) << "[Settings] Virtual display " << (decision.use ? "on" : "off") << " for ["
+                        << requested_app->name << "]: the client asked for "
+                        << (*launch_session->client_virtual_display ? "on" : "off") << ", but "
+                        << proc::describe(decision.source) << '.';
+      } else {
+        BOOST_LOG(info) << "[Settings] Virtual display " << (decision.use ? "on" : "off") << " for ["
+                        << requested_app->name << "]: " << proc::describe(decision.source) << '.';
+      }
+      launch_session->virtual_display = decision.use;
+      launch_session->virtual_display_decided = true;
+      const bool virtual_display_requested = decision.use;
       session_route = proc::resolve_session_route(
         *requested_app,
         isolated_sessions,

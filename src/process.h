@@ -104,6 +104,9 @@ namespace proc {
     bool auto_detach;
     bool wait_all;
     bool virtual_display;
+    /// virtual_display applies to every client, overriding the client's own
+    /// choice. Unset, it is the default for clients that make none.
+    bool force_virtual_display {false};
     bool virtual_display_primary;
     bool use_app_identity;
     bool per_client_app_identity;
@@ -157,6 +160,36 @@ namespace proc {
     const rtsp_stream::launch_session_t &launch_session,
     bool headless_mode
   );
+
+  /** Who decided whether a launch uses a virtual display. */
+  enum class virtual_display_source_e {
+    headless,     ///< The host runs headless; there is nothing else to stream.
+    app_forced,   ///< The app forces its setting on every client.
+    client,       ///< The client chose (Hestia's session/prepare).
+    default_rule  ///< No explicit choice: client request, per-client or app setting.
+  };
+
+  struct virtual_display_decision_t {
+    bool use;
+    virtual_display_source_e source;
+  };
+
+  /**
+   * Decide whether a launch uses a virtual display.
+   *
+   * Headless mode always does. An app that forces its setting wins next, on
+   * or off. Otherwise a client that stated a choice gets it. Without one, the
+   * launch uses a virtual display if the client asked for one or the app's
+   * setting is on, as before.
+   */
+  virtual_display_decision_t decide_virtual_display(
+    const ctx_t &app,
+    const rtsp_stream::launch_session_t &launch_session,
+    bool headless_mode
+  );
+
+  /** A phrase for the log: "forced by the app", "the client's choice", ... */
+  std::string_view describe(virtual_display_source_e source);
 
   /**
    * Resolve a launch to the host session or an independent private session.

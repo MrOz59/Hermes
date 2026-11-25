@@ -48,6 +48,7 @@ const newApp = {
   "per-client-app-identity": false,
   "allow-client-commands": true,
   "virtual-display": false,
+  "force-virtual-display": false,
   "virtual-display-layout": "auto",
   "unlock-host-session": false,
   "isolation-method": "default",
@@ -883,6 +884,14 @@ export default defineComponent({
                   label="apps.virtual_display"
                   desc="apps.virtual_display_desc"
                   v-model="editForm['virtual-display']"
+                  default="false"
+        ></Checkbox>
+        <!-- force the virtual display setting on every client -->
+        <Checkbox class="mb-3"
+                  id="forceVirtualDisplay"
+                  label="apps.force_virtual_display"
+                  desc="apps.force_virtual_display_desc"
+                  v-model="editForm['force-virtual-display']"
                   default="false"
         ></Checkbox>
         <!-- virtual display layout -->

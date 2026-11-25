@@ -3192,7 +3192,19 @@ namespace VDISPLAY {
         }
       }
       if (!apply_pre_session_layout(virtual_output, before, enabled_before, mode_width, mode_height, mode_refresh_hz, layout)) {
-        return false;
+        // KWin enables a hotplugged output by itself, so a layout it did not
+        // take (refused, or naming a monitor that dropped off the link while
+        // waking) costs the placement, not the session. Fail only when the
+        // output really is not enabled.
+        const auto current = outputs();
+        const bool enabled = std::ranges::any_of(current, [&](const auto &output) {
+          return output.name == virtual_output && output.connected && output.enabled;
+        });
+        if (!enabled) {
+          return false;
+        }
+        BOOST_LOG(warning) << "[VDISPLAY/KScreen] Hermes' layout for " << virtual_output
+                           << " was not applied; streaming it where KWin placed it.";
       }
 
       std::lock_guard<std::mutex> lock(layouts_mutex);

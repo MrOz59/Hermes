@@ -61,6 +61,76 @@ namespace nvhttp {
     std::vector<p_named_cert_t> named_devices;
   };
 
+  namespace {
+    const char *source_name(proc::virtual_display_source_e source) {
+      switch (source) {
+        case proc::virtual_display_source_e::headless:
+          return "headless";
+        case proc::virtual_display_source_e::app_forced:
+          return "app_forced";
+        case proc::virtual_display_source_e::client:
+          return "client";
+        case proc::virtual_display_source_e::default_rule:
+          break;
+      }
+      return "app";
+    }
+
+    const char *source_name(proc::scale_factor_source_e source) {
+      switch (source) {
+        case proc::scale_factor_source_e::app_forced:
+          return "app_forced";
+        case proc::scale_factor_source_e::client:
+          return "client";
+        case proc::scale_factor_source_e::app:
+          return "app";
+        case proc::scale_factor_source_e::host_default:
+          break;
+      }
+      return "host_default";
+    }
+  }  // namespace
+
+  nlohmann::json describe_applied_settings(const std::string &app_id, bool virtual_display, int scale_factor) {
+    const auto apps = proc::proc.get_apps();
+    const auto app = std::find_if(apps.begin(), apps.end(), [&](const proc::ctx_t &candidate) {
+      return candidate.id == app_id;
+    });
+    if (app == apps.end()) {
+      return nullptr;
+    }
+
+    rtsp_stream::launch_session_t probe {};
+    probe.virtual_display = virtual_display;
+    probe.client_virtual_display = virtual_display;
+    probe.scale_factor = scale_factor;
+    probe.client_scale_factor = scale_factor;
+
+    const auto display = proc::decide_virtual_display(*app, probe, config::video.headless_mode);
+    bool display_effective = display.use;
+    std::string display_source = source_name(display.source);
+    // An isolated app runs on a display of its own whatever was asked.
+    if (proc::resolve_session_route(*app, experimental_isolated_sessions_enabled(), display.use,
+                                    config::video.isolation_method) != proc::session_route_e::shared) {
+      display_effective = true;
+      display_source = "isolated_session";
+    }
+    const auto scale = proc::decide_scale_factor(*app, probe, config::video.default_scale_factor);
+
+    return {
+      {"virtual_display", {
+        {"requested", virtual_display},
+        {"effective", display_effective},
+        {"source", display_source},
+      }},
+      {"scale_factor", {
+        {"requested", scale_factor},
+        {"effective", scale.percent},
+        {"source", source_name(scale.source)},
+      }},
+    };
+  }
+
   struct pair_session_t;
 
   crypto::cert_chain_t cert_chain;
@@ -520,6 +590,9 @@ namespace nvhttp {
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
     launch_session->virtual_display = util::from_view(get_arg(args, "virtualDisplay", "0")) || named_cert_p->always_use_virtual_display;
     launch_session->scale_factor = util::from_view(get_arg(args, "scaleFactor", "100"));
+    if (args.find("scaleFactor") != args.end()) {
+      launch_session->client_scale_factor = launch_session->scale_factor;
+    }
     launch_session->launch_mode = "normal";
 
     launch_session->client_do_cmds = named_cert_p->do_cmds;
@@ -1449,7 +1522,9 @@ namespace nvhttp {
         launch_session->fps = hestia_prepare->fps * 1000;
         launch_session->enable_hdr = hestia_prepare->hdr;
         launch_session->virtual_display = hestia_prepare->virtual_display;
+        launch_session->client_virtual_display = hestia_prepare->virtual_display;
         launch_session->scale_factor = hestia_prepare->scale_factor;
+        launch_session->client_scale_factor = static_cast<int>(hestia_prepare->scale_factor);
         launch_session->launch_mode = hestia_prepare->launch_mode;
         BOOST_LOG(info) << "[HestiaAPI] applying prepared session for client " << named_cert_p->uuid
                         << ": " << launch_session->width << 'x' << launch_session->height
@@ -1460,12 +1535,32 @@ namespace nvhttp {
 
     auto session_route = proc::session_route_e::shared;
     if (requested_app) {
-      const bool virtual_display_requested =
-        proc::launch_requests_virtual_display(
-          *requested_app,
-          *launch_session,
-          config::video.headless_mode
-        );
+      const auto decision = proc::decide_virtual_display(
+        *requested_app,
+        *launch_session,
+        config::video.headless_mode
+      );
+      if (launch_session->client_virtual_display && decision.use != *launch_session->client_virtual_display) {
+        BOOST_LOG(info) << "[Settings] Virtual display " << (decision.use ? "on" : "off") << " for ["
+                        << requested_app->name << "]: the client asked for "
+                        << (*launch_session->client_virtual_display ? "on" : "off") << ", but "
+                        << proc::describe(decision.source) << '.';
+      } else {
+        BOOST_LOG(info) << "[Settings] Virtual display " << (decision.use ? "on" : "off") << " for ["
+                        << requested_app->name << "]: " << proc::describe(decision.source) << '.';
+      }
+      launch_session->virtual_display = decision.use;
+      launch_session->virtual_display_decided = true;
+      const auto scale = proc::decide_scale_factor(*requested_app, *launch_session, config::video.default_scale_factor);
+      if (launch_session->client_scale_factor && scale.percent != *launch_session->client_scale_factor) {
+        BOOST_LOG(info) << "[Settings] Resolution scale " << scale.percent << "% for [" << requested_app->name
+                        << "]: the client asked for " << *launch_session->client_scale_factor << "%, but "
+                        << proc::describe(scale.source) << '.';
+      } else {
+        BOOST_LOG(info) << "[Settings] Resolution scale " << scale.percent << "% for [" << requested_app->name
+                        << "]: " << proc::describe(scale.source) << '.';
+      }
+      const bool virtual_display_requested = decision.use;
       session_route = proc::resolve_session_route(
         *requested_app,
         isolated_sessions,

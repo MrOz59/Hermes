@@ -23,6 +23,69 @@ TEST(ProcessSessionRoute, VirtualDisplayRequestIsExplicitPolicy) {
   EXPECT_TRUE(proc::launch_requests_virtual_display(app, launch, true));
 }
 
+TEST(ProcessSessionRoute, ClientChoiceWinsUnlessTheAppForcesIt) {
+  proc::ctx_t app {};
+  rtsp_stream::launch_session_t launch {};
+  app.virtual_display = true;
+
+  // The app's setting is the default for a client that states nothing.
+  auto decision = proc::decide_virtual_display(app, launch, false);
+  EXPECT_TRUE(decision.use);
+  EXPECT_EQ(decision.source, proc::virtual_display_source_e::default_rule);
+
+  // A stated "off" is honoured over the app's default.
+  launch.client_virtual_display = false;
+  decision = proc::decide_virtual_display(app, launch, false);
+  EXPECT_FALSE(decision.use);
+  EXPECT_EQ(decision.source, proc::virtual_display_source_e::client);
+
+  // Forced, the app's setting wins, either way.
+  app.force_virtual_display = true;
+  decision = proc::decide_virtual_display(app, launch, false);
+  EXPECT_TRUE(decision.use);
+  EXPECT_EQ(decision.source, proc::virtual_display_source_e::app_forced);
+
+  app.virtual_display = false;
+  launch.client_virtual_display = true;
+  decision = proc::decide_virtual_display(app, launch, false);
+  EXPECT_FALSE(decision.use);
+  EXPECT_EQ(decision.source, proc::virtual_display_source_e::app_forced);
+
+  // A headless host has nothing else to stream.
+  decision = proc::decide_virtual_display(app, launch, true);
+  EXPECT_TRUE(decision.use);
+  EXPECT_EQ(decision.source, proc::virtual_display_source_e::headless);
+}
+
+TEST(ProcessSessionRoute, ClientScaleWinsUnlessTheAppForcesIt) {
+  proc::ctx_t app {};
+  rtsp_stream::launch_session_t launch {};
+  app.scale_factor = 100;
+
+  // Nothing sent and nothing set: the host default.
+  auto scale = proc::decide_scale_factor(app, launch, 125);
+  EXPECT_EQ(scale.percent, 125);
+  EXPECT_EQ(scale.source, proc::scale_factor_source_e::host_default);
+
+  // The app's own scale beats the host default when the client sends none.
+  app.scale_factor = 150;
+  scale = proc::decide_scale_factor(app, launch, 125);
+  EXPECT_EQ(scale.percent, 150);
+  EXPECT_EQ(scale.source, proc::scale_factor_source_e::app);
+
+  // A scale the client sent wins over both, 100 included.
+  launch.client_scale_factor = 100;
+  scale = proc::decide_scale_factor(app, launch, 125);
+  EXPECT_EQ(scale.percent, 100);
+  EXPECT_EQ(scale.source, proc::scale_factor_source_e::client);
+
+  // Forced, the app's scale wins.
+  app.force_scale_factor = true;
+  scale = proc::decide_scale_factor(app, launch, 125);
+  EXPECT_EQ(scale.percent, 150);
+  EXPECT_EQ(scale.source, proc::scale_factor_source_e::app_forced);
+}
+
 TEST(ProcessSessionRoute, DisabledCapabilityAlwaysUsesHost) {
   proc::ctx_t app {};
   app.isolation_method = "kwin_virtual";

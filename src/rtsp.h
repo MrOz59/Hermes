@@ -9,6 +9,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 
 // local includes
@@ -54,6 +55,15 @@ namespace rtsp_stream {
     bool enable_hdr;
     bool enable_sops;
     bool virtual_display;
+    /// The client's own virtual-display choice, when it stated one (Hestia's
+    /// session/prepare). Launch arguments cannot say "off": 0 means unset.
+    std::optional<bool> client_virtual_display;
+    /// The resolution scale the client asked for, when it sent one
+    /// (launch argument scaleFactor, or Hestia's session/prepare).
+    std::optional<int> client_scale_factor;
+    /// Set once the launch has decided virtual_display under the app's rules,
+    /// so execute() uses that decision instead of re-deriving it.
+    bool virtual_display_decided = false;
     std::string launch_error_message;
     // Experimental Linux Hermes-KMS multi-output state. The display is owned
     // by the streaming session rather than by the process/app lifetime.

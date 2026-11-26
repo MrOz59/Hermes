@@ -1879,6 +1879,15 @@ namespace confighttp {
    *
    * The normal GameStream launch path consumes the short-lived settings and
    * creates a virtual display only when the stream actually begins.
+   *
+   * The response's `settings` says what that launch will apply for the
+   * requested app, so the client can show where a host setting overrides
+   * its own: for `virtual_display` and `scale_factor`, the `requested` and
+   * `effective` values and the `source` that decided (`client`,
+   * `app_forced` for an app that forces its setting, `app` or
+   * `host_default` when the client's value is not used, `headless`, or
+   * `isolated_session` for an app that always runs on a display of its own).
+   * It is null when no app has the requested id.
    */
   void prepare_hestia_session(resp_https_t response, req_https_t request) {
     if (!authenticate_hestia_client(response, request, crypto::PERM::launch, "session prepare")) {
@@ -1946,6 +1955,11 @@ namespace confighttp {
           {"hdr", stream["hdr_mode"] == "hdr"},
           {"kscreen_enabled", false},
         }},
+        {"settings", nvhttp::describe_applied_settings(
+          app["id"].get<std::string>(),
+          virtual_display["enabled"].get<bool>(),
+          stream["scale_factor"].get<int>()
+        )},
         {"warnings", {"Prepared settings will be applied when the normal stream launches."}},
       };
       send_response(response, output);

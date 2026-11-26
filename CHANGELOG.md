@@ -99,6 +99,23 @@ run `scripts/bump-version.sh <major|minor|patch>` — it moves everything under
   gamepad, so a game reading that gamepad as well got every press twice; with
   this on, games see Steam Input's controller alone. A game run without Steam
   Input then has no controller.
+- Per-app "Force this Virtual Display setting" (`force-virtual-display`).
+  Hestia's "Use Virtual Display" now does what it says: its on or off wins
+  over the app's "Create a Virtual Display" (formerly "Always create"), which
+  is the default for clients that don't choose. An app that forces its
+  setting applies it to every client, and the log says who decided
+  (`[Settings] Virtual display on for [app]: the client asked for off, but
+  forced by the app.`). The shipped Gamescope Steam Session forces it.
+  Clients without `session/prepare` behave as before.
+- The app editor shows the app's Resolution Scale Factor, with "Force this
+  resolution scale" (`force-scale-factor`). A scale the client sends (Hestia's
+  Resolution Scale Factor) now wins over the app's, which applies to clients
+  that send none; forced, the app's applies to every client. Before, any app
+  scale other than 100% silently replaced the client's. The log names who
+  decided (`[Settings] Resolution scale ...`).
+- Hestia's `session/prepare` response reports `settings`: for the virtual
+  display and the resolution scale, what was requested, what the launch will
+  apply, and who decided, so Hestia can say when a host app overrides it.
 
 ### Changed
 - Record the modularization dependency/lifecycle baseline and enable existing

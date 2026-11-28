@@ -506,7 +506,11 @@ an already-running stream.
         <td>Description</td>
         <td colSpan={2}>
 
-The type of gamepad to emulate on the host. On Linux, auto uses the client-reported
+The type of gamepad to emulate on the host. With the auto or native backend,
+auto first uses the model requested by a compatible client for each connected
+controller. For example, Hestia can request a DualShock 4 for a physical DS4
+throughout a Desktop session. A host or application profile set manually takes
+priority. When the client supplies no recognized model, auto uses the client-reported
 controller type (PlayStation to DualSense, Nintendo to Switch Pro, Xbox to Xbox Series).
 Unknown types can select DualSense from motion/touchpad capabilities; otherwise Xbox
 Series is used. A manual selection overrides client detection.

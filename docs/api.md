@@ -224,3 +224,26 @@ Requires the `server_cmd` permission.
 
 ### POST /api/hestia/v1/commands/run
 Run one of those server commands by name. Requires the `server_cmd` permission.
+
+## Controller model negotiation
+
+RTSP DESCRIBE advertises `a=x-hermes-general.controllerModels:1`. A client
+may append one unsigned byte to the standard `SS_CONTROLLER_ARRIVAL_PACKET`
+on the controller's reliable channel before its first state. The size prefix
+includes the extra byte (13 bytes after the prefix). The standard family,
+capabilities and button fields keep their meanings. Each controller number
+has its own selection until removal.
+
+| Byte | Requested profile |
+| --- | --- |
+| 0 | Host automatic selection |
+| 1 | Generic |
+| 2 | Xbox 360 |
+| 3 | Xbox One |
+| 4 | Xbox Series |
+| 5 | DualShock 4 |
+| 6 | DualSense |
+| 7 | Switch Pro |
+
+An ordinary 16-byte arrival or an unrecognized model uses the existing family
+selection. Clients must omit the extension on hosts that do not advertise v1.

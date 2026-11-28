@@ -924,7 +924,7 @@ namespace input {
    * @param input The input context pointer.
    * @param packet The controller arrival packet.
    */
-  void passthrough(std::shared_ptr<input_t> &input, PSS_CONTROLLER_ARRIVAL_PACKET packet) {
+  void passthrough(std::shared_ptr<input_t> &input, PSS_CONTROLLER_ARRIVAL_PACKET packet, std::uint8_t requested_model) {
     if (!config::input.controller) {
       return;
     }
@@ -944,6 +944,7 @@ namespace input {
       util::endian::little(packet->capabilities),
       util::endian::little(packet->supportedButtonFlags),
       input->client_id,
+      requested_model,
     };
 
     auto id = alloc_id(gamepadMask);
@@ -1662,9 +1663,13 @@ namespace input {
       case SS_PEN_MAGIC:
         passthrough(input, (PSS_PEN_PACKET) payload);
         break;
-      case SS_CONTROLLER_ARRIVAL_MAGIC:
-        passthrough(input, (PSS_CONTROLLER_ARRIVAL_PACKET) payload);
+      case SS_CONTROLLER_ARRIVAL_MAGIC: {
+        // v1 appends a single model byte after the complete Sunshine arrival.
+        constexpr auto extended = sizeof(SS_CONTROLLER_ARRIVAL_PACKET) + 1;
+        const bool has_model = entry.size() == extended && util::endian::big(payload->size) == extended - sizeof(payload->size);
+        passthrough(input, (PSS_CONTROLLER_ARRIVAL_PACKET) payload, has_model ? entry.back() : 0);
         break;
+      }
       case SS_CONTROLLER_TOUCH_MAGIC:
         passthrough(input, (PSS_CONTROLLER_TOUCH_PACKET) payload);
         break;
@@ -1683,6 +1688,14 @@ namespace input {
    * @param input_data The input message.
    */
   void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data, const crypto::PERM& permission) {
+    if (input_data.size() < sizeof(NV_INPUT_HEADER)) {
+      return;
+    }
+    const auto *header = reinterpret_cast<const NV_INPUT_HEADER *>(input_data.data());
+    if (util::endian::little(header->magic) == SS_CONTROLLER_ARRIVAL_MAGIC && input_data.size() < sizeof(SS_CONTROLLER_ARRIVAL_PACKET)) {
+      return;
+    }
+
     // No input permissions at all
     if (!(permission & crypto::PERM::_all_inputs)) {
       return;

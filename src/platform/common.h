@@ -286,6 +286,7 @@ namespace platf {
     std::uint16_t capabilities;
     std::uint32_t supportedButtons;
     std::string client_id;  ///< The paired client's id; with the controller number, a stable identity.
+    std::uint8_t requested_model {};  ///< Hermes controllerModels v1, zero for a standard arrival.
   };
 
   struct gamepad_touch_t {

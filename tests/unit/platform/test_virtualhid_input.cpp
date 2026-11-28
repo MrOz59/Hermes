@@ -215,15 +215,19 @@ namespace {
 
   TEST_F(VirtualHidInputTest, AutoSelectionUsesUnknownCapabilitiesButManualSelectionWins) {
     platf::input_raw_t raw {"hermes-kms-12", fake_runtime()};
-    const auto select = [&](const char *name, std::uint8_t client, std::uint16_t capabilities) {
+    const auto select = [&](const char *name, std::uint8_t client, std::uint16_t capabilities, std::uint8_t model = 0) {
       config::input.gamepad = name;
-      EXPECT_EQ(platf::gamepad::alloc(&raw, {0, 0}, {.type = client, .capabilities = capabilities}, feedback), 0);
+      EXPECT_EQ(platf::gamepad::alloc(&raw, {0, 0}, {.type = client, .capabilities = capabilities, .requested_model = model}, feedback), 0);
       const auto kind = raw.gamepads[0]->adapter->gamepad()->profile().gamepad_kind;
       platf::gamepad::free(&raw, 0);
       return kind;
     };
     config::input.motion_as_ds4 = true;
     config::input.touchpad_as_ds4 = true;
+    EXPECT_EQ(select("auto", LI_CTYPE_PS, 0, 5), lvh::GamepadProfileKind::dualshock4);
+    EXPECT_EQ(select("auto", LI_CTYPE_PS, 0, 6), lvh::GamepadProfileKind::dualsense);
+    EXPECT_EQ(select("auto", LI_CTYPE_PS, 0, 255), lvh::GamepadProfileKind::dualsense);
+    EXPECT_EQ(select("xone", LI_CTYPE_PS, 0, 5), lvh::GamepadProfileKind::xbox_one);
     EXPECT_EQ(select("auto", LI_CTYPE_UNKNOWN, 0), lvh::GamepadProfileKind::xbox_series);
     EXPECT_EQ(select("auto", LI_CTYPE_UNKNOWN, LI_CCAP_GYRO), lvh::GamepadProfileKind::dualsense);
     EXPECT_EQ(select("auto", LI_CTYPE_UNKNOWN, LI_CCAP_TOUCHPAD), lvh::GamepadProfileKind::dualsense);
@@ -233,6 +237,51 @@ namespace {
     EXPECT_EQ(select("auto", LI_CTYPE_UNKNOWN, LI_CCAP_GYRO | LI_CCAP_TOUCHPAD), lvh::GamepadProfileKind::xbox_series);
     EXPECT_EQ(select("xone", LI_CTYPE_PS, LI_CCAP_GYRO), lvh::GamepadProfileKind::xbox_one);
     EXPECT_EQ(select("ds4", LI_CTYPE_XBOX, 0), lvh::GamepadProfileKind::dualshock4);
+  }
+
+  TEST_F(VirtualHidInputTest, ControllerArrivalDecodesModelsPerSlotAndKeepsFamilyFallback) {
+    config::input.gamepad = "auto";
+    config::input.linux_gamepad_backend = "auto";
+    auto platform = std::make_shared<platf::input_t>(new platf::input_raw_t("hermes-kms-1", fake_runtime()));
+    auto *raw = static_cast<platf::input_raw_t *>(platform->get());
+    auto client = std::make_unique<platf::client_input_raw_t>(*platform, fake_runtime());
+    auto stream = input::alloc_for_testing(mailbox, platform, std::move(client));
+    const auto drain = []() {
+      while (auto task = task_pool.pop()) {
+        (*task)->run();
+      }
+    };
+    auto cleanup = util::fail_guard([&]() {
+      input::reset(stream);
+      drain();
+      stream.reset();
+      drain();
+    });
+    const auto send = [&](std::vector<std::uint8_t> bytes, crypto::PERM permission = crypto::PERM::_all_inputs) {
+      input::passthrough(stream, std::move(bytes), permission);
+      drain();
+    };
+    // Same bytes produced by Hestia for a DS4 in client slot 2.
+    const std::vector<std::uint8_t> ds4 {0, 0, 0, 13, 4, 0, 0, 0x55, 2, 2, 3, 0, 0xff, 0xf7, 0, 0, 5};
+    send(ds4, crypto::PERM::input_kbd);
+    send({0, 0, 0, 13, 4, 0, 0, 0x55, 2});  // Truncated arrival.
+    EXPECT_TRUE(std::ranges::all_of(raw->gamepads, [](const auto &pad) { return !pad; }));
+    send(ds4);
+    // Standard PlayStation arrival has no exact model.
+    send({0, 0, 0, 12, 4, 0, 0, 0x55, 3, 2, 3, 0, 0xff, 0xf7, 0, 0});
+    const auto find = [&](int index) {
+      return std::ranges::find_if(raw->gamepads, [&](const auto &pad) { return pad && pad->client_index == index; });
+    };
+    const auto ds4_slot = find(2);
+    const auto ps_slot = find(3);
+    ASSERT_NE(ds4_slot, raw->gamepads.end());
+    ASSERT_NE(ps_slot, raw->gamepads.end());
+    EXPECT_EQ((*ds4_slot)->adapter->gamepad()->profile().gamepad_kind, lvh::GamepadProfileKind::dualshock4);
+    EXPECT_EQ((*ps_slot)->adapter->gamepad()->profile().gamepad_kind, lvh::GamepadProfileKind::dualsense);
+    // A duplicate arrival must preserve the existing device.
+    const auto *device = (*ds4_slot)->adapter->gamepad();
+    send(ds4);
+    EXPECT_EQ((*ds4_slot)->adapter->gamepad(), device);
   }
 
   TEST_F(VirtualHidInputTest, AutomaticBackendPreservesEventDeviceRumbleAndNativeIsExplicit) {
@@ -248,7 +297,7 @@ namespace {
     config::input.linux_gamepad_backend = "uinput";
     config::input.gamepad = "auto";
     platf::input_raw_t raw {"hermes-kms-1", fake_runtime()};
-    ASSERT_EQ(platf::gamepad::alloc(&raw, {0, 0}, {.type = LI_CTYPE_PS, .capabilities = LI_CCAP_GYRO}, feedback), 0);
+    ASSERT_EQ(platf::gamepad::alloc(&raw, {0, 0}, {.type = LI_CTYPE_PS, .capabilities = LI_CCAP_GYRO, .requested_model = 5}, feedback), 0);
     EXPECT_EQ(raw.gamepads[0]->adapter->gamepad()->profile().gamepad_kind, lvh::GamepadProfileKind::xbox_series);
     EXPECT_FALSE(platf::gamepad::supports_controller_extensions());
     platf::gamepad::free(&raw, 0);

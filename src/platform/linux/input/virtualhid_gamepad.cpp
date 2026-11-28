@@ -21,14 +21,15 @@ using namespace std::literals;
 
 namespace platf::gamepad {
   namespace {
-    enum class controller_type {
-      generic,
-      xbox_360,
-      xbox_one,
-      xbox_series,
-      dualshock4,
-      dualsense,
-      switch_pro,
+    // Stable wire values for the controllerModels v1 arrival extension.
+    enum class controller_type : std::uint8_t {
+      generic = 1,
+      xbox_360 = 2,
+      xbox_one = 3,
+      xbox_series = 4,
+      dualshock4 = 5,
+      dualsense = 6,
+      switch_pro = 7,
     };
 
     /** @brief Configuration names and their matching Linux virtual HID profiles. */
@@ -94,6 +95,12 @@ namespace platf::gamepad {
       if (config::input.linux_gamepad_backend == "uinput"sv) {
         BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will use Xbox Series (automatic input-event policy)";
         return controller_type::xbox_series;
+      }
+      for (const auto &[name, type] : controller_profiles) {
+        if (metadata.requested_model == static_cast<std::uint8_t>(type)) {
+          BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will use " << name << " (client model)";
+          return type;
+        }
       }
       if (metadata.type == LI_CTYPE_XBOX) {
         BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox Series controller (client type)";
